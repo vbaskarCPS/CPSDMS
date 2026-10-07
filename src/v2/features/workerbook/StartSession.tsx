@@ -15,7 +15,7 @@ import {
 import { Btn, ErrorBox, Loading, Tag, Toggle } from '../../ui';
 import { BookContractors } from './BookContractors';
 import { TeamBoard } from './TeamBoard';
-import { RoutePickerMap, MANAGER_COLORS } from './RoutePickerMap';
+import { MapRoutePicker } from './MapRoutePicker';
 import { AddLiveRoutes } from './day/AddLiveRoutes';
 
 type Step = 1 | 2 | 3;
@@ -51,7 +51,6 @@ export const StartSession: React.FC = () => {
   // ── plan state ──
   const [routes, setRoutes] = useState<Map<string, PlanRoute>>(new Map());
   const [activeMgr, setActiveMgr] = useState('');
-  const [routeView, setRouteView] = useState<'map' | 'list'>('map');
   const [teams, setTeams] = useState<PlanTeam[]>([]);
   const [members, setMembers] = useState<Record<string, string>>({});
   const [showed, setShowed] = useState<Set<string>>(new Set());
@@ -135,18 +134,6 @@ export const StartSession: React.FC = () => {
   if (!can('workerbook')) return <div className="v2-main v2-narrow"><div className="v2-err">You need the Workerbook permission to start a session.</div></div>;
 
   const painter = activeMgr && mgrs.some(m => m.id === activeMgr) ? activeMgr : firstMgr;
-  // Tap a route: pick it for the active manager; tap again to drop it; a route of another manager moves over.
-  const clickRoute = (code: string, area: string, number: number) => setRoutes(m => {
-    const n = new Map(m); const cur = n.get(code);
-    if (cur && cur.managerId === painter) n.delete(code); else n.set(code, { code, area, number, managerId: painter });
-    return n;
-  });
-  const setAreaAll = (a: Area, on: boolean) => setRoutes(m => {
-    const n = new Map(m);
-    for (const r of a.routes) { if (on) n.set(r.route_code, { code: r.route_code, area: a.name, number: r.route_number, managerId: painter }); else n.delete(r.route_code); }
-    return n;
-  });
-  const mgrColor = (id: string) => MANAGER_COLORS[Math.max(0, mgrs.findIndex(m => m.id === id)) % MANAGER_COLORS.length];
   const removeTeam = (name: string) => { setTeams(ts => ts.filter(t => t.name !== name)); setMembers(m => Object.fromEntries(Object.entries(m).filter(([, t]) => t !== name))); };
   const setRamp = (name: string, ramp: boolean) => {
     const t = teams.find(x => x.name === name); if (!t || (t.kind === 'ramp') === ramp) return;
@@ -181,76 +168,14 @@ export const StartSession: React.FC = () => {
       {mgrs.length === 0 && <div className="v2-err" style={{ marginBottom: 12 }}>No managers are available at {center.display_name} on this day. In Super Admin › Users give your route managers this center as their RM center, and check Availability.</div>}
 
       {step === 1 && (
-        <div className="v2-stack">
-          {(areas.data || []).length === 0 ? (
-            <div className="v2-card">No digital-map areas are assigned to {center.display_name} yet. {can('sa_territory')
-              ? <Link className="v2-link" to="/app/admin/territory">Assign them in Super Admin › Territory.</Link> : 'Ask the Super Admin to assign them in Territory.'}</div>
-          ) : (
-            <div className="v2-split map">
-              <div className="v2-stack" style={{ gap: 10 }}>
-                <div className="v2-row">
-                  <div className="v2-tabs" style={{ marginBottom: 0, borderBottom: 0 }}>
-                    <button className={routeView === 'map' ? 'on' : ''} onClick={() => setRouteView('map')}>Map</button>
-                    <button className={routeView === 'list' ? 'on' : ''} onClick={() => setRouteView('list')}>List</button>
-                  </div>
-                  <span className="v2-spacer" /><span className="v2-mut v2-small">{routes.size} routes picked</span>
-                </div>
-                {routeView === 'map' ? (
-                  <RoutePickerMap areas={areas.data || []} shapes={shapes.data || []} routes={routes} managers={mgrs} active={painter}
-                    onRouteClick={sh => clickRoute(sh.code, sh.area, sh.number)} />
-                ) : (areas.data || []).map(a => (
-                  <div key={a.name} className="v2-card">
-                    <b>{a.name}</b>
-                    <div className="v2-row" style={{ gap: 6, marginTop: 8 }}>
-                      {a.routes.map(r => {
-                        const pr = routes.get(r.route_code);
-                        return <button key={r.route_code} className="v2-chip" onClick={() => clickRoute(r.route_code, a.name, r.route_number)}
-                          style={pr ? { background: mgrColor(pr.managerId), borderColor: mgrColor(pr.managerId), color: '#fff' } : undefined}>{r.route_code}</button>;
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="v2-stack" style={{ gap: 10 }}>
-                <div className="v2-card">
-                  <div className="v2-card-h">Picking for</div>
-                  <div className="v2-stack" style={{ gap: 6 }}>
-                    {mgrs.map(m => {
-                      const n = [...routes.values()].filter(r => r.managerId === m.id).length;
-                      return (
-                        <button key={m.id} className={`v2-mgr${painter === m.id ? ' on' : ''}`} onClick={() => setActiveMgr(m.id)} aria-pressed={painter === m.id}>
-                          <span className="dot" style={{ background: mgrColor(m.id) }} /><b>{m.full_name}</b><span className="v2-spacer" /><span className="v2-mut v2-small">{n} route{n === 1 ? '' : 's'}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="v2-note">Tap a route to give it to this manager. Tap it again to unpick it; tap another manager’s route to move it over.</div>
-                </div>
-                <div className="v2-card">
-                  <div className="v2-card-h">Areas</div>
-                  {(areas.data || []).map(a => {
-                    const picked = a.routes.filter(r => routes.has(r.route_code));
-                    const split = new Set(picked.map(r => routes.get(r.route_code)!.managerId));
-                    return (
-                      <div key={a.name} className="v2-row" style={{ padding: '6px 0', borderTop: '1px solid #f0f1f3', flexWrap: 'nowrap' }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div className="v2-small"><b>{a.name}</b></div>
-                          <div className="v2-row" style={{ gap: 4 }}>
-                            <span className="v2-mut v2-small">{picked.length}/{a.routes.length}</span>
-                            {[...split].map(id => <span key={id} className="dot-sm" style={{ background: mgrColor(id) }} title={mgrs.find(m => m.id === id)?.full_name} />)}
-                          </div>
-                        </div>
-                        <Btn kind="o" size="sm" onClick={() => setAreaAll(a, true)}>All</Btn>
-                        <Btn kind="o" size="sm" disabled={!picked.length} onClick={() => setAreaAll(a, false)}>None</Btn>
-                      </div>
-                    );
-                  })}
-                </div>
-                <Btn disabled={!routes.size} onClick={() => setStep(2)} style={{ justifyContent: 'center' }}>Next: roll call & teams</Btn>
-              </div>
-            </div>
-          )}
-        </div>
+        (areas.data || []).length === 0 ? (
+          <div className="v2-card">No digital-map areas are assigned to {center.display_name} yet. {can('sa_territory')
+            ? <Link className="v2-link" to="/app/admin/territory">Assign them in Super Admin › Territory.</Link> : 'Ask the Super Admin to assign them in Territory.'}</div>
+        ) : (
+          <MapRoutePicker areas={areas.data || []} shapes={shapes.data || []} managers={mgrs} routes={routes} active={painter}
+            onActive={setActiveMgr} onChange={setRoutes}
+            footer={<Btn disabled={!routes.size} onClick={() => setStep(2)} style={{ justifyContent: 'center' }}>Next: roll call &amp; teams ({routes.size} routes)</Btn>} />
+        )
       )}
 
       {step === 2 && (

@@ -73,3 +73,27 @@ export async function routeShapes(areaNames: string[]): Promise<RouteShape[]> {
   }
   return out;
 }
+
+/** Callbook clients (PCL) per route for the given areas: route code → count. */
+export async function pclCounts(areaNames: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (let i = 0; i < areaNames.length; i += 40) {
+    const rows = must(await db.from('map_pcl_cache').select('route_code, client_count').in('area_name', areaNames.slice(i, i + 40))) as
+      { route_code: string; client_count: number | null }[];
+    for (const r of rows) out.set(r.route_code, r.client_count || 0);
+  }
+  return out;
+}
+
+export interface PclDot { code: string; lat: number; lng: number }
+
+/** Where one map's callbook clients are (coordinates only; names and phones are dropped here). */
+export async function pclDots(areaName: string): Promise<PclDot[]> {
+  const rows = must(await db.from('map_pcl_cache').select('route_code, clients').eq('area_name', areaName)) as
+    { route_code: string; clients: { lat?: unknown; lng?: unknown }[] | null }[];
+  const out: PclDot[] = [];
+  for (const r of rows) for (const c of r.clients || []) {
+    if (typeof c.lat === 'number' && typeof c.lng === 'number') out.push({ code: r.route_code, lat: c.lat, lng: c.lng });
+  }
+  return out;
+}
