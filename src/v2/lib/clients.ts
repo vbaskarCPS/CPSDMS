@@ -158,6 +158,34 @@ export async function finishStuckImport(id: string): Promise<void> {
 }
 
 // ─── clients ────────────────────────────────────────────────────────────────
+/** Client counts by city › route map › route (a route map sits under the city most of its clients are in). */
+export interface TreeRoute { code: string; n: number }
+export interface TreeArea { name: string | null; region: string | null; n: number; routes: TreeRoute[] }
+export interface TreeCity { city: string; n: number; areas: TreeArea[]; noRoute: number }
+export async function clientTree(service?: string): Promise<TreeCity[]> {
+  const rows = must(await db.rpc('app_client_tree', { p_service: service || null })) as
+    { city: string; area_name: string | null; region: string | null; route_code: string | null; clients: number }[];
+  return buildTree(rows);
+}
+export function buildTree(rows: { city: string; area_name: string | null; region: string | null; route_code: string | null; clients: number }[]): TreeCity[] {
+  const num = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
+  const cities = new Map<string, TreeCity>();
+  for (const r of rows) {
+    const c = cities.get(r.city) || { city: r.city, n: 0, areas: [], noRoute: 0 };
+    cities.set(r.city, c);
+    c.n += r.clients;
+    if (!r.route_code) { c.noRoute += r.clients; continue; }
+    let a = c.areas.find(x => x.name === r.area_name);
+    if (!a) { a = { name: r.area_name, region: r.region, n: 0, routes: [] }; c.areas.push(a); }
+    a.n += r.clients; a.routes.push({ code: r.route_code, n: r.clients });
+  }
+  for (const c of cities.values()) {
+    c.areas.sort((a, b) => (a.name === null ? 1 : 0) - (b.name === null ? 1 : 0) || num(a.name || '', b.name || ''));
+    for (const a of c.areas) a.routes.sort((x, y) => num(x.code, y.code));
+  }
+  return [...cities.values()].sort((a, b) => (a.city ? 0 : 1) - (b.city ? 0 : 1) || num(a.city, b.city));
+}
+
 export interface Client {
   id: string; house_no: string; street_name: string; unit: string | null; city: string | null; province: string | null; postal_code: string | null;
   lat: number | null; lng: number | null; route_code: string | null; match_how: string | null;
@@ -166,10 +194,11 @@ export interface Client {
   services: string[];
   tags: string[]; notes: string | null; call_first: string | null; do_not_call: boolean; do_not_text: boolean; updated_at: string;
 }
-export async function listClients(opts: { q?: string; route?: string; noRoute?: boolean; service?: string; page?: number; pageSize?: number }): Promise<{ rows: Client[]; total: number }> {
+export async function listClients(opts: { q?: string; route?: string; noRoute?: boolean; service?: string; city?: string; page?: number; pageSize?: number }): Promise<{ rows: Client[]; total: number }> {
   const size = opts.pageSize || 100; const from = (opts.page || 0) * size;
   let qb = db.from('clients').select('*', { count: 'exact' });
   if (opts.service) qb = qb.contains('services', [opts.service]);
+  if (opts.city !== undefined) qb = opts.city ? qb.ilike('city', opts.city.replace(/[%_]/g, '\\$&')) : qb.or('city.is.null,city.eq.');
   if (opts.noRoute) qb = qb.is('route_code', null);
   else if (opts.route) qb = qb.eq('route_code', opts.route.toUpperCase());
   const q = (opts.q || '').trim().toLowerCase();

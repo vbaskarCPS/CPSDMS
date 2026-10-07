@@ -115,3 +115,22 @@ describe('territory areas', () => {
     expect(areaProblems({ name: 'X', prefix: 'G4', region: 'East', start: 3, end: 2 }, pre, null)).toHaveLength(2);
   });
 });
+
+import { buildTree } from './clients';
+describe('clients by city › route map › route', () => {
+  it('nests and counts, numbers in order, no-route and no-map last', () => {
+    const t = buildTree([
+      { city: 'Oakville', area_name: 'GLEN ABBEY #1', region: 'West', route_code: 'GA10', clients: 4 },
+      { city: 'Oakville', area_name: 'GLEN ABBEY #1', region: 'West', route_code: 'GA02', clients: 6 },
+      { city: 'Oakville', area_name: null, region: null, route_code: 'ZZ01', clients: 1 },
+      { city: 'Oakville', area_name: 'BRONTE', region: 'West', route_code: 'BR01', clients: 2 },
+      { city: 'Oakville', area_name: null, region: null, route_code: null, clients: 3 },
+      { city: '', area_name: null, region: null, route_code: null, clients: 5 },
+      { city: 'Burlington', area_name: 'PINEDALE', region: 'East', route_code: 'PD06', clients: 9 },
+    ]);
+    expect(t.map(c => [c.city, c.n, c.noRoute])).toEqual([['Burlington', 9, 0], ['Oakville', 16, 3], ['', 5, 5]]);
+    const oak = t[1];
+    expect(oak.areas.map(a => [a.name, a.n])).toEqual([['BRONTE', 2], ['GLEN ABBEY #1', 10], [null, 1]]);
+    expect(oak.areas[1].routes.map(r => r.code)).toEqual(['GA02', 'GA10']);
+  });
+});

@@ -360,3 +360,13 @@
   font: 700 13px/1 system-ui, -apple-system, 'Segoe UI', sans-serif; box-shadow: 0 4px 14px rgba(0,0,0,.3); cursor: pointer; }
 .v2-floater-back:hover { background: #111827; }
 @media (max-width: 760px) { .v2-floater-back { bottom: auto; top: 56px; } }   /* phones: clear of the team drawer */
+
+/* Clients: city › route map › route tree */
+.v2 .v2-tree-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line-soft, #f1f5f9);
+  padding: 10px 14px; cursor: pointer; color: var(--ink); font: inherit; }
+.v2 .v2-tree-row:hover { background: #f9fafb; }
+.v2 .v2-tree-row.l0 { font-size: 15px; }
+.v2 .v2-tree-row.l1 { padding-left: 38px; background: #fcfcfd; }
+.v2 .v2-tree-row.l2 { padding-left: 62px; font-size: 13px; }
+.v2 .v2-tree-n { font-weight: 800; font-variant-numeric: tabular-nums; min-width: 48px; text-align: right; }
+.v2 .v2-tree-clients { padding: 4px 14px 10px 62px; border-bottom: 1px solid var(--line); background: #fff; }
