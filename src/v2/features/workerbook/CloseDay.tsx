@@ -6,7 +6,8 @@ import { CheckCircle2, AlertTriangle, Download, Lock } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { closeDay, closeDayCheck, type DaySummaryStored } from '../../lib/workerbook';
 import { pointLegacyAt } from '../../lib/legacy';
-import { linesFromLiveSession, saveLines } from '../../lib/payslips';
+import { saveLines } from '../../lib/payslips';
+import { liveDayForClose, saveDay } from '../../lib/payoutCarts';
 import { Btn, ErrorBox, Loading, Modal } from '../../ui';
 
 const money = (v: number) => `$${Math.round(v).toLocaleString('en-CA')}`;
@@ -38,11 +39,17 @@ export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string
     const close = async () => {
       setBusy('close'); setError(null);
       try {
-        // Save the day's payout lines for payslips first, while the session still exists.
+        // Save the day's carts, sales and payout lines first, while the session still exists, so the
+        // day can still be edited until a payslip is generated.
         if (c?.has_session) {
-          const live = await linesFromLiveSession(centerId);
+          const live = await liveDayForClose(centerId, Number(date.slice(0, 4)));
           if (live.date !== date) throw new Error(`The open session is for ${live.date}, not ${date}`);
-          await saveLines(centerId, date, live.lines);
+          try { await saveDay(centerId, date, live.carts, live.lines); }
+          catch (e) {
+            // before the carts SQL is run, keep saving the lines alone
+            if (!/app_save_payout_day|payout_carts|schema cache/i.test(String((e as Error)?.message || e))) throw e;
+            await saveLines(centerId, date, live.lines);
+          }
         }
         onClosed(await closeDay(centerId, date));
       } catch (e) { setError(e); check.reload(); } finally { setBusy(null); }

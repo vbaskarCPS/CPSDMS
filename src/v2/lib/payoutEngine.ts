@@ -93,6 +93,17 @@ const hasInputs = (st: unknown): st is Record<string, unknown> =>
 export async function recalcDay(centerId: string, region: string, day: string): Promise<{ lines: number; changed: number; before: number; after: number }> {
   const lines = await listLines(centerId, day, day);
   if (lines.some(l => l.payslip_id)) throw new Error(`${day} is already on a payslip. Void that payslip first to work the day out again.`);
+  const total = (xs: { total_payout: number }[]) => xs.reduce((a, x) => a + (Number(x.total_payout) || 0), 0);
+  // a day with its carts and sales: work it out from those
+  const cartsLib = await import('./payoutCarts');
+  const carts = await cartsLib.listCarts(centerId, day);
+  if (carts.length) {
+    const ctx = await cartsLib.cartContext(centerId, region, day, carts);
+    const next = await cartsLib.dayLines(carts, ctx);
+    await cartsLib.saveDay(centerId, day, carts, next);
+    const byCn = new Map(lines.map(l => [l.cn, Number(l.total_payout) || 0]));
+    return { lines: next.length, changed: next.filter(l => Math.abs(l.total_payout - (byCn.get(l.cn) ?? NaN)) > 0.005 || !byCn.has(l.cn)).length, before: total(lines), after: total(next) };
+  }
   const ids = [...new Set(lines.map(l => l.hire_id).filter(Boolean) as string[])];
   const [ctx, facts, showed] = await Promise.all([dayContext(centerId, day, region), rateFacts(ids), appShowedDates(ids)]);
   let changed = 0;
@@ -105,7 +116,6 @@ export async function recalcDay(centerId: string, region: string, day: string): 
     return out;
   });
   await saveLines(centerId, day, next);
-  const total = (xs: { total_payout: number }[]) => xs.reduce((a, x) => a + (x.total_payout || 0), 0);
   return { lines: next.length, changed, before: total(lines), after: total(next) };
 }
 
