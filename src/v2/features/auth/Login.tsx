@@ -15,7 +15,10 @@ export const Login: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [finalized, setFinalized] = useState(false);
 
-  if (session && profile) return <Navigate to={profile.must_change_password ? '/app/password' : (loc.state?.from || '/app')} replace />;
+  // Signing in lands on the home page, which sends a manager with a seat on today's session to their map.
+  const target = loc.state?.from && !/^\/app\/?$/.test(loc.state.from) ? loc.state.from : '/app';
+  if (session && profile) return <Navigate to={profile.must_change_password ? '/app/password' : target} replace
+    state={target === '/app' && !profile.must_change_password ? { fromLogin: true } : undefined} />;
 
   /** The old app's accounts (workers, training, command-center and campaign logins, old RM accounts). */
   const tryLegacy = async (u: string, p: string, workersOnly: boolean): Promise<boolean> => {
@@ -35,7 +38,7 @@ export const Login: React.FC = () => {
         if (!(await tryLegacy(username, password, true))) setError('That CN # and first name don’t match anyone working today.');
         return;
       }
-      try { await signIn(username, password); nav(loc.state?.from || '/app', { replace: true }); }
+      try { await signIn(username, password); nav(target, { replace: true, state: target === '/app' ? { fromLogin: true } : undefined }); }
       catch (err) {
         // Not a new-app account: the old app's logins still work from here.
         if (!(await tryLegacy(username, password, false))) setError(/invalid login/i.test(err instanceof Error ? err.message : '') ? 'Wrong username or password.' : (err instanceof Error ? err.message : 'Sign-in failed'));
