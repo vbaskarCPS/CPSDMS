@@ -1,10 +1,11 @@
 // src/v2/features/admin/Centers.tsx — Super Admin › Centers & seasons.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Plus, Lock, Unlock } from 'lucide-react';
 import { useAuth, type Center } from '../../lib/auth';
 import { SERVICES, serviceLabel, type Service } from '../../lib/permissions';
 import { listCenters, listSeasons, saveCenter, saveSeason, closeSeason, reopenSeason, regionTax, seasonState, useLoad, type Season } from '../../lib/data';
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tag, Toggle } from '../../ui';
+import { getCenterType, setCenterType, type CenterType } from '../../lib/crew';
 
 const REGIONS = ['East', 'West', 'Central'];
 const stateTag = (s: Season) => {
@@ -105,6 +106,9 @@ const CenterEditor: React.FC<{ center: Center | null; onClose: () => void; onSav
   });
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [ctype, setCtype] = useState<CenterType>('in_city');
+  const [ctypeLoaded, setCtypeLoaded] = useState<CenterType>('in_city');
+  useEffect(() => { if (center) getCenterType(center.id).then(t => { setCtype(t); setCtypeLoaded(t); }); }, [center]);
   const set = (k: string, v: unknown) => setF(x => ({ ...x, [k]: v }));
   const save = async () => {
     setError(null);
@@ -116,6 +120,7 @@ const CenterEditor: React.FC<{ center: Center | null; onClose: () => void; onSav
         cn_prefix: f.cn_prefix || null, local_number: f.local_number || null, review_link: f.review_link || null,
         tax_name: f.tax_name || null, tax_rate: f.tax_rate === null || (f.tax_rate as unknown) === '' ? null : Number(f.tax_rate), is_active: f.is_active,
       });
+      if (ctype !== ctypeLoaded) await setCenterType(id, ctype);
       onSaved(id);
     } catch (e) { setError(e); } finally { setBusy(false); }
   };
@@ -134,6 +139,12 @@ const CenterEditor: React.FC<{ center: Center | null; onClose: () => void; onSav
             <Field label="Tax %"><input className="v2-input" type="number" step="0.01" value={f.tax_rate ?? ''} onChange={e => set('tax_rate', e.target.value === '' ? null : Number(e.target.value))} /></Field>
           </div>
           <Field label="CN # prefix" hint="Contractor numbers for this center start with this (e.g. ONT1001)."><input className="v2-input" value={f.cn_prefix || ''} onChange={e => set('cn_prefix', e.target.value.toUpperCase())} maxLength={6} /></Field>
+          <Field label="Center type" hint="Road Trip: the crew lives at a hotel (room numbers) and is pulled in from home cities. In City: shuttle points and daily bookings.">
+            <select className="v2-sel" value={ctype} onChange={e => setCtype(e.target.value as CenterType)}>
+              <option value="in_city">In City</option>
+              <option value="road_trip">Road Trip</option>
+            </select>
+          </Field>
         </div>
         <div>
           <div className="v2-label">Services offered</div>

@@ -99,6 +99,12 @@
 
 .v2-close-line { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
 .v2-close-line > svg { flex-shrink: 0; margin-top: 1px; }
+.v2-room { display: inline-flex; align-items: center; gap: 6px; }
+.v2-room .v2-input { width: 84px; height: 34px; padding: 4px 8px; font-weight: 700; }
+.v2-pick { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); cursor: pointer; }
+.v2-pick:hover { background: var(--hover); }
+.v2-pick.on { border-color: var(--blue); background: var(--sel); }
+.v2-pick:disabled { opacity: .5; cursor: not-allowed; }
 
 /* home dashboard: one large stat card per component */
 .v2-stats { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); }
