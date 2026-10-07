@@ -125,7 +125,7 @@ export const StartSession: React.FC = () => {
           </ul>
           <div className="v2-row">
             <Btn kind="o" onClick={() => nav(`/app/workerbook/days/${date}`)}>Back to the day</Btn>
-            {onMap && <Btn onClick={() => nav(`/app/workerbook/days/${date}/payouts`)}>Payouts</Btn>}
+            {onMap && <Btn onClick={() => nav(`/app/workerbook/days/${date}`)}>Payouts</Btn>}
           </div>
         </div>
       </div>

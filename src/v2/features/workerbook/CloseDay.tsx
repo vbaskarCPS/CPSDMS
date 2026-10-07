@@ -2,7 +2,6 @@
 // Closing keeps a copy of the old app's session, clears it so the next day can start, moves
 // the day's no-shows onto the NS list and records the day's numbers (app_close_day).
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { CheckCircle2, AlertTriangle, Download, Lock } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { closeDay, closeDayCheck, type DaySummaryStored } from '../../lib/workerbook';
@@ -67,8 +66,7 @@ export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string
 
             <Line ok={c.unpaid.length === 0} title={c.unpaid.length === 0 ? 'Every cart with sales is paid out' : `${c.unpaid.length} cart${c.unpaid.length === 1 ? '' : 's'} with sales not paid out yet`}>
               {c.unpaid.length > 0 && <>
-                {c.unpaid.map(u => `${u.names || u.worker_id} (${u.sales} sale${u.sales === 1 ? '' : 's'})`).join(' · ')}{' — '}
-                <Link className="v2-link" to={`/app/workerbook/days/${date}/payouts`}>open Payouts</Link>
+                {c.unpaid.map(u => `${u.names || u.worker_id} (${u.sales} sale${u.sales === 1 ? '' : 's'})`).join(' · ')}{' — pay them out on the day page first.'}
               </>}
             </Line>
             {c.road_trip ? (

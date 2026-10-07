@@ -1,25 +1,21 @@
-// Today's roll call: who's here. In-city centers also take each worker's answer for after today —
-// their next day (booked when the session starts), WDR, or Quit (they still work today).
-// Once the session is live, anyone marked here late can be put on the live map under a manager.
+// Today's roll call, before the session starts: who's here. In-city centers also take each
+// worker's answer for after today — their next day (booked when the session starts), WDR, or
+// Quit (they still work today). Once the session starts, the day page shows payouts instead.
 import React, { useMemo, useState } from 'react';
 import { Search, UserPlus } from 'lucide-react';
-import { applyNextDays, fullName, updateRoster, type Day, type RosterRow } from '../../../lib/workerbook';
-import { addLateArrival, type PlanManager } from '../../../lib/startSession';
-import { Btn, ErrorBox, Modal, Tag } from '../../../ui';
+import { fullName, updateRoster, type RosterRow } from '../../../lib/workerbook';
+import { Btn, ErrorBox, Tag } from '../../../ui';
 import type { CenterType } from '../../../lib/crew';
-import { dayContext } from './dayContext';
 
 const addDays = (iso: string, n: number) => { const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const short = (iso: string) => new Date(iso + 'T12:00').toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
 
 export const RollCall: React.FC<{
-  centerId: string; region: string; date: string; day: Day | null; rows: RosterRow[]; type: CenterType; live: boolean;
-  managers: PlanManager[]; canEdit: boolean; onChanged: () => void; onWalkIn: () => void;
-}> = ({ centerId, region, date, day, rows, type, live, managers, canEdit, onChanged, onWalkIn }) => {
+  date: string; rows: RosterRow[]; type: CenterType; canEdit: boolean; onChanged: () => void; onWalkIn: () => void;
+}> = ({ date, rows, type, canEdit, onChanged, onWalkIn }) => {
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [late, setLate] = useState<RosterRow | null>(null);
   const inCity = type === 'in_city';
   const tomorrow = addDays(date, 1);
 
@@ -38,15 +34,8 @@ export const RollCall: React.FC<{
     setBusy(r.id); setError(null);
     try { await fn(); onChanged(); } catch (e) { setError(e); } finally { setBusy(null); }
   };
-  const mark = (r: RosterRow, att: 'showed' | 'no_show') => act(r, async () => {
-    const next = r.attendance === att ? null : att;
-    await updateRoster(r.id, { attendance: next });
-    if (live && next === 'showed' && r.attendance !== 'showed') setLate(r);   // arrived after the start
-  });
-  const answer = (r: RosterRow, a: { next_day: string | null; next_action: 'book' | 'WDR' | 'Q' | null }) => act(r, async () => {
-    await updateRoster(r.id, a);
-    if (live && day) await applyNextDays(day.id, r.hire_id);   // after the start, it takes effect now
-  });
+  const mark = (r: RosterRow, att: 'showed' | 'no_show') => act(r, () => updateRoster(r.id, { attendance: r.attendance === att ? null : att }));
+  const answer = (r: RosterRow, a: { next_day: string | null; next_action: 'book' | 'WDR' | 'Q' | null }) => act(r, () => updateRoster(r.id, a));
 
   return (
     <div>
@@ -95,37 +84,7 @@ export const RollCall: React.FC<{
           })}
         </div>
       )}
-      {inCity && <div className="v2-note" style={{ marginTop: 10 }}>Next days are booked{live ? ' right away' : ' when the session starts'}; WDR and Quit take effect after today.</div>}
-      {late && <LateArrival centerId={centerId} region={region} date={date} row={late} managers={managers} onClose={() => setLate(null)} />}
+      {inCity && <div className="v2-note" style={{ marginTop: 10 }}>Next days are booked when the session starts; WDR and Quit take effect after today.</div>}
     </div>
   );
 };
-
-/** Marked here after the session started: put them on the live map under a manager. */
-const LateArrival: React.FC<{ centerId: string; region: string; date: string; row: RosterRow; managers: PlanManager[]; onClose: () => void }> =
-  ({ centerId, region, date, row, managers, onClose }) => {
-    const [mgr, setMgr] = useState(row.manager_id || managers[0]?.id || '');
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState<unknown>(null);
-    const add = async () => {
-      const m = managers.find(x => x.id === mgr);
-      if (!m) return;
-      setBusy(true); setError(null);
-      try {
-        const ctx = await dayContext(centerId, date, region);
-        await addLateArrival(centerId, row, m, ctx.card, ctx.seasonYear, ctx.service);
-        onClose();
-      } catch (e) { setError(e); } finally { setBusy(false); }
-    };
-    return (
-      <Modal title={`${fullName(row.hire.person)} arrived late`} onClose={onClose}
-        footer={<><Btn kind="o" onClick={onClose}>Not now</Btn><Btn disabled={busy || !mgr} onClick={add}>{busy ? 'Adding…' : 'Put on the live map'}</Btn></>}>
-        <p style={{ marginTop: 0 }}>The session has already started. Put {row.hire.person.first_name} on the live map so they can sign in and their manager can put them on a cart (Manage Team on the RM map).</p>
-        <label className="v2-label" htmlFor="late-mgr">Manager</label>
-        <select id="late-mgr" className="v2-sel" value={mgr} onChange={e => setMgr(e.target.value)}>
-          {managers.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
-        </select>
-        <ErrorBox error={error} />
-      </Modal>
-    );
-  };
