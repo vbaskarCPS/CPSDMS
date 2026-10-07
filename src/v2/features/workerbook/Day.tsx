@@ -1,7 +1,7 @@
 // src/v2/features/workerbook/Day.tsx — one day at a center: who's booked, confirmed, and who showed.
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Play, UserPlus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Play, UserPlus, Wallet } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import {
@@ -67,6 +67,7 @@ export const Day: React.FC = () => {
         {canEdit && <Btn kind="o" icon={UserPlus} onClick={() => setShowBook(true)}>Book contractors</Btn>}
         {can('workerbook') && day.data?.state === 'planned' && sorted.length > 0 && <Btn kind="g" icon={Play} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Start session</Btn>}
         {day.data?.state === 'live' && <Btn kind="o" onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Session details</Btn>}
+        {day.data?.state === 'live' && can('workerbook') && <Btn kind="g" icon={Wallet} onClick={() => nav(`/app/workerbook/days/${date}/payouts`)}>Payouts</Btn>}
       </div>
 
       <div className="v2-grid4" style={{ marginBottom: 14 }}>

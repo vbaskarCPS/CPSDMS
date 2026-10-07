@@ -68,6 +68,8 @@ interface PayoutTodayProps {
   searchTerm: string;
   managers: ManagementUser[];
   workers: Worker[];
+  /** Where a worker's payout opens. Defaults to the old app's page; the new app passes its own. */
+  workerHref?: (contractorId: string) => string;
 }
 
 interface AggregatedStats {
@@ -609,8 +611,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   searchTerm,
   managers,
   workers,
+  workerHref,
 }) => {
   const navigate = useNavigate();
+  const openWorker = (contractorId: string) =>
+    navigate(workerHref ? workerHref(contractorId) : `/admin/payout/${contractorId}?date=${date}`);
   const [loading, setLoading] = useState(true);
 
   const [items, setItems] = useState<{ worker: Worker; session: LogsheetSession }[]>([]);
@@ -1445,7 +1450,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             return (
               <div
                 key={worker.contractorId}
-                onClick={() => navigate(`/admin/payout/${worker.contractorId}?date=${date}`)}
+                onClick={() => openWorker(worker.contractorId)}
                 className="px-3 py-2 flex items-center gap-2 hover:bg-gray-750 transition-colors cursor-pointer group text-xs"
               >
                 <div
@@ -1520,7 +1525,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         />
 
         <div
-          onClick={() => navigate(`/admin/payout/${worker.contractorId}?date=${date}`)}
+          onClick={() => openWorker(worker.contractorId)}
           className="font-bold text-gray-200 min-w-[120px] truncate cursor-pointer hover:text-white"
         >
           {worker.firstName} {worker.lastName}
@@ -1598,7 +1603,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
         <ChevronRight
           size={14}
-          onClick={() => navigate(`/admin/payout/${worker.contractorId}?date=${date}`)}
+          onClick={() => openWorker(worker.contractorId)}
           className="text-gray-600 group-hover:text-white transition-colors flex-shrink-0 cursor-pointer"
         />
       </div>

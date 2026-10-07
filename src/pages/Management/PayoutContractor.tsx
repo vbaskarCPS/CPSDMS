@@ -143,7 +143,8 @@ const TeamMemberCard: React.FC<{
   );
 };
 
-const PayoutContractor: React.FC = () => {
+/** doneHref: where saving a payout returns to. Defaults to the old app's payout tab; the new app passes its own. */
+const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/command-center?tab=payout' }) => {
   const { contractorId } = useParams();
   const navigate = useNavigate();
 
@@ -647,7 +648,7 @@ const PayoutContractor: React.FC = () => {
         equivSplit: isTeamSeason ? equivSplit : undefined,
         upsellSplit: isTeamSeason ? upsellSplit : undefined,
       });
-      navigate('/admin/command-center?tab=payout');
+      navigate(doneHref);
     } catch (err) {
       alert('Error saving payout: ' + err);
       setLoading(false);
