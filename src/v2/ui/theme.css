@@ -151,6 +151,23 @@
   .v2-dayc .l1 { font-size: 11px; }
 }
 
+/* start session · team board */
+.v2-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.8fr); gap: 14px; }
+@media (max-width: 1000px) { .v2-split { grid-template-columns: 1fr; } }
+.v2-people { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; }
+.v2-person { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px 5px 6px; border-radius: 9px; background: #fff;
+  border: 1px solid var(--line); font-size: 12.5px; cursor: grab; user-select: none; touch-action: none; box-shadow: 0 1px 1px rgba(16,24,40,.04); }
+.v2-person .nm { font-weight: 700; }
+.v2-person .cn { color: var(--mut); font-size: 11px; }
+.v2-person.overlay { cursor: grabbing; box-shadow: 0 8px 20px rgba(16,24,40,.18); border-color: var(--blue); }
+.v2-teams { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.v2-team { border: 1px solid var(--line); border-radius: 12px; padding: 9px; background: #fafafa; min-height: 84px; }
+.v2-team.ramp { background: #fffbeb; border-color: #fde68a; }
+.v2-team.new { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border-style: dashed; background: #fff; text-align: center; }
+.v2-team.new .v2-link { display: inline-flex; align-items: center; gap: 4px; }
+.v2-drop { transition: box-shadow .12s, border-color .12s, background .12s; }
+.v2-drop.over { border-color: var(--blue) !important; box-shadow: 0 0 0 3px rgba(37,99,235,.18); background: #eff6ff; }
+
 /* login */
 .v2-login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .v2-login-card { width: 100%; max-width: 380px; }

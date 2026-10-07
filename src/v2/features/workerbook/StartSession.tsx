@@ -1,7 +1,7 @@
 // src/v2/features/workerbook/StartSession.tsx — Start session from a Day: routes → roll call & teams → settings & start.
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Check, Plus, Truck, UserPlus, X } from 'lucide-react';
+import { Check, UserPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { listRateCards, listSeasons, regionTax, todayISO, useLoad } from '../../lib/data';
 import { cardFor, defaultRateCard, type RateCardData } from '../../lib/rateCard';
@@ -14,6 +14,7 @@ import {
 } from '../../lib/startSession';
 import { Btn, ErrorBox, Loading, Tag, Toggle } from '../../ui';
 import { BookContractors } from './BookContractors';
+import { TeamBoard } from './TeamBoard';
 
 type Step = 1 | 2 | 3;
 const STEPS: { n: Step; label: string }[] = [{ n: 1, label: 'Routes' }, { n: 2, label: 'Roll call & teams' }, { n: 3, label: 'Settings & start' }];
@@ -24,8 +25,14 @@ export const StartSession: React.FC = () => {
   const nav = useNavigate();
   const [step, setStep] = useState<Step>(1);
 
-  const day = useLoad(() => center ? getDay(center.id, date) : Promise.resolve(null), [center?.id, date]);
-  const roster = useLoad(() => day.data ? listRoster(day.data.id) : Promise.resolve([] as RosterRow[]), [day.data?.id]);
+  // Day and roster load together, so the team pre-fill below never runs on an empty roster.
+  const dayRoster = useLoad(async () => {
+    if (!center) return null;
+    const d = await getDay(center.id, date);
+    return { day: d, roster: d ? await listRoster(d.id) : [] as RosterRow[] };
+  }, [center?.id, date]);
+  const day = { data: dayRoster.data?.day ?? null, loading: dayRoster.loading, error: dayRoster.error };
+  const roster = { data: dayRoster.data ? dayRoster.data.roster : null, loading: dayRoster.loading, reload: dayRoster.reload };
   const managers = useLoad(() => center ? availableManagers(center.id, date) : Promise.resolve([]), [center?.id, date]);
   const areas = useLoad(() => center ? centerAreas(center.id) : Promise.resolve([] as Area[]), [center?.id]);
   const existing = useLoad(() => day.data ? getSession(day.data.id) : Promise.resolve(null), [day.data?.id]);
@@ -60,18 +67,19 @@ export const StartSession: React.FC = () => {
 
   // Prefill once: teams, managers and attendance already on the roster; settings from the season's rate card.
   useEffect(() => {
-    if (prefilled || roster.loading || managers.loading || seasonInfo.loading || !roster.data) return;
-    const names = [...new Set(roster.data.map(r => r.team).filter(Boolean) as string[])]
+    if (prefilled || !dayRoster.data || managers.loading || !managers.data || seasonInfo.loading) return;
+    const rows = dayRoster.data.roster;
+    const names = [...new Set(rows.map(r => r.team).filter(Boolean) as string[])]
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     setTeams(names.map(n => ({ name: n, kind: /^RC\d*$/i.test(n) ? 'ramp' : 'cart',
-      managerId: roster.data!.find(r => r.team === n && r.manager_id)?.manager_id || firstMgr })));
-    setMembers(Object.fromEntries(roster.data.filter(r => r.team).map(r => [r.hire_id, r.team as string])));
-    setShowed(new Set(roster.data.filter(r => r.attendance === 'showed').map(r => r.hire_id)));
+      managerId: dayRoster.data!.roster.find(r => r.team === n && r.manager_id)?.manager_id || firstMgr })));
+    setMembers(Object.fromEntries(rows.filter(r => r.team).map(r => [r.hire_id, r.team as string])));
+    setShowed(new Set(rows.filter(r => r.attendance === 'showed').map(r => r.hire_id)));
     const svc = (seasonInfo.data?.season?.service || 'sealing') as Service;
     setService(svc);
     setSettings(s => ({ ...s, productCostPercent: card.productCostPercent, noTaxOnCash: card.noTaxOnCashDefault }));
     setPrefilled(true);
-  }, [prefilled, roster.loading, roster.data, managers.loading, seasonInfo.loading, seasonInfo.data, firstMgr, card]);
+  }, [prefilled, dayRoster.data, managers.loading, managers.data, seasonInfo.loading, seasonInfo.data, firstMgr, card]);
 
   const plan: Plan | null = day.data && roster.data ? {
     date, seasonYear: seasonInfo.data?.season?.year || Number(date.slice(0, 4)), card,
@@ -118,7 +126,6 @@ export const StartSession: React.FC = () => {
     setAreaMgr(x => ({ ...x, [area]: mid }));
     setRoutes(m => new Map([...m].map(([k, r]) => [k, r.area === area ? { ...r, managerId: mid } : r])));
   };
-  const addTeam = (managerId: string, kind: PlanTeam['kind']) => setTeams(ts => [...ts, { name: nextTeamName(ts, kind), kind, managerId }]);
   const removeTeam = (name: string) => { setTeams(ts => ts.filter(t => t.name !== name)); setMembers(m => Object.fromEntries(Object.entries(m).filter(([, t]) => t !== name))); };
   const setRamp = (name: string, ramp: boolean) => {
     const t = teams.find(x => x.name === name); if (!t || (t.kind === 'ramp') === ramp) return;
@@ -183,7 +190,7 @@ export const StartSession: React.FC = () => {
       )}
 
       {step === 2 && (
-        <div className="v2-grid2" style={{ alignItems: 'start' }}>
+        <div className="v2-split" style={{ alignItems: 'start' }}>
           <div className="v2-card" style={{ padding: 0 }}>
             <div className="v2-row" style={{ padding: 12 }}>
               <b>Roll call</b><span className="v2-mut v2-small">{showedRows.length} of {roster.data.length}</span><span className="v2-spacer" />
@@ -213,30 +220,12 @@ export const StartSession: React.FC = () => {
             </div>
           </div>
           <div className="v2-stack">
-            {mgrs.map(m => (
-              <div key={m.id} className="v2-card">
-                <div className="v2-row" style={{ marginBottom: 8 }}><b>{m.full_name}</b><span className="v2-spacer" />
-                  <Btn kind="o" size="sm" icon={Plus} onClick={() => addTeam(m.id, 'cart')}>Cart</Btn>
-                  <Btn kind="o" size="sm" icon={Truck} onClick={() => addTeam(m.id, 'ramp')}>Ramp Crew</Btn></div>
-                {teams.filter(t => t.managerId === m.id).length === 0 && <div className="v2-mut v2-small">No teams yet.</div>}
-                {teams.filter(t => t.managerId === m.id).map(t => {
-                  const people = showedRows.filter(r => members[r.hire_id] === t.name);
-                  return (
-                    <div key={t.name} className="v2-row" style={{ padding: '7px 0', borderTop: '1px solid #f0f1f3', alignItems: 'flex-start', flexWrap: 'nowrap' }}>
-                      <Tag tone={t.kind === 'ramp' ? 'a' : 'b'}>{t.kind === 'ramp' ? t.name : `Cart ${t.name}`}</Tag>
-                      <span style={{ flex: 1 }} className="v2-small">{people.length ? people.map(r => fullName(r.hire.person)).join(', ') : <span className="v2-mut">Nobody yet</span>}</span>
-                      <label className="v2-row v2-small" style={{ gap: 6, flexWrap: 'nowrap' }} title="Ramp crews do the asphalt work">Ramp
-                        <Toggle on={t.kind === 'ramp'} onChange={v => setRamp(t.name, v)} label={`Ramp crew ${t.name}`} /></label>
-                      <select className="v2-sel" style={{ padding: '3px 6px', width: 110 }} value={t.managerId} aria-label="Manager"
-                        onChange={e => setTeams(ts => ts.map(x => x.name === t.name ? { ...x, managerId: e.target.value } : x))}>
-                        {mgrs.map(o => <option key={o.id} value={o.id}>{o.full_name.split(' ')[0]}</option>)}
-                      </select>
-                      <button className="v2-gbtn" style={{ width: 28, height: 28 }} aria-label={`Remove team ${t.name}`} onClick={() => removeTeam(t.name)}><X size={14} /></button>
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+            <TeamBoard people={showedRows} teams={teams} members={members} managers={mgrs}
+              onAssign={(h, t) => setMembers(m => { const n = { ...m }; if (t) n[h] = t; else delete n[h]; return n; })}
+              onNewTeam={(mid, kind, h) => { const name = nextTeamName(teams, kind); setTeams(ts => [...ts, { name, kind, managerId: mid }]); if (h) setMembers(m => ({ ...m, [h]: name })); }}
+              onRamp={setRamp}
+              onManager={(t, mid) => setTeams(ts => ts.map(x => x.name === t ? { ...x, managerId: mid } : x))}
+              onRemove={removeTeam} />
             {teams.some(t => !mgrs.some(m => m.id === t.managerId)) && (
               <div className="v2-card"><b>Teams without an available manager</b>
                 {teams.filter(t => !mgrs.some(m => m.id === t.managerId)).map(t => (
