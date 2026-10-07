@@ -7,6 +7,7 @@ import { CheckCircle2, AlertTriangle, Download, Lock } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { closeDay, closeDayCheck, type DaySummaryStored } from '../../lib/workerbook';
 import { pointLegacyAt } from '../../lib/legacy';
+import { linesFromLiveSession, saveLines } from '../../lib/payslips';
 import { Btn, ErrorBox, Loading, Modal } from '../../ui';
 
 const money = (v: number) => `$${Math.round(v).toLocaleString('en-CA')}`;
@@ -37,7 +38,15 @@ export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string
     };
     const close = async () => {
       setBusy('close'); setError(null);
-      try { onClosed(await closeDay(centerId, date)); } catch (e) { setError(e); check.reload(); } finally { setBusy(null); }
+      try {
+        // Save the day's payout lines for payslips first, while the session still exists.
+        if (c?.has_session) {
+          const live = await linesFromLiveSession(centerId);
+          if (live.date !== date) throw new Error(`The open session is for ${live.date}, not ${date}`);
+          await saveLines(centerId, date, live.lines);
+        }
+        onClosed(await closeDay(centerId, date));
+      } catch (e) { setError(e); check.reload(); } finally { setBusy(null); }
     };
 
     const needsExport = !!c?.has_session;
@@ -75,7 +84,7 @@ export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string
               </Line>
             )}
             <div className="v2-note">{c.has_session
-              ? 'Closing keeps a copy of today’s session, then clears it from the RM map and worker logsheets so the next day can start. It can’t be undone from the app.'
+              ? 'Closing saves each worker’s finalized day for payslips, keeps a copy of the session, then clears it from the RM map and worker logsheets so the next day can start. It can’t be undone from the app.'
               : 'There’s no live session to clear for this day; closing records attendance and moves no-shows.'}</div>
             <ErrorBox error={error} />
           </div>

@@ -150,6 +150,27 @@ export function parsePayoutStatsRows(
   return Array.from(map.values()).sort((a, b) => a.contractorId.localeCompare(b.contractorId));
 }
 
+// ─── Payslip totals (one place, used by the sign-out list, the slips and the new app) ───
+export interface PayslipTotals {
+  earnedComm: number; daysWorked: number; trainingBump: number; gi: number;
+  hotels: number; advances: number; travelPkg: number; crackfillDed: number;
+  extraDeductions: number; additions: number; finalPay: number;
+}
+export function payslipTotals(w: WorkerPayslipData, hiddenFields: HiddenFields, season: PayslipSeason): PayslipTotals {
+  const earnedComm   = r2(w.days.reduce((s, d) => s + d.totalPayout, 0));
+  const daysWorked   = w.days.length;
+  const trainingBump = w.is120Program ? r2(Math.max(0, daysWorked * 120 - earnedComm)) : 0;
+  const gi           = w.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
+  const hotels       = hiddenFields.hotels ? 0 : w.hotels;
+  const advances     = hiddenFields.advances ? 0 : w.advances;
+  const travelPkg    = hiddenFields.travelPkg ? 0 : w.travelPkg;
+  const crackfillDed = season === 'sealing' ? r2(earnedComm * ((w.crackfillPct || 0) / 100)) : 0;
+  const extraDeductions = w.extraDeductions.reduce((s, d) => s + d.amount, 0);
+  const additions       = w.additions.reduce((s, a) => s + a.amount, 0);
+  const finalPay = r2(gi - hotels - advances - travelPkg - crackfillDed - extraDeductions + additions);
+  return { earnedComm, daysWorked, trainingBump, gi, hotels, advances, travelPkg, crackfillDed, extraDeductions, additions, finalPay };
+}
+
 // ─── PDF Layout Constants ─────────────────────────────────────────────────────
 
 const PW = 612;               // Letter/Legal share the same width in pt
@@ -368,20 +389,7 @@ function renderSignOutList(
       drawRect(doc, ML, y, CW, SO_ROW_H, bgColor);
 
       // Compute final pay for this worker
-      const earnedComm = r2(w.days.reduce((s, d) => s + d.totalPayout, 0));
-      const daysWorked = w.days.length;
-      const gi = w.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
-      const hotelsVal = hiddenFields.hotels ? 0 : w.hotels;
-      const advancesVal = hiddenFields.advances ? 0 : w.advances;
-      const travelVal = hiddenFields.travelPkg ? 0 : w.travelPkg;
-      const crackfillDed = season === 'sealing'
-        ? r2(earnedComm * ((w.crackfillPct || 0) / 100))
-        : 0;
-      const finalPay = r2(
-        gi - hotelsVal - advancesVal - travelVal - crackfillDed
-        - w.extraDeductions.reduce((s, d) => s + d.amount, 0)
-        + w.additions.reduce((s, a) => s + a.amount, 0)
-      );
+      const { finalPay } = payslipTotals(w, hiddenFields, season);
 
       let cx = soColX;
       // #
@@ -430,21 +438,9 @@ function drawPayslip(
   const isSealing = season === 'sealing';
 
   // ── Compute financials ──
-  const earnedComm   = r2(worker.days.reduce((s, d) => s + d.totalPayout, 0));
-  const daysWorked   = worker.days.length;
-  const trainingBump = worker.is120Program ? r2(Math.max(0, daysWorked * 120 - earnedComm)) : 0;
-  const gi           = worker.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
-  const hotelsVal    = hiddenFields.hotels ? 0 : worker.hotels;
-  const advancesVal  = hiddenFields.advances ? 0 : worker.advances;
-  const travelVal    = hiddenFields.travelPkg ? 0 : worker.travelPkg;
-  const crackfillDed = isSealing
-    ? r2(earnedComm * ((worker.crackfillPct || 0) / 100))
-    : 0;
-  const finalPay     = r2(
-    gi - hotelsVal - advancesVal - travelVal - crackfillDed
-    - worker.extraDeductions.reduce((s, d) => s + d.amount, 0)
-    + worker.additions.reduce((s, a) => s + a.amount, 0)
-  );
+  const t = payslipTotals(worker, hiddenFields, season);
+  const { earnedComm, trainingBump, gi, crackfillDed, finalPay } = t;
+  const hotelsVal = t.hotels, advancesVal = t.advances, travelVal = t.travelPkg;
 
   // ── Row 1: Name banner ──
   drawRect(doc, x, y, CW, H_NAME, '#1A1A1A');

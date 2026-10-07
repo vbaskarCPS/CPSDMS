@@ -33,7 +33,8 @@ export const Day: React.FC = () => {
   const shown = useLoad(() => showedCounts((roster.data || []).map(r => r.hire_id)), [roster.data]);
 
   const today = todayISO();
-  const canMark = date <= today;
+  // A payout day is a day with a session started; before that it's a Workerbook day (bookings).
+  const canMark = day.data?.state === 'live' || day.data?.state === 'closed';
   const locked = day.data?.state === 'closed';
   const canEdit = can('workerbook') && !locked;
 
@@ -62,7 +63,7 @@ export const Day: React.FC = () => {
       <div className="v2-head">
         <Link to="/app/workerbook/days" className="v2-link">‹ Days</Link>
         <span className="v2-h1">{pretty}</span>
-        {locked ? <Tag tone="g">Closed</Tag> : day.data?.state === 'live' ? <Tag tone="b">Live</Tag> : canMark ? <Tag tone="a">Payout day</Tag> : <Tag tone="b">Workerbook day</Tag>}
+        {locked ? <Tag tone="g">Closed · payout day</Tag> : day.data?.state === 'live' ? <Tag tone="b">Live · payout day</Tag> : <Tag tone="v">Workerbook day</Tag>}
         <span className="v2-spacer" />
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, -1)}`)} aria-label="Previous day"><ChevronLeft size={16} /></button>
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, 1)}`)} aria-label="Next day"><ChevronRight size={16} /></button>

@@ -42,7 +42,7 @@ export const Home: React.FC = () => {
         <div className="v2-h1">{greet}, {first}</div>
       </div>
       {!openComp ? (
-        <StatCards comps={comps} onOpen={setOpenComp} />
+        <StatCards comps={comps} onOpen={c => (c.key === 'wb' ? nav('/app/workerbook/days') : setOpenComp(c))} />
       ) : (
         <Card title={openComp.label} right={<button className="v2-link" onClick={() => setOpenComp(null)}>‹ All components</button>}>
           <div className="v2-tiles">

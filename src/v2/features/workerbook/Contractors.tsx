@@ -23,7 +23,12 @@ export const Contractors: React.FC = () => {
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
   const seasonYear = season?.year;
   React.useEffect(() => { if (seasonYear) setYear(seasonYear); }, [seasonYear]);
-  const [filter, setFilter] = useState<Filter>(() => (loc.pathname.endsWith('/status') ? 'NS' : 'active'));
+  // ?status=WDR opens a bucket straight from the Workerbook calendar
+  const [filter, setFilter] = useState<Filter>(() => {
+    const want = new URLSearchParams(loc.search).get('status');
+    if (want && (want === 'active' || want === 'all' || STATUS_LISTS.some(s => s.code === want))) return want as Filter;
+    return loc.pathname.endsWith('/status') ? 'NS' : 'active';
+  });
   const [allCenters, setAllCenters] = useState(false);
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<Hire | null>(null);

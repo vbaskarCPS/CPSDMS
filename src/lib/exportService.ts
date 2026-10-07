@@ -723,6 +723,158 @@ export async function generateSessionExport(): Promise<void> {
  *   PropertyType is SS/SSP on driveway, "Ramp" on asphalt.
  *   Non-asphalt transactions continue to emit a single row via the existing mapping.
  */
+// ─── Payout Stats: one row per worker per validated cart (the payslip's daily lines) ───
+// Pulled out of exportToGoogleSheets so the new app can compute the same rows when a day
+// is closed (and from the saved copy of a closed day) — same maths, same numbers.
+export interface PayoutInput {
+  sessions: any[]; transactions: any[]; users: any[];
+  seasonType: SeasonType; productCostPercent: number; noTaxOnCash: boolean; taxRate: number;
+}
+
+export function computePayoutStats(input: PayoutInput): any[] {
+  const { sessions, transactions, users, seasonType, productCostPercent, noTaxOnCash, taxRate } = input;
+  const isTeamSeason = seasonHasTeams(seasonType);
+  const workersMap = new Map<string, any>();
+  const managersMap = new Map<string, any>();
+  users.forEach(u => {
+    if (u.role === 'Worker') workersMap.set(u.user_id, u);
+    else if (u.role === 'RouteManager') managersMap.set(u.user_id, u);
+  });
+  const txByWorker = new Map<string, any[]>();
+  const txBySession = new Map<string, any[]>();
+  transactions.forEach(tx => {
+    if (!txByWorker.has(tx.worker_id)) txByWorker.set(tx.worker_id, []);
+    txByWorker.get(tx.worker_id)!.push(tx);
+    if (tx.session_id) {
+      if (!txBySession.has(tx.session_id)) txBySession.set(tx.session_id, []);
+      txBySession.get(tx.session_id)!.push(tx);
+    }
+  });
+
+  const statsData: any[] = [];
+  const validatedSessions = sessions.filter(s => s.validation?.isValidated);
+
+  if (isTeamSeason) {
+    for (const session of validatedSessions) {
+      const teamWorkerIds = session.team_worker_ids || [session.worker_id];
+      const sessionTx = getSessionTransactions(session, isTeamSeason, txBySession, txByWorker);
+      const stats = sessionService.recalculateStats(sessionTx.map(mapTxForRecalc), taxRate, seasonType, productCostPercent, noTaxOnCash);
+
+      const sessionObj = {
+        id: session.id, workerId: session.worker_id, date: session.date, status: session.status,
+        stats, validation: session.validation, bonuses: session.bonuses,
+        teamWorkerIds: session.team_worker_ids, equivSplit: session.equiv_split, upsellSplit: session.upsell_split,
+        dailyRouteStore: [], financialStore: [],
+      };
+      const workersArray = Array.from(workersMap.values()).map(u => ({
+        contractorId: u.user_id, firstName: u.name.split(' ')[0], lastName: u.name.split(' ').slice(1).join(' '),
+        alumniRate: u.metadata?.alumniRate || 0, silverRate: u.metadata?.silverRate || 0,
+      }));
+      const payouts = sessionService.calculateTeamPayouts(sessionObj as any, workersArray as any, seasonType);
+      const payoutMap = new Map(payouts.map(p => [p.workerId, p]));
+
+      for (const workerId of teamWorkerIds) {
+        const worker = workersMap.get(workerId);
+        if (!worker) continue;
+        const payout = payoutMap.get(workerId);
+        if (!payout) continue;
+        const equivPercent = payout.equivSplitPercent / 100;
+        const upsellPercent = payout.upsellSplitPercent / 100;
+        const nameParts = (worker?.name || '').split(' ');
+        const managerId = worker?.metadata?.assignedManagerId;
+        const manager = managerId ? managersMap.get(managerId) : null;
+
+        statsData.push({
+          contractorId: workerId, firstName: nameParts[0] || '', lastName: nameParts.slice(1).join(' ') || '',
+          manager: manager?.name || '',
+          stepCount: (stats.stepCount || 0) * equivPercent, iosCount: (stats.iosCount || 0) * upsellPercent,
+          prodBilled: (stats.prodBilled || 0) * equivPercent, prodCash: (stats.prodCash || 0) * equivPercent,
+          prodCheque: (stats.prodCheque || 0) * equivPercent, prodCreditCard: (stats.prodCreditCard || 0) * equivPercent,
+          prodETransfer: (stats.prodETransfer || 0) * equivPercent, prodFlats: (stats.prodFlats || 0) * equivPercent,
+          prodPrepaid: (stats.prodPrepaid || 0) * equivPercent, prodPrepaidSplit: (stats.prodPrepaidSplit || 0) * equivPercent,
+          prodGross: (stats.prodGross || 0) * equivPercent, prodPayable: (stats.prodPayable || 0) * equivPercent,
+          assignedEQ: payout.assignedEQ,
+          upsellCount: (stats.upsellCount || 0) * upsellPercent, upsellCash: (stats.upsellCash || 0) * upsellPercent,
+          upsellCheque: (stats.upsellCheque || 0) * upsellPercent, upsellCreditCard: (stats.upsellCreditCard || 0) * upsellPercent,
+          upsellETransfer: (stats.upsellETransfer || 0) * upsellPercent, upsellPrepaid: (stats.upsellPrepaid || 0) * upsellPercent,
+          upsellGross: (stats.upsellGross || 0) * upsellPercent, upsellPayable: (stats.upsellPayable || 0) * upsellPercent,
+          totalPayoutRate: payout.totalPayoutRate, productionComm: payout.productionCommission,
+          upsellComm: payout.upsellCommission, iosComm: payout.iosCommission,
+          machineRental: payout.machineRentalDeduction, deductions: payout.deductions,
+          bonuses: payout.bonusAmount, finalPay: payout.finalCommission,
+          // NEW: Rejuv-specific columns
+          teamSize: teamWorkerIds.length, equivSplitPercent: payout.equivSplitPercent,
+          upsellSplitPercent: payout.upsellSplitPercent, productCostPercent: productCostPercent,
+          // Crackfiller (Sealing only): full job cost sliced by this worker's equiv
+          // share, so the column sums to the real cost and each payslip itemizes its part.
+          crackfillerCost: (seasonType === 'sealing'
+            ? (session.validation?.crackfillerPounds || 0) * CRACKFILLER_RATE_PER_LB
+            : 0) * equivPercent,
+        });
+      }
+    }
+  } else {
+    for (const session of validatedSessions) {
+      const worker = workersMap.get(session.worker_id);
+      const nameParts = (worker?.name || '').split(' ');
+      const managerId = worker?.metadata?.assignedManagerId;
+      const manager = managerId ? managersMap.get(managerId) : null;
+      const sessionTx = getSessionTransactions(session, isTeamSeason, txBySession, txByWorker);
+      const stats = sessionService.recalculateStats(sessionTx.map(mapTxForRecalc), taxRate, seasonType, productCostPercent, noTaxOnCash);
+      const validation = session.validation || {};
+      const bonuses = session.bonuses || [];
+      const totalBonuses = bonuses.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
+      const basePayoutRate = getPayoutRate(seasonType, 1);
+      const alumniRate = worker?.metadata?.alumniRate || 0;
+      const silverRate = worker?.metadata?.silverRate || 0;
+      const totalPayoutRate = basePayoutRate + alumniRate + silverRate;
+      const actualEQ = validation.actualTotalEQ || stats.totalEQ || 0;
+      const productionComm = actualEQ * totalPayoutRate;
+      const upsellComm = (stats.upsellPayable || 0) * 0.15;
+      const iosComm = (stats.iosCount || 0) * 5;
+      const machineRental = validation.machineRental ? 10 : 0;
+
+      statsData.push({
+        contractorId: session.worker_id, firstName: nameParts[0] || '', lastName: nameParts.slice(1).join(' ') || '',
+        manager: manager?.name || '',
+        stepCount: stats.stepCount || 0, iosCount: stats.iosCount || 0,
+        prodBilled: stats.prodBilled || 0, prodCash: stats.prodCash || 0, prodCheque: stats.prodCheque || 0,
+        prodCreditCard: stats.prodCreditCard || 0, prodETransfer: stats.prodETransfer || 0,
+        prodFlats: stats.prodFlats || 0, prodPrepaid: stats.prodPrepaid || 0, prodPrepaidSplit: stats.prodPrepaidSplit || 0,
+        prodGross: stats.prodGross || 0, prodPayable: stats.prodPayable || 0, assignedEQ: actualEQ,
+        upsellCount: stats.upsellCount || 0, upsellCash: stats.upsellCash || 0, upsellCheque: stats.upsellCheque || 0,
+        upsellCreditCard: stats.upsellCreditCard || 0, upsellETransfer: stats.upsellETransfer || 0,
+        upsellPrepaid: stats.upsellPrepaid || 0, upsellGross: stats.upsellGross || 0, upsellPayable: stats.upsellPayable || 0,
+        totalPayoutRate, productionComm, upsellComm, iosComm,
+        machineRental, deductions: machineRental, bonuses: totalBonuses,
+        finalPay: validation.finalCommission || 0,
+      });
+    }
+  }
+
+  return statsData;
+}
+
+/** The inputs for computePayoutStats from the live session at the current command center. */
+export async function loadLivePayoutInput(): Promise<PayoutInput & { date: string }> {
+  const ccId = getCCId();
+  const date = await sessionService.getDailySessionDate();
+  if (!date) throw new Error('No active session');
+  const [seasonType, productCostPercent, noTaxOnCash] = await Promise.all([
+    sessionService.getSessionSeasonType(), sessionService.getProductCostPercent(), sessionService.getSessionNoTaxOnCash(),
+  ]);
+  const [sessionsRes, transactionsRes, usersRes] = await Promise.all([
+    supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
+    supabase.from('transactions').select('*').eq('command_center_id', ccId),
+    supabase.from('users').select(USER_COLS).eq('command_center_id', ccId),
+  ]);
+  for (const r of [sessionsRes, transactionsRes, usersRes]) if (r.error) throw new Error(r.error.message);
+  return {
+    date, sessions: sessionsRes.data || [], transactions: transactionsRes.data || [], users: usersRes.data || [],
+    seasonType, productCostPercent, noTaxOnCash, taxRate: commandCenterService.getCurrentTaxRate(),
+  };
+}
+
 export async function exportToGoogleSheets(dateTab: string): Promise<{
   bookingsUpdated: number;
   accountsAppended: number;
@@ -901,106 +1053,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   if (logsheetsData.length > 0) await googleSheetsService.appendLogsheets(logsheetsData);
 
   // === 4. Append Payout Stats (VALIDATED ONLY, LIVE RECALC) ===
-  const statsData: any[] = [];
-  const validatedSessions = sessions.filter(s => s.validation?.isValidated);
-
-  if (isTeamSeason) {
-    for (const session of validatedSessions) {
-      const teamWorkerIds = session.team_worker_ids || [session.worker_id];
-      const sessionTx = getSessionTransactions(session, isTeamSeason, txBySession, txByWorker);
-      const stats = sessionService.recalculateStats(sessionTx.map(mapTxForRecalc), taxRate, seasonType, productCostPercent, noTaxOnCash);
-
-      const sessionObj = {
-        id: session.id, workerId: session.worker_id, date: session.date, status: session.status,
-        stats, validation: session.validation, bonuses: session.bonuses,
-        teamWorkerIds: session.team_worker_ids, equivSplit: session.equiv_split, upsellSplit: session.upsell_split,
-        dailyRouteStore: [], financialStore: [],
-      };
-      const workersArray = Array.from(workersMap.values()).map(u => ({
-        contractorId: u.user_id, firstName: u.name.split(' ')[0], lastName: u.name.split(' ').slice(1).join(' '),
-        alumniRate: u.metadata?.alumniRate || 0, silverRate: u.metadata?.silverRate || 0,
-      }));
-      const payouts = sessionService.calculateTeamPayouts(sessionObj as any, workersArray as any, seasonType);
-      const payoutMap = new Map(payouts.map(p => [p.workerId, p]));
-
-      for (const workerId of teamWorkerIds) {
-        const worker = workersMap.get(workerId);
-        if (!worker) continue;
-        const payout = payoutMap.get(workerId);
-        if (!payout) continue;
-        const equivPercent = payout.equivSplitPercent / 100;
-        const upsellPercent = payout.upsellSplitPercent / 100;
-        const nameParts = (worker?.name || '').split(' ');
-        const managerId = worker?.metadata?.assignedManagerId;
-        const manager = managerId ? managersMap.get(managerId) : null;
-
-        statsData.push({
-          contractorId: workerId, firstName: nameParts[0] || '', lastName: nameParts.slice(1).join(' ') || '',
-          manager: manager?.name || '',
-          stepCount: (stats.stepCount || 0) * equivPercent, iosCount: (stats.iosCount || 0) * upsellPercent,
-          prodBilled: (stats.prodBilled || 0) * equivPercent, prodCash: (stats.prodCash || 0) * equivPercent,
-          prodCheque: (stats.prodCheque || 0) * equivPercent, prodCreditCard: (stats.prodCreditCard || 0) * equivPercent,
-          prodETransfer: (stats.prodETransfer || 0) * equivPercent, prodFlats: (stats.prodFlats || 0) * equivPercent,
-          prodPrepaid: (stats.prodPrepaid || 0) * equivPercent, prodPrepaidSplit: (stats.prodPrepaidSplit || 0) * equivPercent,
-          prodGross: (stats.prodGross || 0) * equivPercent, prodPayable: (stats.prodPayable || 0) * equivPercent,
-          assignedEQ: payout.assignedEQ,
-          upsellCount: (stats.upsellCount || 0) * upsellPercent, upsellCash: (stats.upsellCash || 0) * upsellPercent,
-          upsellCheque: (stats.upsellCheque || 0) * upsellPercent, upsellCreditCard: (stats.upsellCreditCard || 0) * upsellPercent,
-          upsellETransfer: (stats.upsellETransfer || 0) * upsellPercent, upsellPrepaid: (stats.upsellPrepaid || 0) * upsellPercent,
-          upsellGross: (stats.upsellGross || 0) * upsellPercent, upsellPayable: (stats.upsellPayable || 0) * upsellPercent,
-          totalPayoutRate: payout.totalPayoutRate, productionComm: payout.productionCommission,
-          upsellComm: payout.upsellCommission, iosComm: payout.iosCommission,
-          machineRental: payout.machineRentalDeduction, deductions: payout.deductions,
-          bonuses: payout.bonusAmount, finalPay: payout.finalCommission,
-          // NEW: Rejuv-specific columns
-          teamSize: teamWorkerIds.length, equivSplitPercent: payout.equivSplitPercent,
-          upsellSplitPercent: payout.upsellSplitPercent, productCostPercent: productCostPercent,
-          // Crackfiller (Sealing only): full job cost sliced by this worker's equiv
-          // share, so the column sums to the real cost and each payslip itemizes its part.
-          crackfillerCost: (seasonType === 'sealing'
-            ? (session.validation?.crackfillerPounds || 0) * CRACKFILLER_RATE_PER_LB
-            : 0) * equivPercent,
-        });
-      }
-    }
-  } else {
-    for (const session of validatedSessions) {
-      const worker = workersMap.get(session.worker_id);
-      const nameParts = (worker?.name || '').split(' ');
-      const managerId = worker?.metadata?.assignedManagerId;
-      const manager = managerId ? managersMap.get(managerId) : null;
-      const sessionTx = getSessionTransactions(session, isTeamSeason, txBySession, txByWorker);
-      const stats = sessionService.recalculateStats(sessionTx.map(mapTxForRecalc), taxRate, seasonType, productCostPercent, noTaxOnCash);
-      const validation = session.validation || {};
-      const bonuses = session.bonuses || [];
-      const totalBonuses = bonuses.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
-      const basePayoutRate = getPayoutRate(seasonType, 1);
-      const alumniRate = worker?.metadata?.alumniRate || 0;
-      const silverRate = worker?.metadata?.silverRate || 0;
-      const totalPayoutRate = basePayoutRate + alumniRate + silverRate;
-      const actualEQ = validation.actualTotalEQ || stats.totalEQ || 0;
-      const productionComm = actualEQ * totalPayoutRate;
-      const upsellComm = (stats.upsellPayable || 0) * 0.15;
-      const iosComm = (stats.iosCount || 0) * 5;
-      const machineRental = validation.machineRental ? 10 : 0;
-
-      statsData.push({
-        contractorId: session.worker_id, firstName: nameParts[0] || '', lastName: nameParts.slice(1).join(' ') || '',
-        manager: manager?.name || '',
-        stepCount: stats.stepCount || 0, iosCount: stats.iosCount || 0,
-        prodBilled: stats.prodBilled || 0, prodCash: stats.prodCash || 0, prodCheque: stats.prodCheque || 0,
-        prodCreditCard: stats.prodCreditCard || 0, prodETransfer: stats.prodETransfer || 0,
-        prodFlats: stats.prodFlats || 0, prodPrepaid: stats.prodPrepaid || 0, prodPrepaidSplit: stats.prodPrepaidSplit || 0,
-        prodGross: stats.prodGross || 0, prodPayable: stats.prodPayable || 0, assignedEQ: actualEQ,
-        upsellCount: stats.upsellCount || 0, upsellCash: stats.upsellCash || 0, upsellCheque: stats.upsellCheque || 0,
-        upsellCreditCard: stats.upsellCreditCard || 0, upsellETransfer: stats.upsellETransfer || 0,
-        upsellPrepaid: stats.upsellPrepaid || 0, upsellGross: stats.upsellGross || 0, upsellPayable: stats.upsellPayable || 0,
-        totalPayoutRate, productionComm, upsellComm, iosComm,
-        machineRental, deductions: machineRental, bonuses: totalBonuses,
-        finalPay: validation.finalCommission || 0,
-      });
-    }
-  }
+  const statsData = computePayoutStats({ sessions, transactions, users, seasonType, productCostPercent, noTaxOnCash, taxRate });
 
   if (statsData.length > 0) {
     await googleSheetsService.appendPayoutStats(dateTab, statsData);
