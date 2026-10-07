@@ -7,8 +7,8 @@ import { Link } from 'react-router-dom';
 import { FileSpreadsheet, Link2, Sparkles, Undo2, Upload } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import {
-  applyMapping, cell, FIELDS, findHeaderRow, fingerprint, guessMapping, formatPhone,
-  type Applied, type ClientRow, type ColumnRule, type Field, type Mapping,
+  applyMapping, cell, FIELDS, findHeaderRow, fingerprint, guessMapping, formatPhone, lineLabel, SERVICE_LINES,
+  type Applied, type ClientRow, type ColumnRule, type Field, type Mapping, type ServiceLine,
 } from '../../lib/clientImport';
 import {
   bennyFixAddresses, bennyMap, commitImport, fetchSheetCsv, findRecipe, finishStuckImport, geocode, listImports, listRecipes,
@@ -198,6 +198,14 @@ export const ClientLists: React.FC = () => {
               <Btn kind="o" size="sm" onClick={reset}>Start over</Btn>
             </div>
             {(bennyNote || mapping.notes) && <div className="v2-note" style={{ whiteSpace: 'pre-wrap' }}>{bennyNote || mapping.notes}</div>}
+            <div className="v2-row" style={{ marginTop: 12, gap: 8 }}>
+              <b>These are past clients of</b>
+              {SERVICE_LINES.map(l => (
+                <button key={l.key} type="button" className={`v2-chip${mapping.serviceLine === l.key ? ' on' : ''}`}
+                  onClick={() => setMapping({ ...mapping, serviceLine: l.key as ServiceLine })}>{l.label}</button>
+              ))}
+              {!mapping.serviceLine && <span className="v2-small" style={{ color: '#b45309' }}>Pick the service. Each route keeps a separate past-client list per service.</span>}
+            </div>
             <div className="v2-grid4" style={{ marginTop: 12 }}>
               <label className="v2-small"><span className="v2-label">Title row</span>
                 <input className="v2-input" type="number" min={1} value={mapping.headerRow + 1} onChange={e => setMapping({ ...mapping, headerRow: Math.max(0, Number(e.target.value) - 1) })} /></label>
@@ -253,7 +261,7 @@ export const ClientLists: React.FC = () => {
               <Btn kind="o" size="sm" icon={Sparkles} disabled={!!busy} onClick={fixWithBenny}>Ask The Benny to read {preview.skipped.filter(s => s.reason !== 'No address' && s.text).length} addresses</Btn>
             )}
             <span className="v2-spacer" />
-            <Btn disabled={!!busy || preview.clients.length === 0} onClick={matchAll}>Next: match to routes</Btn>
+            <Btn disabled={!!busy || preview.clients.length === 0 || !mapping.serviceLine} onClick={matchAll}>Next: match to routes</Btn>
           </div>
         </div>
       )}
@@ -319,7 +327,8 @@ const Review: React.FC<{
                   <td>{m?.route_code ? <><b>{m.route_code}</b><div className="v2-small v2-mut">{HOW[m.how || ''] || ''}</div></> : <Tag tone="a">No route</Tag>}</td>
                   <td className="v2-small">{c.people.map(p => `${p.first} ${p.last}`.trim()).join(', ') || '—'}</td>
                   <td className="v2-small">{c.phones.map(formatPhone).join(', ') || '—'}</td>
-                  <td className="v2-small">{c.history.map(h => [h.year, h.service, h.price && `$${h.price}`].filter(Boolean).join(' ')).join(' · ') || '—'}</td>
+                  <td className="v2-small">{c.history.map(h => [h.year, h.service || (h.line && lineLabel(h.line)), h.price && `$${h.price}`].filter(Boolean).join(' ')).join(' · ') || '—'}
+                    {[...new Set(c.history.map(h => h.line).filter(Boolean))].map(l => <span key={l} style={{ marginLeft: 6 }}><Tag tone="b">{lineLabel(l)}</Tag></span>)}</td>
                   <td>{c.do_not_call && <Tag tone="r">DNC</Tag>} {c.do_not_text && <Tag tone="r">No text</Tag>} {c.tags.map(t => <Tag key={t}>{t}</Tag>)}</td>
                   <td className="v2-small v2-mut">{c.rows.join(', ')}</td>
                 </tr>

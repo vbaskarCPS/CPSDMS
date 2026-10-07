@@ -43,12 +43,13 @@ select x->>'i' i, x->>'route_code' route, x->>'how' how, x->>'street_norm' norm 
 select app_client_import_begin('calgary.xlsx','file',null,'fp1','Callbook 2026',array['FIRST','LAST'],'{"columns":{}}','notes') as imp1 \gset
 select app_client_import_add(:'imp1', '[
  {"house_no":"2201","street_name":"Baronwood Dr","city":"Oakville","route_code":"WO08","match_how":"house","lat":43.43,"lng":-79.768,
-  "people":[{"first":"Ann","last":"Lee"}],"phones":["9055551234"],"history":[{"year":2025,"service":"AER","price":"120","contractor":"Bo"}],"do_not_call":false},
+  "people":[{"first":"Ann","last":"Lee"}],"phones":["9055551234"],"history":[{"year":2025,"service":"AER","price":"120","contractor":"Bo","line":"aeration"}],"do_not_call":false},
  {"house_no":"2403","street_name":"Alstep Way","city":"Oakville","route_code":"WO06","match_how":"street",
-  "people":[{"first":"Sam","last":"Wu"}],"history":[{"year":2024,"service":"SS","price":"200","contractor":"Max"}],"tags":["NO SP"]},
+  "people":[{"first":"Sam","last":"Wu"}],"history":[{"year":2024,"service":"SS","price":"200","contractor":"Max","line":"sealing"}],"tags":["NO SP"]},
  {"house_no":"","street_name":"Bad"}]');
 select app_client_import_finish(:'imp1', '{"rows":3}');
-select house_no, street_norm, city, route_code, people, phones, tags from clients order by house_no;
+select house_no, street_norm, city, route_code, people, phones, tags, services from clients order by house_no;
+select 'by service', route_code, service, (select string_agg(e->>'firstName' || ':' || jsonb_array_length(e->'history'), ', ') from jsonb_array_elements(clients) e) from map_pcl_by_service order by 2, 3;
 select route_code, client_count, (select string_agg(e->>'firstName' || ':' || coalesce(e->>'src','old') || ':' || jsonb_array_length(e->'history'), ', ') from jsonb_array_elements(clients) e) entries
   from map_pcl_cache order by route_code;
 
@@ -56,10 +57,13 @@ select route_code, client_count, (select string_agg(e->>'firstName' || ':' || co
 select app_client_import_begin('book2.csv','sheet','https://docs.google.com/x','fp2','Book 2',null,'{}',null) as imp2 \gset
 select app_client_import_add(:'imp2', '[
  {"house_no":"2201","street_name":"Baronwood Drive","people":[{"first":"Ann","last":"Lee"},{"first":"Bob","last":"Lee"}],
-  "phones":["9055559999","9055551234"],"history":[{"year":2026,"service":"AER","price":"130","contractor":"Bo"},{"year":2025,"service":"AER","price":"120","contractor":"Bo"}],"do_not_call":true},
+  "phones":["9055559999","9055551234"],"history":[{"year":2026,"service":"SS","price":"130","contractor":"Bo","line":"sealing"},{"year":2025,"service":"AER","price":"120","contractor":"Bo","line":"aeration"}],"do_not_call":true},
  {"house_no":"2280","street_name":"Baronwood Dr","city":"Oakville","route_code":"WO09","match_how":"address_point","people":[{"first":"Cy","last":"Ng"}]}]');
 select app_client_import_finish(:'imp2', '{}');
-select house_no, people, phones, jsonb_array_length(history) hist, do_not_call from clients where house_no = '2201';
+select house_no, people, phones, jsonb_array_length(history) hist, do_not_call, services from clients where house_no = '2201';
+select route_code, client_count, (select string_agg(e->>'firstName' || ':' || coalesce(e->>'src','old') || ':' || jsonb_array_length(e->'history'), ', ') from jsonb_array_elements(clients) e) entries
+  from map_pcl_cache order by route_code;
+select 'by service', route_code, service, (select string_agg(e->>'firstName' || ':' || jsonb_array_length(e->'history'), ', ') from jsonb_array_elements(clients) e) from map_pcl_by_service order by 2, 3;
 
 \echo '== 5 undo #1 refused (2201 changed by #2); undo #2 then #1 restores everything'
 select app_client_import_undo(:'imp1');
@@ -67,6 +71,7 @@ select app_client_import_undo(:'imp2');
 select house_no, people, phones, jsonb_array_length(history) hist, do_not_call from clients order by house_no;
 select app_client_import_undo(:'imp1');
 select 'clients left', count(*) from clients;
+select 'by service left', count(*) from map_pcl_by_service;
 select route_code, client_count, (select string_agg(e->>'firstName' || ':' || coalesce(e->>'src','old'), ', ') from jsonb_array_elements(clients) e) entries
   from map_pcl_cache order by route_code;
 select app_client_import_undo(:'imp1');

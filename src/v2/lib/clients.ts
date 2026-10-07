@@ -98,7 +98,7 @@ export interface ImportRow {
   house_no: string; street_name: string; unit: string; city: string; province: string; postal_code: string;
   lat: number | null; lng: number | null; route_code: string | null; match_how: string | null;
   people: { first: string; last: string }[]; phones: string[]; emails: string[];
-  history: { year: number | null; service: string; price: string; contractor: string; payment: string }[];
+  history: { year: number | null; service: string; price: string; contractor: string; payment: string; line: string }[];
   tags: string[]; notes: string; call_first: string; do_not_call: boolean; do_not_text: boolean;
 }
 
@@ -137,12 +137,14 @@ export interface Client {
   id: string; house_no: string; street_name: string; unit: string | null; city: string | null; province: string | null; postal_code: string | null;
   lat: number | null; lng: number | null; route_code: string | null; match_how: string | null;
   people: { first: string; last: string }[]; phones: string[]; emails: string[];
-  history: { year: number | null; service: string; price: string; contractor: string; payment: string }[];
+  history: { year: number | null; service: string; price: string; contractor: string; payment: string; line?: string }[];
+  services: string[];
   tags: string[]; notes: string | null; call_first: string | null; do_not_call: boolean; do_not_text: boolean; updated_at: string;
 }
-export async function listClients(opts: { q?: string; route?: string; noRoute?: boolean; page?: number; pageSize?: number }): Promise<{ rows: Client[]; total: number }> {
+export async function listClients(opts: { q?: string; route?: string; noRoute?: boolean; service?: string; page?: number; pageSize?: number }): Promise<{ rows: Client[]; total: number }> {
   const size = opts.pageSize || 100; const from = (opts.page || 0) * size;
   let qb = db.from('clients').select('*', { count: 'exact' });
+  if (opts.service) qb = qb.contains('services', [opts.service]);
   if (opts.noRoute) qb = qb.is('route_code', null);
   else if (opts.route) qb = qb.eq('route_code', opts.route.toUpperCase());
   const q = (opts.q || '').trim().toLowerCase();

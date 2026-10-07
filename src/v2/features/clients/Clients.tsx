@@ -5,7 +5,7 @@ import { Search } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import { listClients, type Client } from '../../lib/clients';
-import { formatPhone } from '../../lib/clientImport';
+import { formatPhone, lineLabel, SERVICE_LINES } from '../../lib/clientImport';
 import { Btn, ErrorBox, Loading, Modal, Tag } from '../../ui';
 
 const HOW: Record<string, string> = { house: 'house on the route', address_point: 'official address point', geocode: 'map search', street: 'only route on the street', given: 'the list’s route code', manual: 'set by hand' };
@@ -16,10 +16,11 @@ export const Clients: React.FC = () => {
   const [q, setQ] = useState('');
   const [debounced, setDebounced] = useState('');
   const [filter, setFilter] = useState<'all' | 'none'>('all');
+  const [service, setService] = useState('');
   const [page, setPage] = useState(0);
   const [open, setOpen] = useState<Client | null>(null);
   useEffect(() => { const t = setTimeout(() => { setDebounced(q); setPage(0); }, 300); return () => clearTimeout(t); }, [q]);
-  const list = useLoad(() => listClients({ q: debounced, noRoute: filter === 'none', page }), [debounced, filter, page]);
+  const list = useLoad(() => listClients({ q: debounced, noRoute: filter === 'none', service, page }), [debounced, filter, service, page]);
 
   if (!can('dialer') && !can('sa_territory')) return <div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to clients.</div></div>;
   const total = list.data?.total || 0;
@@ -34,6 +35,10 @@ export const Clients: React.FC = () => {
       <div className="v2-row" style={{ marginBottom: 12 }}>
         <button className={`v2-chip${filter === 'all' ? ' on' : ''}`} onClick={() => { setFilter('all'); setPage(0); }}>All</button>
         <button className={`v2-chip${filter === 'none' ? ' on' : ''}`} onClick={() => { setFilter('none'); setPage(0); }}>Needs attention · no route</button>
+        <select className="v2-sel" style={{ width: 190 }} value={service} onChange={e => { setService(e.target.value); setPage(0); }} aria-label="Service">
+          <option value="">Every service</option>
+          {SERVICE_LINES.map(l => <option key={l.key} value={l.key}>{l.label} clients</option>)}
+        </select>
         <span className="v2-spacer" />
         <div style={{ position: 'relative' }}>
           <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: '#6b7280' }} />
@@ -45,7 +50,7 @@ export const Clients: React.FC = () => {
         <div className="v2-card" style={{ padding: 0 }}>
           <div className="v2-table-wrap">
             <table className="v2-table">
-              <thead><tr><th>Address</th><th>Route</th><th>Name</th><th>Phone</th><th>Last service</th><th>Flags</th></tr></thead>
+              <thead><tr><th>Address</th><th>Route</th><th>Name</th><th>Phone</th><th>Services</th><th>Last service</th><th>Flags</th></tr></thead>
               <tbody>
                 {(list.data?.rows || []).map(c => {
                   const last = c.history[0];
@@ -55,12 +60,13 @@ export const Clients: React.FC = () => {
                       <td>{c.route_code ? <b>{c.route_code}</b> : <Tag tone="a">No route</Tag>}</td>
                       <td>{name(c) || '—'}</td>
                       <td className="v2-small">{c.phones[0] ? formatPhone(c.phones[0]) : '—'}{c.phones.length > 1 && <span className="v2-mut"> +{c.phones.length - 1}</span>}</td>
+                      <td>{(c.services || []).map(l => <span key={l} style={{ marginRight: 4 }}><Tag tone="b">{lineLabel(l)}</Tag></span>)}</td>
                       <td className="v2-small">{last ? [last.year, last.service, last.price && `$${last.price}`].filter(Boolean).join(' ') : '—'}</td>
                       <td>{c.do_not_call && <Tag tone="r">DNC</Tag>} {c.do_not_text && <Tag tone="r">No text</Tag>} {c.call_first && <Tag tone="a">Call first</Tag>}</td>
                     </tr>
                   );
                 })}
-                {(list.data?.rows || []).length === 0 && <tr><td colSpan={6} className="v2-mut" style={{ textAlign: 'center', padding: 24 }}>No clients{debounced ? ' match that search' : ' yet'}.</td></tr>}
+                {(list.data?.rows || []).length === 0 && <tr><td colSpan={7} className="v2-mut" style={{ textAlign: 'center', padding: 24 }}>No clients{debounced ? ' match that search' : ' yet'}.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -103,8 +109,8 @@ const ClientCard: React.FC<{ c: Client; onClose: () => void }> = ({ c, onClose }
       <div>
         <div className="v2-card-h">Service history</div>
         {c.history.length ? (
-          <table className="v2-table"><thead><tr><th>Year</th><th>Service</th><th>Price</th><th>Contractor</th><th>Paid</th></tr></thead>
-            <tbody>{c.history.map((h, i) => <tr key={i}><td>{h.year || '—'}</td><td>{h.service || '—'}</td><td>{h.price ? (/^\d/.test(h.price) ? `$${h.price}` : h.price) : '—'}</td><td>{h.contractor || '—'}</td><td>{h.payment || '—'}</td></tr>)}</tbody>
+          <table className="v2-table"><thead><tr><th>Year</th><th>Line</th><th>Service</th><th>Price</th><th>Contractor</th><th>Paid</th></tr></thead>
+            <tbody>{c.history.map((h, i) => <tr key={i}><td>{h.year || '—'}</td><td>{h.line ? lineLabel(h.line) : '—'}</td><td>{h.service || '—'}</td><td>{h.price ? (/^\d/.test(h.price) ? `$${h.price}` : h.price) : '—'}</td><td>{h.contractor || '—'}</td><td>{h.payment || '—'}</td></tr>)}</tbody>
           </table>
         ) : <div className="v2-mut">No history yet.</div>}
       </div>

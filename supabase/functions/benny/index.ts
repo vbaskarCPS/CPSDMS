@@ -45,12 +45,13 @@ const MAP_TOOL = {
       },
       defaultYear: { type: ['integer', 'null'], description: 'Year for history when the list has no year column (e.g. from the file name)' },
       defaultService: { type: ['string', 'null'], description: 'Service code when the whole list is one service (AER aeration, SS sealing, RJ rejuv, WW windows)' },
+      serviceLine: { type: ['string', 'null'], enum: ['aeration', 'lawn_rejuv', 'sealing', 'cleaning', null], description: 'Which service these are past clients of: aeration, sealing (driveway sealing, ramps), lawn_rejuv, or cleaning (window cleaning). From the file name, title or service codes. null only if truly unclear.' },
       defaultCity: { type: ['string', 'null'] },
       defaultProvince: { type: ['string', 'null'], description: 'Two-letter province code' },
       yesValues: { type: 'array', items: { type: 'string' }, description: 'Values in this file that mean yes/serviced besides yes, y, x, 1, true' },
       notes: { type: 'string', description: 'Two to five short plain-English sentences for the person importing: what this list is and anything unusual' },
     },
-    required: ['headerRow', 'columns', 'notes'],
+    required: ['headerRow', 'columns', 'serviceLine', 'notes'],
   },
 };
 
@@ -72,7 +73,7 @@ Callbook conventions you will see:
 - "NO SP" (not interested in the Star Plan) and "2nd" (second service) are tags.
 - "HOUSE #" or "PREFIX" is house_no; "STREET NAME" is street.
 - Columns that repeat for several years (e.g. "2024 Price", "2025 Price") are history columns with their own "year".
-If a column's purpose is unclear, choose "ignore" and say so in notes. Infer defaultYear from the file name or a title row when there is no year column, and defaultService when the whole list is one service. Give every column index in the header row an entry.`;
+If a column's purpose is unclear, choose "ignore" and say so in notes. Each route keeps a separate past-client list per service, so always say which service the list is for (serviceLine): aeration callbooks (codes AER, FO/FP/BO), sealing callbooks (SS, SSP, SSF, ramp), lawn rejuvenation (RJ), window cleaning (WW). Infer defaultYear from the file name or a title row when there is no year column, and defaultService when the whole list is one service. Give every column index in the header row an entry.`;
 
 async function claude(apiKey: string, body: Record<string, unknown>) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {

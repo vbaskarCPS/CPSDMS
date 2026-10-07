@@ -1667,6 +1667,18 @@ function distToSegmentMetersLocal(
  * IMPORTANT: throws on Supabase errors so callers can distinguish a real
  * failure (worth retrying) from a clean empty result (no rows exist).
  */
+/** The live session's season at a centre ('aeration', 'sealing', ...), or null. */
+async function activeSeasonFor(ccId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('daily_sessions')
+    .select('season_type')
+    .eq('command_center_id', ccId)
+    .eq('is_active', true)
+    .limit(1);
+  if (error) return null;
+  return (data?.[0]?.season_type as string | undefined) || null;
+}
+
 export async function getWorkerPCL(
   routeCodes: string[],
   ccId: string,
@@ -1689,6 +1701,33 @@ export async function getWorkerPCL(
   for (const row of data || []) {
     const list = (row.clients || []) as PCLClientGroup[];
     if (list.length > 0) ccByRoute.set(row.route_code, list);
+  }
+
+  // EACH SERVICE HAS ITS OWN PAST CLIENTS.
+  //
+  // map_pcl_cache is the sealing list. Aeration, lawn rejuv and window-cleaning clients
+  // (loaded through the new app's client-list import) live in map_pcl_by_service, one list per
+  // route and service. A session that isn't sealing reads its own service's list; the centre's
+  // own rows fill any gaps, as below.
+  const season = await activeSeasonFor(ccId);
+  if (season && season !== 'sealing') {
+    const CHUNK = 100;
+    for (let i = 0; i < routeCodes.length; i += CHUNK) {
+      const { data: rows, error: e } = await supabase
+        .from('map_pcl_by_service')
+        .select('route_code, clients')
+        .eq('service', season)
+        .in('route_code', routeCodes.slice(i, i + CHUNK));
+      if (e) { console.warn('[PCL Cache] map_pcl_by_service read failed:', e.message); break; }
+      for (const row of rows || []) {
+        const list = (row.clients || []) as PCLClientGroup[];
+        if (list.length > 0) result.set(row.route_code, list);
+      }
+    }
+    for (const rc of routeCodes) {
+      if (!result.has(rc) && ccByRoute.has(rc)) result.set(rc, ccByRoute.get(rc)!);
+    }
+    return result;
   }
 
   // THE MAP'S PCLs WIN.
