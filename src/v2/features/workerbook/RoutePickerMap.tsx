@@ -7,6 +7,7 @@ import type { PlanManager, PlanRoute } from '../../lib/startSession';
 
 export const MANAGER_COLORS = ['#2563eb', '#d97706', '#7c3aed', '#0d9488', '#e11d48', '#0284c7', '#65a30d', '#c026d3'];
 const OFF = '#9ca3af';
+export const TAKEN = '#f9a8d4';          // already given to another manager
 
 // Without a Mapbox token (local builds) the routes still draw, on a plain background.
 const BLANK_STYLE: mapboxgl.StyleSpecification = {
@@ -34,10 +35,15 @@ export const RoutePickerMap: React.FC<Props> = ({ areas, shapes, routes, manager
   const shapeByCode = useMemo(() => new Map(shapes.map(s => [s.code, s])), [shapes]);
   const shapesRef = useRef(shapeByCode);
   shapesRef.current = shapeByCode;
-  const colorOf = useMemo(() => {
-    const m = new Map(managers.map((x, i) => [x.id, MANAGER_COLORS[i % MANAGER_COLORS.length]]));
-    return (code: string) => { const r = routes.get(code); return r ? m.get(r.managerId) || OFF : OFF; };
-  }, [managers, routes]);
+  // Only the manager you're picking for shows in their colour; routes another manager already has are light pink.
+  const styleOf = useMemo(() => {
+    const color = MANAGER_COLORS[Math.max(0, managers.findIndex(x => x.id === active)) % MANAGER_COLORS.length];
+    return (code: string): { color: string; st: 0 | 1 | 2 } => {
+      const r = routes.get(code);
+      if (!r) return { color: OFF, st: 0 };
+      return r.managerId === active ? { color, st: 2 } : { color: TAKEN, st: 1 };
+    };
+  }, [managers, routes, active]);
 
   const bounds = useMemo(() => {
     const b = new mapboxgl.LngLatBounds();
@@ -73,11 +79,11 @@ export const RoutePickerMap: React.FC<Props> = ({ areas, shapes, routes, manager
     const lines: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
     const labels: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
     for (const s of shapes) {
-      const color = colorOf(s.code); const on = routes.has(s.code);
-      for (const line of s.lines) lines.features.push({ type: 'Feature', properties: { code: s.code, color, on: on ? 1 : 0 }, geometry: { type: 'LineString', coordinates: line } });
+      const { color, st } = styleOf(s.code);
+      for (const line of s.lines) lines.features.push({ type: 'Feature', properties: { code: s.code, color, st }, geometry: { type: 'LineString', coordinates: line } });
       const all = s.lines.flat(); if (!all.length) continue;
       const mid = all[Math.floor(all.length / 2)];
-      labels.features.push({ type: 'Feature', properties: { code: s.code, color, on: on ? 1 : 0 }, geometry: { type: 'Point', coordinates: mid } });
+      labels.features.push({ type: 'Feature', properties: { code: s.code, color, st }, geometry: { type: 'Point', coordinates: mid } });
     }
     const src = m.getSource('routes') as mapboxgl.GeoJSONSource | undefined;
     if (src) { src.setData(lines); (m.getSource('route-labels') as mapboxgl.GeoJSONSource).setData(labels); return; }
@@ -85,10 +91,10 @@ export const RoutePickerMap: React.FC<Props> = ({ areas, shapes, routes, manager
     m.addSource('route-labels', { type: 'geojson', data: labels });
     m.addLayer({ id: 'routes-hit', type: 'line', source: 'routes', paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 18 } });
     m.addLayer({ id: 'routes-line', type: 'line', source: 'routes', layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': ['get', 'color'], 'line-width': ['case', ['==', ['get', 'on'], 1], 6, 3], 'line-opacity': ['case', ['==', ['get', 'on'], 1], 0.95, 0.55] } });
+      paint: { 'line-color': ['get', 'color'], 'line-width': ['match', ['get', 'st'], 2, 6, 1, 4, 3], 'line-opacity': ['match', ['get', 'st'], 2, 0.95, 1, 0.9, 0.55] } });
     if (hasToken.current) m.addLayer({ id: 'routes-label', type: 'symbol', source: 'route-labels',
       layout: { 'text-field': ['get', 'code'], 'text-size': 12, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': false },
-      paint: { 'text-color': ['case', ['==', ['get', 'on'], 1], ['get', 'color'], '#4b5563'], 'text-halo-color': '#fff', 'text-halo-width': 2 } });
+      paint: { 'text-color': ['match', ['get', 'st'], 2, ['get', 'color'], 1, '#db2777', '#4b5563'], 'text-halo-color': '#fff', 'text-halo-width': 2 } });
     const pick = (e: mapboxgl.MapLayerMouseEvent) => {
       const code = e.features?.[0]?.properties?.code as string | undefined;
       const shape = code ? shapesRef.current.get(code) : undefined;
@@ -99,7 +105,7 @@ export const RoutePickerMap: React.FC<Props> = ({ areas, shapes, routes, manager
       m.on('mouseenter', id, () => { m.getCanvas().style.cursor = 'pointer'; });
       m.on('mouseleave', id, () => { m.getCanvas().style.cursor = ''; });
     }
-  }, [ready, shapes, routes, colorOf]);
+  }, [ready, shapes, routes, styleOf]);
 
   // fit to the center's areas when they load
   useEffect(() => {
@@ -112,7 +118,8 @@ export const RoutePickerMap: React.FC<Props> = ({ areas, shapes, routes, manager
       <div ref={box} className="v2-routemap-canvas" aria-label="Map of this center's routes. Tap a route to pick it." />
       {failed && <div className="v2-routemap-msg">The map couldn’t load ({failed}). Use the list instead.</div>}
       {!failed && areas.length > 0 && shapes.length === 0 && <div className="v2-routemap-msg">Loading routes…</div>}
-      {active && <div className="v2-routemap-hint"><span style={{ background: activeColor }} />Tap routes to give them to {managers.find(m => m.id === active)?.full_name.split(' ')[0]}</div>}
+      {active && <div className="v2-routemap-hint"><span style={{ background: activeColor }} />Tap routes to give them to {managers.find(m => m.id === active)?.full_name.split(' ')[0]}
+        {[...routes.values()].some(r => r.managerId !== active) && <><span style={{ background: TAKEN, marginLeft: 8 }} /><i className="v2-mut" style={{ fontStyle: 'normal', fontWeight: 600 }}>already given out</i></>}</div>}
     </div>
   );
 };
