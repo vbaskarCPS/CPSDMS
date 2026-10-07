@@ -6,7 +6,7 @@ import {
   Lock, Unlock, Leaf, CreditCard, Shovel, Droplets, Bookmark, Navigation, History,
   CheckCircle2, MapPin as MapPinIcon, Smartphone, LayoutGrid, X as XIcon,
 } from 'lucide-react';
-import { getStorageItem } from '../../lib/localStorage';
+import { getStorageItem, setStorageItem } from '../../lib/localStorage';
 import {
   ManagementUser, DailySessionData, LogsheetSession, SeasonType,
   PendingSale, SEASON_CONFIGS,
@@ -414,6 +414,35 @@ const RMLogbook: React.FC = () => {
     };
   }, [navigate]);
 
+  // MAP SHARING: a manager who has given me full access (RM map › Layers) counts
+  // as a manager I float for — the same access as an office-set floater. Worked
+  // out from today's manager rows (my office floatingFor + grants to me), minus
+  // any I've hidden on this device, and kept on current_user so every floater
+  // check (the map, stats, asphalt) sees it. Office floats can't be hidden.
+  const [accessTick, setAccessTick] = useState(0);
+  useEffect(() => {
+    const onChange = () => setAccessTick(t => t + 1);
+    window.addEventListener('cpsdms:rm-access', onChange);
+    return () => window.removeEventListener('cpsdms:rm-access', onChange);
+  }, []);
+  useEffect(() => {
+    if (!dailyData || !currentUser) return;
+    const me = dailyData.managers.find(m => m.userId === currentUser.userId);
+    if (!me) return;
+    const hidden = getStorageItem<string[]>(`rm_hidden_access:${me.userId}`, []);
+    const granted = dailyData.managers
+      .filter(m => m.userId !== me.userId && (m.mapSharing?.access || []).includes(me.userId) && !hidden.includes(m.userId))
+      .map(m => m.userId);
+    const effective = [...new Set([...(me.floatingFor || []), ...granted])].sort();
+    const current = [...((currentUser.floatingFor as string[] | undefined) || [])].sort();
+    if (effective.join('|') === current.join('|')) return;
+    const updated = { ...currentUser, floatingFor: effective };
+    setCurrentUser(updated);
+    setStorageItem('current_user', updated);
+    if (effective.length > 0) setDigitalMappingEnabled(true);
+    refreshData(updated); // load the newly covered managers' sales straight away
+  }, [dailyData?.managers, currentUser, accessTick]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Defensive: if mapping is on, force activeTab to maps regardless.
   useEffect(() => {
     if (digitalMappingEnabled && activeTab !== 'maps') {
@@ -442,7 +471,7 @@ const RMLogbook: React.FC = () => {
       unsubscribe();
       clearInterval(intervalId);
     };
-  }, [dailyData?.date, currentUser?.userId, myTeamIds]);
+  }, [dailyData?.date, currentUser?.userId, (currentUser?.floatingFor || []).join('|'), myTeamIds]);
 
 
   useEffect(() => {

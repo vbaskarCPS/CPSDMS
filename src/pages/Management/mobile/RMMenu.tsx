@@ -85,50 +85,75 @@ export const LayerRow: React.FC<{
 };
 
 /**
- * The "other managers" part of Layers: what I see of the other managers in the CC,
- * and what I let them see of me. Both default to private for sharing; seeing is
- * on, so anything a manager shares shows up straight away.
+ * The "other managers" part of Layers.
+ *  • Sharing: for each other manager in the CC, give them full access (the same
+ *    access and tools a floater has) or just my position. Private until chosen.
+ *  • Seeing: the managers who've shared with me, each of which I can hide on
+ *    this device.
  */
-export type OthersKey = 'showRoutes' | 'showPositions' | 'shareRoutes' | 'sharePosition';
+export interface ShareRow {
+  id: string; name: string;
+  /** Full access (floater level). */
+  access: boolean;
+  /** Can see my position (always true with full access). */
+  position: boolean;
+  /** The admin set them up as my floater, so they have access already. */
+  floats: boolean;
+}
+export interface SeenRow { id: string; name: string; kind: 'access' | 'position'; shown: boolean }
 export interface OthersLayers {
-  showRoutes: boolean;
-  showPositions: boolean;
-  shareRoutes: boolean;
-  sharePosition: boolean;
-  /** First names of the managers sharing each thing with me right now. */
-  routesFrom: string[];
-  positionsFrom: string[];
-  /** True while my sharing change is being saved. */
+  share: ShareRow[];
+  seen: SeenRow[];
+  /** True while a sharing change is being saved. */
   saving: boolean;
-  onToggle: (k: OthersKey) => void;
+  onShare: (managerId: string, what: 'access' | 'position') => void;
+  onShow: (managerId: string) => void;
 }
 
-const SwitchRow: React.FC<{
-  icon: LucideIcon; label: string; sub: string; on: boolean; disabled?: boolean; tone?: 'blue' | 'green';
-  onToggle: () => void;
-}> = ({ icon: Icon, label, sub, on, disabled, tone = 'blue', onToggle }) => {
-  const ring = tone === 'green' ? 'bg-emerald-600/20 ring-1 ring-emerald-500' : 'bg-blue-600/25 ring-1 ring-blue-500';
-  const knob = tone === 'green' ? 'bg-emerald-500' : 'bg-blue-500';
-  return (
-    <button
-      onClick={disabled ? undefined : onToggle}
-      role="switch" aria-checked={on} aria-label={label}
-      className={`w-full min-h-[56px] rounded-xl px-4 py-2.5 flex items-center gap-3 text-left ${on ? ring : 'bg-gray-800'} ${disabled ? 'opacity-60' : ''}`}
-    >
-      <Icon size={18} className={`flex-shrink-0 ${on ? (tone === 'green' ? 'text-emerald-300' : 'text-blue-300') : 'text-gray-400'}`} />
-      <span className="flex-1 min-w-0">
-        <span className="block text-sm font-bold text-white">{label}</span>
-        <span className="block text-[11px] text-gray-400">{sub}</span>
-      </span>
-      <span className={`w-11 h-6 rounded-full relative transition-colors flex-shrink-0 ${on ? knob : 'bg-gray-600'}`}>
-        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
-      </span>
-    </button>
-  );
-};
+const Pill: React.FC<{ on: boolean; disabled?: boolean; label: string; title: string; onClick: () => void }> = ({ on, disabled, label, title, onClick }) => (
+  <button
+    onClick={disabled ? undefined : onClick}
+    role="switch" aria-checked={on} aria-label={title} title={title} disabled={disabled}
+    className={`h-9 px-3 rounded-lg text-xs font-bold whitespace-nowrap border transition-colors ${on ? 'bg-emerald-600/25 border-emerald-500 text-emerald-200' : 'bg-gray-900 border-gray-700 text-gray-400'} ${disabled ? 'opacity-60 cursor-default' : ''}`}
+  >{on ? '✓ ' : ''}{label}</button>
+);
 
-const who = (names: string[]) => names.length === 0 ? 'No one is sharing right now.'
-  : `Shared by ${names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} +${names.length - 3}`}.`;
+const OthersSection: React.FC<{ o: OthersLayers }> = ({ o }) => (
+  <>
+    <div className="pt-3 pb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-gray-500 font-bold"><Eye size={12} />Shared with me</div>
+    {o.seen.length === 0 && <div className="text-[11px] text-gray-500 px-1 pb-1">No manager has shared with you.</div>}
+    {o.seen.map(r => (
+      <button
+        key={r.id} onClick={() => o.onShow(r.id)} role="switch" aria-checked={r.shown} aria-label={`Show ${r.name}`}
+        className={`w-full min-h-[52px] rounded-xl px-4 py-2 flex items-center gap-3 text-left ${r.shown ? 'bg-blue-600/25 ring-1 ring-blue-500' : 'bg-gray-800'}`}
+      >
+        {r.kind === 'access' ? <Route size={18} className={r.shown ? 'text-blue-300' : 'text-gray-400'} /> : <Navigation size={18} className={r.shown ? 'text-blue-300' : 'text-gray-400'} />}
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm font-bold text-white truncate">{r.name}</span>
+          <span className="block text-[11px] text-gray-400">{r.kind === 'access' ? 'Full access — routes, team, sales, like a floater' : 'Their position'}</span>
+        </span>
+        <span className={`w-11 h-6 rounded-full relative transition-colors flex-shrink-0 ${r.shown ? 'bg-blue-500' : 'bg-gray-600'}`}>
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${r.shown ? 'left-[22px]' : 'left-0.5'}`} />
+        </span>
+      </button>
+    ))}
+    <div className="pt-3 pb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-gray-500 font-bold"><Share2 size={12} />Share with</div>
+    <div className="text-[11px] text-gray-500 px-1 pb-1">Full access gives that manager everything a floater gets for you. Nothing is shared until you choose.</div>
+    {o.share.length === 0 && <div className="text-[11px] text-gray-500 px-1">No other managers today.</div>}
+    {o.share.map(r => (
+      <div key={r.id} className="w-full rounded-xl px-4 py-2.5 flex items-center gap-2 bg-gray-800">
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm font-bold text-white truncate">{r.name}</span>
+          <span className="block text-[11px] text-gray-400">
+            {r.floats ? 'Floats for you (set by the office)' : r.access ? 'Has full access to you' : r.position ? 'Sees your position' : 'Private'}
+          </span>
+        </span>
+        <Pill label="Full access" title={`Full access for ${r.name}`} on={r.access || r.floats} disabled={o.saving || r.floats} onClick={() => o.onShare(r.id, 'access')} />
+        <Pill label="Position" title={`Position for ${r.name}`} on={r.position || r.floats} disabled={o.saving || r.access || r.floats} onClick={() => o.onShare(r.id, 'position')} />
+      </div>
+    ))}
+  </>
+);
 
 export const LayersList: React.FC<{
   filterVisibility: FilterVisibility;
@@ -141,22 +166,7 @@ export const LayersList: React.FC<{
     <LayerRow icon={CheckCircle2} label="Sales & completed" on={f.pendingSalesAndCompleted} progress={g.pendingSalesAndCompleted} onToggle={() => onToggle('pendingSalesAndCompleted')} />
     <LayerRow icon={History} label="Previously done" on={f.historical} progress={g.historical} onToggle={() => onToggle('historical')} />
     <LayerRow icon={Users} label="Callbook clients (PCL)" on={f.pcl} progress={g.pcl} onToggle={() => onToggle('pcl')} />
-    {o && (
-      <>
-        <div className="pt-3 pb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-gray-500 font-bold"><Eye size={12} />Other managers on my map</div>
-        <SwitchRow icon={Route} label="Their teams & routes" sub={who(o.routesFrom)} on={o.showRoutes} onToggle={() => o.onToggle('showRoutes')} />
-        <SwitchRow icon={Navigation} label="Their positions" sub={who(o.positionsFrom)} on={o.showPositions} onToggle={() => o.onToggle('showPositions')} />
-        <div className="pt-3 pb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-gray-500 font-bold"><Share2 size={12} />What other managers can see of me</div>
-        <SwitchRow
-          icon={Route} label="My teams & routes" tone="green" disabled={o.saving} on={o.shareRoutes} onToggle={() => o.onToggle('shareRoutes')}
-          sub={o.shareRoutes ? 'Shared with every manager in this CC.' : 'Private. Only a manager covering you sees them.'}
-        />
-        <SwitchRow
-          icon={Navigation} label="My position" tone="green" disabled={o.saving} on={o.sharePosition} onToggle={() => o.onToggle('sharePosition')}
-          sub={o.sharePosition ? 'Shared with every manager in this CC.' : 'Private. Only a manager covering you sees it.'}
-        />
-      </>
-    )}
+    {o && <OthersSection o={o} />}
   </div>
 );
 
