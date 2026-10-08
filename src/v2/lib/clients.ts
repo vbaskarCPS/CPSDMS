@@ -37,25 +37,39 @@ export async function bennyFixAddresses(items: { i: number; text: string }[]): P
 export interface Candidate { street: string; near: boolean; score: number }
 export interface Placement { i: number; house_no: string; street: string | null; confidence: 'high' | 'medium' | 'low'; reason: string }
 
-/** Real street names an unplaced address most likely meant (from the map's streets). */
-export async function streetCandidates(items: { i: number; house_no: string; street: string; city: string }[], routes: string[]): Promise<Map<number, Candidate[]>> {
-  const out = new Map<number, Candidate[]>();
-  for (let k = 0; k < items.length; k += 300) {
-    const res = must(await db.rpc('app_client_street_candidates', { p_items: items.slice(k, k + 300), p_routes: routes })) as { i: number; candidates: Candidate[] }[];
-    for (const r of res) out.set(Number(r.i), r.candidates || []);
+/**
+ * Real street names an unplaced address most likely meant (from the map's streets). 50 addresses
+ * per request keeps each one well inside the database's time limit; a batch that still fails is
+ * skipped (those addresses stay under Needs attention) instead of stopping the rest.
+ */
+export async function streetCandidates(items: { i: number; house_no: string; street: string; city: string }[], routes: string[],
+  onProgress?: (done: number) => void): Promise<{ found: Map<number, Candidate[]>; failed: number; error: string | null }> {
+  const found = new Map<number, Candidate[]>();
+  let failed = 0; let error: string | null = null;
+  for (let k = 0; k < items.length; k += 50) {
+    const batch = items.slice(k, k + 50);
+    try {
+      const res = must(await db.rpc('app_client_street_candidates', { p_items: batch, p_routes: routes })) as { i: number; candidates: Candidate[] }[];
+      for (const r of res) found.set(Number(r.i), r.candidates || []);
+    } catch (e) { failed += batch.length; error = e instanceof Error ? e.message : String(e); }
+    onProgress?.(Math.min(items.length, k + 50));
   }
-  return out;
+  return { found, failed, error };
 }
 
 /** The Benny picks which real street each misspelled address meant (or none). */
 export async function bennyPlace(items: { i: number; house_no: string; street: string; city: string; text: string; candidates: Candidate[] }[],
   onProgress?: (done: number) => void): Promise<Placement[]> {
   const out: Placement[] = [];
+  let lastError: unknown = null;
   for (let k = 0; k < items.length; k += 80) {
-    const res = await benny<{ items: Placement[] }>({ task: 'place_addresses', items: items.slice(k, k + 80) });
-    out.push(...(res.items || []));
+    try {
+      const res = await benny<{ items: Placement[] }>({ task: 'place_addresses', items: items.slice(k, k + 80) });
+      out.push(...(res.items || []));
+    } catch (e) { lastError = e; }   // one batch failing doesn't lose the others
     onProgress?.(Math.min(items.length, k + 80));
   }
+  if (!out.length && lastError) throw lastError;
   return out;
 }
 

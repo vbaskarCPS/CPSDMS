@@ -131,7 +131,10 @@ export const ClientLists: React.FC = () => {
       try {
         setBusy(`The Benny is placing ${unplaced.length} addresses that couldn’t be found…`);
         const routes = [...new Set([...res.values()].map(r => r.route_code).filter((r): r is string => !!r))];
-        const cands = await streetCandidates(unplaced.map(i => ({ i, house_no: list[i].house_no, street: list[i].street_name, city: list[i].city })), routes);
+        const got = await streetCandidates(unplaced.map(i => ({ i, house_no: list[i].house_no, street: list[i].street_name, city: list[i].city })), routes,
+          n => setBusy(`The Benny is looking for the streets ${unplaced.length} addresses meant… ${n} of ${unplaced.length}`));
+        const cands = got.found;
+        if (got.failed) setBennyNote(`The Benny couldn’t look at ${got.failed} of the ${unplaced.length} missing addresses (${got.error}). They are listed under Needs attention.`);
         const asks = unplaced.filter(i => (cands.get(i) || []).length).map(i => ({
           i, house_no: list[i].house_no, street: list[i].street_name, city: list[i].city, text: list[i].raw_address, candidates: cands.get(i)!,
         }));
