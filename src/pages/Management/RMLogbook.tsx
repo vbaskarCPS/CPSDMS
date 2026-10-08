@@ -75,7 +75,7 @@ const initialGeocodeProgress: GeocodeProgress = {
 
 // Filter visibility flags — these drive what layers render on the map.
 // Defaults per spec: Pending Bookings ON, Pending Sales/Completed ON,
-// Historical OFF, PCL OFF. Worker locations have no toggle, always render.
+// Previously done ON (houses done this season, as X's), PCL OFF. Worker locations have no toggle, always render.
 export interface FilterVisibility {
   pendingBookings: boolean;
   pendingSalesAndCompleted: boolean;
@@ -86,7 +86,7 @@ export interface FilterVisibility {
 const defaultFilterVisibility: FilterVisibility = {
   pendingBookings: true,
   pendingSalesAndCompleted: true,
-  historical: false,
+  historical: true,
   pcl: false,
 };
 
