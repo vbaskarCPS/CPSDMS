@@ -29,7 +29,7 @@ import {
   SavedRouteMap, RouteHouse, HouseDisposition, HouseView,
   fetchRouteMaps, fetchRouteHouses, fetchDispositions, fetchHistoricalForRoutes,
   subscribeToDispositions, subscribeToPendingSales,
-  indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews,
+  indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews, seasonJobsAsHistorical,
   buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, placeRouteOnRoofs, tileCentre, cleanupRouteGhosts,
   fillRouteGaps, fetchStreetChecks, StreetCheck, streetBase,
   houseMapNumber, houseAddressLabel,
@@ -205,7 +205,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   const houseViews: HouseView[] = useMemo(() => {
     const ps = indexPendingSales(pendingSales, houses);
     const { pending, completed } = indexBookings(cart.sharedBookings || [], houses);
-    return buildHouseViews(houses, dispositions, ps, pending, completed, indexPcl(pclByRoute, houses), indexHistorical(historicalRows, houses));
+    return buildHouseViews(houses, dispositions, ps, pending, completed, indexPcl(pclByRoute, houses), indexHistorical([...historicalRows, ...seasonJobsAsHistorical(pclByRoute)], houses));
   }, [houses, dispositions, pendingSales, cart.sharedBookings, pclByRoute, historicalRows]);
 
   const scope: CartScope = useMemo(() => ({

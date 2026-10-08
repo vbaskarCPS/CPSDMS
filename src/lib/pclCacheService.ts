@@ -31,6 +31,8 @@ export interface PCLHistoryEntry {
   price: string;
   serviceType: string;
   contractor: string;
+  /** The day the job was done (YYYY-MM-DD) — set on jobs the app recorded from a closed day. */
+  date?: string;
 }
 
 export interface PCLClientGroup {
