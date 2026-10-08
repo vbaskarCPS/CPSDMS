@@ -3950,6 +3950,33 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, historicalProps, geocodeOne, updateHistoricalPins, onGeocodeProgress]);
 
+  // DONE THIS SEASON, FROM THE PAST-CLIENT LISTS. A closed day's sales (and uploaded season
+  // lists) are written onto the customers, so a past client with a job this year was done this
+  // season. They join the "Previously done" X's straight away — the coordinate travels with the
+  // client, so there's nothing to look up and no need to wait for the geocoding phases.
+  useEffect(() => {
+    if (!mapLoaded) return;
+    const map = mapRef.current; if (!map) return;
+    const year = new Date().getFullYear();
+    let added = 0;
+    pclByRoute.forEach((clients, routeCode) => {
+      clients.forEach(c => {
+        if (c.lat == null || c.lng == null) return;
+        if (!(c.history || []).some(h => Number(h.year) === year)) return;
+        const address = `${c.houseNum} ${c.streetName}`.trim();
+        const uniqueKey = `${routeCode}::${makeCacheKey(address)}`;
+        if (knownHistoricalRef.current.has(uniqueKey)) return;
+        knownHistoricalRef.current.set(uniqueKey, { routeCode, address, lat: c.lat, lng: c.lng });
+        added++;
+      });
+    });
+    if (!added) return;
+    const all = Array.from(knownHistoricalRef.current.values());
+    setGeocodedHistorical(all);
+    updateHistoricalPins(map, all);
+    if (map.getLayer('rm-historical-symbols')) map.setPaintProperty('rm-historical-symbols', 'icon-opacity', filterVisibility.historical ? 0.85 : 0);
+  }, [mapLoaded, pclByRoute, updateHistoricalPins, filterVisibility.historical]);
+
   // PHASE 4: PCL
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
