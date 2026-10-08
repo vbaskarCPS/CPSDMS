@@ -26,6 +26,9 @@ interface Matched { client: ClientRow; match: MatchResult | null; fix?: Fix }
 const effective = (m: Matched): { client: ClientRow; match: MatchResult | null; fixed: boolean } =>
   m.fix?.on ? { client: { ...m.client, house_no: m.fix.house_no, street_name: m.fix.street }, match: m.fix.match, fixed: true } : { client: m.client, match: m.match, fixed: false };
 
+/** How many unplaced addresses The Benny takes on at a time. */
+const BENNY_BATCH = 800;
+
 const HISTORY: Field[] = ['year', 'service', 'price', 'contractor', 'payment', 'serviced'];
 const HOW: Record<string, string> = { house_benny: 'House on route', address_point_benny: 'Address point', geocode_benny: 'Map search', street_benny: 'Only route on street', house: 'House on route', address_point: 'Address point', geocode: 'Map search', street: 'Only route on street', given: 'List’s route code' };
 const fmtDate = (s: string) => new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -45,6 +48,7 @@ export const ClientLists: React.FC = () => {
   const [matched, setMatched] = useState<Matched[]>([]);
   const [fixed, setFixed] = useState<Map<number, { house_no: string; street: string; unit?: string; city?: string; province?: string; postal_code?: string }>>(new Map());
   const [includeUnrouted, setIncludeUnrouted] = useState(true);
+  const [bennyTried, setBennyTried] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<{ id: string; inserted: number; merged: number } | null>(null);
   const imports = useLoad(listImports, []);
   const recipes = useLoad(listRecipes, []);
@@ -101,6 +105,68 @@ export const ClientLists: React.FC = () => {
     setFixed(prev => { const n = new Map(prev); for (const g of got) n.set(g.i, g); return n; });
   });
 
+  /**
+   * The Benny places addresses that couldn't be found: it looks up the real streets each one most
+   * likely meant, picks one, and the corrected address is matched to its route. Returns the fixes,
+   * and which addresses it got to look at (a batch that failed isn't counted, so it can be retried).
+   */
+  const placeWithBenny = async (list: ClientRow[], idx: number[], routes: string[]): Promise<{ fixes: Map<number, Fix>; tried: Set<number> }> => {
+    const fixes = new Map<number, Fix>(); const tried = new Set<number>();
+    try {
+      setBusy(`The Benny is placing ${idx.length} addresses that couldn’t be found…`);
+      const got = await streetCandidates(idx.map(i => ({ i, house_no: list[i].house_no, street: list[i].street_name, city: list[i].city })), routes,
+        n => setBusy(`The Benny is looking for the streets ${idx.length} addresses meant… ${n} of ${idx.length}`));
+      const cands = got.found;
+      for (const i of cands.keys()) tried.add(i);
+      if (got.failed) setBennyNote(`The Benny couldn’t look at ${got.failed} of the ${idx.length} missing addresses (${got.error}). They are listed under Needs attention; run The Benny again there.`);
+      const asks = idx.filter(i => (cands.get(i) || []).length).map(i => ({
+        i, house_no: list[i].house_no, street: list[i].street_name, city: list[i].city, text: list[i].raw_address, candidates: cands.get(i)!,
+      }));
+      const placed = (await bennyPlace(asks, n => setBusy(`The Benny is placing addresses… ${n} of ${asks.length}`))).filter(p => p.street);
+      if (placed.length) {
+        const fixedAddr = (p: typeof placed[number]) => ({ i: p.i, house_no: p.house_no || list[p.i].house_no, street: titleCase(p.street!), unit: list[p.i].unit, city: list[p.i].city, route: list[p.i].route_given });
+        const again = await matchClients(placed.map(fixedAddr));
+        // a corrected address the map's own data doesn't know: one map search, then match again
+        const look = placed.filter(p => !again.get(p.i)?.route_code).slice(0, 200);
+        const pts = new Map<number, { lat: number; lng: number }>();
+        for (let k = 0; k < look.length; k += 6) {
+          await Promise.all(look.slice(k, k + 6).map(async p => {
+            const a = fixedAddr(p); const g = await geocode({ ...list[p.i], house_no: a.house_no, street_name: a.street });
+            if (g) pts.set(p.i, g);
+          }));
+        }
+        if (pts.size) {
+          const third = await matchClients(look.filter(p => pts.has(p.i)).map(p => ({ ...fixedAddr(p), ...pts.get(p.i)! })));
+          for (const [i, r] of third) if (r.route_code) again.set(i, r);
+        }
+        for (const p of placed) {
+          const m = again.get(p.i) || null;
+          fixes.set(p.i, { house_no: (p.house_no || list[p.i].house_no).toUpperCase(), street: titleCase(p.street!), confidence: p.confidence, reason: p.reason, match: m,
+            on: p.confidence !== 'low' && !!m?.route_code });
+        }
+      }
+    } catch (e) {
+      setBennyNote(`The Benny couldn’t place the missing addresses (${e instanceof Error ? e.message : String(e)}). They are listed under Needs attention; run The Benny again there.`);
+    }
+    return { fixes, tried };
+  };
+
+  /** Needs attention › Run The Benny again: the next addresses it hasn't looked at yet (then the rest again). */
+  const rerunBenny = () => run('The Benny is placing addresses…', async () => {
+    const list = matched.map(m => m.client);
+    const open = matched.map((m, i) => ({ m, i })).filter(({ m }) => !effective(m).match?.route_code && !m.fix?.match?.route_code);
+    const fresh = open.filter(({ m }) => !bennyTried.has(m.client.key));
+    const pick = (fresh.length ? fresh : open).slice(0, BENNY_BATCH).map(({ i }) => i);
+    if (!pick.length) return;
+    setBennyNote(null);
+    const routes = [...new Set(matched.map(m => effective(m).match?.route_code).filter((r): r is string => !!r))];
+    const { fixes, tried } = await placeWithBenny(list, pick, routes);
+    setBennyTried(prev => { const n = new Set(prev); for (const i of tried) n.add(list[i].key); return n; });
+    setMatched(ms => ms.map((m, i) => fixes.has(i) ? { ...m, fix: fixes.get(i) } : m));
+    const placedOnRoute = [...fixes.values()].filter(f => f.on).length;
+    setBennyNote(n => n || `The Benny looked at ${tried.size} more address${tried.size === 1 ? '' : 'es'} and placed ${placedOnRoute} on a route${fixes.size > placedOnRoute ? ` (${fixes.size - placedOnRoute} more readings to check under Placed by The Benny)` : ''}.`);
+  });
+
   /** Match every address to a route: the map's own address data first, then a map search. */
   const matchAll = () => preview && mapping && run('Matching addresses to routes…', async () => {
     const list = preview.clients;
@@ -125,43 +191,11 @@ export const ClientLists: React.FC = () => {
       }
     }
     // The Benny places what's still missing: it picks which real street a misspelled address meant
-    const fixes = new Map<number, Fix>();
-    const unplaced = all.filter(i => !res.get(i)?.route_code).slice(0, 800);
-    if (unplaced.length) {
-      try {
-        setBusy(`The Benny is placing ${unplaced.length} addresses that couldn’t be found…`);
-        const routes = [...new Set([...res.values()].map(r => r.route_code).filter((r): r is string => !!r))];
-        const cands = await streetCandidates(unplaced.map(i => ({ i, house_no: list[i].house_no, street: list[i].street_name, city: list[i].city })), routes);
-        const asks = unplaced.filter(i => (cands.get(i) || []).length).map(i => ({
-          i, house_no: list[i].house_no, street: list[i].street_name, city: list[i].city, text: list[i].raw_address, candidates: cands.get(i)!,
-        }));
-        const placed = (await bennyPlace(asks, n => setBusy(`The Benny is placing addresses… ${n} of ${asks.length}`))).filter(p => p.street);
-        if (placed.length) {
-          const fixedAddr = (p: typeof placed[number]) => ({ i: p.i, house_no: p.house_no || list[p.i].house_no, street: titleCase(p.street!), unit: list[p.i].unit, city: list[p.i].city, route: list[p.i].route_given });
-          const again = await matchClients(placed.map(fixedAddr));
-          // a corrected address the map's own data doesn't know: one map search, then match again
-          const look = placed.filter(p => !again.get(p.i)?.route_code).slice(0, 200);
-          const pts = new Map<number, { lat: number; lng: number }>();
-          for (let k = 0; k < look.length; k += 6) {
-            await Promise.all(look.slice(k, k + 6).map(async p => {
-              const a = fixedAddr(p); const g = await geocode({ ...list[p.i], house_no: a.house_no, street_name: a.street });
-              if (g) pts.set(p.i, g);
-            }));
-          }
-          if (pts.size) {
-            const third = await matchClients(look.filter(p => pts.has(p.i)).map(p => ({ ...fixedAddr(p), ...pts.get(p.i)! })));
-            for (const [i, r] of third) if (r.route_code) again.set(i, r);
-          }
-          for (const p of placed) {
-            const m = again.get(p.i) || null;
-            fixes.set(p.i, { house_no: (p.house_no || list[p.i].house_no).toUpperCase(), street: titleCase(p.street!), confidence: p.confidence, reason: p.reason, match: m,
-              on: p.confidence !== 'low' && !!m?.route_code });
-          }
-        }
-      } catch (e) {
-        setBennyNote(`The Benny couldn’t place the missing addresses (${e instanceof Error ? e.message : String(e)}). They are listed under Needs attention.`);
-      }
-    }
+    const unplaced = all.filter(i => !res.get(i)?.route_code).slice(0, BENNY_BATCH);
+    setBennyNote(null);
+    const routes = [...new Set([...res.values()].map(r => r.route_code).filter((r): r is string => !!r))];
+    const { fixes, tried } = unplaced.length ? await placeWithBenny(list, unplaced, routes) : { fixes: new Map<number, Fix>(), tried: new Set<number>() };
+    setBennyTried(new Set([...tried].map(i => list[i].key)));
     setApplied(preview);
     setMatched(list.map((client, i) => ({ client, match: res.get(i) || null, fix: fixes.get(i) })));
     setStep('review');
@@ -314,6 +348,9 @@ export const ClientLists: React.FC = () => {
 
       {step === 'review' && src && (
         <Review counts={counts} matched={matched} skipped={applied?.skipped || []} busy={!!busy} note={bennyNote}
+          bennyLeft={matched.filter(m => !effective(m).match?.route_code && !m.fix?.match?.route_code && !bennyTried.has(m.client.key)).length}
+          bennyOpen={matched.filter(m => !effective(m).match?.route_code && !m.fix?.match?.route_code).length}
+          busyLabel={busy} onRerunBenny={rerunBenny}
           onToggleFix={key => setMatched(ms => ms.map(m => m.client.key === key && m.fix ? { ...m, fix: { ...m.fix, on: !m.fix.on } } : m))}
           recipeName={recipeName} setRecipeName={setRecipeName} includeUnrouted={includeUnrouted} setIncludeUnrouted={setIncludeUnrouted}
           onBack={() => setStep('columns')} onApprove={approve} />
@@ -340,9 +377,11 @@ export const ClientLists: React.FC = () => {
 const Review: React.FC<{
   counts: { rowsRead: number; clients: number; skipped: number; combined: number; fresh: number; merge: number; routed: number; unrouted: number; fixed: number; suggested: number };
   matched: Matched[]; skipped: Applied['skipped']; busy: boolean; note: string | null; onToggleFix: (key: string) => void;
+  /** needs-attention addresses The Benny hasn't looked at yet / still without a route */
+  bennyLeft: number; bennyOpen: number; busyLabel: string | null; onRerunBenny: () => void;
   recipeName: string; setRecipeName: (s: string) => void;
   includeUnrouted: boolean; setIncludeUnrouted: (b: boolean) => void; onBack: () => void; onApprove: () => void;
-}> = ({ counts, matched, skipped, busy, note, onToggleFix, recipeName, setRecipeName, includeUnrouted, setIncludeUnrouted, onBack, onApprove }) => {
+}> = ({ counts, matched, skipped, busy, note, onToggleFix, bennyLeft, bennyOpen, busyLabel, onRerunBenny, recipeName, setRecipeName, includeUnrouted, setIncludeUnrouted, onBack, onApprove }) => {
   const [tab, setTab] = useState<'new' | 'merge' | 'fixed' | 'attention' | 'skipped'>('new');
   const eff = matched.map(effective);
   const list = tab === 'new' ? eff.filter(m => !m.match?.client_id) : tab === 'merge' ? eff.filter(m => m.match?.client_id)
@@ -365,6 +404,16 @@ const Review: React.FC<{
             { key: 'fixed', label: 'Placed by The Benny', count: counts.suggested },
             { key: 'attention', label: 'Needs attention', count: counts.unrouted }, { key: 'skipped', label: 'Skipped rows', count: counts.skipped }]} />
           {note && <div className="v2-note" style={{ margin: '0 0 8px' }}>{note}</div>}
+          {tab === 'attention' && bennyOpen > 0 && (
+            <div className="v2-row" style={{ margin: '0 0 10px', gap: 10 }}>
+              <Btn size="sm" icon={Sparkles} disabled={busy} onClick={onRerunBenny}>
+                {busy && busyLabel ? busyLabel : `Run The Benny again on ${Math.min(BENNY_BATCH, bennyLeft || bennyOpen).toLocaleString()} address${Math.min(BENNY_BATCH, bennyLeft || bennyOpen) === 1 ? '' : 'es'}`}
+              </Btn>
+              <span className="v2-small v2-mut">{bennyLeft
+                ? `${bennyLeft.toLocaleString()} it hasn’t looked at yet${bennyLeft > BENNY_BATCH ? `, ${BENNY_BATCH} at a time` : ''}. It picks the real street a misspelled address meant; check its readings under Placed by The Benny.`
+                : `It has looked at all ${bennyOpen.toLocaleString()}; this tries the ones still without a route again.`}</span>
+            </div>
+          )}
         </div>
         <div className="v2-table-wrap" style={{ maxHeight: 420, overflow: 'auto' }}>
           {tab === 'fixed' ? (
