@@ -39,7 +39,7 @@ import RoutePCLModal from './RoutePCLModal';
 import CartMapPanel from './CartMapPanel';
 import WorkerDriverStops, { WORKER_STOP_COLOR, workerName as driverName } from './WorkerDriverStops';
 import RMPhoneLayout, {
-  RMPhoneShell, RMPhoneCtx, PhoneCrew, PhoneRouteState, PhonePinCardData, crewLabel,
+  RMPhoneShell, RMPhoneCtx, PhoneCrew, PhoneRouteState, PhonePinCardData, crewLabel, managerInitials, type ManagerTag,
 } from '../mobile/RMPhoneLayout';
 import PhoneNavigation from '../mobile/PhoneNavigation';
 import { MenuTiles, LayersList, PinsList, MenuSub, type OthersLayers } from '../mobile/RMMenu';
@@ -716,23 +716,24 @@ function createManagerMarkerEl(fillColor: string, label: string): HTMLDivElement
     .toUpperCase();
   const el = document.createElement('div');
   el.style.cssText = [
-    'width:20px',
-    'height:20px',
+    'width:28px',
+    'height:28px',
     'border-radius:50%',
     `background:${fillColor}`,
-    'border:1.5px solid rgba(0,0,0,0.55)',
+    'border:2.5px solid #ffffff',
+    'outline:1.5px solid rgba(0,0,0,0.45)',
     'box-shadow:0 1px 3px rgba(0,0,0,0.4)',
     'display:flex',
     'align-items:center',
     'justify-content:center',
-    'font-size:9px',
+    'font-size:11px',
     'font-weight:700',
     'color:#ffffff',
     'font-family:system-ui,sans-serif',
     'text-shadow:0 1px 1px rgba(0,0,0,0.5)',
     'cursor:default',
     'user-select:none',
-    'pointer-events:none',
+    'pointer-events:auto',
   ].join(';');
   el.textContent = initials;
   el.title = label;
@@ -1433,6 +1434,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     },
     [managerId, sortedManagerIds]
   );
+  // FLOATER: each crew's manager as initials in that manager's colour (cards' top right). Only
+  // while covering several managers; on your own map every crew is yours.
+  const crewManagerTag = useCallback((crew: PhoneCrew): ManagerTag | null => {
+    if (!floaterColouringActive) return null;
+    const members = crew.type === 'cart' ? crew.cart.members : [crew.card.worker];
+    const mid = members.map(w => w.assignedManagerId as string | undefined).find(id => !!id);
+    if (!mid) return null;
+    const name = allManagers.find(m => m.userId === mid)?.name || mid.replace(/^rm_/, '');
+    return { initials: managerInitials(name), name, color: getManagerColor(mid, sortedManagerIds) };
+  }, [floaterColouringActive, allManagers, sortedManagerIds]);
   const myTeamIds = useMemo(() => new Set(workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)).map(w => w.contractorId)), [workers, coveredManagerIds]);
   const myTeamWorkers = useMemo(() => workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)), [workers, coveredManagerIds]);
   const routeColorMap = useMemo(() => { const m = new Map<string,string>(); routeMapData.forEach(r => m.set(r.route_code, r.route_color)); return m; }, [routeMapData]);
@@ -2444,7 +2455,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   // My position is written only when someone may see it: a floater covers me, or
   // I've given someone access or my position. Otherwise my row is removed.
-  const reportPosition = mySharing.access.length > 0 || mySharing.position.length > 0 || adminFloatersForMe.size > 0;
+  // Floater view (the Floater Route Manager permission) can follow any manager at any time, and a
+  // manager's device can't tell when someone opens it, so a manager's map always reports where they
+  // are; who sees it is still decided on the viewer's side (covered managers, or ones sharing with you).
+  const reportPosition: boolean = true;
   const reportPositionRef = useRef(false);
   reportPositionRef.current = reportPosition;
   useEffect(() => {
@@ -2553,13 +2567,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // Covered managers, plus (Layers › their positions) managers sharing theirs
       // with a fix from the last 15 minutes. Never our own dot (we're the red arrow).
       if (loc.managerId === managerId) return;
+      const ageMs = Date.now() - new Date(loc.updatedAt).getTime();
+      if (ageMs > 3 * 60 * 60 * 1000) return;   // an old fix (yesterday's, or a closed app) isn't where they are
       const covered = coveredManagerIds.has(loc.managerId);
       const shared = shownPositionSharerIds.has(loc.managerId)
         && Date.now() - new Date(loc.updatedAt).getTime() < 15 * 60 * 1000;
       if (!covered && !shared) return;
 
       const mgr = allManagers.find(m => m.userId === loc.managerId);
-      const label = covered ? (mgr?.name || loc.managerId) : `${mgr?.name || 'Manager'} (sharing their position)`;
+      const mins = Math.round(ageMs / 60000);
+      const seen = mins < 2 ? 'now' : `${mins} min ago`;
+      const label = covered ? `${mgr?.name || loc.managerId} · ${seen}` : `${mgr?.name || 'Manager'} (sharing their position) · ${seen}`;
       const fill = colorForOwner(loc.managerId, '#9ca3af');
 
       const existing = managerLocationMarkersRef.current.get(loc.managerId);
@@ -2711,6 +2729,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // Every route's number labels accumulate here and go into ONE layer below,
       // instead of each route minting its own source and layer.
       const allLabelFeatures: GeoJSON.Feature[] = [];
+      // FLOATER: every covered route again, as a wide soft band in its manager's colour, drawn
+      // under the route lines, so each manager's territory (and where two teams meet) reads at a glance.
+      const ownerFeatures: GeoJSON.Feature[] = [];
 
     // Letters we'll honour in the match expression. Up to 'f' is the
     // documented palette (60° rotations covering the full 360° wheel).
@@ -2728,6 +2749,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // fallback for buckets with no managerId stamp).
       const routeRow = routes.find(r => r.routeCode === route.route_code);
       const routeOwner = routeRow?.managerId || managerId;
+      const ownerHue = (letter: string) => getManagerColor(ownerOf(routeOwner, buckets.find(b => b.letter === letter)?.managerId), sortedManagerIds);
 
       // Build per-line-piece features. Colour is purely the route's own colour
       // (and its split-bucket hues) — floater mode shows routes exactly as a
@@ -2751,6 +2773,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             },
             geometry: { type: 'LineString', coordinates: [a, b] },
           });
+          if (floaterColouringActive) ownerFeatures.push({ type: 'Feature', properties: { color: ownerHue(bucketLetter) }, geometry: { type: 'LineString', coordinates: [a, b] } });
           allCoords.push(a, b);
         }
       });
@@ -2835,6 +2858,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     }
 
+    // --- FLOATER JURISDICTION BAND: one source and layer, fed new data each time (like the labels).
+    // Named outside the rm- prefix so the reorder below leaves it alone; it's put under the lowest
+    // route line after the lines are drawn.
+    const ownerGj: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: ownerFeatures };
+    const ownerSrc = map.getSource('rmo-owner-band-src') as mapboxgl.GeoJSONSource | undefined;
+    if (ownerSrc) ownerSrc.setData(ownerGj);
+    else {
+      map.addSource('rmo-owner-band-src', { type: 'geojson', data: ownerGj });
+      map.addLayer({
+        id: 'rmo-owner-band', type: 'line', source: 'rmo-owner-band-src',
+        paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 8, 14, 18, 17, 30], 'line-opacity': 0.32, 'line-blur': 1.5 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+      }, before);
+    }
+    try {
+      const firstLine = ((map.getStyle()?.layers as any[]) || []).map(l => String(l.id)).find(id => id.startsWith('rm-line-'));
+      if (firstLine && map.getLayer('rmo-owner-band')) map.moveLayer('rmo-owner-band', firstLine);
+    } catch { /* the band just sits wherever it was */ }
+
     // --- LAYER ORDER: make it deterministic instead of a race. ---
     //
     // Everything above still leans on `before`, which is resolved by asking the
@@ -2869,7 +2911,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       initialFitDoneRef.current=true;
       setTimeout(()=>{if(!mapRef.current) return; const b=allCoords.reduce((b,c)=>b.extend(c),new mapboxgl.LngLatBounds(allCoords[0],allCoords[0]));mapRef.current.fitBounds(b,{padding:80,maxZoom:15,duration:800});},300);
     }
-  }, [routeMapData, mapLoaded, routeSplitsByCode, routes, managerId]);
+  }, [routeMapData, mapLoaded, routeSplitsByCode, routes, managerId, floaterColouringActive, sortedManagerIds, ownerOf]);
 
   // Worker name overlay — V2 RECURSIVE-SPLIT-AWARE.
   // Unsplit routes get one label at the route centroid showing assigned workers.
@@ -6396,6 +6438,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       carts: sortedCartCards,
       workers: sortedWorkerCards,
       knock: cartKnockSummary,
+      managerTag: crewManagerTag,
       crewMoney: phoneCrewMoney,
       onEnterCrew: phoneEnterCrew,
       onRouteCrewLabel: onRouteCrew ? crewLabel(onRouteCrew) : null,
@@ -6591,6 +6634,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 crewForIds={phoneCrewForIds}
                 crewMoney={phoneCrewMoney}
                 knock={cartKnockSummary}
+                managerTag={crewManagerTag}
                 activityNow={activityNow}
                 selected={phoneRoute}
                 sortBy={sortBy}

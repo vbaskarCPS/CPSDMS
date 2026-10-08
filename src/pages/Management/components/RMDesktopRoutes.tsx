@@ -17,8 +17,8 @@ import {
 } from 'lucide-react';
 import type { MasterBooking } from '../../../types';
 import type { CartCardData, WorkerCardData, RouteCardData } from './RMMapTab';
-import type { PhoneCrew, PhoneRouteState, KnockSummary, CrewMoney, SortOption } from '../mobile/RMPhoneLayout';
-import { crewLabel } from '../mobile/RMPhoneLayout';
+import type { PhoneCrew, PhoneRouteState, KnockSummary, CrewMoney, SortOption, ManagerTag } from '../mobile/RMPhoneLayout';
+import { crewLabel, ManagerBadge } from '../mobile/RMPhoneLayout';
 import { ActivityBadge, latestMs } from './rmMapShared';
 import { money } from '../mobile/rmPhone';
 
@@ -48,6 +48,8 @@ export interface RouteListProps {
   crewForIds: (ids: string[]) => PhoneCrew | null;
   crewMoney: (crew: PhoneCrew) => CrewMoney;
   knock: Map<string, KnockSummary>;
+  /** Floating for several managers: whose team each crew is (top right of the card). */
+  managerTag?: (crew: PhoneCrew) => ManagerTag | null;
   activityNow: number;
   selected: PhoneRouteState | null;
   sortBy: SortOption;
@@ -115,6 +117,7 @@ export const RouteList: React.FC<RouteListProps> = p => {
           const m = p.crewMoney(c);
           const k = c.type === 'cart' ? p.knock.get(c.cart.sessionId) : undefined;
           const theirs = routesOf.get(c.key) || [];
+          const tag = p.managerTag?.(c) || null;
           const on = !!sel && (sel.crewKey === c.key || selRouteCrewKey === c.key);
           return (
             <div
@@ -139,6 +142,7 @@ export const RouteList: React.FC<RouteListProps> = p => {
                     {c.type === 'cart' && c.cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" />}
                     <span className="text-white text-xs font-bold truncate">{crewLabel(c)}</span>
                     <ActivityBadge lastMs={crewLastMs(c, p.knock)} nowMs={p.activityNow} />
+                    {tag && <span className="ml-auto"><ManagerBadge tag={tag} /></span>}
                   </div>
                   <div className="flex flex-wrap items-center gap-x-1.5 text-[10px] text-gray-300 mt-0.5">
                     <span><b className="text-white">{m.steps}</b> steps</span><Dot />
@@ -146,6 +150,14 @@ export const RouteList: React.FC<RouteListProps> = p => {
                     <span>{money(m.gross, true)}<span className="text-yellow-400"> +{money(m.pendingGross, true).slice(1)}</span></span>
                     {k && (<><Dot /><span className="text-blue-300">{k.total ? `${Math.round(k.pct * 100)}% cov` : '— cov'}</span></>)}
                   </div>
+                  {k && (
+                    <div className="flex flex-wrap items-center gap-x-1.5 text-[10px] text-gray-300 mt-0.5">
+                      <span><b className="text-white">{k.knocks}</b> knocks</span><Dot />
+                      <span className={k.no > 0 ? 'text-red-400' : ''}>{k.no} no</span><Dot />
+                      <span className={k.goBack > 0 ? 'text-orange-300' : ''}>{k.goBack} GB</span><Dot />
+                      <span className={k.invalid > 0 ? 'text-pink-300' : ''}>{k.invalid} inv</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
