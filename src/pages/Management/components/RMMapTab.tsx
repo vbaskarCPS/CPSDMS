@@ -2729,8 +2729,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // Every route's number labels accumulate here and go into ONE layer below,
       // instead of each route minting its own source and layer.
       const allLabelFeatures: GeoJSON.Feature[] = [];
-      // FLOATER: every covered route again, as a wide soft band in its manager's colour, drawn
-      // under the route lines, so each manager's territory (and where two teams meet) reads at a glance.
+      // FLOATER: every covered route again, for the thin outline + manager-colour glow drawn under
+      // the route lines, so each manager's territory (and where two teams meet) reads at a glance.
       const ownerFeatures: GeoJSON.Feature[] = [];
 
     // Letters we'll honour in the match expression. Up to 'f' is the
@@ -2858,24 +2858,31 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     }
 
-    // --- FLOATER JURISDICTION BAND: one source and layer, fed new data each time (like the labels).
-    // Named outside the rm- prefix so the reorder below leaves it alone; it's put under the lowest
-    // route line after the lines are drawn.
+    // --- FLOATER JURISDICTION OUTLINE: one source, two layers, fed new data each time (like the labels).
+    // A thin black edge hugging each covered route line, with a soft glow in its manager's colour
+    // outside it, so each team's territory reads at a glance. Both use line-gap-width = the route
+    // line's width, so they only draw beside the line and never tint the route's own colour. Named
+    // outside the rm- prefix so the reorder below leaves them alone; put under the lowest route line.
     const ownerGj: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: ownerFeatures };
-    const ownerSrc = map.getSource('rmo-owner-band-src') as mapboxgl.GeoJSONSource | undefined;
+    const ownerSrc = map.getSource('rmo-owner-src') as mapboxgl.GeoJSONSource | undefined;
     if (ownerSrc) ownerSrc.setData(ownerGj);
     else {
-      map.addSource('rmo-owner-band-src', { type: 'geojson', data: ownerGj });
+      map.addSource('rmo-owner-src', { type: 'geojson', data: ownerGj });
       map.addLayer({
-        id: 'rmo-owner-band', type: 'line', source: 'rmo-owner-band-src',
-        paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 8, 14, 18, 17, 30], 'line-opacity': 0.32, 'line-blur': 1.5 },
+        id: 'rmo-owner-glow', type: 'line', source: 'rmo-owner-src',
+        paint: { 'line-color': ['get', 'color'], 'line-gap-width': 7, 'line-width': 6, 'line-blur': 5, 'line-opacity': 0.55 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+      }, before);
+      map.addLayer({
+        id: 'rmo-owner-edge', type: 'line', source: 'rmo-owner-src',
+        paint: { 'line-color': '#111827', 'line-gap-width': 7, 'line-width': 1.2, 'line-opacity': 0.85 },
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       }, before);
     }
     try {
       const firstLine = ((map.getStyle()?.layers as any[]) || []).map(l => String(l.id)).find(id => id.startsWith('rm-line-'));
-      if (firstLine && map.getLayer('rmo-owner-band')) map.moveLayer('rmo-owner-band', firstLine);
-    } catch { /* the band just sits wherever it was */ }
+      if (firstLine) for (const id of ['rmo-owner-glow', 'rmo-owner-edge']) if (map.getLayer(id)) map.moveLayer(id, firstLine);
+    } catch { /* the outline just sits wherever it was */ }
 
     // --- LAYER ORDER: make it deterministic instead of a race. ---
     //
