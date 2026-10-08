@@ -109,10 +109,11 @@ export interface MatchResult { i: number; street_norm: string | null; route_code
 export async function matchClients(list: { i: number; house_no: string; street: string; unit: string; city: string; lat?: number | null; lng?: number | null; route?: string }[],
   onProgress?: (done: number) => void): Promise<Map<number, MatchResult>> {
   const out = new Map<number, MatchResult>();
-  for (let k = 0; k < list.length; k += 400) {
-    const res = must(await db.rpc('app_client_match', { p_rows: list.slice(k, k + 400) })) as MatchResult[];
+  // 200 per request keeps each well inside the 8-second limit on a request
+  for (let k = 0; k < list.length; k += 200) {
+    const res = must(await db.rpc('app_client_match', { p_rows: list.slice(k, k + 200) })) as MatchResult[];
     for (const r of res) out.set(Number(r.i), r);
-    onProgress?.(Math.min(list.length, k + 400));
+    onProgress?.(Math.min(list.length, k + 200));
   }
   return out;
 }
