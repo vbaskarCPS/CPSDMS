@@ -137,7 +137,7 @@ export async function geocode(c: Pick<ClientRow, 'house_no' | 'street_name' | 'c
 export interface ImportRow {
   house_no: string; street_name: string; unit: string; city: string; province: string; postal_code: string;
   lat: number | null; lng: number | null; route_code: string | null; match_how: string | null;
-  people: { first: string; last: string }[]; phones: string[]; emails: string[];
+  people: { first: string; last: string; phone?: string }[]; phones: string[]; emails: string[];
   history: { year: number | null; service: string; price: string; contractor: string; payment: string; line: string }[];
   tags: string[]; notes: string; call_first: string; do_not_call: boolean; do_not_text: boolean;
 }
@@ -204,7 +204,7 @@ export function buildTree(rows: { city: string; area_name: string | null; region
 export interface Client {
   id: string; house_no: string; street_name: string; unit: string | null; city: string | null; province: string | null; postal_code: string | null;
   lat: number | null; lng: number | null; route_code: string | null; match_how: string | null;
-  people: { first: string; last: string }[]; phones: string[]; emails: string[];
+  people: { first: string; last: string; phone?: string }[]; phones: string[]; emails: string[];
   history: { year: number | null; service: string; price: string; contractor: string; payment: string; line?: string }[];
   services: string[];
   tags: string[]; notes: string | null; call_first: string | null; do_not_call: boolean; do_not_text: boolean; updated_at: string;
