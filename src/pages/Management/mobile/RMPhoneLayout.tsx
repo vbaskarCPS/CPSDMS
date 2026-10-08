@@ -89,6 +89,19 @@ export interface CrewMoney { steps: number; pending: number; gross: number; pend
 
 export type SortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
 
+export interface ManagerTag { initials: string; name: string; color: string }
+
+/** "Chad Stevens" → "CS". */
+export const managerInitials = (name: string) =>
+  name.split(/\s+/).filter(Boolean).map(w => w[0]).join('').slice(0, 3).toUpperCase();
+
+/** The small coloured initials badge for a crew's manager (floater view, several teams). */
+export const ManagerBadge: React.FC<{ tag: ManagerTag }> = ({ tag }) => (
+  <span title={`${tag.name}'s team`} aria-label={`${tag.name}'s team`}
+    className="flex-shrink-0 h-[18px] min-w-[22px] px-1 rounded text-[10px] font-extrabold leading-[18px] text-center text-white"
+    style={{ background: tag.color }}>{tag.initials}</span>
+);
+
 export interface RMPhoneCtx {
   shell: RMPhoneShell;
   mapContainerRef: React.RefObject<HTMLDivElement>;
@@ -114,6 +127,8 @@ export interface RMPhoneCtx {
   carts: CartCardData[];
   workers: WorkerCardData[];
   knock: Map<string, KnockSummary>;
+  /** Floating for several managers: whose team a crew is (initials in their colour); null otherwise. */
+  managerTag?: (crew: PhoneCrew) => ManagerTag | null;
   crewMoney: (crew: PhoneCrew) => CrewMoney;
   onEnterCrew: (key: string) => void;
   onRouteCrewLabel: string | null;
@@ -772,6 +787,7 @@ const CrewCard: React.FC<{ crew: PhoneCrew; ctx: RMPhoneCtx; lastMs: number | nu
   const st = crew.type === 'cart' ? crew.cart.stats : crew.card.stats;
   const k = crew.type === 'cart' ? ctx.knock.get(crew.cart.sessionId) : undefined;
   const routes = crew.type === 'cart' ? crew.cart.assignedRoutes : crew.card.assignedRoutes;
+  const tag = ctx.managerTag?.(crew) || null;
   return (
     <button onClick={onTap} className="w-full text-left bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 active:bg-gray-700">
       <div className="flex items-center gap-1.5 min-w-0">
@@ -780,6 +796,7 @@ const CrewCard: React.FC<{ crew: PhoneCrew; ctx: RMPhoneCtx; lastMs: number | nu
         <ActivityBadge lastMs={lastMs} nowMs={ctx.activityNow} />
         {hasFlag && <span title={flags.join(', ')} className="text-red-400"><AlertTriangle size={13} /></span>}
         {routes.length > 0 && <span className="ml-auto text-[10px] text-gray-400 font-mono truncate max-w-[40%]">{routes.join(' ')}</span>}
+        {tag && <span className={routes.length > 0 ? '' : 'ml-auto'}><ManagerBadge tag={tag} /></span>}
       </div>
       <div className="flex flex-wrap items-center gap-x-1.5 mt-1 text-[11px] text-gray-300">
         <span><b className="text-white">{st.steps}</b> steps</span><Dot />
