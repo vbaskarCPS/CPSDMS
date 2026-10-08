@@ -24,6 +24,7 @@ import { CloseDay } from './CloseDay';
 import { RollCall } from './day/RollCall';
 import { PlanTomorrow } from './day/PlanTomorrow';
 import { PayoutCopy } from './day/PayoutCopy';
+import { SheetsBridge } from './day/SheetsBridge';
 import { LateArrivals } from './day/LateArrivals';
 import { SessionPayouts } from './Payouts';
 import { ContractorLink } from './ContractorCard';
@@ -114,6 +115,7 @@ export const Day: React.FC = () => {
           {mode === 'session' && !handedOff && <SessionPayouts key={lateTick} centerId={center.id} centerName={center.display_name} date={date} />}
           {mode === 'session' && handedOff && day.data && <PayoutCopy centerId={center.id} region={center.region} date={date} day={day.data} rows={rows} canEdit={can('workerbook')} onChanged={day.reload} />}
           {mode === 'plan' && <PlanTomorrow rows={rows} managers={managers.data || []} canEdit={canEdit} onChanged={roster.reload} crew={rt ? crewById : undefined} />}
+          {mode === 'copy' && day.data && <SheetsBridge centerId={center.id} date={date} />}
           {mode === 'copy' && day.data && <PayoutCopy centerId={center.id} region={center.region} date={date} day={day.data} rows={rows} canEdit={can('workerbook')} />}
           {rt && (mode === 'future' || mode === 'past') && <CrewDay rows={rows} crew={crewById} past={mode === 'past'} />}
           {!rt && (mode === 'future' || mode === 'past') && (

@@ -865,11 +865,10 @@ class GoogleSheetsService {
       expiry: string;
       cvc: string;
       services?: ServiceFlags;
-    }>
+    }>,
+    spreadsheetId?: string,   // the new app names the center's Master Bookings sheet; the old app uses its CC context
   ): Promise<void> {
     if (accounts.length === 0) return;
-
-    const config = this.getConfig();
 
     const rows = accounts.map(a => {
       const servicesStr = this.serviceFlagsToString(a.services);
@@ -898,7 +897,7 @@ class GoogleSheetsService {
     });
 
     await this.sheetsAppend(
-      config.spreadsheets.masterbookings,
+      spreadsheetId || this.getConfig().spreadsheets.masterbookings,
       `'${SHEET_TABS.accounts}'!A:P`,
       rows
     );
@@ -920,11 +919,10 @@ class GoogleSheetsService {
       paymentType: string;
       contractorName: string;
       services?: ServiceFlags;
-    }>
+    }>,
+    spreadsheetId?: string,
   ): Promise<void> {
     if (logsheets.length === 0) return;
-
-    const config = this.getConfig();
 
     const rows = logsheets.map(l => {
       const servicesStr = this.serviceFlagsToString(l.services);
@@ -950,7 +948,7 @@ class GoogleSheetsService {
     });
 
     await this.sheetsAppend(
-      config.spreadsheets.masterbookings,
+      spreadsheetId || this.getConfig().spreadsheets.masterbookings,
       `'${SHEET_TABS.logsheets}'!A:M`,
       rows
     );
