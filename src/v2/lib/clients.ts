@@ -1,6 +1,6 @@
 // src/v2/lib/clients.ts — clients (one per address), client-list imports, recipes and The Benny.
 import { db, must } from './client';
-import { cell, sanitizeMapping, type ClientRow, type Mapping } from './clientImport';
+import { cell, profileColumns, sanitizeMapping, type ClientRow, type Mapping } from './clientImport';
 
 // ─── The Benny ──────────────────────────────────────────────────────────────
 async function benny<T>(body: Record<string, unknown>): Promise<T> {
@@ -16,12 +16,28 @@ async function benny<T>(body: Record<string, unknown>): Promise<T> {
   return data as T;
 }
 
-export async function bennyMap(fileName: string, rows: unknown[][], headerRow: number): Promise<Mapping> {
+/**
+ * The Benny reads the layout: the top 60 rows of the tab plus a profile of every column over the
+ * whole file (fill, common values, samples from further down), so look-alike columns are told apart.
+ * Besides the layout it can come back with a few questions for the person importing.
+ */
+export async function bennyMap(fileName: string, rows: unknown[][], headerRow: number, tabs?: { names: string[]; current: string }): Promise<Mapping & { questions: string[] }> {
   const start = Math.max(0, headerRow - 3);
-  const sample = rows.slice(start, start + 28).map(r => (r || []).map(cell));
-  const res = await benny<{ mapping: unknown }>({ task: 'map', fileName, rows: sample });
+  const sample = rows.slice(start, start + 60).map(r => (r || []).map(cell));
+  const profile = profileColumns(rows, headerRow);
+  const res = await benny<{ mapping: unknown }>({ task: 'map', fileName, rows: sample, profile, sheetNames: tabs?.names, sheetName: tabs?.current });
   const m = sanitizeMapping(res.mapping, Math.max(...rows.slice(0, 40).map(r => (r || []).length), 0));
-  return { ...m, headerRow: m.headerRow + start };
+  const raw = (res.mapping || {}) as { questions?: unknown };
+  const questions = Array.isArray(raw.questions) ? raw.questions.filter((q): q is string => typeof q === 'string' && !!q.trim()).slice(0, 4) : [];
+  return { ...m, headerRow: m.headerRow + start, questions };
+}
+
+/** One turn of the upload chat: what was said so far (newest last) and the upload as it stands. */
+export interface ChatTurn { role: 'user' | 'assistant'; text: string }
+export interface ChatAction { tool: 'set_columns' | 'set_list_settings' | 'skip_rows'; input: Record<string, unknown> }
+export async function bennyChat(messages: ChatTurn[], context: Record<string, unknown>): Promise<{ reply: string; actions: ChatAction[] }> {
+  const res = await benny<{ reply?: string; actions?: ChatAction[] }>({ task: 'chat', messages, context });
+  return { reply: (res.reply || '').trim(), actions: Array.isArray(res.actions) ? res.actions : [] };
 }
 
 export interface FixedAddress { i: number; house_no: string; street: string; unit?: string; city?: string; province?: string; postal_code?: string }
