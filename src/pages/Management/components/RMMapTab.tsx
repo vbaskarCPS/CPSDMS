@@ -1427,6 +1427,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // colour (red is reserved for self per the palette comment, and self-routes
   // already read naturally); covered OTHER managers get their palette hue. When
   // floater colouring is inactive, callers should not use this (they keep route_color).
+  // FLOATER TEAM COLOURS: the managers being followed get clearly different colours, assigned in
+  // order among just those managers (blue, orange, green, purple…), so two teams never end up with
+  // look-alike hues the way the CC-wide palette can. Used for the route glow, the card initials and
+  // the manager dots. Anyone else (e.g. a manager sharing their position) keeps the CC-wide colour.
+  const teamColorOf = useMemo(() => {
+    const TEAM_PALETTE = ['#2563eb', '#ea580c', '#16a34a', '#9333ea', '#0891b2', '#ca8a04', '#db2777', '#475569'];
+    const ids = [...coveredManagerIds].filter(id => id !== managerId || routes.some(r => r.managerId === id)).sort();
+    const m = new Map(ids.map((id, i) => [id, TEAM_PALETTE[i % TEAM_PALETTE.length]]));
+    return (id: string) => m.get(id) || getManagerColor(id, sortedManagerIds);
+  }, [coveredManagerIds, managerId, routes, sortedManagerIds]);
   const colorForOwner = useCallback(
     (ownerManagerId: string, fallbackRouteColor: string): string => {
       if (ownerManagerId === managerId) return fallbackRouteColor;
@@ -1442,8 +1452,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const mid = members.map(w => w.assignedManagerId as string | undefined).find(id => !!id);
     if (!mid) return null;
     const name = allManagers.find(m => m.userId === mid)?.name || mid.replace(/^rm_/, '');
-    return { initials: managerInitials(name), name, color: getManagerColor(mid, sortedManagerIds) };
-  }, [floaterColouringActive, allManagers, sortedManagerIds]);
+    return { initials: managerInitials(name), name, color: teamColorOf(mid) };
+  }, [floaterColouringActive, allManagers, teamColorOf]);
   const myTeamIds = useMemo(() => new Set(workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)).map(w => w.contractorId)), [workers, coveredManagerIds]);
   const myTeamWorkers = useMemo(() => workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)), [workers, coveredManagerIds]);
   const routeColorMap = useMemo(() => { const m = new Map<string,string>(); routeMapData.forEach(r => m.set(r.route_code, r.route_color)); return m; }, [routeMapData]);
@@ -2578,7 +2588,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const mins = Math.round(ageMs / 60000);
       const seen = mins < 2 ? 'now' : `${mins} min ago`;
       const label = covered ? `${mgr?.name || loc.managerId} · ${seen}` : `${mgr?.name || 'Manager'} (sharing their position) · ${seen}`;
-      const fill = colorForOwner(loc.managerId, '#9ca3af');
+      const fill = covered ? teamColorOf(loc.managerId) : colorForOwner(loc.managerId, '#9ca3af');
 
       const existing = managerLocationMarkersRef.current.get(loc.managerId);
       if (existing) {
@@ -2600,7 +2610,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       managerLocationMarkersRef.current.get(id)?.remove();
       managerLocationMarkersRef.current.delete(id);
     });
-  }, [managerLocations, mapLoaded, pollManagerLocations, shownPositionSharerIds, coveredManagerIds, managerId, allManagers, colorForOwner]);
+  }, [managerLocations, mapLoaded, pollManagerLocations, shownPositionSharerIds, coveredManagerIds, managerId, allManagers, colorForOwner, teamColorOf]);
 
   // Geocode cache hydration
   useEffect(() => {
@@ -2749,7 +2759,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // fallback for buckets with no managerId stamp).
       const routeRow = routes.find(r => r.routeCode === route.route_code);
       const routeOwner = routeRow?.managerId || managerId;
-      const ownerHue = (letter: string) => getManagerColor(ownerOf(routeOwner, buckets.find(b => b.letter === letter)?.managerId), sortedManagerIds);
+      const ownerHue = (letter: string) => teamColorOf(ownerOf(routeOwner, buckets.find(b => b.letter === letter)?.managerId));
 
       // Build per-line-piece features. Colour is purely the route's own colour
       // (and its split-bucket hues) — floater mode shows routes exactly as a
@@ -2879,7 +2889,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       map.addSource('rmo-team-src', { type: 'geojson', data: ownerGj });
       map.addLayer({
         id: 'rmo-team-glow', type: 'line', source: 'rmo-team-src',
-        paint: { 'line-color': ['get', 'color'], 'line-width': 14, 'line-blur': 8, 'line-opacity': 0.35 },
+        paint: { 'line-color': ['get', 'color'], 'line-width': 18, 'line-blur': 6, 'line-opacity': 0.45 },
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       }, before);
     }
@@ -2922,7 +2932,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       initialFitDoneRef.current=true;
       setTimeout(()=>{if(!mapRef.current) return; const b=allCoords.reduce((b,c)=>b.extend(c),new mapboxgl.LngLatBounds(allCoords[0],allCoords[0]));mapRef.current.fitBounds(b,{padding:80,maxZoom:15,duration:800});},300);
     }
-  }, [routeMapData, mapLoaded, routeSplitsByCode, routes, managerId, floaterColouringActive, sortedManagerIds, ownerOf]);
+  }, [routeMapData, mapLoaded, routeSplitsByCode, routes, managerId, floaterColouringActive, sortedManagerIds, ownerOf, teamColorOf]);
 
   // Worker name overlay — V2 RECURSIVE-SPLIT-AWARE.
   // Unsplit routes get one label at the route centroid showing assigned workers.
