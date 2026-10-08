@@ -116,9 +116,9 @@ export const StatCards: React.FC<{ comps: Component[]; onOpen: (c: Component) =>
         return (
           <StatCard comp={cd} onOpen={() => onOpen(cd)} loading={clients.loading} error={clients.error} caption="Client records"
             kpis={c ? [
-              { label: 'Properties', value: n(c.total), to: '/app/clients' },
-              { label: 'Need a route', value: n(c.noRoute), tone: c.noRoute ? 'amber' : undefined, to: '/app/clients' },
-              ...top.map(x => ({ label: `${SERVICE_LINES.find(l => l.key === x.key)?.label || x.key} clients`, value: n(x.n), to: '/app/clients' })),
+              { label: 'Properties', value: n(c.total), to: '/app/clients/list' },
+              { label: 'Need a route', value: n(c.noRoute), tone: c.noRoute ? 'amber' : undefined, to: '/app/clients/list' },
+              ...top.map(x => ({ label: `${SERVICE_LINES.find(l => l.key === x.key)?.label || x.key} clients`, value: n(x.n), to: '/app/clients/list' })),
             ] : null} />
         );
       })()}

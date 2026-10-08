@@ -34,15 +34,16 @@ export const COMPONENTS: Component[] = [
     { key: 'crew', label: 'Crew list', icon: BedDouble, color: 'violet', path: '/app/workerbook/crew', ready: true },
     { key: 'status', label: 'Status lists', icon: AlertCircle, color: 'amber', path: '/app/workerbook/status', ready: true },
   ] },
-  { key: 'mb', label: 'Master Bookings', icon: CalendarCheck, color: 'amber', perm: 'bookings', home: '/app/bookings', blurb: 'Coming in a later phase', subs: [
+  { key: 'mb', label: 'Master Bookings', icon: CalendarCheck, color: 'amber', perm: 'bookings', home: '/app/bookings/customers', blurb: 'Customers on the map; bookings and accounts coming', subs: [
+    { key: 'customers', label: 'Customers', icon: MapPin, color: 'amber', path: '/app/bookings/customers', ready: true },
     { key: 'bookings', label: 'Bookings', icon: List, color: 'amber', path: '/app/bookings', ready: false },
     { key: 'inbox', label: 'Inbox', icon: Inbox, color: 'blue', path: '/app/bookings/inbox', ready: false },
     { key: 'accounts', label: 'Accounts', icon: Receipt, color: 'green', path: '/app/bookings/accounts', ready: false },
     { key: 'crews', label: 'Crews', icon: Truck, color: 'teal', path: '/app/bookings/crews', ready: false },
     { key: 'kpis', label: 'KPIs', icon: BarChart3, color: 'violet', path: '/app/bookings/kpis', ready: false },
   ] },
-  { key: 'cd', label: 'Clients & Dialer', icon: Phone, color: 'violet', perm: 'dialer', home: '/app/clients', blurb: 'Client records and calling', subs: [
-    { key: 'clients', label: 'Clients', icon: Users, color: 'violet', path: '/app/clients', ready: true },
+  { key: 'cd', label: 'Clients & Dialer', icon: Phone, color: 'violet', perm: 'dialer', home: '/app/clients', blurb: 'Customers on the map, client records and calling', subs: [
+    { key: 'clients', label: 'Customers', icon: MapPin, color: 'violet', path: '/app/clients', ready: true },
     { key: 'campaigns', label: 'Campaigns', icon: Megaphone, color: 'rose', path: '/app/clients/campaigns', ready: false },
     { key: 'dialer', label: 'Dialer', icon: Phone, color: 'green', path: '/app/clients/dialer', ready: false },
     { key: 'followups', label: 'Follow-ups', icon: Clock, color: 'amber', path: '/app/clients/follow-ups', ready: false },
