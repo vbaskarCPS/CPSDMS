@@ -1753,6 +1753,38 @@ export function historicalSummary(rows: HistoricalProperty[]): { name: string; s
   return { name, shortName: short, prices, total };
 }
 
+/**
+ * THIS SEASON'S JOBS, FROM THE PCL LIST. A closed day's sales are written onto the customers'
+ * records (one system with past clients), so a past-client entry with a job this year is a house
+ * done this season. They're handed to the map as historical rows: the house shows as previously
+ * serviced (purple, with what they paid), is set to Invalid for knocking, and stays out of PCL
+ * Outreach — the same treatment the old app's Load Historical gave the Logsheets tab.
+ */
+export function seasonJobsAsHistorical(pclByRoute: Map<string, PCLClientGroup[]>, year = new Date().getFullYear()): HistoricalProperty[] {
+  const out: HistoricalProperty[] = [];
+  pclByRoute.forEach((clients, routeCode) => {
+    for (const c of clients) {
+      for (const h of c.history || []) {
+        if (Number(h.year) !== year) continue;
+        const done = h.date ? new Date(`${h.date}T12:00:00`) : null;
+        out.push({
+          routeCode,
+          address: `${c.houseNum || ''} ${c.streetName || ''}`.trim(),
+          customerName: (c as { nameUnsure?: boolean }).nameUnsure ? undefined : `${c.firstName || ''} ${c.lastName || ''}`.trim() || undefined,
+          phone: c.phone || undefined,
+          propertyType: h.serviceType || undefined,
+          price: h.price || undefined,
+          contractorName: h.contractor || undefined,
+          notes: done && !isNaN(done.getTime())
+            ? `Done ${done.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}`
+            : 'Done this season',
+        });
+      }
+    }
+  });
+  return out;
+}
+
 export function indexPcl(pclByRoute: Map<string, PCLClientGroup[]>, houses: RouteHouse[] = []): Map<string, PCLClientGroup> {
   const m = new Map<string, PCLClientGroup>();
   const onRoute = new Set(houses.map(h => routeHouseId(h.routeCode, h.houseKey)));
@@ -1823,6 +1855,8 @@ export function buildHouseViews(
     if (done) state = 'completed';
     else if (ps || ob) state = 'pending';
     else if (d) state = d.status;
+    // done earlier this season (historical): not to be knocked again
+    else if (hist.length) state = 'invalid';
     const pclName = p ? `${p.firstName || ''} ${p.lastName || ''}`.trim() || null : null;
     // Name line: the sale's customer for pending/completed houses, else the
     // name jotted on the disposition, else the PCL name. Years line: from PCL

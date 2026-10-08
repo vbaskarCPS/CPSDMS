@@ -37,6 +37,8 @@ export interface PclOutreachClient {
   maxPrice?: number;
   maxPriceYear?: number;
   repeatCount: number;
+  /** Several people are on file here and we don't know whose this phone is. */
+  nameUnsure?: boolean;
 }
 
 function parsePrice(raw: any): number | undefined {
@@ -90,10 +92,21 @@ export function pclOutreachClients(views: HouseView[], historicalPhones: Set<str
       maxPrice,
       maxPriceYear,
       repeatCount: distinctYears.size,
+      nameUnsure: !!c.nameUnsure,
     });
   }
   list.sort((a, b) => (b.year || 0) - (a.year || 0));
-  return list;
+  // ONE ROW PER PHONE. A callbook sometimes has the same number at two houses (a copy-paste
+  // slip, or someone who moved): texting both would send that person a neighbour's address.
+  // The most recent customer keeps the number.
+  const seen = new Set<string>();
+  return list.filter(c => {
+    const pk = phoneKey(c.phone);
+    if (pk.length !== 10) return true;
+    if (seen.has(pk)) return false;
+    seen.add(pk);
+    return true;
+  });
 }
 
 interface Props {
@@ -167,8 +180,9 @@ const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients, t
     return list;
   }, [clients, texted, hideTexted, yearFrom, yearTo, minPrice, minRepeats, search]);
 
+  // When we can't tell whose phone it is, greet "there" rather than risk the wrong name.
   const messageFor = (c: PclOutreachClient) => buildPclOutreachMessage(template, {
-    firstName: c.firstName, lastName: c.lastName, houseNum: c.houseNum, streetName: c.streetName,
+    firstName: c.nameUnsure ? '' : c.firstName, lastName: c.nameUnsure ? '' : c.lastName, houseNum: c.houseNum, streetName: c.streetName,
     city: c.city, year: c.year, price: c.price, serviceType: c.serviceType, routeCode: c.routeCode,
     workerFirstName: worker.firstName, workerLastName: worker.lastName,
   });
@@ -410,6 +424,7 @@ const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients, t
                           {`${c.firstName} ${c.lastName}`.trim() || '(no name on record)'}
                         </span>
                         {done && <span className="text-[10px] text-green-400 flex items-center gap-1 flex-shrink-0"><Check size={10} /> texted</span>}
+                        {c.nameUnsure && <span className="text-[10px] text-amber-400 border border-amber-500/40 rounded px-1 flex-shrink-0" title="More than one person is on file here, so the text says “Hi there”">says “Hi there”</span>}
                       </div>
                       <div className="text-xs text-gray-400 truncate">{c.houseNum} {c.streetName}{c.city ? `, ${c.city}` : ''}</div>
                       <div className="text-[11px] text-gray-500 flex items-center gap-2 mt-0.5 flex-wrap">

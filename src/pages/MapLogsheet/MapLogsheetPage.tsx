@@ -48,7 +48,7 @@ import {
   MAP_LOGSHEET_PATH, isMapWorker,
   SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView, StreetSegmentPick,
   fetchRouteMaps, ensureRouteHouses, fetchDispositions, fetchDisposition, setDisposition, clearDisposition, addManualHouse, loadSegmentHouses,
-  fetchHistoricalForRoutes, indexHistorical, historicalSummary,
+  fetchHistoricalForRoutes, indexHistorical, historicalSummary, seasonJobsAsHistorical,
   indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId,
   subscribeToPendingSales, subscribeToDispositions,
   houseNumberLabel,
@@ -491,21 +491,23 @@ const MapLogsheetPage: React.FC = () => {
   // ---------------------------------------------------------------------
   // DERIVED
   // ---------------------------------------------------------------------
+  // Done this season: the old Load Historical rows plus this season's jobs on the PCL list.
+  const allHistorical = useMemo(() => [...historicalRows, ...seasonJobsAsHistorical(pclByRoute)], [historicalRows, pclByRoute]);
   const houseViews: HouseView[] = useMemo(() => {
     const ps = indexPendingSales(pendingSales, houses);
     const { pending, completed } = indexBookings(jobs, houses);
     const pcl = indexPcl(pclByRoute, houses);
-    const hist = indexHistorical(historicalRows, houses);
+    const hist = indexHistorical(allHistorical, houses);
     return buildHouseViews(houses, dispositions, ps, pending, completed, pcl, hist);
-  }, [houses, dispositions, pendingSales, jobs, pclByRoute, historicalRows]);
+  }, [houses, dispositions, pendingSales, jobs, pclByRoute, allHistorical]);
 
   // PCL Outreach: who's textable on these routes, and how many are still to do.
   // Anyone in the historicals (same house, or same phone number) is left out.
   const historicalPhones = useMemo(() => {
     const set = new Set<string>();
-    for (const r of historicalRows) { const k = phoneKey(r.phone); if (k.length === 10) set.add(k); }
+    for (const r of allHistorical) { const k = phoneKey(r.phone); if (k.length === 10) set.add(k); }
     return set;
-  }, [historicalRows]);
+  }, [allHistorical]);
   const pclClients = useMemo(() => pclOutreachClients(houseViews, historicalPhones), [houseViews, historicalPhones]);
   const pclToText = useMemo(() => pclClients.filter(c => !pclTexted.has(c.key)).length, [pclClients, pclTexted]);
   useEffect(() => {
