@@ -15,7 +15,9 @@ export type Field =
   // flags and notes
   | 'notes' | 'call_first' | 'do_not_call' | 'do_not_text' | 'tag'
   // one year of service history (columns with the same `year` form one entry)
-  | 'year' | 'service' | 'price' | 'contractor' | 'payment' | 'serviced';
+  | 'year' | 'service' | 'price' | 'contractor' | 'payment' | 'serviced'
+  // how a job came (New / Existing / an upsell badge) and the day it was done (Logsheets-style lists)
+  | 'client_type' | 'job_date';
 
 export const FIELDS: { key: Field; label: string; group: string }[] = [
   { key: 'ignore', label: 'Ignore', group: '' },
@@ -44,6 +46,8 @@ export const FIELDS: { key: Field; label: string; group: string }[] = [
   { key: 'contractor', label: 'Contractor', group: 'History' },
   { key: 'payment', label: 'Payment type', group: 'History' },
   { key: 'serviced', label: 'Serviced that year (yes / code)', group: 'History' },
+  { key: 'client_type', label: 'Client type (New / Existing / upsell)', group: 'History' },
+  { key: 'job_date', label: 'Date done', group: 'History' },
 ];
 const FIELD_KEYS = new Set(FIELDS.map(f => f.key));
 
@@ -84,12 +88,21 @@ export interface Mapping {
   serviceLine?: ServiceLine | null;          // which service this list's clients are past clients of
   yesValues?: string[];                      // extra values that mean "yes"
   notes?: string | null;                     // The Benny's explanation, shown on the review screen
+  skipRows?: number[];                       // sheet rows (1-based) left out on purpose (e.g. from the chat)
 }
 
 /** A person on a client record. `phone` is the number that came on the same row as this
  *  name, so a text to it can greet the right person (a client can have several people). */
 export interface Person { first: string; last: string; phone?: string }
-export interface HistoryEntry { year: number | null; service: string; price: string; contractor: string; payment: string; line: ServiceLine | '' }
+export interface HistoryEntry {
+  year: number | null; service: string; price: string; contractor: string; payment: string; line: ServiceLine | '';
+  /** Door sale / Prebooked / Upsell, from a Client Type column. */
+  source?: string;
+  /** What an upsell was (its badge, e.g. SP PRO), from a Client Type column. */
+  product?: string;
+  /** The day the job was done (YYYY-MM-DD). */
+  date?: string;
+}
 
 export interface ClientRow {
   key: string;                // address key inside this file
@@ -159,6 +172,28 @@ export function cleanPrice(s: string): string {
   const t = s.replace(/[$,\s]/g, '');
   if (/^\d+(\.\d+)?$/.test(t)) { const n = Number(t); return Number.isInteger(n) ? String(n) : n.toFixed(2); }
   return s.trim();
+}
+
+/** "2026-10-03", "Oct 3, 2026", "10/03/2026", "3-Oct-26" → "2026-10-03" (or '' when it isn't a date). */
+export function cleanDate(s: string): string {
+  const t = s.trim();
+  if (!t) return '';
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return iso(+m[1], +m[2], +m[3]);
+  m = t.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);            // month/day/year, the way the sheets write it
+  if (m) return iso(m[3].length === 2 ? 2000 + +m[3] : +m[3], +m[1], +m[2]);
+  const d = new Date(t.replace(/(\d)(st|nd|rd|th)\b/g, '$1'));
+  return isNaN(d.getTime()) ? '' : iso(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+const iso = (y: number, mo: number, d: number) =>
+  y >= 1990 && y <= 2100 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` : '';
+
+/** A Client Type cell → how the job came: New = a door sale, Existing = prebooked, else an upsell badge. */
+export function clientTypeSource(v: string): { source: string; product?: string } {
+  const t = v.trim();
+  if (/^new\b/i.test(t)) return { source: 'Door sale' };
+  if (/^(existing|prebook|pre-book|booked)/i.test(t)) return { source: 'Prebooked' };
+  return { source: 'Upsell', product: t.toUpperCase() };
 }
 
 export function cleanYear(s: string): number | null {
@@ -282,6 +317,9 @@ export function guessMapping(rows: unknown[][], headerRow = findHeaderRow(rows))
     else if (/CALL FIRST/.test(h)) r = rule('call_first');
     else if (/NOTE|COMMENT/.test(h)) r = rule('notes');
     else if (/^YEAR$|^SEASON$/.test(h)) r = rule('year');
+    else if (/^CLIENT TYPE$|^CUSTOMER TYPE$/.test(h)) r = rule('client_type');
+    else if (/^PROPERTY TYPE$/.test(h)) r = rule('service');
+    else if (/^(DATE|DATE DONE|DATE COMPLETED|COMPLETED|DONE ON|JOB DATE)$/.test(h)) r = rule('job_date');
     else if (/^(SERVICE|SERVICE TYPE|FO|SVC)$/.test(h) || /\bSERVICE\b/.test(h)) r = rule('service');
     else if (/PRICE|AMOUNT|AMT|\$/.test(h)) r = rule('price');
     else if (/CONTRACTOR|TECH|WORKER/.test(h)) r = rule('contractor');
@@ -322,6 +360,7 @@ export function sanitizeMapping(m: unknown, columnCount: number): Mapping {
     serviceLine: typeof src.serviceLine === 'string' && LINE_KEYS.has(src.serviceLine) ? src.serviceLine as ServiceLine : null,
     yesValues: Array.isArray(src.yesValues) ? src.yesValues.filter(v => typeof v === 'string').slice(0, 20) as string[] : [],
     notes: str(src.notes, 2000),
+    skipRows: Array.isArray(src.skipRows) ? [...new Set(src.skipRows.map(Number).filter(n => Number.isInteger(n) && n > 0))].slice(0, 5000) : [],
   };
 }
 
@@ -330,6 +369,7 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
   const headers = (rows[mapping.headerRow] || []).map(cell);
   const entries = Object.entries(mapping.columns).map(([i, r]) => [Number(i), r] as const).filter(([, r]) => r.field !== 'ignore');
   const yes = mapping.yesValues || [];
+  const skipRows = new Set(mapping.skipRows || []);
   const byKey = new Map<string, ClientRow>();
   const skipped: Applied['skipped'] = [];
   let rowsRead = 0;
@@ -340,6 +380,7 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
     if (!vals.some(([, v]) => v)) continue;          // blank row
     rowsRead++;
     const sheetRow = r + 1;
+    if (skipRows.has(sheetRow)) { skipped.push({ row: sheetRow, reason: 'Left out', text: vals.map(([, v]) => v).filter(Boolean).slice(0, 6).join(' · ') }); continue; }
     let house = '', street = '', unit = '', city = '', province = '', postal = '', route = '';
     let first = '', last = '';
     const people: Person[] = []; const phones: string[] = []; const emails: string[] = []; const tags: string[] = [];
@@ -382,6 +423,8 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
         case 'price': { const e = h(rule.year); e.price = e.price || cleanPrice(v); if (e.price) e.any = true; break; }
         case 'contractor': { const e = h(rule.year); e.contractor = e.contractor || titleCase(v); break; }
         case 'payment': { const e = h(rule.year); e.payment = e.payment || v; break; }
+        case 'client_type': { const e = h(rule.year); const c = clientTypeSource(v); e.source = e.source || c.source; if (c.product) e.product = e.product || c.product; e.any = true; break; }
+        case 'job_date': { const d = cleanDate(v); if (!d) break; const e = h(rule.year); e.date = e.date || d; e.any = true; rowYear = rowYear ?? Number(d.slice(0, 4)); break; }
         case 'serviced': {
           if (isNo(v)) break;
           const e = h(rule.year);
@@ -415,7 +458,8 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
       if (!e.any && !e.contractor) continue;
       const year = e.year ?? rowYear ?? mapping.defaultYear ?? null;
       const service = e.service || (mapping.defaultService || '').toUpperCase();
-      history.push({ year, service, price: e.price, contractor: e.contractor, payment: e.payment, line: classifyLine(service) || listLine });
+      history.push({ year, service, price: e.price, contractor: e.contractor, payment: e.payment, line: classifyLine(service) || listLine,
+        ...(e.source ? { source: e.source } : {}), ...(e.product ? { product: e.product } : {}), ...(e.date ? { date: e.date } : {}) });
     }
     // a client on a list with no history columns is still a past client of the list's service
     if (!history.length && listLine) {
@@ -459,7 +503,7 @@ function dedupePeople(list: Person[]): Person[] {
 }
 function dedupeHistory(list: HistoryEntry[]): HistoryEntry[] {
   const seen = new Set<string>(); const out: HistoryEntry[] = [];
-  for (const e of list) { const k = `${e.year}|${e.line}|${e.service}|${e.price}|${e.contractor}`.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(e); } }
+  for (const e of list) { const k = `${e.year}|${e.line}|${e.service}|${e.price}|${e.contractor}|${e.date || ''}`.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(e); } }
   return out.sort((a, b) => (b.year || 0) - (a.year || 0));
 }
 
@@ -469,4 +513,37 @@ export function sheetCsvUrl(link: string): string | null {
   if (!id) return null;
   const gid = link.match(/[#&?]gid=(\d+)/)?.[1];
   return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv${gid ? `&gid=${gid}` : ''}`;
+}
+
+// ─── a summary of every column over the whole file (for The Benny) ─────────
+export interface ColumnProfile {
+  i: number; header: string; filled: number; distinct: number;
+  top: [string, number][];        // most common values and how often
+  samples: string[];              // values from all through the file
+  looks: string[];                // what the values look like: phone, email, money, year, date, yes/no, number, text
+}
+export function profileColumns(rows: unknown[][], headerRow: number, maxCols = 80): ColumnProfile[] {
+  const headers = (rows[headerRow] || []).map(cell);
+  const body = rows.slice(headerRow + 1);
+  const width = Math.min(maxCols, Math.max(headers.length, ...body.slice(0, 200).map(r => (r || []).length)));
+  const out: ColumnProfile[] = [];
+  for (let i = 0; i < width; i++) {
+    const counts = new Map<string, number>();
+    const vals: string[] = [];
+    for (const r of body) { const v = cell((r || [])[i]); if (!v) continue; vals.push(v); counts.set(v, (counts.get(v) || 0) + 1); }
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([v, n]) => [v.slice(0, 40), n] as [string, number]);
+    const step = Math.max(1, Math.floor(vals.length / 6));
+    const samples = [...new Set(vals.filter((_, k) => k % step === 0).map(v => v.slice(0, 50)))].slice(0, 6);
+    const share = (re: RegExp) => vals.length ? vals.filter(v => re.test(v)).length / vals.length : 0;
+    const looks: string[] = [];
+    if (share(/^\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) > 0.5) looks.push('phone');
+    if (share(/@/) > 0.5) looks.push('email');
+    if (share(/^\$?\s?\d{1,5}(\.\d{2})?$/) > 0.6 && share(/^(19|20)\d{2}$/) < 0.6) looks.push('money or number');
+    if (share(/^(19|20)\d{2}$/) > 0.6) looks.push('year');
+    if (share(/^\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}$|^\d{4}-\d{2}-\d{2}/) > 0.5) looks.push('date');
+    if (counts.size > 0 && counts.size <= 4 && [...counts.keys()].every(v => v.length <= 4)) looks.push('flag or short code');
+    if (share(/^\d+[A-Za-z]?\s+\D/) > 0.5) looks.push('street address');
+    out.push({ i, header: headers[i] || '', filled: vals.length, distinct: counts.size, top, samples, looks });
+  }
+  return out;
 }

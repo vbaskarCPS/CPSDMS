@@ -7,15 +7,17 @@ import { Link } from 'react-router-dom';
 import { FileSpreadsheet, Link2, Sparkles, Undo2, Upload } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import {
-  applyMapping, cell, FIELDS, findHeaderRow, fingerprint, guessMapping, formatPhone, lineLabel, SERVICE_LINES, titleCase,
+  applyMapping, cell, FIELDS, findHeaderRow, fingerprint, guessMapping, formatPhone, lineLabel, profileColumns, SERVICE_LINES, titleCase,
   type Applied, type ClientRow, type ColumnRule, type Field, type Mapping, type ServiceLine,
 } from '../../lib/clientImport';
 import {
-  bennyFixAddresses, bennyMap, bennyPlace, commitImport, streetCandidates, fetchSheetCsv, findRecipe, finishStuckImport, geocode, listImports, listRecipes,
+  bennyChat, bennyFixAddresses, bennyMap, bennyPlace, commitImport, streetCandidates, fetchSheetCsv, findRecipe, finishStuckImport, geocode, listImports, listRecipes,
   matchClients, parseCsv, readWorkbook, undoImport, updateRecipe, type ImportRecord, type ImportRow, type MatchResult, type Recipe, type Sheet,
 } from '../../lib/clients';
 import { Btn, ErrorBox, Loading, Tabs, Tag, Toggle } from '../../ui';
 import { TerritoryTabs } from './Territory';
+import { BennyChat, type ChatMessage } from './BennyChat';
+import { applyChatActions, openingMessage, REVIEW_PROMPT } from '../../lib/bennyChat';
 
 type Step = 'source' | 'columns' | 'review' | 'done';
 interface Source { fileName: string; kind: 'file' | 'sheet'; sheetUrl: string | null; sheets: Sheet[]; sheet: number }
@@ -27,7 +29,11 @@ const effective = (m: Matched): { client: ClientRow; match: MatchResult | null; 
   m.fix?.on ? { client: { ...m.client, house_no: m.fix.house_no, street_name: m.fix.street }, match: m.fix.match, fixed: true } : { client: m.client, match: m.match, fixed: false };
 
 /** How many unplaced addresses The Benny takes on at a time. */
-const BENNY_BATCH = 800;
+const BENNY_BATCH = 2000;
+/** Map searches for addresses the map's own data doesn't know, and for map points of placed ones. */
+const GEOCODE_MISSING = 3000;
+const GEOCODE_POINTS = 3000;
+const GEOCODE_PARALLEL = 8;
 
 const HISTORY: Field[] = ['year', 'service', 'price', 'contractor', 'payment', 'serviced'];
 const HOW: Record<string, string> = { house_benny: 'House on route', address_point_benny: 'Address point', geocode_benny: 'Map search', street_benny: 'Only route on street', house: 'House on route', address_point: 'Address point', geocode: 'Map search', street: 'Only route on street', given: 'List’s route code' };
@@ -50,6 +56,8 @@ export const ClientLists: React.FC = () => {
   const [includeUnrouted, setIncludeUnrouted] = useState(true);
   const [bennyTried, setBennyTried] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<{ id: string; inserted: number; merged: number } | null>(null);
+  const [chat, setChat] = useState<ChatMessage[]>([]);
+  const [chatBusy, setChatBusy] = useState(false);
   const imports = useLoad(listImports, []);
   const recipes = useLoad(listRecipes, []);
 
@@ -72,12 +80,18 @@ export const ClientLists: React.FC = () => {
     setFixed(new Map()); setBennyNote(null);
     if (known) {
       setRecipe(known); setRecipeName(known.name); setMapping(known.mapping);
+      setChat([{ role: 'assistant', text: openingMessage([], true) }]);
     } else {
       setRecipe(null); setRecipeName(s.fileName.replace(/\.[^.]+$/, ''));
-      try { setMapping(await bennyMap(s.fileName, r, guessRow)); }
-      catch (e) {
+      setChat([]);
+      try {
+        const { questions, ...m } = await bennyMap(s.fileName, r, guessRow, { names: s.sheets.map(x => x.name), current: s.sheets[s.sheet].name });
+        setMapping(m);
+        setChat([{ role: 'assistant', text: openingMessage(questions, false) }]);
+      } catch (e) {
         setMapping(guessMapping(r, guessRow));
         setBennyNote(`The Benny couldn’t read this one (${e instanceof Error ? e.message : String(e)}). The columns below were guessed from their titles; check them before going on.`);
+        setChat([{ role: 'assistant', text: 'I couldn’t read this file just now, so the columns were guessed from their titles. You can still ask me about it.', error: true }]);
       }
     }
     setStep('columns');
@@ -176,19 +190,29 @@ export const ClientLists: React.FC = () => {
     });
     const all = list.map((_, i) => i);
     const res = await matchClients(ask(all), n => setBusy(`Matching addresses to routes… ${n} of ${list.length}`));
-    const missing = all.filter(i => !res.get(i)?.route_code).slice(0, 600);
+    const missing = all.filter(i => !res.get(i)?.route_code).slice(0, GEOCODE_MISSING);
     if (missing.length) {
       const found = new Map<number, { lat: number; lng: number }>();
       let done = 0;
-      for (let k = 0; k < missing.length; k += 6) {
-        await Promise.all(missing.slice(k, k + 6).map(async i => { const g = await geocode(list[i]); if (g) found.set(i, g); }));
-        done = Math.min(missing.length, k + 6);
+      for (let k = 0; k < missing.length; k += GEOCODE_PARALLEL) {
+        await Promise.all(missing.slice(k, k + GEOCODE_PARALLEL).map(async i => { const g = await geocode(list[i]); if (g) found.set(i, g); }));
+        done = Math.min(missing.length, k + GEOCODE_PARALLEL);
         setBusy(`Looking up addresses on the map… ${done} of ${missing.length}`);
       }
       if (found.size) {
         const again = await matchClients(ask([...found.keys()], found));
         for (const [i, r] of again) if (r.route_code || r.lat) res.set(i, { ...r, lat: r.lat ?? found.get(i)!.lat, lng: r.lng ?? found.get(i)!.lng });
       }
+    }
+    // A map point for every placed address that doesn't have one yet (placed by its street or by
+    // the list's route code), so each customer shows on the map, not just on its route.
+    const pointless = all.filter(i => res.get(i)?.route_code && res.get(i)?.lat == null).slice(0, GEOCODE_POINTS);
+    for (let k = 0; k < pointless.length; k += GEOCODE_PARALLEL) {
+      await Promise.all(pointless.slice(k, k + GEOCODE_PARALLEL).map(async i => {
+        const g = await geocode(list[i]);
+        if (g) res.set(i, { ...res.get(i)!, lat: g.lat, lng: g.lng });
+      }));
+      setBusy(`Finding map points… ${Math.min(pointless.length, k + GEOCODE_PARALLEL)} of ${pointless.length}`);
     }
     // The Benny places what's still missing: it picks which real street a misspelled address meant
     const unplaced = all.filter(i => !res.get(i)?.route_code).slice(0, BENNY_BATCH);
@@ -197,9 +221,75 @@ export const ClientLists: React.FC = () => {
     const { fixes, tried } = unplaced.length ? await placeWithBenny(list, unplaced, routes) : { fixes: new Map<number, Fix>(), tried: new Set<number>() };
     setBennyTried(new Set([...tried].map(i => list[i].key)));
     setApplied(preview);
-    setMatched(list.map((client, i) => ({ client, match: res.get(i) || null, fix: fixes.get(i) })));
+    const nextMatched = list.map((client, i) => ({ client, match: res.get(i) || null, fix: fixes.get(i) }));
+    setMatched(nextMatched);
     setStep('review');
+    // The Benny looks over the results and says what stands out
+    void talk(REVIEW_PROMPT, { hidden: true, stage: 'review', matchedNow: nextMatched, appliedNow: preview });
   });
+
+  /** What The Benny is told about the upload as it stands. */
+  const chatContext = (stage: string, matchedNow: Matched[] = matched, appliedNow: Applied | null = applied): Record<string, unknown> => {
+    if (!src || !mapping) return {};
+    const r = src.sheets[src.sheet].rows;
+    const hs = (r[mapping.headerRow] || []).map(cell);
+    const p = preview;
+    const ctx: Record<string, unknown> = {
+      file: src.fileName, tab: src.sheets[src.sheet].name, tabs: src.sheets.map(x => `${x.name} (${x.rows.length} rows)`), stage,
+      columns: hs.map((h, i) => ({ i, title: h, means: mapping.columns[i]?.field || 'ignore', year: mapping.columns[i]?.year ?? undefined,
+        tag: mapping.columns[i]?.tag ?? undefined, service: mapping.columns[i]?.service ?? undefined })),
+      settings: { titleRow: mapping.headerRow + 1, defaultYear: mapping.defaultYear ?? null, defaultService: mapping.defaultService ?? null,
+        serviceLine: mapping.serviceLine ?? null, defaultCity: mapping.defaultCity ?? null, defaultProvince: mapping.defaultProvince ?? null,
+        yesValues: mapping.yesValues || [], rowsLeftOut: mapping.skipRows || [] },
+      profile: profileColumns(r, mapping.headerRow).map(c => ({ i: c.i, filled: c.filled, distinct: c.distinct, top: c.top.slice(0, 5), samples: c.samples, looks: c.looks })),
+      topRows: r.slice(mapping.headerRow + 1, mapping.headerRow + 13).map((row, k) => ({ row: mapping.headerRow + 2 + k, cells: (row || []).map(cell).slice(0, 40) })),
+    };
+    if (p) ctx.read = { rowsRead: p.rowsRead, addresses: p.clients.length, rowsWithoutAddress: p.skipped.length,
+      examplesWithoutAddress: p.skipped.slice(0, 12), firstAddresses: p.clients.slice(0, 8).map(c => ({ rows: c.rows, address: `${c.house_no} ${c.street_name}`, people: c.people.length, phones: c.phones.length, history: c.history })) };
+    if (stage === 'review' && matchedNow.length) {
+      const eff = matchedNow.map(effective);
+      const byRoute = new Map<string, number>();
+      for (const m of eff) if (m.match?.route_code) byRoute.set(m.match.route_code, (byRoute.get(m.match.route_code) || 0) + 1);
+      const phoneAt = new Map<string, Set<string>>();
+      for (const m of eff) for (const ph of m.client.phones) { const set = phoneAt.get(ph) || new Set(); set.add(m.client.key); phoneAt.set(ph, set); }
+      const how = new Map<string, number>();
+      for (const m of eff) { const k = m.match?.how || 'none'; how.set(k, (how.get(k) || 0) + 1); }
+      ctx.results = {
+        addresses: eff.length, onRoute: eff.filter(m => m.match?.route_code).length, noRoute: eff.filter(m => !m.match?.route_code).length,
+        newCustomers: eff.filter(m => !m.match?.client_id).length, existingCustomers: eff.filter(m => m.match?.client_id).length,
+        withMapPoint: eff.filter(m => m.match?.lat != null).length, placedBy: Object.fromEntries(how),
+        routes: [...byRoute.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20),
+        routeGivenButDifferent: eff.filter(m => m.client.route_given && m.match?.route_code && m.client.route_given !== m.match.route_code).slice(0, 15)
+          .map(m => ({ rows: m.client.rows, address: `${m.client.house_no} ${m.client.street_name}`, listSays: m.client.route_given, mapSays: m.match!.route_code })),
+        noRouteExamples: eff.filter(m => !m.match?.route_code).slice(0, 25).map(m => ({ rows: m.client.rows, address: `${m.client.house_no} ${m.client.street_name}`, city: m.client.city, listRoute: m.client.route_given })),
+        bennyReadings: matchedNow.filter(m => m.fix).slice(0, 15).map(m => ({ was: m.client.raw_address, now: `${m.fix!.house_no} ${m.fix!.street}`, route: m.fix!.match?.route_code || null, confidence: m.fix!.confidence })),
+        samePhoneSeveralAddresses: [...phoneAt.values()].filter(x => x.size > 1).length,
+        rowsCombined: Math.max(0, (appliedNow?.rowsRead || 0) - (appliedNow?.skipped.length || 0) - eff.length),
+      };
+    }
+    return ctx;
+  };
+
+  /** One turn of the chat: send what was said (and the upload as it stands), apply any changes. */
+  const talk = async (text: string, opts: { hidden?: boolean; stage?: string; matchedNow?: Matched[]; appliedNow?: Applied | null } = {}) => {
+    if (!mapping) return;
+    const said: ChatMessage = { role: 'user', text, hidden: opts.hidden };
+    const history = [...chat, said];
+    setChat(history); setChatBusy(true);
+    try {
+      const stage = opts.stage || step;
+      const res = await bennyChat(history.filter(m => !m.error).map(m => ({ role: m.role, text: m.changes?.length ? `${m.text}\n(Changed: ${m.changes.join('; ')})` : m.text })),
+        chatContext(stage, opts.matchedNow, opts.appliedNow));
+      const { mapping: next, changes } = applyChatActions(mapping, res.actions, (rows[mapping.headerRow] || []).map(cell));
+      if (changes.length) {
+        setMapping(next);
+        if (stage === 'review') { setStep('columns'); setBennyNote('The Benny changed the layout, so the addresses need matching again: check the columns, then Next: match to routes.'); }
+      }
+      setChat(c => [...c, { role: 'assistant', text: res.reply || (changes.length ? 'Done.' : 'I don’t have anything to add.'), changes }]);
+    } catch (e) {
+      setChat(c => [...c, { role: 'assistant', text: `I couldn’t answer just now (${e instanceof Error ? e.message : String(e)}).`, error: true }]);
+    } finally { setChatBusy(false); }
+  };
 
   const counts = useMemo(() => {
     const n = { rowsRead: applied?.rowsRead || 0, clients: matched.length, skipped: applied?.skipped.length || 0, combined: 0, fresh: 0, merge: 0, routed: 0, unrouted: 0, fixed: 0, suggested: 0 };
@@ -230,7 +320,7 @@ export const ClientLists: React.FC = () => {
     setResult(res); setStep('done'); imports.reload(); recipes.reload();
   });
 
-  const reset = () => { setStep('source'); setSrc(null); setMapping(null); setRecipe(null); setApplied(null); setMatched([]); setResult(null); setFixed(new Map()); setLink(''); setBennyNote(null); };
+  const reset = () => { setStep('source'); setSrc(null); setMapping(null); setRecipe(null); setApplied(null); setMatched([]); setResult(null); setFixed(new Map()); setLink(''); setBennyNote(null); setChat([]); };
 
   return (
     <div className="v2-main">
@@ -261,7 +351,10 @@ export const ClientLists: React.FC = () => {
         </div>
       )}
 
-      {step === 'columns' && src && mapping && preview && (
+      {(step === 'columns' || step === 'review') && src && mapping && (
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+      <div style={{ flex: '999 1 640px', minWidth: 0 }}>
+      {step === 'columns' && preview && (
         <div className="v2-stack">
           <div className="v2-card">
             <div className="v2-row">
@@ -354,6 +447,16 @@ export const ClientLists: React.FC = () => {
           onToggleFix={key => setMatched(ms => ms.map(m => m.client.key === key && m.fix ? { ...m, fix: { ...m.fix, on: !m.fix.on } } : m))}
           recipeName={recipeName} setRecipeName={setRecipeName} includeUnrouted={includeUnrouted} setIncludeUnrouted={setIncludeUnrouted}
           onBack={() => setStep('columns')} onApprove={approve} />
+      )}
+      </div>
+      <div style={{ flex: '1 1 320px', maxWidth: 420, minWidth: 0 }}>
+        <BennyChat messages={chat} busy={chatBusy} disabled={!!busy}
+          suggestions={chat.filter(m => m.role === 'user').length ? [] : step === 'review'
+            ? ['Why do some addresses have no route?', 'Which rows were combined?']
+            : ['What’s in this file?', 'Which columns did you skip?', 'Why were some rows left out?']}
+          onSend={t => { void talk(t); }} />
+      </div>
+      </div>
       )}
 
       {step === 'done' && result && (
