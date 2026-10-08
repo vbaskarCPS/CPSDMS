@@ -159,9 +159,17 @@ export async function routeShapes(areaNames: string[]): Promise<RouteShape[]> {
   return out;
 }
 
-/** Callbook clients (PCL) per route for the given areas: route code → count. */
+/** Past clients (PCL) per route for the given areas: route code → count, from the client database. */
 export async function pclCounts(areaNames: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
+  if (!areaNames.length) return out;
+  const { data, error } = await db.rpc('app_area_pcl_counts', { p_areas: areaNames });
+  if (!error) {
+    for (const r of (data || []) as { route_code: string; n: number }[]) out.set(r.route_code, Number(r.n) || 0);
+    return out;
+  }
+  if (!missingFn(error)) throw new Error(error.message);
+  // before the SQL is run: the old builder's PCL cache
   for (let i = 0; i < areaNames.length; i += 40) {
     const rows = must(await db.from('map_pcl_cache').select('route_code, client_count').in('area_name', areaNames.slice(i, i + 40))) as
       { route_code: string; client_count: number | null }[];
@@ -170,10 +178,16 @@ export async function pclCounts(areaNames: string[]): Promise<Map<string, number
   return out;
 }
 
+const missingFn = (e: { message?: string; code?: string }) => e.code === 'PGRST202' || /could not find the function|schema cache/i.test(e.message || '');
+
 export interface PclDot { code: string; lat: number; lng: number }
 
-/** Where one map's callbook clients are (coordinates only; names and phones are dropped here). */
+/** Where one map's past clients are (route code and position only; no names, phones or addresses). */
 export async function pclDots(areaName: string): Promise<PclDot[]> {
+  const { data, error } = await db.rpc('app_area_pcl_dots', { p_area: areaName });
+  if (!error) return ((data || []) as { route_code: string; lat: number; lng: number }[])
+    .filter(r => typeof r.lat === 'number' && typeof r.lng === 'number').map(r => ({ code: r.route_code, lat: r.lat, lng: r.lng }));
+  if (!missingFn(error)) throw new Error(error.message);
   const rows = must(await db.from('map_pcl_cache').select('route_code, clients').eq('area_name', areaName)) as
     { route_code: string; clients: { lat?: unknown; lng?: unknown }[] | null }[];
   const out: PclDot[] = [];

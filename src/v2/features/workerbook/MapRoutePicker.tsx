@@ -3,7 +3,7 @@
 //
 //   1. pick a map (an area) — from the list, or by tapping its name on the map
 //   2. the map zooms to it: its routes with big tappable route numbers, and the callbook
-//      clients (PCL) as small grey dots; each number also shows that route's PCL count
+//      past clients (PCL, from the client database) as small grey dots; each number also shows that route’s PCL count
 //   3. assign the whole map to the manager you're picking for, or tap route numbers one by one
 //
 // Every manager's routes show in their own colour, so you can see how the day is split.
