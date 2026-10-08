@@ -7,8 +7,9 @@
 //   { task: 'fetch_sheet', url }               → { csv }       read a Google Sheet shared by link
 //
 // The Claude API key lives only in the ANTHROPIC_API_KEY secret (Supabase › Edge Functions ›
-// Secrets). It never reaches the browser. Client data sent to Claude is limited to the first
-// rows of a file (to learn its layout) and to addresses that need splitting.
+// Secrets), with ANTHROPIC_WORKSPACE_ID when the key isn't tied to a workspace. It never reaches
+// the browser. Client data sent to Claude is limited to the first rows of a file (to learn its
+// layout) and to addresses that need splitting or placing.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
@@ -76,13 +77,20 @@ Callbook conventions you will see:
 - Columns that repeat for several years (e.g. "2024 Price", "2025 Price") are history columns with their own "year".
 If a column's purpose is unclear, choose "ignore" and say so in notes. Each route keeps a separate past-client list per service, so always say which service the list is for (serviceLine): aeration callbooks (codes AER, FO/FP/BO), sealing callbooks (SS, SSP, SSF, ramp), lawn rejuvenation (RJ), window cleaning (WW). Infer defaultYear from the file name or a title row when there is no year column, and defaultService when the whole list is one service. Give every column index in the header row an entry.`;
 
+// A Claude API key that isn't tied to one workspace needs the workspace named on every request:
+// set ANTHROPIC_WORKSPACE_ID (Supabase › Edge Functions › Secrets), or use a key made inside a workspace.
+const WORKSPACE = (Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '').trim();
+
 async function claude(apiKey: string, body: Record<string, unknown>) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
     body: JSON.stringify({ model: MODEL, ...body }),
   });
   const data = await res.json().catch(() => ({}));
+  if (!res.ok && /workspace/i.test(String(data?.error?.message || ''))) {
+    throw new Error('The Benny’s Claude API key isn’t tied to a workspace. In Supabase › Edge Functions › Secrets, either add ANTHROPIC_WORKSPACE_ID (the workspace’s ID from the Claude Console), or replace ANTHROPIC_API_KEY with a key created inside a workspace.');
+  }
   if (!res.ok) throw new Error(`The Benny couldn’t reach Claude (${res.status}${data?.error?.message ? `: ${data.error.message}` : ''})`);
   return data as { content: { type: string; name?: string; input?: unknown; text?: string }[] };
 }
