@@ -214,6 +214,20 @@ export const ClientLists: React.FC = () => {
       }));
       setBusy(`Finding map points… ${Math.min(pointless.length, k + GEOCODE_PARALLEL)} of ${pointless.length}`);
     }
+    // THE MAP DECIDES THE ROUTE. An address placed only by the list's own route code is checked
+    // against its map point: if the point sits on a route of the digital maps, that route wins
+    // (a list's codes can be out of date or from an older set of maps).
+    const byListCode = all.filter(i => res.get(i)?.how === 'given' && res.get(i)?.lat != null);
+    if (byListCode.length) {
+      setBusy(`Checking ${byListCode.length} list route codes against the maps…`);
+      const check = await matchClients(byListCode.map(i => {
+        const c = list[i]; const r = res.get(i)!;
+        return { i, house_no: c.house_no, street: c.street_name, unit: c.unit, city: c.city, lat: r.lat, lng: r.lng };
+      }));
+      for (const [i, r] of check) {
+        if (r.route_code && r.how !== 'given') res.set(i, { ...res.get(i)!, ...r, lat: r.lat ?? res.get(i)!.lat, lng: r.lng ?? res.get(i)!.lng });
+      }
+    }
     // The Benny places what's still missing: it picks which real street a misspelled address meant
     const unplaced = all.filter(i => !res.get(i)?.route_code).slice(0, BENNY_BATCH);
     setBennyNote(null);
