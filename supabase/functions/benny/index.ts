@@ -77,15 +77,26 @@ Callbook conventions you will see:
 - Columns that repeat for several years (e.g. "2024 Price", "2025 Price") are history columns with their own "year".
 If a column's purpose is unclear, choose "ignore" and say so in notes. Each route keeps a separate past-client list per service, so always say which service the list is for (serviceLine): aeration callbooks (codes AER, FO/FP/BO), sealing callbooks (SS, SSP, SSF, ramp), lawn rejuvenation (RJ), window cleaning (WW). Infer defaultYear from the file name or a title row when there is no year column, and defaultService when the whole list is one service. Give every column index in the header row an entry.`;
 
-// A Claude API key that isn't tied to one workspace needs the workspace named on every request:
-// set ANTHROPIC_WORKSPACE_ID (Supabase › Edge Functions › Secrets), or use a key made inside a workspace.
-const WORKSPACE = (Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '').trim();
+// Claude Sonnet 5.5 doesn't take a forced tool choice (tool_choice "tool"/"any" is a 400) and thinks
+// up front by default. So the tool is offered with tool_choice "auto" and the instructions say to
+// answer only by calling it; on Sonnet 5.5, thinking is kept to its lowest setting (between tools).
+const NO_FORCED_TOOL = (model: string) => /sonnet-5-5/.test(model);
 
 async function claude(apiKey: string, body: Record<string, unknown>) {
+  // A Claude API key that isn't tied to one workspace needs the workspace named on every request:
+  // ANTHROPIC_WORKSPACE_ID (Supabase › Edge Functions › Secrets), read per call so a new secret applies at once.
+  const WORKSPACE = (Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '').trim();
+  const req: Record<string, unknown> = { model: MODEL, ...body };
+  const forced = req.tool_choice as { type?: string; name?: string } | undefined;
+  if (NO_FORCED_TOOL(MODEL) && forced && (forced.type === 'tool' || forced.type === 'any')) {
+    req.tool_choice = { type: 'auto' };
+    req.system = `${String(req.system || '')}\n\nAnswer only by calling the ${forced.name || 'given'} tool. Do not reply in text.`.trim();
+    req.thinking = { type: 'between_tools' };
+  }
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-    body: JSON.stringify({ model: MODEL, ...body }),
+    body: JSON.stringify(req),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok && /workspace/i.test(String(data?.error?.message || ''))) {
