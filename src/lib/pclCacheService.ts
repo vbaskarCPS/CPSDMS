@@ -39,6 +39,9 @@ export interface PCLClientGroup {
   houseNum: string;
   streetName: string;
   phone: string;
+  /** Several people are on file at this address and we don't know whose the phone is:
+   *  a text greets "there" rather than risk the wrong name. */
+  nameUnsure?: boolean;
   history: PCLHistoryEntry[];
   // Resolved once at load time and stored WITH the client. This is what makes
   // the attachment permanent: the map no longer has to geocode a PCL address at

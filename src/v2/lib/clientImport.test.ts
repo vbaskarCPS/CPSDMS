@@ -53,7 +53,7 @@ describe('a callbook', () => {
     expect(out.clients).toHaveLength(1);
     const c = out.clients[0];
     expect(c).toMatchObject({ house_no: '12', street_name: 'Elm Rd', route_given: 'CA01', phones: ['4035551234'], tags: ['NO SP'], rows: [3, 4] });
-    expect(c.people).toEqual([{ first: 'Ann', last: 'Lee' }]);
+    expect(c.people).toEqual([{ first: 'Ann', last: 'Lee', phone: '4035551234' }]);
     expect(c.history).toEqual([
       { year: 2025, service: 'AER', price: '70', contractor: 'Bo Smith', payment: '', line: 'aeration' },
       { year: 2024, service: 'X', price: '65', contractor: 'Bo Smith', payment: '', line: 'aeration' },
@@ -86,5 +86,30 @@ describe('recipes and links', () => {
   it('turns a sheet link into its CSV export', () => {
     expect(sheetCsvUrl('https://docs.google.com/spreadsheets/d/abc_123/edit#gid=456')).toBe('https://docs.google.com/spreadsheets/d/abc_123/export?format=csv&gid=456');
     expect(sheetCsvUrl('https://example.com')).toBeNull();
+  });
+});
+
+describe('two people at one address', () => {
+  it('keeps each person with the phone from their own row', () => {
+    const rows = [
+      ['FIRST', 'LAST', 'HOUSE #', 'STREET', 'PHONE'],
+      ['Evelyn', 'Robbins', '588', 'Wilene Drive', '905 555 8080'],
+      ['Gorry', 'Hansen', '588', 'Wilene Drive', '905 555 3660'],
+      ['Evelyn', 'Robbins', '588', 'Wilene Drive', ''],
+    ];
+    const c = applyMapping(rows, guessMapping(rows)).clients[0];
+    expect(c.people).toEqual([
+      { first: 'Evelyn', last: 'Robbins', phone: '9055558080' },
+      { first: 'Gorry', last: 'Hansen', phone: '9055553660' },
+    ]);
+    expect(c.phones).toEqual(['9055558080', '9055553660']);
+  });
+  it('fills a phone in from a later row of the same person', () => {
+    const rows = [
+      ['FIRST', 'LAST', 'HOUSE #', 'STREET', 'PHONE'],
+      ['Bo', 'Ng', '12', 'Elm Rd', ''],
+      ['Bo', 'Ng', '12', 'Elm Rd', '4035550002'],
+    ];
+    expect(applyMapping(rows, guessMapping(rows)).clients[0].people).toEqual([{ first: 'Bo', last: 'Ng', phone: '4035550002' }]);
   });
 });

@@ -86,7 +86,9 @@ export interface Mapping {
   notes?: string | null;                     // The Benny's explanation, shown on the review screen
 }
 
-export interface Person { first: string; last: string }
+/** A person on a client record. `phone` is the number that came on the same row as this
+ *  name, so a text to it can greet the right person (a client can have several people). */
+export interface Person { first: string; last: string; phone?: string }
 export interface HistoryEntry { year: number | null; service: string; price: string; contractor: string; payment: string; line: ServiceLine | '' }
 
 export interface ClientRow {
@@ -404,6 +406,8 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
     city = city || mapping.defaultCity || '';
     province = province || mapping.defaultProvince || '';
     if (first || last) people.unshift({ first: titleCase(first), last: titleCase(last) });
+    // the row's phone belongs to the row's (first) person
+    if (people.length && phones.length && !people[0].phone) people[0] = { ...people[0], phone: phones[0] };
 
     const history: HistoryEntry[] = [];
     const listLine = mapping.serviceLine || '';
@@ -443,8 +447,14 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
 }
 
 function dedupePeople(list: Person[]): Person[] {
-  const seen = new Set<string>(); const out: Person[] = [];
-  for (const p of list) { const k = `${p.first}|${p.last}`.toLowerCase(); if ((p.first || p.last) && !seen.has(k)) { seen.add(k); out.push(p); } }
+  const seen = new Map<string, number>(); const out: Person[] = [];
+  for (const p of list) {
+    if (!p.first && !p.last) continue;
+    const k = `${p.first}|${p.last}`.toLowerCase();
+    const at = seen.get(k);
+    if (at === undefined) { seen.set(k, out.length); out.push(p); }
+    else if (!out[at].phone && p.phone) out[at] = { ...out[at], phone: p.phone };
+  }
   return out;
 }
 function dedupeHistory(list: HistoryEntry[]): HistoryEntry[] {
