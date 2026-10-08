@@ -725,8 +725,9 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
       const map = mapRef.current;
       if (!map || !currentArea) return;
       const rect = canvas.getBoundingClientRect();
+      // Mapbox GL 3 takes the point as [x, y] (a plain {x, y} object throws, so the menu never opened)
       const features = map.queryRenderedFeatures(
-        { x: e.clientX - rect.left, y: e.clientY - rect.top },
+        [e.clientX - rect.left, e.clientY - rect.top],
         { layers: ['roads-base', 'roads-unnamed', 'roads-selected'] },
       );
       if (!features.length) return;
