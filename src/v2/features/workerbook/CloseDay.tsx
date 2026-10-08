@@ -86,6 +86,7 @@ export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string
               : c.handed_off
                 ? 'A newer day has the RM map and worker sign-ins, so closing only locks in this day’s numbers from its saved carts. Payouts stay editable until a payslip is generated.'
                 : `There’s no live session to clear for this day; closing records ${c.road_trip ? 'the day’s numbers' : 'attendance and moves no-shows'}.`}</div>
+            <div className="v2-note">After closing, send the day to the Master Bookings sheet (Logsheets and Accounts) from the day page.</div>
             <ErrorBox error={error} />
           </div>
         )}

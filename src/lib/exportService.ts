@@ -463,6 +463,88 @@ function buildAsphaltLogsheetRows(
   return rows;
 }
 
+/** One row for the Master Bookings sheet's Logsheets tab (A:M). */
+export interface LogsheetRow {
+  routeNumber: string; firstName: string; lastName: string; streetNum: string; streetName: string;
+  phone: string; email: string; clientType: string; propertyType: string; notes: string;
+  price: number; paymentType: string; contractorName: string; services?: ServiceFlags;
+}
+/** One row for the Accounts tab (A:P): a Logsheets row plus the payment details. */
+export interface AccountRow extends LogsheetRow { paymentDetails: string; expiry: string; cvc: string }
+
+/** Contractors whose sales never go to the Accounts tab (H01's map-logsheet testing). */
+const ACCOUNTS_EXCLUDED_CONTRACTORS = ['H01'];
+const ACCOUNT_PAYMENT_METHODS = ['Billed', 'E-Transfer', 'Credit Card'];
+
+/**
+ * The Logsheets and Accounts rows for one day's session, the same rows Export to Google Sheets
+ * has always written. Pure: the old app's live export and the new app's closed-day bridge (which
+ * reads the day's saved copy) both build their rows here.
+ *
+ * Card numbers, expiry dates and CVCs never go to the sheet: only a Bambora last 4 or a masked
+ * number. A saved copy carries no card fields at all, only `card_masked` (already masked).
+ */
+export function buildSheetRows(input: { transactions: any[]; sessions: any[]; users: any[]; seasonType: SeasonType }): {
+  logsheets: LogsheetRow[]; accounts: AccountRow[];
+} {
+  const { transactions, sessions, users, seasonType } = input;
+  const isTeamSeason = seasonHasTeams(seasonType);
+  const workersMap = new Map<string, any>();
+  users.forEach(u => { if (u.role === 'Worker') workersMap.set(u.user_id, u); });
+  const sessionsMap = new Map<string, any>();
+  sessions.forEach(s => sessionsMap.set(s.id, s));
+  const teamSessions = isTeamSeason ? sessionsMap : undefined;
+
+  const base = (tx: any): LogsheetRow => {
+    const address = tx.customer_snapshot?.address || tx.address || '';
+    const streetParts = address.split(' ');
+    return {
+      routeNumber: tx.customer_snapshot?.routeCode || '', firstName: tx.customer_snapshot?.firstName || '',
+      lastName: tx.customer_snapshot?.lastName || '', streetNum: streetParts[0] || '',
+      streetName: streetParts.slice(1).join(' ') || '', phone: tx.customer_phone || '', email: tx.customer_email || '',
+      clientType: getClientType(tx), propertyType: tx.customer_snapshot?.serviceType || 'FP', notes: tx.item_description || '',
+      price: tx.price || 0, paymentType: formatPaymentType(tx), contractorName: getTeamWorkerNames(tx, workersMap, teamSessions),
+      services: tx.services as ServiceFlags | undefined,
+    };
+  };
+
+  // === Accounts: billed, e-transfer and credit-card sales ===
+  // Phantom partner rows (asphalt) are skipped; so is anything H01 took part in, matched on the
+  // transaction's worker, the completing workers and the team session's members.
+  const isAccountsExcluded = (tx: any): boolean => {
+    const ids = new Set<string>(
+      [tx.worker_id, ...(tx.completed_by_worker_ids || []), ...getTeamWorkerIds(tx, teamSessions).split(',')]
+        .map((id: any) => String(id || '').trim().toUpperCase())
+        .filter(Boolean),
+    );
+    return ACCOUNTS_EXCLUDED_CONTRACTORS.some(x => ids.has(x));
+  };
+  const accounts: AccountRow[] = transactions.filter(tx => {
+    if (tx.asphalt_meta?.is_partner_phantom) return false;
+    if (isAccountsExcluded(tx)) return false;
+    if (tx.payment_breakdown && typeof tx.payment_breakdown === 'object') {
+      return Object.keys(tx.payment_breakdown).some(method => ACCOUNT_PAYMENT_METHODS.some(valid => method.includes(valid)));
+    }
+    return ACCOUNT_PAYMENT_METHODS.some(valid => (tx.payment_method || '').includes(valid));
+  }).map(tx => {
+    const isBambora = (tx.cc_full_number || '').startsWith('BAMBORA-');
+    const card = typeof tx.card_masked === 'string' && tx.card_masked ? tx.card_masked
+      : isBambora ? `••••••••••••${tx.cc_cvc || ''}`
+      : maskCardNumber(tx.cc_full_number);
+    const paymentDetails = card || tx.cheque_number || tx.etransfer_email || tx.invoice_number || '';
+    return { ...base(tx), paymentDetails, expiry: '', cvc: '' };
+  });
+
+  // === Logsheets (asphalt two-row treatment) ===
+  const logsheetTypes = isTeamSeason ? ['Production', 'Sale', 'Add-On'] : ['Production', 'Sale', 'Upgrade', 'Add-On'];
+  const eligible = transactions.filter(tx => logsheetTypes.includes(tx.type));
+  const logsheets: LogsheetRow[] = [
+    ...eligible.filter(tx => !tx.asphalt_meta).map(base),
+    ...buildAsphaltLogsheetRows(eligible.filter(tx => !!tx.asphalt_meta), workersMap, sessionsMap, isTeamSeason),
+  ];
+  return { logsheets, accounts };
+}
+
 /**
  * Generates and downloads a comprehensive Excel export of all session data.
  * All data is scoped to the current command center.
@@ -906,26 +988,8 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const transactions = transactionsRes.data || [];
   const users = usersRes.data || [];
 
-  const workersMap = new Map<string, any>();
-  const managersMap = new Map<string, any>();
-  users.forEach(u => {
-    if (u.role === 'Worker') workersMap.set(u.user_id, u);
-    else if (u.role === 'RouteManager') managersMap.set(u.user_id, u);
-  });
-
   const sessionsMap = new Map<string, any>();
   sessions.forEach(s => sessionsMap.set(s.id, s));
-
-  const txByWorker = new Map<string, any[]>();
-  const txBySession = new Map<string, any[]>();
-  transactions.forEach(tx => {
-    if (!txByWorker.has(tx.worker_id)) txByWorker.set(tx.worker_id, []);
-    txByWorker.get(tx.worker_id)!.push(tx);
-    if (tx.session_id) {
-      if (!txBySession.has(tx.session_id)) txBySession.set(tx.session_id, []);
-      txBySession.get(tx.session_id)!.push(tx);
-    }
-  });
 
   // === 1. Update Completed AND Cancelled Bookings ===
   const bookingsRes = await supabase
@@ -967,89 +1031,9 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     [...completedFromTransactions, ...cancelledBookings], seasonType
   );
 
-  // === 2. Append Accounts ===
-  // Skip phantom partner transactions — their empty payment_breakdown ({}) means
-  // they'd never match the payment-method filters below, but we make the intent
-  // explicit here so anyone reading sees the asphalt-aware logic.
-  const validAccountPaymentMethods = ['Billed', 'E-Transfer', 'Credit Card'];
-  // Contractors whose sales never go to the Accounts tab (H01's map-logsheet
-  // testing). Matched on the transaction's worker, the completing workers, and
-  // the team session's members, so a team sale involving them is skipped too.
-  const ACCOUNTS_EXCLUDED_CONTRACTORS = ['H01'];
-  const isAccountsExcluded = (tx: any): boolean => {
-    const ids = new Set<string>(
-      [tx.worker_id, ...(tx.completed_by_worker_ids || []), ...getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined).split(',')]
-        .map((id: any) => String(id || '').trim().toUpperCase())
-        .filter(Boolean),
-    );
-    return ACCOUNTS_EXCLUDED_CONTRACTORS.some(x => ids.has(x));
-  };
-  const accountTransactions = transactions.filter(tx => {
-    if (tx.asphalt_meta?.is_partner_phantom) return false;
-    if (isAccountsExcluded(tx)) return false;
-    if (tx.payment_breakdown && typeof tx.payment_breakdown === 'object') {
-      return Object.keys(tx.payment_breakdown).some(method =>
-        validAccountPaymentMethods.some(valid => method.includes(valid))
-      );
-    }
-    return validAccountPaymentMethods.some(valid => (tx.payment_method || '').includes(valid));
-  });
-
-  const accountsData = accountTransactions.map(tx => {
-    const address = tx.customer_snapshot?.address || tx.address || '';
-    const streetParts = address.split(' ');
-    const contractorName = getTeamWorkerNames(tx, workersMap, isTeamSeason ? sessionsMap : undefined);
-    const clientType = getClientType(tx);
-    const isBambora = (tx.cc_full_number || '').startsWith('BAMBORA-');
-    // Card numbers, expiry dates and CVCs never go to the sheet — only Bambora's last 4 or a masked number.
-    const paymentDetails = isBambora
-      ? `\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022${tx.cc_cvc || ''}`
-      : (maskCardNumber(tx.cc_full_number) || tx.cheque_number || tx.etransfer_email || tx.invoice_number || '');
-    return {
-      routeNumber: tx.customer_snapshot?.routeCode || '', firstName: tx.customer_snapshot?.firstName || '',
-      lastName: tx.customer_snapshot?.lastName || '', streetNum: streetParts[0] || '',
-      streetName: streetParts.slice(1).join(' ') || '', phone: tx.customer_phone || '', email: tx.customer_email || '',
-      clientType, propertyType: tx.customer_snapshot?.serviceType || 'FP', notes: tx.item_description || '',
-      price: tx.price || 0, paymentType: formatPaymentType(tx), contractorName,
-      paymentDetails, expiry: '', cvc: '',
-      services: tx.services as ServiceFlags | undefined,
-    };
-  });
+  // === 2 & 3. Append Accounts, then Logsheets (asphalt two-row treatment) ===
+  const { accounts: accountsData, logsheets: logsheetsData } = buildSheetRows({ transactions, sessions, users, seasonType });
   if (accountsData.length > 0) await googleSheetsService.appendAccounts(accountsData);
-
-  // === 3. Append Logsheets (asphalt two-row treatment) ===
-  // Filter to logsheet-eligible types, then split asphalt vs non-asphalt and process
-  // independently. Non-asphalt keeps the existing single-row mapping; asphalt routes
-  // through buildAsphaltLogsheetRows which emits driveway + asphalt rows per shared job.
-  const logsheetTypes = isTeamSeason ? ['Production', 'Sale', 'Add-On'] : ['Production', 'Sale', 'Upgrade', 'Add-On'];
-  const eligibleLogsheetTx = transactions.filter(tx => logsheetTypes.includes(tx.type));
-
-  const asphaltLogsheetTx = eligibleLogsheetTx.filter(tx => !!tx.asphalt_meta);
-  const nonAsphaltLogsheetTx = eligibleLogsheetTx.filter(tx => !tx.asphalt_meta);
-
-  const nonAsphaltLogsheetsData = nonAsphaltLogsheetTx.map(tx => {
-    const address = tx.customer_snapshot?.address || tx.address || '';
-    const streetParts = address.split(' ');
-    const clientType = getClientType(tx);
-    const contractorName = getTeamWorkerNames(tx, workersMap, isTeamSeason ? sessionsMap : undefined);
-    return {
-      routeNumber: tx.customer_snapshot?.routeCode || '', firstName: tx.customer_snapshot?.firstName || '',
-      lastName: tx.customer_snapshot?.lastName || '', streetNum: streetParts[0] || '',
-      streetName: streetParts.slice(1).join(' ') || '', phone: tx.customer_phone || '', email: tx.customer_email || '',
-      clientType, propertyType: tx.customer_snapshot?.serviceType || 'FP', notes: tx.item_description || '',
-      price: tx.price || 0, paymentType: formatPaymentType(tx), contractorName,
-      services: tx.services as ServiceFlags | undefined,
-    };
-  });
-
-  const asphaltLogsheetsData = buildAsphaltLogsheetRows(
-    asphaltLogsheetTx,
-    workersMap,
-    sessionsMap,
-    isTeamSeason
-  );
-
-  const logsheetsData = [...nonAsphaltLogsheetsData, ...asphaltLogsheetsData];
   if (logsheetsData.length > 0) await googleSheetsService.appendLogsheets(logsheetsData);
 
   // === 4. Append Payout Stats (VALIDATED ONLY, LIVE RECALC) ===
