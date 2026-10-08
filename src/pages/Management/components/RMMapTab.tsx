@@ -2729,8 +2729,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // Every route's number labels accumulate here and go into ONE layer below,
       // instead of each route minting its own source and layer.
       const allLabelFeatures: GeoJSON.Feature[] = [];
-      // FLOATER: every covered route again, for the thin outline + manager-colour glow drawn under
-      // the route lines, so each manager's territory (and where two teams meet) reads at a glance.
+      // FLOATER: every covered route again, for the faint manager-colour glow drawn under the route
+      // lines, so each manager's territory (and where two teams meet) reads at a glance.
       const ownerFeatures: GeoJSON.Feature[] = [];
 
     // Letters we'll honour in the match expression. Up to 'f' is the
@@ -2758,6 +2758,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       route.segments.forEach(seg => {
         const cs = seg.coordinates;
         if (!cs || cs.length < 2) return;
+        // floater outline: one continuous line per stretch with the same manager (no joints to overlap)
+        let run: [number, number][] = []; let runColor = '';
+        const flush = () => { if (run.length > 1) ownerFeatures.push({ type: 'Feature', properties: { color: runColor }, geometry: { type: 'LineString', coordinates: run } }); run = []; };
         for (let i = 0; i < cs.length - 1; i++) {
           const a = cs[i];
           const b = cs[i + 1];
@@ -2773,9 +2776,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             },
             geometry: { type: 'LineString', coordinates: [a, b] },
           });
-          if (floaterColouringActive) ownerFeatures.push({ type: 'Feature', properties: { color: ownerHue(bucketLetter) }, geometry: { type: 'LineString', coordinates: [a, b] } });
+          if (floaterColouringActive) {
+            const hue = ownerHue(bucketLetter);
+            if (hue !== runColor) { flush(); runColor = hue; run = [a]; }
+            run.push(b);
+          }
           allCoords.push(a, b);
         }
+        flush();
       });
 
       // Build colour match expression from the palette letters (route FILL —
@@ -2858,31 +2866,27 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     }
 
-    // --- FLOATER JURISDICTION OUTLINE: one source, two layers, fed new data each time (like the labels).
-    // A thin black edge hugging each covered route line, with a soft glow in its manager's colour
-    // outside it, so each team's territory reads at a glance. Both use line-gap-width = the route
-    // line's width, so they only draw beside the line and never tint the route's own colour. Named
-    // outside the rm- prefix so the reorder below leaves them alone; put under the lowest route line.
+    // --- FLOATER TEAM GLOW: one source and layer, fed new data each time (like the labels). The map
+    // looks like the regular RM map; each covered route just gets a faint blurred halo in its manager's
+    // colour underneath, so the teams' territories read at a glance. Named outside the rm- prefix so the
+    // reorder below leaves it alone; put under the lowest route line. (Older outline layers are removed.)
+    for (const id of ['rmo-owner-edge', 'rmo-owner-glow', 'rmo-owner-band']) if (map.getLayer(id)) map.removeLayer(id);
+    for (const id of ['rmo-owner-src', 'rmo-owner-band-src']) if (map.getSource(id)) map.removeSource(id);
     const ownerGj: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: ownerFeatures };
-    const ownerSrc = map.getSource('rmo-owner-src') as mapboxgl.GeoJSONSource | undefined;
+    const ownerSrc = map.getSource('rmo-team-src') as mapboxgl.GeoJSONSource | undefined;
     if (ownerSrc) ownerSrc.setData(ownerGj);
     else {
-      map.addSource('rmo-owner-src', { type: 'geojson', data: ownerGj });
+      map.addSource('rmo-team-src', { type: 'geojson', data: ownerGj });
       map.addLayer({
-        id: 'rmo-owner-glow', type: 'line', source: 'rmo-owner-src',
-        paint: { 'line-color': ['get', 'color'], 'line-gap-width': 7, 'line-width': 6, 'line-blur': 5, 'line-opacity': 0.55 },
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-      }, before);
-      map.addLayer({
-        id: 'rmo-owner-edge', type: 'line', source: 'rmo-owner-src',
-        paint: { 'line-color': '#111827', 'line-gap-width': 7, 'line-width': 1.2, 'line-opacity': 0.85 },
+        id: 'rmo-team-glow', type: 'line', source: 'rmo-team-src',
+        paint: { 'line-color': ['get', 'color'], 'line-width': 14, 'line-blur': 8, 'line-opacity': 0.35 },
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       }, before);
     }
     try {
       const firstLine = ((map.getStyle()?.layers as any[]) || []).map(l => String(l.id)).find(id => id.startsWith('rm-line-'));
-      if (firstLine) for (const id of ['rmo-owner-glow', 'rmo-owner-edge']) if (map.getLayer(id)) map.moveLayer(id, firstLine);
-    } catch { /* the outline just sits wherever it was */ }
+      if (firstLine && map.getLayer('rmo-team-glow')) map.moveLayer('rmo-team-glow', firstLine);
+    } catch { /* the glow just sits wherever it was */ }
 
     // --- LAYER ORDER: make it deterministic instead of a race. ---
     //
