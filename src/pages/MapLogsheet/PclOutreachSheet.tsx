@@ -14,7 +14,8 @@ import {
   X, Search, SlidersHorizontal, MessageSquare, Check, Settings, Save, Loader, Eye, EyeOff, Smartphone, ArrowLeft,
 } from 'lucide-react';
 import { Worker } from '../../types';
-import { HouseView } from '../../lib/mapLogsheetService';
+import { HouseView, RouteHouse, houseKeyCandidates, routeHouseId } from '../../lib/mapLogsheetService';
+import type { PCLClientGroup } from '../../lib/pclCacheService';
 import { buildSmsLink } from '../../lib/workerbookEmailService';
 import {
   DEFAULT_PCL_OUTREACH_TEMPLATE, PCL_OUTREACH_PLACEHOLDERS,
@@ -37,6 +38,8 @@ export interface PclOutreachClient {
   maxPrice?: number;
   maxPriceYear?: number;
   repeatCount: number;
+  /** On the route's street, but the map has no house at that number. */
+  notOnMap?: boolean;
 }
 
 function parsePrice(raw: any): number | undefined {
@@ -54,46 +57,92 @@ export function phoneKey(raw: unknown): string {
 
 /** Houses that are candidates for a text: a PCL with a phone, not already dealt
  *  with today, and NOT in the historicals (Load Historical) — neither the same
- *  house nor the same phone number as any historical row on these routes. */
-export function pclOutreachClients(views: HouseView[], historicalPhones: Set<string> = new Set()): PclOutreachClient[] {
+ *  house nor the same phone number as any historical row on these routes.
+ *
+ *  PCLs that don't sit on a house on the map (the map's house layer is missing
+ *  that number — a new build, a gap in the address register, a spelling in the
+ *  client file) used to be left out entirely, about 1 in 5 of them. They're
+ *  listed too, marked "not on map", as long as their street is on the route. */
+export function pclOutreachClients(
+  views: HouseView[],
+  historicalPhones: Set<string> = new Set(),
+  offMap?: { pclByRoute: Map<string, PCLClientGroup[]>; houses: RouteHouse[] },
+): PclOutreachClient[] {
   const list: PclOutreachClient[] = [];
+  const seen = new Set<string>();
+  const add = (c: PCLClientGroup, routeCode: string, notOnMap: boolean) => {
+    const phone = String(c.phone || '').trim();
+    if (!phone) return;
+    const pk = phoneKey(phone);
+    if (pk.length === 10 && historicalPhones.has(pk)) return;
+    const key = pclClientKey(routeCode, c.houseNum, c.streetName);
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push(toClient(c, routeCode, key, phone, notOnMap));
+  };
+  const onAHouse = new Set<PCLClientGroup>();
   for (const v of views) {
     const c = v.pcl;
     if (!c) continue;
+    onAHouse.add(c);
     if (v.isHistorical) continue;
     if (v.state === 'no' || v.state === 'invalid' || v.state === 'pending' || v.state === 'completed') continue;
-    const phone = String(c.phone || '').trim();
-    if (!phone) continue;
-    const pk = phoneKey(phone);
-    if (pk.length === 10 && historicalPhones.has(pk)) continue;
-    const history: any[] = Array.isArray(c.history) ? c.history : [];
-    const recent = history.length > 0 ? history[0] : null;
-    let maxPrice: number | undefined;
-    let maxPriceYear: number | undefined;
-    history.forEach(h => {
-      const p = parsePrice(h?.price);
-      if (p !== undefined && (maxPrice === undefined || p > maxPrice)) { maxPrice = p; maxPriceYear = h?.year; }
-    });
-    const distinctYears = new Set(history.map(h => h?.year).filter(y => y !== null && y !== undefined));
-    list.push({
-      key: pclClientKey(v.house.routeCode, c.houseNum, c.streetName),
-      routeCode: v.house.routeCode,
-      firstName: c.firstName || '',
-      lastName: c.lastName || '',
-      houseNum: c.houseNum || '',
-      streetName: c.streetName || '',
-      city: c.city || undefined,
-      phone,
-      year: recent?.year,
-      price: recent?.price,
-      serviceType: recent?.serviceType,
-      maxPrice,
-      maxPriceYear,
-      repeatCount: distinctYears.size,
+    add(c, v.house.routeCode, false);
+  }
+  if (offMap && offMap.houses.length) {
+    const streetsOn = new Map<string, Set<string>>();
+    const housesOn = new Set<string>();
+    for (const h of offMap.houses) {
+      let s = streetsOn.get(h.routeCode);
+      if (!s) streetsOn.set(h.routeCode, s = new Set());
+      s.add(h.streetNorm);
+      housesOn.add(routeHouseId(h.routeCode, h.houseKey));
+    }
+    offMap.pclByRoute.forEach((clients, rc) => {
+      const streets = streetsOn.get(rc);
+      if (!streets) return; // the route's houses haven't loaded yet
+      for (const c of clients) {
+        if (onAHouse.has(c)) continue;
+        const cands = houseKeyCandidates(c.houseNum, c.streetName);
+        if (!cands.length) continue;
+        // a second PCL at a house that already has one: the house's own row covers it
+        if (cands.some(k => housesOn.has(routeHouseId(rc, k)))) continue;
+        if (!streets.has(cands[cands.length - 1].split('|')[1])) continue; // street isn't on this route
+        add(c, rc, true);
+      }
     });
   }
   list.sort((a, b) => (b.year || 0) - (a.year || 0));
   return list;
+}
+
+function toClient(c: PCLClientGroup, routeCode: string, key: string, phone: string, notOnMap: boolean): PclOutreachClient {
+  const history: any[] = Array.isArray(c.history) ? c.history : [];
+  const recent = history.length > 0 ? history[0] : null;
+  let maxPrice: number | undefined;
+  let maxPriceYear: number | undefined;
+  history.forEach(h => {
+    const p = parsePrice(h?.price);
+    if (p !== undefined && (maxPrice === undefined || p > maxPrice)) { maxPrice = p; maxPriceYear = h?.year; }
+  });
+  const distinctYears = new Set(history.map(h => h?.year).filter(y => y !== null && y !== undefined));
+  return {
+    key,
+    routeCode,
+    firstName: c.firstName || '',
+    lastName: c.lastName || '',
+    houseNum: c.houseNum || '',
+    streetName: c.streetName || '',
+    city: c.city || undefined,
+    phone,
+    year: recent?.year,
+    price: recent?.price,
+    serviceType: recent?.serviceType,
+    maxPrice,
+    maxPriceYear,
+    repeatCount: distinctYears.size,
+    notOnMap,
+  };
 }
 
 interface Props {
@@ -410,6 +459,7 @@ const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients, t
                           {`${c.firstName} ${c.lastName}`.trim() || '(no name on record)'}
                         </span>
                         {done && <span className="text-[10px] text-green-400 flex items-center gap-1 flex-shrink-0"><Check size={10} /> texted</span>}
+                        {c.notOnMap && <span className="text-[10px] text-amber-400 border border-amber-500/40 rounded px-1 flex-shrink-0" title="On your route's street, but the map has no house at this number">not on map</span>}
                       </div>
                       <div className="text-xs text-gray-400 truncate">{c.houseNum} {c.streetName}{c.city ? `, ${c.city}` : ''}</div>
                       <div className="text-[11px] text-gray-500 flex items-center gap-2 mt-0.5 flex-wrap">

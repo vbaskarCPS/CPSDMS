@@ -506,7 +506,10 @@ const MapLogsheetPage: React.FC = () => {
     for (const r of historicalRows) { const k = phoneKey(r.phone); if (k.length === 10) set.add(k); }
     return set;
   }, [historicalRows]);
-  const pclClients = useMemo(() => pclOutreachClients(houseViews, historicalPhones), [houseViews, historicalPhones]);
+  const pclClients = useMemo(
+    () => pclOutreachClients(houseViews, historicalPhones, { pclByRoute, houses }),
+    [houseViews, historicalPhones, pclByRoute, houses],
+  );
   const pclToText = useMemo(() => pclClients.filter(c => !pclTexted.has(c.key)).length, [pclClients, pclTexted]);
   useEffect(() => {
     if (!worker) return;
