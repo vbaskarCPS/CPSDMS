@@ -34,7 +34,8 @@ export const Clients: React.FC = () => {
   return (
     <div className="v2-main">
       <div className="v2-head">
-        <span className="v2-h1">Clients</span>
+        <Link className="v2-chip" to="/app/clients">Map</Link>
+        <span className="v2-h1">Client list</span>
         <span className="v2-mut v2-small">{total.toLocaleString()} {filter === 'none' && !grouped ? 'without a route' : 'properties'}{service ? ` · ${lineLabel(service)}` : ''}</span>
         <span className="v2-spacer" />
         {can('sa_territory') && <Link className="v2-btn o" to="/app/admin/territory/clients">Import a client list</Link>}
@@ -194,7 +195,8 @@ const TreeClients: React.FC<{ route?: string; city?: string; service: string; to
 };
 
 const ClientCard: React.FC<{ c: Client; onClose: () => void }> = ({ c, onClose }) => (
-  <Modal title={`${c.house_no} ${c.street_name}${c.unit ? ` Unit ${c.unit}` : ''}`} onClose={onClose} wide>
+  <Modal title={`${c.house_no} ${c.street_name}${c.unit ? ` Unit ${c.unit}` : ''}`} onClose={onClose} wide
+    footer={<Link className="v2-btn" to={`/app/clients/c/${c.id}`}>Open customer page</Link>}>
     <div className="v2-mut" style={{ marginTop: -6, marginBottom: 12 }}>
       {[c.city, c.province, c.postal_code].filter(Boolean).join(', ')}
       {c.route_code ? <> · route <b style={{ color: '#111827' }}>{c.route_code}</b>{c.match_how && ` (${HOW[c.match_how] || c.match_how})`}</> : ' · no route yet'}
