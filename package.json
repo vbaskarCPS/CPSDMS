@@ -4,7 +4,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:v2": "vitest run src/v2 src/lib/cardSafety.test.ts src/lib/userWrites.test.ts src/pages/MapLogsheet/pclOutreach.test.ts src/lib/seasonJobs.test.ts"
+    "test:v2": "vitest run src/v2 src/lib/areaNumbers.test.ts src/lib/cardSafety.test.ts src/lib/userWrites.test.ts src/pages/MapLogsheet/pclOutreach.test.ts src/lib/seasonJobs.test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
