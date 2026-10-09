@@ -82,8 +82,13 @@ const REGION_ORDER: Region[] = ['West', 'Central', 'East'];
 
 // ─── COMPONENT ───────────────────────────────────────────────────────────────
 
-const DigiMaps: React.FC = () => {
+/**
+ * embedAreas: opened from the new app's Territory list with these maps already picked — no
+ * login gate, no grid; Back (onExit) returns to the list.
+ */
+const DigiMaps: React.FC<{ embedAreas?: string[]; onExit?: () => void }> = ({ embedAreas, onExit }) => {
   const navigate = useNavigate();
+  const embedded = !!embedAreas;
 
   const [view, setView] = useState<'grid' | 'map'>('grid');
   const [areas, setAreas] = useState<AreaCard[]>([]);
@@ -111,9 +116,10 @@ const DigiMaps: React.FC = () => {
   // goes back to the login screen; there is nothing sensitive rendered here,
   // but an unguarded route is an untidy route.
   useEffect(() => {
+    if (embedded) return;   // the new app checks Territory access itself
     const ok = getStorageItem<boolean>('digimaps_viewer', false);
     if (!ok) navigate('/login');
-  }, [navigate]);
+  }, [navigate, embedded]);
 
   const handleLogout = () => {
     removeStorageItem('digimaps_viewer');
@@ -275,7 +281,20 @@ const DigiMaps: React.FC = () => {
     }
   };
 
+  // Embedded: open the picked maps as soon as the list is in.
+  const embedOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!embedAreas || embedOpenedRef.current || loadingAreas) return;
+    embedOpenedRef.current = true;
+    const want = new Set(embedAreas);
+    const list = areas.filter(a => want.has(a.areaName));
+    if (list.some(a => a.routesDrawn > 0)) handleOpenAreas(list);
+    else setError('None of those maps has drawn routes yet.');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedAreas, loadingAreas, areas]);
+
   const handleBackToGrid = () => {
+    if (onExit) { onExit(); return; }
     setView('grid');
     setOpenAreas([]);
     setDrawnRoutes([]);
@@ -504,7 +523,11 @@ const DigiMaps: React.FC = () => {
             onClick={handleBackToGrid}
             className="flex items-center gap-1.5 text-gray-300 hover:text-white text-sm"
           >
-            <ArrowLeft size={16} /> All Maps
+            <ArrowLeft size={16} /> {embedded ? 'Territory' : 'All Maps'}
+          </button>
+        ) : embedded ? (
+          <button onClick={onExit} className="flex items-center gap-1.5 text-gray-300 hover:text-white text-sm">
+            <ArrowLeft size={16} /> Territory
           </button>
         ) : (
           <div className="flex items-center gap-2">
@@ -555,13 +578,13 @@ const DigiMaps: React.FC = () => {
               </button>
             </>
           )}
-          <button
+          {!embedded && <button
             onClick={handleLogout}
             className="p-1.5 bg-gray-700 hover:bg-gray-600 text-red-400 rounded"
             title="Log out"
           >
             <LogOut size={15} />
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -572,7 +595,10 @@ const DigiMaps: React.FC = () => {
       )}
 
       {/* GRID VIEW */}
-      {view === 'grid' && (
+      {embedded && view === 'grid' && !error && (
+        <div className="flex-1 flex items-center justify-center text-gray-400 text-sm gap-2"><Loader size={16} className="animate-spin" /> Opening the maps…</div>
+      )}
+      {view === 'grid' && !embedded && (
         <div className="flex-1 overflow-y-auto p-6">
           {loadingAreas ? (
             <div className="flex items-center justify-center h-48">

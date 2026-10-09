@@ -433,3 +433,9 @@
 .v2-crm-tl li.visit.a::before { background: #d97706; }
 .v2-crm-tl .when { font-size: 12px; color: var(--mut); white-space: nowrap; }
 @media (max-width: 520px) { .v2-crm-tl li { grid-template-columns: 1fr; gap: 2px; } }
+
+/* Territory: maps by city, the prefix check */
+.v2 .v2-terr-city td { background: var(--soft); cursor: pointer; padding-top: 8px; padding-bottom: 8px; }
+.v2-terr-pfx { font-size: 12px; margin: -6px 0 12px; padding: 7px 10px; border-radius: 8px; line-height: 1.4; }
+.v2-terr-pfx.ok { background: #ecfdf5; color: #065f46; }
+.v2-terr-pfx.bad { background: #fff1f2; color: #9f1239; }

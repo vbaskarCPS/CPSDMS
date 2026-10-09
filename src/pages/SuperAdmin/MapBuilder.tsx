@@ -11,6 +11,7 @@ import {
 import { supabase } from '../../lib/supabase';
 import { googleAuthService } from '../../lib/googleAuthService';
 import { loadAndCacheMapPCL, getMapPCLCounts, recalibrateMapPCL } from '../../lib/pclCacheService';
+import { firstFree, ownedNumbers, runsLabel, takenNumbers, type Drawn } from '../../lib/areaNumbers';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -244,6 +245,9 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
   const [view, setView] = useState<'grid' | 'map'>('grid');
   const [areas, setAreas] = useState<AreaPrefix[]>([]);
   const [savedCounts, setSavedCounts] = useState<Map<string, number>>(new Map());
+  // Every map's saved route numbers, so this map's list skips numbers other maps hold and
+  // Add route takes the first free one.
+  const [drawnNums, setDrawnNums] = useState<Drawn>(new Map());
 
   // --- PCL UPLOAD STATE ---
   // The spreadsheet id is remembered between visits; it rarely changes and
@@ -448,6 +452,10 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
         from += 1000;
       }
 
+      const nums: Drawn = new Map();
+      routeData.forEach(({ area_name, route_number }) => { if (!nums.has(area_name)) nums.set(area_name, new Set()); nums.get(area_name)!.add(route_number); });
+      setDrawnNums(nums);
+
       // Build saved count and max route per area
       const countByArea = new Map<string, number>();
       const maxRouteByArea = new Map<string, number>();
@@ -556,9 +564,12 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
 
   const initRoutesForArea = (area: AreaPrefix) => {
     restoredAreaRef.current = null;
-    const start = area.route_start ?? 1;
-    setRoutes(Array.from({ length: area.route_count }, (_, i) => ({
-      num: start + i,
+    // This map's numbers: its span, less numbers that belong to other maps (a map that grew past
+    // its neighbours has a gap: AN01–AN22 · AN87), plus anything it has saved.
+    let nums = ownedNumbers(area, areas, drawnNums);
+    if (!nums.length) nums = [area.route_start ?? 1];
+    setRoutes(nums.map((num, i) => ({
+      num,
       color: ROUTE_COLORS[i % ROUTE_COLORS.length],
       status: 'pending' as const,
       selectedWayIds: new Set<number>(),
@@ -566,7 +577,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
       aiNotes: '',
       confidence: 0,
     })));
-    setActiveRouteNum(start);
+    setActiveRouteNum(nums[0]);
     setAllWays([]);
     setWayOverrides(new Map());
     setWayNameOverrides(new Map());
@@ -578,11 +589,19 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
 
   const handleInsertRoute = useCallback((afterRouteNum: number) => {
     if (!currentArea) return;
+    const taken = takenNumbers(currentArea.prefix, areas, drawnNums, currentArea.area_name);
+    const newNum = firstFree(taken, afterRouteNum + 1);
     setRoutes(prev => {
       const totalRoutes = prev.length + 1;
-      const shifted = prev.map(r => r.num <= afterRouteNum ? r : { ...r, num: r.num + 1 });
+      // The routes after it move up, each to the next number no other map holds.
+      let at = newNum;
+      const shifted = prev.map(r => {
+        if (r.num <= afterRouteNum) return r;
+        at = firstFree(taken, at + 1);
+        return { ...r, num: at };
+      });
       const newRoute: RouteData = {
-        num: afterRouteNum + 1,
+        num: newNum,
         color: ROUTE_COLORS[(totalRoutes - 1) % ROUTE_COLORS.length],
         status: 'pending',
         selectedWayIds: new Set<number>(),
@@ -592,8 +611,25 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
       };
       return [...shifted, newRoute].sort((a, b) => a.num - b.num);
     });
-    setActiveRouteNum(afterRouteNum + 1);
-  }, [currentArea]);
+    setActiveRouteNum(newNum);
+  }, [currentArea, areas, drawnNums]);
+
+  /** The route the fixed Add button adds: the first number after this map's last that no other map holds. */
+  const nextRouteNum = useMemo(() => {
+    if (!currentArea) return null;
+    const last = routes.length ? routes[routes.length - 1].num : (currentArea.route_start ?? 1) - 1;
+    return firstFree(takenNumbers(currentArea.prefix, areas, drawnNums, currentArea.area_name), last + 1);
+  }, [currentArea, routes, areas, drawnNums]);
+
+  const handleAddRoute = useCallback(() => {
+    if (!currentArea || nextRouteNum == null) return;
+    const num = nextRouteNum;
+    setRoutes(prev => [...prev, {
+      num, color: ROUTE_COLORS[prev.length % ROUTE_COLORS.length], status: 'pending' as const,
+      selectedWayIds: new Set<number>(), streetNames: [], aiNotes: '', confidence: 0,
+    }]);
+    setActiveRouteNum(num);
+  }, [currentArea, nextRouteNum]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1068,7 +1104,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
             <h1 className="text-sm font-bold">Map Builder</h1>
             <p className="text-xs text-gray-400">
               {view === 'map' && currentArea
-                ? `${currentArea.area_name} · ${currentArea.prefix} · ${currentArea.region} · ${formatRouteCode(currentArea.prefix, currentArea.route_start ?? 1)}–${formatRouteCode(currentArea.prefix, routes[routes.length - 1]?.num ?? (currentArea.route_start ?? 1))}`
+                ? `${currentArea.area_name} · ${currentArea.prefix} · ${currentArea.region} · ${runsLabel(currentArea.prefix, routes.map(r => r.num)) || formatRouteCode(currentArea.prefix, currentArea.route_start ?? 1)}`
                 : `${areas.length} areas`}
             </p>
           </div>
@@ -1317,12 +1353,16 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
                   </div>
                 </React.Fragment>
               ))}
-              {routes.length > 0 && (
-                <div className="group relative flex items-center justify-center h-0 overflow-visible z-10">
-                  <button onClick={() => handleInsertRoute(routes[routes.length - 1].num)} title={`Add new route after ${formatRouteCode(currentArea.prefix, routes[routes.length - 1].num)}`} className="absolute opacity-0 group-hover:opacity-100 transition-opacity bg-blue-700 hover:bg-blue-500 text-white rounded-full w-4 h-4 flex items-center justify-center shadow-lg border border-blue-500" style={{ top: '-8px' }}><Plus size={9} /></button>
-                </div>
-              )}
             </div>
+            {/* Always there: add the next route (the first number no other map holds). */}
+            {nextRouteNum != null && (
+              <div className="p-2 border-t border-gray-700 flex-shrink-0">
+                <button onClick={handleAddRoute} title={`Add ${formatRouteCode(currentArea.prefix, nextRouteNum)} to this map`}
+                  className="w-full h-11 rounded-lg bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold text-sm flex items-center justify-center gap-1.5 shadow">
+                  <Plus size={18} />Add route {formatRouteCode(currentArea.prefix, nextRouteNum)}
+                </button>
+              </div>
+            )}
             <div className="p-2 border-t border-gray-700">
               <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden mb-1">
                 <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${routes.length > 0 ? (approvedCount / routes.length) * 100 : 0}%` }} />

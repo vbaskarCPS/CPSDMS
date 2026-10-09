@@ -92,27 +92,37 @@ describe('navigation by permission', () => {
   });
 });
 
-import { areaProblems, mergeAreas, routeCodeOf, type AreaPrefix } from './territory';
+import { areaProblems, byCity, drawnByArea, firstNumberFor, mergeAreas, routeCodeOf, type AreaPrefix } from './territory';
 describe('territory areas', () => {
   const pre: AreaPrefix[] = [
-    { area_name: 'GLEN ABBEY #1', prefix: 'GA', region: 'West', route_start: 1, route_count: 8 },
-    { area_name: 'GLEN ABBEY #2', prefix: 'GA', region: 'East', route_start: 9, route_count: 14 },
+    { area_name: 'GLEN ABBEY #1', prefix: 'GA', region: 'West', route_start: 1, route_count: 8, city: 'Oakville' },
+    { area_name: 'GLEN ABBEY #2', prefix: 'GA', region: 'East', route_start: 9, route_count: 14, city: 'Oakville' },
     { area_name: 'NEW AREA', prefix: 'NA', region: 'Central', route_start: 1, route_count: 5 },
   ];
   const routes = [1, 2, 3, 4, 5, 6, 7, 8].map(n => ({ area_name: 'GLEN ABBEY #1', route_number: n, route_code: routeCodeOf('GA', n) }))
     .concat([{ area_name: 'LOOSE', route_number: 3, route_code: 'LO03' }]);
-  it('lists every area with its region, drawn routes and planned numbers', () => {
+  const drawn = drawnByArea(routes);
+  it('lists every area with its region, drawn routes, planned numbers and city', () => {
     const rows = mergeAreas(pre, routes, new Map([['GLEN ABBEY #1', 'cc1']]));
-    expect(rows.map(r => [r.name, r.region, r.routes.length, r.planned, r.centerId])).toEqual([
-      ['GLEN ABBEY #1', 'West', 8, 8, 'cc1'], ['GLEN ABBEY #2', 'East', 0, 14, null], ['LOOSE', null, 1, 1, null], ['NEW AREA', 'Central', 0, 5, null]]);
+    expect(rows.map(r => [r.name, r.region, r.routes.length, r.planned, r.centerId, r.numbers, r.city])).toEqual([
+      ['GLEN ABBEY #1', 'West', 8, 8, 'cc1', 'GA01–GA08', 'Oakville'], ['GLEN ABBEY #2', 'East', 0, 14, null, 'GA09–GA22', 'Oakville'],
+      ['LOOSE', null, 1, 1, null, 'LO03', null], ['NEW AREA', 'Central', 0, 5, null, 'NA01–NA05', null]]);
     expect(rows.find(r => r.name === 'LOOSE')!.hasPrefixRow).toBe(false);
+    expect(byCity(rows).map(g => [g.city, g.areas.map(a => a.name)])).toEqual([
+      ['Oakville', ['GLEN ABBEY #1', 'GLEN ABBEY #2']], [null, ['LOOSE', 'NEW AREA']]]);
   });
-  it('checks a new or edited area', () => {
-    expect(areaProblems({ name: 'GLEN ABBEY #3', prefix: 'GA', region: 'West', start: 23, end: 30 }, pre, null)).toEqual([]);
-    expect(areaProblems({ name: 'GLEN ABBEY #3', prefix: 'GA', region: 'West', start: 20, end: 30 }, pre, null)[0]).toMatch(/overlaps GLEN ABBEY #2 \(GA09–GA22\)/);
-    expect(areaProblems({ name: 'glen abbey #1', prefix: 'GA', region: 'West', start: 1, end: 8 }, pre, null)).toContain('There’s already an area with that name.');
-    expect(areaProblems({ name: 'GLEN ABBEY #1', prefix: 'GA', region: 'East', start: 1, end: 8 }, pre, 'GLEN ABBEY #1')).toEqual([]);   // editing itself
-    expect(areaProblems({ name: 'X', prefix: 'G4', region: 'East', start: 3, end: 2 }, pre, null)).toHaveLength(2);
+  it('checks a new area: a used prefix only continues a numbered map of the same name', () => {
+    expect(areaProblems({ name: 'GLEN ABBEY #3', prefix: 'GA', region: 'West' }, pre, null, drawn)).toEqual([]);
+    expect(firstNumberFor('GLEN ABBEY #3', 'GA', pre, drawn)).toBe(23);
+    expect(firstNumberFor('BRAND NEW', 'BN', pre, drawn)).toBe(1);
+    expect(areaProblems({ name: 'GALT', prefix: 'GA', region: 'West' }, pre, null, drawn)[0]).toMatch(/GA is already used by GLEN ABBEY #1–#2\. Pick another prefix, or name this GLEN ABBEY #3/);
+    expect(areaProblems({ name: 'glen abbey #1', prefix: 'GA', region: 'West' }, pre, null, drawn)).toContain('There’s already an area with that name.');
+    expect(areaProblems({ name: 'X', prefix: 'G4', region: 'East' }, pre, null, drawn)).toHaveLength(1);
+  });
+  it('checks an edited area', () => {
+    expect(areaProblems({ name: 'GLEN ABBEY #1', prefix: 'GA', region: 'East', start: 1, end: 8 }, pre, 'GLEN ABBEY #1', drawn)).toEqual([]);   // itself
+    expect(areaProblems({ name: 'GLEN ABBEY #1', prefix: 'GA', region: 'East', start: 1, end: 10 }, pre, 'GLEN ABBEY #1', drawn)[0]).toMatch(/GA09–GA10 are already GLEN ABBEY #2’s/);
+    expect(areaProblems({ name: 'GLEN ABBEY #1', prefix: 'GA', region: 'East', start: 3, end: 2 }, pre, 'GLEN ABBEY #1', drawn)).toHaveLength(1);
   });
 });
 
