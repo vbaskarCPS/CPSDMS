@@ -3605,12 +3605,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       type: 'circle',
       source: 'rm-pcl-src',
       paint: {
+        // Always on when zoomed out (the houses show PCL when zoomed in).
         'circle-color': '#6b7280',
-        'circle-radius': 1.75,
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 1.75, 15, 3],
         'circle-stroke-color': '#374151',
         'circle-stroke-width': 0.5,
-        'circle-opacity': 0,
-        'circle-stroke-opacity': 0,
+        'circle-opacity': 0.7,
+        'circle-stroke-opacity': 0.7,
       },
     });
   }, []);

@@ -162,6 +162,7 @@ export const LayersList: React.FC<{
     <LayerRow icon={Clock} label="Pending prebooks" detail="Zoomed out" progress={g.pendingBookings} />
     <LayerRow icon={CheckCircle2} label="Sales & completed" detail="Zoomed out" progress={g.pendingSalesAndCompleted} />
     <LayerRow icon={History} label="Previously done (X)" detail="Zoomed out; purple houses when zoomed in" progress={g.historical} />
+    <LayerRow icon={Users} label="Callbook clients (PCL)" detail="Grey dots zoomed out; blue houses when zoomed in" progress={g.pcl} />
     {o && <OthersSection o={o} />}
   </div>
 );

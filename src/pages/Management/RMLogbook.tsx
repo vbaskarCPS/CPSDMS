@@ -74,8 +74,8 @@ const initialGeocodeProgress: GeocodeProgress = {
 };
 
 // What the map shows. Fixed — there are no layer switches: Pending Bookings,
-// Pending Sales/Completed and Previously done (X's) always show; PCL clients
-// show on the houses when zoomed in (no separate dots). Worker locations always render.
+// Pending Sales/Completed, Previously done (X's) and PCL dots always show when
+// zoomed out; zoomed in, the houses show all of it. Worker locations always render.
 export interface FilterVisibility {
   pendingBookings: boolean;
   pendingSalesAndCompleted: boolean;
@@ -87,7 +87,7 @@ const FILTER_VISIBILITY: FilterVisibility = {
   pendingBookings: true,
   pendingSalesAndCompleted: true,
   historical: true,
-  pcl: false,
+  pcl: true,
 };
 
 function getPendingDollarValue(priceStr: string | undefined | null, seasonType: SeasonType): number {
