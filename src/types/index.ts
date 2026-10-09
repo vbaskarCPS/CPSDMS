@@ -172,6 +172,18 @@ export interface ManagementUser {
   // level) or just their position. Stored in users.metadata.mapSharing, separate
   // from floatingFor (which stays the admin's floater setup). Absent = private.
   mapSharing?: ManagerMapSharing;
+  // --- RM MAP LAYER SWITCHES ---
+  // This manager's own on/off choices for the RM map's layers, so the map opens
+  // the way they left it on any device. Stored in users.metadata.mapFilters.
+  mapFilters?: ManagerMapFilters;
+}
+
+/** An RM's layer switches on the RM map (absent = the defaults). */
+export interface ManagerMapFilters {
+  pendingBookings: boolean;
+  pendingSalesAndCompleted: boolean;
+  historical: boolean;
+  pcl: boolean;
 }
 
 export interface ManagerMapSharing {

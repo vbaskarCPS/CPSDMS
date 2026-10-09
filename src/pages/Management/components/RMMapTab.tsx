@@ -1118,6 +1118,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
+  // The RM's layer switches, for layers created after a switch was set.
+  const filterVisRef = useRef(filterVisibility);
+  filterVisRef.current = filterVisibility;
   const [mapLoaded, setMapLoaded] = useState(false);
   const loadedIdsRef = useRef<string[]>([]);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
@@ -3605,13 +3608,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       type: 'circle',
       source: 'rm-pcl-src',
       paint: {
-        // Always on when zoomed out (the houses show PCL when zoomed in).
+        // Zoomed out only (the houses show PCL when zoomed in); starts at the RM's own setting.
         'circle-color': '#6b7280',
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 1.75, 15, 3],
         'circle-stroke-color': '#374151',
         'circle-stroke-width': 0.5,
-        'circle-opacity': 0.7,
-        'circle-stroke-opacity': 0.7,
+        'circle-opacity': filterVisRef.current.pcl ? 0.7 : 0,
+        'circle-stroke-opacity': filterVisRef.current.pcl ? 0.7 : 0,
       },
     });
   }, []);
@@ -6823,7 +6826,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4">
               {desktopMenuSub === 'layers' ? (
-                <LayersList geocodeProgress={geocodeProgress} others={othersLayers} />
+                <LayersList filterVisibility={filterVisibility} geocodeProgress={geocodeProgress} onToggle={shell.onToggleFilter} others={othersLayers} />
               ) : desktopMenuSub === 'pins' ? (
                 <PinsList
                   verb="Click"

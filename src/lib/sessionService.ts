@@ -42,6 +42,7 @@ import {
   RouteSplitRectangle,
   ManagerLocation,
   ManagerMapSharing,
+  ManagerMapFilters,
   ManagerMappingConfig,
 } from '../types';
 
@@ -520,6 +521,8 @@ class SessionService {
             position: Array.isArray(m.metadata.mapSharing.position) ? m.metadata.mapSharing.position.filter((x: unknown) => typeof x === 'string') : [],
           }
         : undefined,
+      // This manager's RM map layer switches (defaults when absent).
+      mapFilters: readMapFilters(m.metadata?.mapFilters),
     }));
 
     const workers: Worker[] = (workersRes.data || []).map((w) => ({
@@ -825,6 +828,31 @@ class SessionService {
     const { error: updateError } = await supabase
       .from('users')
       .update({ metadata: newMetadata })
+      .eq('user_id', managerId)
+      .eq('role', 'RouteManager')
+      .eq('command_center_id', ccId);
+    if (updateError) throw updateError;
+  }
+
+  // --- RM MAP LAYER SWITCHES: saved on the manager's own row, so their map opens the way
+  // they left it (any device). Same read-merge-write as the sharing above.
+  public async updateManagerMapFilters(managerId: string, filters: ManagerMapFilters): Promise<void> {
+    const ccId = this.getCCId();
+    const { data: user, error: fetchError } = await supabase
+      .from('users')
+      .select('metadata')
+      .eq('user_id', managerId)
+      .eq('role', 'RouteManager')
+      .eq('command_center_id', ccId)
+      .single();
+    if (fetchError || !user) throw new Error('Manager not found');
+    const clean: ManagerMapFilters = {
+      pendingBookings: !!filters.pendingBookings, pendingSalesAndCompleted: !!filters.pendingSalesAndCompleted,
+      historical: !!filters.historical, pcl: !!filters.pcl,
+    };
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ metadata: { ...(user.metadata || {}), mapFilters: clean } })
       .eq('user_id', managerId)
       .eq('role', 'RouteManager')
       .eq('command_center_id', ccId);
@@ -1712,6 +1740,7 @@ class SessionService {
               ? m.digitalMappings
               : (m.digitalMapping ? [m.digitalMapping] : []),
             ...(m.mapSharing ? { mapSharing: m.mapSharing } : {}),
+            ...(m.mapFilters ? { mapFilters: m.mapFilters } : {}),
           },
           command_center_id: ccId,
         })),
@@ -5272,3 +5301,12 @@ export interface MapPin {
 }
 
 export const sessionService = SessionService.getInstance();
+
+/** A manager's saved RM map layer switches, or undefined when they've never set any. */
+function readMapFilters(v: unknown): ManagerMapFilters | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  const b = (k: string) => typeof o[k] === 'boolean' ? (o[k] as boolean) : undefined;
+  if ([b('pendingBookings'), b('pendingSalesAndCompleted'), b('historical'), b('pcl')].every(x => x === undefined)) return undefined;
+  return { pendingBookings: b('pendingBookings') ?? true, pendingSalesAndCompleted: b('pendingSalesAndCompleted') ?? true, historical: b('historical') ?? true, pcl: b('pcl') ?? true };
+}
