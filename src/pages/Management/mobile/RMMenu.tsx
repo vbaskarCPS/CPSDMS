@@ -14,11 +14,11 @@ import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   Users, MapPin, Layers, CreditCard, Shovel, Truck, Loader, Clock, CheckCircle2, History, ChevronRight, LayoutDashboard,
-  Route, Navigation, Eye, Share2, Home,
+  Route, Navigation, Eye, Share2,
 } from 'lucide-react';
 import { Tile } from './PhoneSheet';
 import type { RMPhoneShell } from './RMPhoneLayout';
-import type { GeocodeProgress } from '../RMLogbook';
+import type { FilterVisibility, GeocodeProgress } from '../RMLogbook';
 
 export type MenuSub = 'layers' | 'pins';
 
@@ -58,25 +58,29 @@ export const MenuTiles: React.FC<{
   </div>
 );
 
-/** One thing the map always shows (no switch); spins while it's still loading. */
 export const LayerRow: React.FC<{
-  icon: LucideIcon; label: string; detail: string;
-  progress?: { current: number; total: number; done: boolean };
-}> = ({ icon: Icon, label, detail, progress }) => {
-  const loading = !!progress && !progress.done;
+  icon: LucideIcon; label: string; on: boolean;
+  progress: { current: number; total: number; done: boolean };
+  onToggle: () => void;
+}> = ({ icon: Icon, label, on, progress, onToggle }) => {
+  const loading = !progress.done;
   return (
-    <div className="w-full min-h-[56px] rounded-xl px-4 py-2 flex items-center gap-3 bg-gray-800">
-      <Icon size={18} className="text-blue-300 flex-shrink-0" />
-      <span className="flex-1 min-w-0">
-        <span className="block text-sm font-bold text-white">{label}</span>
-        <span className="block text-[11px] text-gray-400">{detail}</span>
-      </span>
-      {loading && (
-        <span className="text-[11px] text-amber-300 font-bold flex items-center gap-1 flex-shrink-0">
-          <Loader size={12} className="animate-spin" />{progress!.total > 0 ? `${progress!.current}/${progress!.total}` : 'loading'}
+    <button
+      onClick={loading ? undefined : onToggle}
+      className={`w-full h-14 rounded-xl px-4 flex items-center gap-3 ${on && !loading ? 'bg-blue-600/25 ring-1 ring-blue-500' : 'bg-gray-800'} ${loading ? 'opacity-60' : ''}`}
+    >
+      <Icon size={18} className={on ? 'text-blue-300' : 'text-gray-400'} />
+      <span className="text-sm font-bold text-white flex-1 text-left">{label}</span>
+      {loading ? (
+        <span className="text-[11px] text-amber-300 font-bold flex items-center gap-1">
+          <Loader size={12} className="animate-spin" />{progress.total > 0 ? `${progress.current}/${progress.total}` : 'waiting'}
+        </span>
+      ) : (
+        <span className={`w-11 h-6 rounded-full relative transition-colors ${on ? 'bg-blue-500' : 'bg-gray-600'}`}>
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
         </span>
       )}
-    </div>
+    </button>
   );
 };
 
@@ -152,17 +156,16 @@ const OthersSection: React.FC<{ o: OthersLayers }> = ({ o }) => (
 );
 
 export const LayersList: React.FC<{
+  filterVisibility: FilterVisibility;
   geocodeProgress: GeocodeProgress;
+  onToggle: (k: keyof FilterVisibility) => void;
   others?: OthersLayers;
-}> = ({ geocodeProgress: g, others: o }) => (
+}> = ({ filterVisibility: f, geocodeProgress: g, onToggle, others: o }) => (
   <div className="space-y-2 pb-2">
-    <div className="text-[11px] text-gray-400 px-1">The map always shows all of this. Zoom in to street level to see every house.</div>
-    <LayerRow icon={Route} label="Routes" detail="Route lines, numbers and crews, at every zoom" />
-    <LayerRow icon={Home} label="Every house (zoomed in)" detail="Coloured by today's knocks, sales and PCL, with numbers and names" />
-    <LayerRow icon={Clock} label="Pending prebooks" detail="Zoomed out" progress={g.pendingBookings} />
-    <LayerRow icon={CheckCircle2} label="Sales & completed" detail="Zoomed out" progress={g.pendingSalesAndCompleted} />
-    <LayerRow icon={History} label="Previously done (X)" detail="Zoomed out; purple houses when zoomed in" progress={g.historical} />
-    <LayerRow icon={Users} label="Callbook clients (PCL)" detail="Grey dots zoomed out; blue houses when zoomed in" progress={g.pcl} />
+    <LayerRow icon={Clock} label="Pending prebooks" on={f.pendingBookings} progress={g.pendingBookings} onToggle={() => onToggle('pendingBookings')} />
+    <LayerRow icon={CheckCircle2} label="Sales & completed" on={f.pendingSalesAndCompleted} progress={g.pendingSalesAndCompleted} onToggle={() => onToggle('pendingSalesAndCompleted')} />
+    <LayerRow icon={History} label="Previously done" on={f.historical} progress={g.historical} onToggle={() => onToggle('historical')} />
+    <LayerRow icon={Users} label="Callbook clients (PCL)" on={f.pcl} progress={g.pcl} onToggle={() => onToggle('pcl')} />
     {o && <OthersSection o={o} />}
   </div>
 );
