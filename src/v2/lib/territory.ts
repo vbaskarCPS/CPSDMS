@@ -235,18 +235,18 @@ export async function centerAreas(centerId: string): Promise<Area[]> {
   return groupAreas(routes, assigned).filter(a => a.centerId === centerId);
 }
 
-export interface RouteShape { code: string; area: string; number: number; lines: [number, number][][] }
+export interface RouteShape { code: string; area: string; number: number; lines: [number, number][][]; id?: string; color?: string }
 
-/** Route lines for the given areas (for the Start session map). */
+/** Route lines for the given areas (for the Start session map and the customer map). */
 export async function routeShapes(areaNames: string[]): Promise<RouteShape[]> {
   if (!areaNames.length) return [];
   const out: RouteShape[] = [];
   for (let from = 0; ; from += 500) {
-    const page = must(await db.from('route_maps').select('area_name, route_number, route_code, segments')
+    const page = must(await db.from('route_maps').select('id, area_name, route_number, route_code, route_color, segments')
       .eq('status', 'approved').in('area_name', areaNames).order('route_code').range(from, from + 499)) as
-      { area_name: string; route_number: number; route_code: string; segments: { coordinates: [number, number][] }[] | null }[];
+      { id: string; area_name: string; route_number: number; route_code: string; route_color: string | null; segments: { coordinates: [number, number][] }[] | null }[];
     for (const r of page) {
-      out.push({ code: r.route_code, area: r.area_name, number: r.route_number,
+      out.push({ code: r.route_code, area: r.area_name, number: r.route_number, id: r.id, color: r.route_color || undefined,
         lines: (r.segments || []).map(s => s.coordinates).filter(c => Array.isArray(c) && c.length > 1) });
     }
     if (page.length < 500) break;

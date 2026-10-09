@@ -1,6 +1,10 @@
 // src/v2/features/clients/CustomerMap.tsx — Customers: opens on a map of the person's territory.
 // Pick a route map; every customer is a dot coloured by what happened this season (back again, new,
 // owed, said no, past customer). Tap a dot for the house, then open its customer page.
+//
+// Drawn like the RM map: the same tidied streets map, routes in their own colours with big route
+// numbers, past customers as the RM's small grey dots, and every house in the workers' knock
+// colours once zoomed in to street level.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import mapboxgl from 'mapbox-gl';
@@ -9,14 +13,18 @@ import { Search, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import { routeShapes } from '../../lib/territory';
+import { RM_LINE, RM_NUMBER, RM_STYLE, rmLabelAnchor, tidyRmBaseMap } from '../../../lib/rmMapStyle';
+import { useRouteHouseLayer } from '../../../pages/Management/components/useRouteHouseLayer';
+import type { SavedRouteMap } from '../../../lib/mapLogsheetService';
 import { areaCustomers, CATS, catOf, countByCat, fmtMoney, myAreas, type AreaPoint, type Cat } from '../../lib/customers';
 import { Btn, ErrorBox, Loading } from '../../ui';
 
 const BLANK_STYLE: mapboxgl.StyleSpecification = {
-  version: 8, sources: {},
+  version: 8, sources: {}, glyphs: 'mapbox://fonts/mapbox/{fontstack}/{range}.pbf',
   layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#eef0f3' } }],
 };
 const LAST = 'v2.crm.area';
+const NONE: never[] = [];
 const remember = (a: string) => { try { localStorage.setItem(LAST, a); } catch { /* private window */ } };
 const recall = () => { try { return localStorage.getItem(LAST); } catch { return null; } };
 
@@ -62,46 +70,78 @@ export const CustomerMap: React.FC = () => {
     const token = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_MAPBOX_TOKEN || '';
     try {
       if (token) mapboxgl.accessToken = token;
-      const m = new mapboxgl.Map({ container: box.current, style: token && token !== 'pk.test' ? 'mapbox://styles/mapbox/light-v11' : BLANK_STYLE,
+      const m = new mapboxgl.Map({ container: box.current, style: token && token !== 'pk.test' ? RM_STYLE : BLANK_STYLE,
         center: [-79.73, 43.45], zoom: 11, attributionControl: false });
       m.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
-      m.on('load', () => setReady(true));
+      let loaded = false;
+      m.on('load', () => { loaded = true; tidyRmBaseMap(m); setReady(true); });
       const ro = new ResizeObserver(() => m.resize()); ro.observe(box.current); (m as unknown as { __ro?: ResizeObserver }).__ro = ro;
-      m.on('error', e => { if (!m.isStyleLoaded()) setFailed(String((e as { error?: Error }).error?.message || 'Map failed to load')); });
+      // Only a map that never loaded is a failure; later hiccups (a tile, a font) aren't.
+      m.on('error', e => { if (!loaded) setFailed(String((e as { error?: Error }).error?.message || 'Map failed to load')); });
       map.current = m;
       (box.current as HTMLDivElement & { __map?: mapboxgl.Map }).__map = m;
     } catch (e) { setFailed(e instanceof Error ? e.message : 'Map failed to load'); }
     return () => { (map.current as unknown as { __ro?: ResizeObserver } | null)?.__ro?.disconnect(); try { map.current?.remove(); } catch { /* gone */ } map.current = null; setReady(false); };
   }, []);
 
-  // route lines
+  // route lines in their own colours, with big route numbers (as on the RM map)
   useEffect(() => {
     const m = map.current; if (!m || !ready) return;
-    const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: (shapes.data || []).flatMap(s => s.lines.map(l => ({ type: 'Feature' as const, properties: { code: s.code }, geometry: { type: 'LineString' as const, coordinates: l } }))) };
+    const list = shapes.data || [];
+    const lines: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: list.flatMap(s => s.lines.map(l => ({ type: 'Feature' as const, properties: { code: s.code, color: s.color || '#6b7280' }, geometry: { type: 'LineString' as const, coordinates: l } }))) };
+    const nums: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: list.flatMap(s => {
+      const cs = s.lines.flat(); if (!cs.length) return [];
+      const c: [number, number] = [cs.reduce((t, p) => t + p[0], 0) / cs.length, cs.reduce((t, p) => t + p[1], 0) / cs.length];
+      return [{ type: 'Feature' as const, properties: { num: String(s.number), color: s.color || '#6b7280' }, geometry: { type: 'Point' as const, coordinates: c } }];
+    }) };
     const src = m.getSource('crm-routes') as mapboxgl.GeoJSONSource | undefined;
-    if (src) src.setData(fc);
-    else {
-      m.addSource('crm-routes', { type: 'geojson', data: fc });
-      m.addLayer({ id: 'crm-routes', type: 'line', source: 'crm-routes', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#94a3b8', 'line-width': 3, 'line-opacity': 0.6 } });
-    }
+    if (src) { src.setData(lines); (m.getSource('crm-nums') as mapboxgl.GeoJSONSource | undefined)?.setData(nums); return; }
+    m.addSource('crm-routes', { type: 'geojson', data: lines });
+    m.addLayer({ id: 'crm-routes', type: 'line', source: 'crm-routes', layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': ['get', 'color'], 'line-width': RM_LINE.width, 'line-opacity': RM_LINE.opacity } }, rmLabelAnchor(m, 'crm-'));
+    m.addSource('crm-nums', { type: 'geojson', data: nums });
+    m.addLayer({ id: 'crm-nums', type: 'symbol', source: 'crm-nums',
+      layout: { 'text-field': ['get', 'num'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': RM_NUMBER.size, 'text-allow-overlap': true, 'text-ignore-placement': true },
+      paint: { 'text-color': ['get', 'color'], 'text-halo-color': RM_NUMBER.halo, 'text-halo-width': RM_NUMBER.haloWidth } });
   }, [ready, shapes.data]);
+
+  // every house in the workers' knock colours once zoomed in (the RM map's house layer)
+  const routeMaps = useMemo<SavedRouteMap[]>(() => (shapes.data || []).map(s => ({
+    id: s.id || s.code, route_code: s.code, route_color: s.color || '#6b7280', route_number: s.number,
+    segments: s.lines.map((coordinates, i) => ({ osmId: i, name: '', coordinates })),
+  })), [shapes.data]);
+  const noPcl = useMemo(() => new Map(), []);
+  useRouteHouseLayer({ map: map.current, mapLoaded: ready, routeMaps, skipRoutes: NONE, bookings: NONE, pendingSales: NONE, pclByRoute: noPcl, historical: NONE });
 
   // customer dots
   useEffect(() => {
     const m = map.current; if (!m || !ready) return;
-    const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: shown.map((p, i) => ({ type: 'Feature', properties: { i, color: catOf(p.cat).color, big: p.cat === 'none' ? 0 : 1 }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })) };
+    const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: shown.map((p, i) => ({ type: 'Feature', properties: { i, color: p.cat === 'past' ? '#6b7280' : catOf(p.cat).color, big: p.cat === 'none' || p.cat === 'past' ? 0 : 1 }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })) };
     const src = m.getSource('crm-pts') as mapboxgl.GeoJSONSource | undefined;
     if (src) { src.setData(fc); return; }
     m.addSource('crm-pts', { type: 'geojson', data: fc });
+    // Like the RM map's pins: small, dark-edged dots; past customers as its small grey PCL dots.
     m.addLayer({ id: 'crm-pts', type: 'circle', source: 'crm-pts', paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, ['case', ['==', ['get', 'big'], 1], 3.5, 2.5], 16, ['case', ['==', ['get', 'big'], 1], 8, 5]],
-      'circle-color': ['get', 'color'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.2 } });
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, ['case', ['==', ['get', 'big'], 1], 3.33, 1.75], 17, ['case', ['==', ['get', 'big'], 1], 6, 3.5]],
+      'circle-color': ['get', 'color'],
+      'circle-stroke-color': ['case', ['==', ['get', 'big'], 1], '#000000', '#374151'],
+      'circle-stroke-width': ['case', ['==', ['get', 'big'], 1], 1.67, 0.5],
+      'circle-opacity': ['case', ['==', ['get', 'big'], 1], 0.95, 0.7] } });
     m.addSource('crm-sel', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     m.addLayer({ id: 'crm-sel', type: 'circle', source: 'crm-sel', paint: { 'circle-radius': 12, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#111827', 'circle-stroke-width': 2.5 } });
     m.on('click', 'crm-pts', e => { const i = e.features?.[0]?.properties?.i; const p = typeof i === 'number' ? ptsRef.current[i] : undefined; if (p) setSel(p); });
     m.on('mouseenter', 'crm-pts', () => { m.getCanvas().style.cursor = 'pointer'; });
     m.on('mouseleave', 'crm-pts', () => { m.getCanvas().style.cursor = ''; });
   }, [ready, shown]);
+
+  // customers, the picked house and route numbers stay on top of the house layer
+  useEffect(() => {
+    const m = map.current; if (!m || !ready) return;
+    const lift = () => ['crm-pts', 'crm-sel', 'crm-nums'].forEach(id => { try { if (m.getLayer(id)) m.moveLayer(id); } catch { /* */ } });
+    lift();
+    const t = setTimeout(lift, 500);
+    return () => clearTimeout(t);
+  }, [ready, shown, shapes.data, routeMaps]);
 
   // the picked house
   useEffect(() => {
