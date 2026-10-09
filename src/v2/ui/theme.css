@@ -439,3 +439,4 @@
 .v2-terr-pfx { font-size: 12px; margin: -6px 0 12px; padding: 7px 10px; border-radius: 8px; line-height: 1.4; }
 .v2-terr-pfx.ok { background: #ecfdf5; color: #065f46; }
 .v2-terr-pfx.bad { background: #fff1f2; color: #9f1239; }
+.v2-crm-leg .v2-crm-x { width: 10px; font-weight: 900; font-size: 13px; line-height: 1; text-align: center; flex-shrink: 0; }
