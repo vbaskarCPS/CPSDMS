@@ -16,6 +16,8 @@ import { routeShapes } from '../../lib/territory';
 import { RM_LINE, RM_NUMBER, RM_STYLE, rmLabelAnchor, tidyRmBaseMap } from '../../../lib/rmMapStyle';
 import { useRouteHouseLayer } from '../../../pages/Management/components/useRouteHouseLayer';
 import type { SavedRouteMap } from '../../../lib/mapLogsheetService';
+import { getWorkerPCL, type PCLClientGroup } from '../../../lib/pclCacheService';
+import { db, must } from '../../lib/client';
 import { areaCustomers, CATS, catOf, countByCat, fmtMoney, myAreas, type AreaPoint, type Cat } from '../../lib/customers';
 import { Btn, ErrorBox, Loading } from '../../ui';
 
@@ -25,6 +27,17 @@ const BLANK_STYLE: mapboxgl.StyleSpecification = {
 };
 const LAST = 'v2.crm.area';
 const NONE: never[] = [];
+/** Categories done this season: drawn as an X, like the RM map's "previously done". */
+const DONE_NOW = new Set<Cat>(['done', 'new', 'owed']);
+/** The RM map's X (16 px, drawn at 2×), in a colour, with a white edge so it reads on any street. */
+function xImage(color: string): ImageData | null {
+  const n = 20, c = document.createElement('canvas'); c.width = n; c.height = n;
+  const g = c.getContext('2d'); if (!g) return null;
+  const pad = 4; g.lineCap = 'round';
+  const draw = (w: number, col: string) => { g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.moveTo(pad, pad); g.lineTo(n - pad, n - pad); g.moveTo(n - pad, pad); g.lineTo(pad, n - pad); g.stroke(); };
+  draw(6, '#ffffff'); draw(3.2, color);
+  return g.getImageData(0, 0, n, n);
+}
 const remember = (a: string) => { try { localStorage.setItem(LAST, a); } catch { /* private window */ } };
 const recall = () => { try { return localStorage.getItem(LAST); } catch { return null; } };
 
@@ -32,11 +45,20 @@ export const canReadCustomers = (can: (p: 'dialer' | 'bookings' | 'workerbook' |
   can('dialer') || can('bookings') || can('workerbook') || can('sa_territory');
 
 export const CustomerMap: React.FC = () => {
-  const { can } = useAuth();
+  const { can, center } = useAuth();
   const [params, setParams] = useSearchParams();
   const nav = useNavigate();
   const allowed = canReadCustomers(can);
-  const areas = useLoad(() => allowed ? myAreas() : Promise.resolve([]), [allowed]);
+  // Only the route maps assigned to the center picked in the top bar (its territory).
+  const areas = useLoad(async () => {
+    if (!allowed || !center) return [];
+    const [mine, assigned] = await Promise.all([
+      myAreas(),
+      db.from('map_area_centers').select('area_name').eq('center_id', center.id).then(r => must(r) as { area_name: string }[]),
+    ]);
+    const here = new Set(assigned.map(a => a.area_name));
+    return mine.filter(a => here.has(a.area));
+  }, [allowed, center?.id]);
   const list = areas.data || [];
   const fromUrl = params.get('area');
   const area = (fromUrl && list.some(a => a.area === fromUrl) ? fromUrl : null)
@@ -110,34 +132,48 @@ export const CustomerMap: React.FC = () => {
     id: s.id || s.code, route_code: s.code, route_color: s.color || '#6b7280', route_number: s.number,
     segments: s.lines.map((coordinates, i) => ({ osmId: i, name: '', coordinates })),
   })), [shapes.data]);
-  const noPcl = useMemo(() => new Map(), []);
-  useRouteHouseLayer({ map: map.current, mapLoaded: ready, routeMaps, skipRoutes: NONE, bookings: NONE, pendingSales: NONE, pclByRoute: noPcl, historical: NONE });
+  const noPcl = useMemo(() => new Map<string, PCLClientGroup[]>(), []);
+  // The route's past clients, as the RM map has them: PCL houses blue, done this season purple.
+  const pcl = useLoad(async () => {
+    const codes = routeMaps.map(r => r.route_code);
+    if (!codes.length || !center) return new Map<string, PCLClientGroup[]>();
+    return getWorkerPCL(codes, center.id).catch(() => new Map<string, PCLClientGroup[]>());
+  }, [routeMaps, center?.id]);
+  useRouteHouseLayer({ map: map.current, mapLoaded: ready, routeMaps, skipRoutes: NONE, bookings: NONE, pendingSales: NONE, pclByRoute: pcl.data || noPcl, historical: NONE });
 
-  // customer dots
+  // customers: done this season (back again, new, owed) as the RM map's X, coloured by category;
+  // said no as a small dark-edged dot; past customers as the RM's small grey PCL dots
   useEffect(() => {
     const m = map.current; if (!m || !ready) return;
-    const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: shown.map((p, i) => ({ type: 'Feature', properties: { i, color: p.cat === 'past' ? '#6b7280' : catOf(p.cat).color, big: p.cat === 'none' || p.cat === 'past' ? 0 : 1 }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })) };
+    const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: shown.map((p, i) => ({ type: 'Feature', properties: {
+      i, cat: p.cat, x: DONE_NOW.has(p.cat) ? 1 : 0, color: p.cat === 'past' ? '#6b7280' : catOf(p.cat).color, big: p.cat === 'none' || p.cat === 'past' ? 0 : 1,
+    }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } })) };
     const src = m.getSource('crm-pts') as mapboxgl.GeoJSONSource | undefined;
     if (src) { src.setData(fc); return; }
+    for (const c of CATS) if (DONE_NOW.has(c.key) && !m.hasImage(`crm-x-${c.key}`)) { const img = xImage(c.color); if (img) m.addImage(`crm-x-${c.key}`, img, { pixelRatio: 2 }); }
     m.addSource('crm-pts', { type: 'geojson', data: fc });
-    // Like the RM map's pins: small, dark-edged dots; past customers as its small grey PCL dots.
-    m.addLayer({ id: 'crm-pts', type: 'circle', source: 'crm-pts', paint: {
+    m.addLayer({ id: 'crm-pts', type: 'circle', source: 'crm-pts', filter: ['==', ['get', 'x'], 0], paint: {
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, ['case', ['==', ['get', 'big'], 1], 3.33, 1.75], 17, ['case', ['==', ['get', 'big'], 1], 6, 3.5]],
       'circle-color': ['get', 'color'],
       'circle-stroke-color': ['case', ['==', ['get', 'big'], 1], '#000000', '#374151'],
       'circle-stroke-width': ['case', ['==', ['get', 'big'], 1], 1.67, 0.5],
       'circle-opacity': ['case', ['==', ['get', 'big'], 1], 0.95, 0.7] } });
+    m.addLayer({ id: 'crm-x', type: 'symbol', source: 'crm-pts', filter: ['==', ['get', 'x'], 1], layout: {
+      'icon-image': ['concat', 'crm-x-', ['get', 'cat']], 'icon-size': ['interpolate', ['linear'], ['zoom'], 11, 0.9, 17, 1.6],
+      'icon-allow-overlap': true, 'icon-ignore-placement': true } });
     m.addSource('crm-sel', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     m.addLayer({ id: 'crm-sel', type: 'circle', source: 'crm-sel', paint: { 'circle-radius': 12, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#111827', 'circle-stroke-width': 2.5 } });
-    m.on('click', 'crm-pts', e => { const i = e.features?.[0]?.properties?.i; const p = typeof i === 'number' ? ptsRef.current[i] : undefined; if (p) setSel(p); });
-    m.on('mouseenter', 'crm-pts', () => { m.getCanvas().style.cursor = 'pointer'; });
-    m.on('mouseleave', 'crm-pts', () => { m.getCanvas().style.cursor = ''; });
+    for (const layer of ['crm-pts', 'crm-x']) {
+      m.on('click', layer, e => { const i = e.features?.[0]?.properties?.i; const p = typeof i === 'number' ? ptsRef.current[i] : undefined; if (p) setSel(p); });
+      m.on('mouseenter', layer, () => { m.getCanvas().style.cursor = 'pointer'; });
+      m.on('mouseleave', layer, () => { m.getCanvas().style.cursor = ''; });
+    }
   }, [ready, shown]);
 
   // customers, the picked house and route numbers stay on top of the house layer
   useEffect(() => {
     const m = map.current; if (!m || !ready) return;
-    const lift = () => ['crm-pts', 'crm-sel', 'crm-nums'].forEach(id => { try { if (m.getLayer(id)) m.moveLayer(id); } catch { /* */ } });
+    const lift = () => ['crm-pts', 'crm-x', 'crm-sel', 'crm-nums'].forEach(id => { try { if (m.getLayer(id)) m.moveLayer(id); } catch { /* */ } });
     lift();
     const t = setTimeout(lift, 500);
     return () => clearTimeout(t);
@@ -176,8 +212,9 @@ export const CustomerMap: React.FC = () => {
           </div>
           <ErrorBox error={areas.error} />
           {areas.loading && !areas.data ? <Loading label="Finding your route maps…" /> : !list.length ? (
-            <div className="v2-card v2-mut">No route maps are assigned to your centers yet. A Super Admin assigns them under Territory.</div>
+            <div className="v2-card v2-mut">{center ? `No route maps are assigned to ${center.display_name} yet. A Super Admin assigns them under Territory.` : 'Pick a center in the top bar to see its route maps.'}</div>
           ) : <>
+            {center && <div className="v2-mut v2-small">{center.display_name}’s territory · {list.length} map{list.length === 1 ? '' : 's'}</div>}
             <select className="v2-input" value={area || ''} onChange={e => pick(e.target.value)} aria-label="Route map">
               {list.map(a => <option key={a.area} value={a.area}>{a.area} · {a.customers.toLocaleString()} customers</option>)}
             </select>
@@ -210,7 +247,7 @@ export const CustomerMap: React.FC = () => {
             <div className="v2-card-h" style={{ margin: '4px 6px 6px' }}>On the map · tap to show or hide</div>
             {CATS.map(c => (
               <button key={c.key} type="button" className={`v2-crm-leg${hidden.has(c.key) ? ' off' : ''}`} onClick={() => flip(c.key)} title={c.hint} aria-pressed={!hidden.has(c.key)}>
-                <i style={{ background: c.color }} /><span>{c.label}</span><b>{counts[c.key].toLocaleString()}</b>
+                {DONE_NOW.has(c.key) ? <span className="v2-crm-x" style={{ color: c.color }} aria-hidden>✕</span> : <i style={{ background: c.color }} />}<span>{c.label}</span><b>{counts[c.key].toLocaleString()}</b>
               </button>
             ))}
           </div>
