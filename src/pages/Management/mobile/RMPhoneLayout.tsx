@@ -48,7 +48,6 @@ export interface RMPhoneShell {
   };
   statsPanel: React.ReactNode;
   battleCards: React.ReactNode;
-  onToggleFilter: (k: keyof FilterVisibility) => void;
   onToggleFollowMe: () => void;
   onTogglePinMode: () => void;
   isTeamLocked: boolean;
@@ -694,7 +693,7 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
 
       {sheet === 'layers' && (
         <PhoneSheet title="Map layers" onClose={() => setSheet(null)}>
-          <LayersList filterVisibility={ctx.filterVisibility} geocodeProgress={ctx.geocodeProgress} onToggle={shell.onToggleFilter} others={ctx.othersLayers} />
+          <LayersList geocodeProgress={ctx.geocodeProgress} others={ctx.othersLayers} />
         </PhoneSheet>
       )}
 

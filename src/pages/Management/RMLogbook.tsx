@@ -3,8 +3,8 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock,
-  Lock, Unlock, Leaf, CreditCard, Shovel, Droplets, Bookmark, Navigation, History,
-  CheckCircle2, MapPin as MapPinIcon, Smartphone, LayoutGrid, X as XIcon,
+  Lock, Unlock, Leaf, CreditCard, Shovel, Droplets, Bookmark, Navigation,
+  MapPin as MapPinIcon, Smartphone, LayoutGrid, X as XIcon,
 } from 'lucide-react';
 import { getStorageItem, setStorageItem } from '../../lib/localStorage';
 import {
@@ -73,9 +73,9 @@ const initialGeocodeProgress: GeocodeProgress = {
   pcl: { current: 0, total: 0, done: false },
 };
 
-// Filter visibility flags — these drive what layers render on the map.
-// Defaults per spec: Pending Bookings ON, Pending Sales/Completed ON,
-// Previously done ON (houses done this season, as X's), PCL OFF. Worker locations have no toggle, always render.
+// What the map shows. Fixed — there are no layer switches: Pending Bookings,
+// Pending Sales/Completed and Previously done (X's) always show; PCL clients
+// show on the houses when zoomed in (no separate dots). Worker locations always render.
 export interface FilterVisibility {
   pendingBookings: boolean;
   pendingSalesAndCompleted: boolean;
@@ -83,7 +83,7 @@ export interface FilterVisibility {
   pcl: boolean;
 }
 
-const defaultFilterVisibility: FilterVisibility = {
+const FILTER_VISIBILITY: FilterVisibility = {
   pendingBookings: true,
   pendingSalesAndCompleted: true,
   historical: true,
@@ -165,7 +165,7 @@ const RMLogbook: React.FC = () => {
   // NEW: state lifted from RMMapTab — header controls live here now.
   const [showManageTeamModal, setShowManageTeamModal] = useState(false);
   const [centerOnLocation, setCenterOnLocation] = useState(false);
-  const [filterVisibility, setFilterVisibility] = useState<FilterVisibility>(defaultFilterVisibility);
+  const filterVisibility = FILTER_VISIBILITY;
   const [geocodePhase, setGeocodePhase] = useState<GeocodePhase>('idle');
   const [geocodeProgress, setGeocodeProgress] = useState<GeocodeProgress>(initialGeocodeProgress);
 
@@ -357,11 +357,6 @@ const RMLogbook: React.FC = () => {
   // disables it during nav, same as today, via handleFollowMeAutoDisable.
   const handleForceFollowMeOn = useCallback(() => {
     setCenterOnLocation(true);
-  }, []);
-
-  // Filter toggle handler — only fires when the layer's geocoding phase is done.
-  const handleToggleFilter = useCallback((key: keyof FilterVisibility) => {
-    setFilterVisibility(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
   // Progress reporter — RMMapTab calls this as it works through each phase.
@@ -882,7 +877,6 @@ const RMLogbook: React.FC = () => {
         seasonType={seasonType}
       />
     ),
-    onToggleFilter: handleToggleFilter,
     onToggleFollowMe: handleToggleCenter,
     onTogglePinMode: () => setPinMode(prev => !prev),
     isTeamLocked,
@@ -1024,48 +1018,6 @@ const RMLogbook: React.FC = () => {
     );
   }
 
-  // FILTER BUTTON COMPONENT — small helper to keep the JSX below readable.
-  // Renders the icon, ON/OFF visual state, and the loading badge when a phase
-  // hasn't completed yet for the given layer.
-  const FilterBtn: React.FC<{
-    icon: React.ReactNode;
-    active: boolean;
-    progress: { current: number; total: number; done: boolean };
-    onToggle: () => void;
-    label: string;
-  }> = ({ icon, active, progress, onToggle, label }) => {
-    const isLoading = !progress.done && progress.total > 0;
-    const isPending = !progress.done && progress.total === 0;
-    const disabled = !progress.done;
-
-    const badge = isLoading
-      ? `${progress.current}/${progress.total}`
-      : isPending
-        ? '…'
-        : null;
-
-    return (
-      <button
-        onClick={() => !disabled && onToggle()}
-        disabled={disabled}
-        title={disabled ? `${label} — loading…` : `${label} — ${active ? 'visible' : 'hidden'}`}
-        className={`relative flex items-center justify-center w-7 h-7 sm:w-9 sm:h-9 rounded-lg transition-all ${
-          disabled
-            ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
-            : active
-              ? 'bg-blue-600 text-white hover:bg-blue-500'
-              : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
-        }`}
-      >
-        {icon}
-        {badge && (
-          <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[16px] h-[14px] px-1 text-[8px] bg-amber-600 text-white rounded-full font-bold border border-gray-800 whitespace-nowrap">
-            {badge}
-          </span>
-        )}
-      </button>
-    );
-  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
@@ -1159,39 +1111,9 @@ const RMLogbook: React.FC = () => {
               )}
             </button>
 
-            {/* FILTER BUTTONS — only render on digital-mapping CCs. Each one is
-                disabled until its phase reports done. Layers default per spec. */}
+            {/* (No layer switches: the map always shows the same layers.) */}
             {digitalMappingEnabled && (
               <>
-                <FilterBtn
-                  icon={<Clock size={14} />}
-                  active={filterVisibility.pendingBookings}
-                  progress={geocodeProgress.pendingBookings}
-                  onToggle={() => handleToggleFilter('pendingBookings')}
-                  label="Pending Bookings"
-                />
-                <FilterBtn
-                  icon={<CheckCircle2 size={14} />}
-                  active={filterVisibility.pendingSalesAndCompleted}
-                  progress={geocodeProgress.pendingSalesAndCompleted}
-                  onToggle={() => handleToggleFilter('pendingSalesAndCompleted')}
-                  label="Pending Sales & Completed"
-                />
-                <FilterBtn
-                  icon={<History size={14} />}
-                  active={filterVisibility.historical}
-                  progress={geocodeProgress.historical}
-                  onToggle={() => handleToggleFilter('historical')}
-                  label="Previously Done"
-                />
-                <FilterBtn
-                  icon={<Users size={14} />}
-                  active={filterVisibility.pcl}
-                  progress={geocodeProgress.pcl}
-                  onToggle={() => handleToggleFilter('pcl')}
-                  label="Callbook Clients (PCL)"
-                />
-
                 {/* DROP A PIN — sits immediately left of Follow Me. Lit while
                     active so it's obvious the map is in a different mode. */}
                 <button

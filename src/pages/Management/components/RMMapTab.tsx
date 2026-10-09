@@ -37,6 +37,8 @@ import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbo
 import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
 import RoutePCLModal from './RoutePCLModal';
 import CartMapPanel from './CartMapPanel';
+import { useRouteHouseLayer } from './useRouteHouseLayer';
+import type { SavedRouteMap } from '../../../lib/mapLogsheetService';
 import WorkerDriverStops, { WORKER_STOP_COLOR, workerName as driverName } from './WorkerDriverStops';
 import RMPhoneLayout, {
   RMPhoneShell, RMPhoneCtx, PhoneCrew, PhoneRouteState, PhonePinCardData, crewLabel, managerInitials, type ManagerTag,
@@ -1934,6 +1936,31 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // For map handlers registered once (route-line "navigate to who?" prompt).
   const cartKnockSummaryRef = useRef(cartKnockSummary);
   cartKnockSummaryRef.current = cartKnockSummary;
+
+  // --- HOUSES ON EVERY ROUTE (always on) ---
+  // Zoomed in past HOUSE_ZOOM every route's houses show in the workers'
+  // colours (and the pins step aside); zoomed out, routes and pins as before.
+  // The route view's own route is left to CartMapPanel.
+  const houseLayerBookings = useMemo(() => {
+    const seen = new Set<string>();
+    const out: MasterBooking[] = [];
+    for (const b of [...bookings, ...cartCardData.flatMap(c => c.sharedBookings || [])]) {
+      const id = b['Booking ID'];
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      out.push(b);
+    }
+    return out;
+  }, [bookings, cartCardData]);
+  useRouteHouseLayer({
+    map: mapRef.current, mapLoaded,
+    routeMaps: routeMapData as unknown as SavedRouteMap[],
+    skipRoutes: cartPanelRouteCodes,
+    bookings: houseLayerBookings,
+    pendingSales: pendingSalesByManager,
+    pclByRoute,
+    historical: historicalProps,
+  });
 
   const cartByWorkerId = useMemo(() => {
     const map = new Map<string, TeamCart>();
@@ -6795,7 +6822,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4">
               {desktopMenuSub === 'layers' ? (
-                <LayersList filterVisibility={filterVisibility} geocodeProgress={geocodeProgress} onToggle={shell.onToggleFilter} others={othersLayers} />
+                <LayersList geocodeProgress={geocodeProgress} others={othersLayers} />
               ) : desktopMenuSub === 'pins' ? (
                 <PinsList
                   verb="Click"
