@@ -1541,15 +1541,21 @@ export async function fetchDisposition(routeCode: string, houseKey: string): Pro
 export async function fetchDispositions(routeCodes: string[]): Promise<Map<string, HouseDisposition>> {
   const m = new Map<string, HouseDisposition>();
   if (!routeCodes.length) return m;
-  const { data, error } = await supabase
-    .from('house_dispositions')
-    .select('*')
-    .in('route_code', routeCodes);
-  if (error) throw error;
-  (data || []).forEach(r => {
-    const d = mapDisposition(r);
-    m.set(routeHouseId(d.routeCode, d.houseKey), d);
-  });
+  // Page in 1000s: a whole RM map's routes can hold more knocks than one read returns.
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from('house_dispositions')
+      .select('*')
+      .in('route_code', routeCodes)
+      .order('id')
+      .range(from, from + 999);
+    if (error) throw error;
+    (data || []).forEach(r => {
+      const d = mapDisposition(r);
+      m.set(routeHouseId(d.routeCode, d.houseKey), d);
+    });
+    if (!data || data.length < 1000) break;
+  }
   return m;
 }
 
