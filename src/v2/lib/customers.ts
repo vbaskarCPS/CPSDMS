@@ -9,7 +9,7 @@ export const CATS: { key: Cat; label: string; color: string; hint: string }[] = 
   { key: 'done', label: 'Back again', color: '#059669', hint: 'Done this season, and a customer before' },
   { key: 'new', label: 'New this season', color: '#2563eb', hint: 'Done this season, first time' },
   { key: 'owed', label: 'Owed', color: '#d97706', hint: 'Done this season, not paid yet (billed or e-transfer to confirm)' },
-  { key: 'past', label: 'Past customer', color: '#64748b', hint: 'A customer in earlier years, not done this season' },
+  { key: 'past', label: 'Past customer', color: '#6b7280', hint: 'A customer in earlier years, not done this season' },
   { key: 'no', label: 'Said no / invalid', color: '#e11d48', hint: 'Said no or marked invalid at the door this season' },
   { key: 'none', label: 'No history', color: '#cbd5e1', hint: 'On file with no jobs yet' },
 ];
