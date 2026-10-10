@@ -38,6 +38,7 @@ import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
 import RoutePCLModal from './RoutePCLModal';
 import CartMapPanel from './CartMapPanel';
 import { useRouteHouseLayer } from './useRouteHouseLayer';
+import { getOtherServicePCL, type PclLine } from '../../../lib/pclCacheService';
 import type { SavedRouteMap } from '../../../lib/mapLogsheetService';
 import WorkerDriverStops, { WORKER_STOP_COLOR, workerName as driverName } from './WorkerDriverStops';
 import RMPhoneLayout, {
@@ -1257,6 +1258,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   // PCL reference circles
   const [pclByRoute, setPclByRoute] = useState<Map<string, PCLClientGroup[]>>(new Map());
+  // The other service's past clients (aeration in a sealing session, sealing in an aeration one):
+  // light green / light blue dots, the same size as the PCL dots, with their own switch.
+  const [otherPcl, setOtherPcl] = useState<{ line: PclLine; byRoute: Map<string, PCLClientGroup[]> } | null>(null);
   const [geocodedPCL, setGeocodedPCL] = useState<GeocodedPCLEntry[]>([]);
 
   // Team-season cart data
@@ -1963,6 +1967,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     pendingSales: pendingSalesByManager,
     pclByRoute,
     historical: historicalProps,
+    otherPcl,
   });
 
   const cartByWorkerId = useMemo(() => {
@@ -2708,6 +2713,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
     })();
     return () => { cancelled = true; };
+  }, [myRouteCodes.join(',')]);
+
+  // The other service's PCLs (no geocoding: imported clients carry their coordinates)
+  useEffect(() => {
+    const ccId = commandCenterService.getCurrentCommandCenterId();
+    if (!myRouteCodes.length || !ccId) { setOtherPcl(null); return; }
+    let cancelled = false;
+    getOtherServicePCL(myRouteCodes, ccId).then(o => { if (!cancelled) setOtherPcl(o); }).catch(err => console.warn('[PCL] other-service load failed:', err));
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myRouteCodes.join(',')]);
 
   // Load route geometry
@@ -3667,6 +3682,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       map.setPaintProperty('rm-pcl-circles', 'circle-opacity', filterVisibility.pcl ? 0.7 : 0);
       map.setPaintProperty('rm-pcl-circles', 'circle-stroke-opacity', filterVisibility.pcl ? 0.7 : 0);
     }
+    if (map.getLayer('rm-pcl2-circles')) {
+      map.setPaintProperty('rm-pcl2-circles', 'circle-opacity', filterVisibility.otherPcl ? 0.85 : 0);
+      map.setPaintProperty('rm-pcl2-circles', 'circle-stroke-opacity', filterVisibility.otherPcl ? 0.85 : 0);
+    }
   }, [filterVisibility, mapLoaded]);
 
   // --- SERIAL GEOCODING STATE MACHINE ---
@@ -4086,6 +4105,41 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     })();
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pclByRoute, geocodeOne, updatePclCircles, onGeocodeProgress]);
+
+  // THE OTHER SERVICE'S PCLs: light green (aeration) / light blue (sealing) dots, same size as the
+  // PCL dots. A house that's a PCL of the session's own service shows only that one.
+  useEffect(() => {
+    const map = mapRef.current; if (!map || !mapLoaded) return;
+    const own = new Set<string>();
+    pclByRoute.forEach((clients, rc) => clients.forEach(c => own.add(`${rc}::${makeCacheKey(`${c.houseNum} ${c.streetName}`.trim())}`)));
+    const features: GeoJSON.Feature[] = [];
+    otherPcl?.byRoute.forEach((clients, rc) => clients.forEach(c => {
+      const lat = (c as any).lat, lng = (c as any).lng;
+      if (typeof lat !== 'number' || typeof lng !== 'number') return;
+      if (own.has(`${rc}::${makeCacheKey(`${c.houseNum} ${c.streetName}`.trim())}`)) return;
+      features.push({ type: 'Feature', properties: { route: rc }, geometry: { type: 'Point', coordinates: [lng, lat] } });
+    }));
+    const fill = otherPcl?.line === 'sealing' ? '#7dd3fc' : '#86efac';
+    const edge = otherPcl?.line === 'sealing' ? '#0369a1' : '#3f6212';
+    const gj: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features };
+    const src = map.getSource('rm-pcl2-src') as mapboxgl.GeoJSONSource | undefined;
+    if (src) {
+      src.setData(gj);
+      try { map.setPaintProperty('rm-pcl2-circles', 'circle-color', fill); map.setPaintProperty('rm-pcl2-circles', 'circle-stroke-color', edge); } catch { /* */ }
+      return;
+    }
+    map.addSource('rm-pcl2-src', { type: 'geojson', data: gj });
+    const on = filterVisRef.current.otherPcl ? 0.85 : 0;
+    map.addLayer({
+      id: 'rm-pcl2-circles', type: 'circle', source: 'rm-pcl2-src',
+      paint: {
+        'circle-color': fill,
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 1.75, 15, 3],
+        'circle-stroke-color': edge, 'circle-stroke-width': 0.5,
+        'circle-opacity': on, 'circle-stroke-opacity': on,
+      },
+    });
+  }, [mapLoaded, otherPcl, pclByRoute]);
 
   // INCREMENTAL: mid-day pending-sales additions
   useEffect(() => {
@@ -6509,6 +6563,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       filterVisibility,
       geocodeProgress,
       othersLayers,
+      otherPclLabel: seasonType === 'aeration' ? 'Sealing PCLs' : 'Aeration PCLs',
       centerOnLocation,
       pinMode,
 
@@ -6826,7 +6881,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4">
               {desktopMenuSub === 'layers' ? (
-                <LayersList filterVisibility={filterVisibility} geocodeProgress={geocodeProgress} onToggle={shell.onToggleFilter} others={othersLayers} />
+                <LayersList filterVisibility={filterVisibility} geocodeProgress={geocodeProgress} onToggle={shell.onToggleFilter} others={othersLayers} otherPclLabel={seasonType === 'aeration' ? 'Sealing PCLs' : 'Aeration PCLs'} />
               ) : desktopMenuSub === 'pins' ? (
                 <PinsList
                   verb="Click"

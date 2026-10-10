@@ -292,7 +292,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
           hasFp: hasFp ? 1 : 0,
           hasState: hasState ? 1 : 0,
           // coloured houses win label placement fights
-          sort: hasState || v.isPcl ? 0 : 1,
+          sort: hasState || v.isPcl || v.otherPcl ? 0 : 1,
         },
         geometry: { type: 'Point', coordinates: labelAt },
       });

@@ -36,7 +36,7 @@ export const HOUSE_ZOOM = 15.5;
 export const RM_PIN_LAYERS = [
   'rm-pending-pins-circles', 'rm-pending-confirmed-check', 'rm-pending-dash-ring', 'rm-confirmed-check',
   'rm-completed-pins-circles', 'rm-upsell-only-circles', 'rm-upsell-half-blue', 'rm-overlap-half-symbols',
-  'rm-pending-sale-circles', 'rm-pending-sale-ring', 'rm-historical-symbols', 'rm-historical-x', 'rm-pcl-circles',
+  'rm-pending-sale-circles', 'rm-pending-sale-ring', 'rm-historical-symbols', 'rm-historical-x', 'rm-pcl-circles', 'rm-pcl2-circles',
 ];
 
 const P = 'rmh';
@@ -58,6 +58,8 @@ export interface RouteHouseLayerInput {
   pendingSales: PendingSale[];
   pclByRoute: Map<string, PCLClientGroup[]>;
   historical: HistoricalProperty[];
+  /** The other service's past clients (aeration in a sealing session …): lime / sky blue houses. */
+  otherPcl?: { line: 'aeration' | 'sealing'; byRoute: Map<string, PCLClientGroup[]> } | null;
 }
 
 /** Read a few routes at a time (each route pages its own houses). */
@@ -73,7 +75,7 @@ async function loadHouses(codes: string[]): Promise<RouteHouse[]> {
   return out;
 }
 
-export function useRouteHouseLayer({ map, mapLoaded, routeMaps, skipRoutes, bookings, pendingSales, pclByRoute, historical }: RouteHouseLayerInput): void {
+export function useRouteHouseLayer({ map, mapLoaded, routeMaps, skipRoutes, bookings, pendingSales, pclByRoute, historical, otherPcl = null }: RouteHouseLayerInput): void {
   const codes = useMemo(() => [...new Set(routeMaps.map(r => r.route_code))].sort(), [routeMaps]);
   const codeKey = codes.join(',');
   const [houses, setHouses] = useState<RouteHouse[]>([]);
@@ -99,8 +101,9 @@ export function useRouteHouseLayer({ map, mapLoaded, routeMaps, skipRoutes, book
     const ps = indexPendingSales(pendingSales, houses);
     const { pending, completed } = indexBookings(bookings, houses);
     return buildHouseViews(houses, dispositions, ps, pending, completed, indexPcl(pclByRoute, houses),
-      indexHistorical([...historical, ...seasonJobsAsHistorical(pclByRoute)], houses));
-  }, [houses, dispositions, pendingSales, bookings, pclByRoute, historical]);
+      indexHistorical([...historical, ...seasonJobsAsHistorical(pclByRoute)], houses),
+      otherPcl ? { line: otherPcl.line, byHouse: indexPcl(otherPcl.byRoute, houses) } : null);
+  }, [houses, dispositions, pendingSales, bookings, pclByRoute, historical, otherPcl]);
 
   const houseSig = useMemo(() => houses.map(h => `${routeHouseId(h.routeCode, h.houseKey)}@${h.lat.toFixed(6)},${h.lng.toFixed(6)}`).join(','), [houses]);
   const tiles = useMemo(
@@ -215,7 +218,7 @@ export function useRouteHouseLayer({ map, mapLoaded, routeMaps, skipRoutes, book
       const onBuilding = match.houseToBuilding.has(id) || !!match.houseToSlice?.has(id);
       const labelAt: [number, number] = tile && !onBuilding ? tileCentre(tile) : [v.house.lng, v.house.lat];
       if (tile) fp.push({ type: 'Feature', properties: { id, color, fillOpacity: hasState ? 0.45 : 0.10, lineOpacity: hasState ? 0.9 : 0.35, b: onBuilding ? 1 : 0 }, geometry: tile });
-      pt.push({ type: 'Feature', properties: { id, color, num: houseMapNumber(v.house), name: v.mapLabel || '', sort: hasState || v.isPcl ? 0 : 1 }, geometry: { type: 'Point', coordinates: labelAt } });
+      pt.push({ type: 'Feature', properties: { id, color, num: houseMapNumber(v.house), name: v.mapLabel || '', sort: hasState || v.isPcl || v.otherPcl ? 0 : 1 }, geometry: { type: 'Point', coordinates: labelAt } });
       const st: BuildingStyle = { color, fill: hasState ? 0.55 : 0.18, line: hasState ? 0.95 : 0.6, width: hasState ? 1.6 : 1 };
       byHouse.set(id, st);
       const bid = match.houseToBuilding.get(id);

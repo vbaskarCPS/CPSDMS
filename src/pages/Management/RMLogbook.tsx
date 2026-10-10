@@ -82,6 +82,8 @@ export interface FilterVisibility {
   pendingSalesAndCompleted: boolean;
   historical: boolean;
   pcl: boolean;
+  /** The other service's PCLs (aeration in a sealing session, sealing in an aeration one). */
+  otherPcl: boolean;
 }
 
 const defaultFilterVisibility: FilterVisibility = {
@@ -89,6 +91,7 @@ const defaultFilterVisibility: FilterVisibility = {
   pendingSalesAndCompleted: true,
   historical: true,
   pcl: true,
+  otherPcl: true,
 };
 
 function getPendingDollarValue(priceStr: string | undefined | null, seasonType: SeasonType): number {
@@ -1216,6 +1219,13 @@ const RMLogbook: React.FC = () => {
                   progress={geocodeProgress.pcl}
                   onToggle={() => handleToggleFilter('pcl')}
                   label="Callbook Clients (PCL)"
+                />
+                <FilterBtn
+                  icon={<Users size={14} className={seasonType === 'aeration' ? 'text-sky-300' : 'text-lime-300'} />}
+                  active={filterVisibility.otherPcl}
+                  progress={{ current: 0, total: 0, done: true }}
+                  onToggle={() => handleToggleFilter('otherPcl')}
+                  label={seasonType === 'aeration' ? 'Sealing PCLs' : 'Aeration PCLs'}
                 />
 
                 {/* DROP A PIN — sits immediately left of Follow Me. Lit while

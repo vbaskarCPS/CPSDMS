@@ -16,7 +16,7 @@ import { routeShapes } from '../../lib/territory';
 import { RM_LINE, RM_NUMBER, RM_STYLE, rmLabelAnchor, tidyRmBaseMap } from '../../../lib/rmMapStyle';
 import { useRouteHouseLayer } from '../../../pages/Management/components/useRouteHouseLayer';
 import type { SavedRouteMap } from '../../../lib/mapLogsheetService';
-import { getWorkerPCL, type PCLClientGroup } from '../../../lib/pclCacheService';
+import { getOtherServicePCL, getWorkerPCL, type PCLClientGroup } from '../../../lib/pclCacheService';
 import { db, must } from '../../lib/client';
 import { areaCustomers, CATS, catOf, countByCat, fmtMoney, myAreas, type AreaPoint, type Cat } from '../../lib/customers';
 import { Btn, ErrorBox, Loading } from '../../ui';
@@ -139,7 +139,11 @@ export const CustomerMap: React.FC = () => {
     if (!codes.length || !center) return new Map<string, PCLClientGroup[]>();
     return getWorkerPCL(codes, center.id).catch(() => new Map<string, PCLClientGroup[]>());
   }, [routeMaps, center?.id]);
-  useRouteHouseLayer({ map: map.current, mapLoaded: ready, routeMaps, skipRoutes: NONE, bookings: NONE, pendingSales: NONE, pclByRoute: pcl.data || noPcl, historical: NONE });
+  const otherPcl = useLoad(async () => {
+    const codes = routeMaps.map(r => r.route_code);
+    return codes.length && center ? getOtherServicePCL(codes, center.id).catch(() => null) : null;
+  }, [routeMaps, center?.id]);
+  useRouteHouseLayer({ map: map.current, mapLoaded: ready, routeMaps, skipRoutes: NONE, bookings: NONE, pendingSales: NONE, pclByRoute: pcl.data || noPcl, historical: NONE, otherPcl: otherPcl.data });
 
   // customers: done this season (back again, new, owed) as the RM map's X, coloured by category;
   // said no as a small dark-edged dot; past customers as the RM's small grey PCL dots

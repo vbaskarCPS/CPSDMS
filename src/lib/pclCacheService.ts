@@ -1684,6 +1684,46 @@ async function activeSeasonFor(ccId: string): Promise<string | null> {
   return (data?.[0]?.season_type as string | undefined) || null;
 }
 
+// ─── THE OTHER SERVICE'S PAST CLIENTS ────────────────────────────────────────
+//
+// A sealing session also shows the route's aeration past clients (and an aeration session the
+// sealing ones) as a second kind of PCL: lime green / sky blue on the worker map, a light dot on
+// the RM map, and their own outreach list. They never count as "done this season" — only the
+// session's own service does — and where a house is a PCL of both, the session's own service wins
+// (the maps check that house by house).
+
+export type PclLine = 'aeration' | 'sealing';
+
+/** Which service the centre's live session is for ("sealing" when there's no session). */
+export async function sessionServiceFor(ccId: string): Promise<string> {
+  return (await activeSeasonFor(ccId)) || 'sealing';
+}
+
+async function readPclTable(table: 'map_pcl_by_service' | 'map_pcl_cache', routeCodes: string[], service?: string): Promise<Map<string, PCLClientGroup[]>> {
+  const out = new Map<string, PCLClientGroup[]>();
+  const CHUNK = 100;
+  for (let i = 0; i < routeCodes.length; i += CHUNK) {
+    let q = supabase.from(table).select('route_code, clients').in('route_code', routeCodes.slice(i, i + CHUNK));
+    if (service) q = q.eq('service', service);
+    const { data, error } = await q;
+    if (error) { console.warn(`[PCL Cache] ${table} read failed:`, error.message); break; }
+    for (const row of data || []) {
+      const list = (row.clients || []) as PCLClientGroup[];
+      if (list.length > 0) out.set(row.route_code, list);
+    }
+  }
+  return out;
+}
+
+/** The other service's past clients on these routes, or null when the session has no partner service. */
+export async function getOtherServicePCL(routeCodes: string[], ccId: string): Promise<{ line: PclLine; byRoute: Map<string, PCLClientGroup[]> } | null> {
+  if (!routeCodes.length || !ccId) return null;
+  const season = await sessionServiceFor(ccId);
+  if (season === 'sealing') return { line: 'aeration', byRoute: await readPclTable('map_pcl_by_service', routeCodes, 'aeration') };
+  if (season === 'aeration') return { line: 'sealing', byRoute: await readPclTable('map_pcl_cache', routeCodes) };
+  return null;
+}
+
 export async function getWorkerPCL(
   routeCodes: string[],
   ccId: string,

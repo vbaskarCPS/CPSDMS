@@ -28,7 +28,7 @@ import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
 import { supabase } from '../../lib/supabase';
-import { getWorkerPCL, PCLClientGroup } from '../../lib/pclCacheService';
+import { getOtherServicePCL, getWorkerPCL, PCLClientGroup, type PclLine } from '../../lib/pclCacheService';
 import { Worker, SessionStats, MasterBooking, SeasonType, PendingSale, CommandCenter, SessionTransaction, HistoricalProperty } from '../../types';
 import LogsheetJobCard from '../Logsheet/components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
@@ -49,7 +49,7 @@ import {
   SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView, StreetSegmentPick,
   fetchRouteMaps, ensureRouteHouses, fetchDispositions, fetchDisposition, setDisposition, clearDisposition, addManualHouse, loadSegmentHouses,
   fetchHistoricalForRoutes, indexHistorical, historicalSummary, seasonJobsAsHistorical,
-  indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId,
+  indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId, OTHER_PCL_LABEL,
   subscribeToPendingSales, subscribeToDispositions,
   houseNumberLabel,
 } from '../../lib/mapLogsheetService';
@@ -154,6 +154,8 @@ const MapLogsheetPage: React.FC = () => {
   const [cart, setCart] = useState<CartScope>({ workerIds: new Set(), sessionIds: new Set() });
   const [workerNames, setWorkerNames] = useState<Map<string, string>>(new Map());
   const [pclByRoute, setPclByRoute] = useState<Map<string, PCLClientGroup[]>>(new Map());
+  // The other service's past clients (aeration in a sealing session …): lime / sky blue, own list.
+  const [otherPcl, setOtherPcl] = useState<{ line: PclLine; byRoute: Map<string, PCLClientGroup[]> } | null>(null);
   // Load Historical rows (previously serviced houses) for these routes — purple.
   const [historicalRows, setHistoricalRows] = useState<HistoricalProperty[]>([]);
   // The daily session's date ("YYYY-MM-DD"). Today's counts and Pace are scoped
@@ -421,16 +423,18 @@ const MapLogsheetPage: React.FC = () => {
     (async () => {
       try {
         setLoadingMsg('Loading your routes…');
-        const [maps, dispos, pcl, hist] = await Promise.all([
+        const [maps, dispos, pcl, hist, other] = await Promise.all([
           fetchRouteMaps(routeCodes),
           fetchDispositions(routeCodes),
           getWorkerPCL(routeCodes, cc.id).catch(err => { console.warn('[MapLogsheet] PCL load failed', err); return new Map<string, PCLClientGroup[]>(); }),
           fetchHistoricalForRoutes(cc.id, routeCodes).catch(err => { console.warn('[MapLogsheet] historical load failed', err); return [] as HistoricalProperty[]; }),
+          getOtherServicePCL(routeCodes, cc.id).catch(err => { console.warn('[MapLogsheet] other-service PCL load failed', err); return null; }),
         ]);
         if (cancelled) return;
         setRouteMaps(maps);
         setDispositions(dispos);
         setPclByRoute(pcl);
+        setOtherPcl(other);
         setHistoricalRows(hist);
 
         if (maps.length === 0) {
@@ -498,8 +502,9 @@ const MapLogsheetPage: React.FC = () => {
     const { pending, completed } = indexBookings(jobs, houses);
     const pcl = indexPcl(pclByRoute, houses);
     const hist = indexHistorical(allHistorical, houses);
-    return buildHouseViews(houses, dispositions, ps, pending, completed, pcl, hist);
-  }, [houses, dispositions, pendingSales, jobs, pclByRoute, allHistorical]);
+    const other = otherPcl ? { line: otherPcl.line, byHouse: indexPcl(otherPcl.byRoute, houses) } : null;
+    return buildHouseViews(houses, dispositions, ps, pending, completed, pcl, hist, other);
+  }, [houses, dispositions, pendingSales, jobs, pclByRoute, allHistorical, otherPcl]);
 
   // PCL Outreach: who's textable on these routes, and how many are still to do.
   // Anyone in the historicals (same house, or same phone number) is left out.
@@ -509,7 +514,8 @@ const MapLogsheetPage: React.FC = () => {
     return set;
   }, [allHistorical]);
   const pclClients = useMemo(() => pclOutreachClients(houseViews, historicalPhones), [houseViews, historicalPhones]);
-  const pclToText = useMemo(() => pclClients.filter(c => !pclTexted.has(c.key)).length, [pclClients, pclTexted]);
+  const otherClients = useMemo(() => otherPcl ? pclOutreachClients(houseViews, historicalPhones, 'other') : [], [houseViews, historicalPhones, otherPcl]);
+  const pclToText = useMemo(() => [...pclClients, ...otherClients].filter(c => !pclTexted.has(c.key)).length, [pclClients, otherClients, pclTexted]);
   useEffect(() => {
     if (!worker) return;
     let cancelled = false;
@@ -906,7 +912,7 @@ const MapLogsheetPage: React.FC = () => {
             pclToText={pclToText}
             canAddSale={!!sessionId && routeCodes.length > 0}
             upsellsEnabled={upsellsEnabled}
-            hasPcl={pclClients.length > 0}
+            hasPcl={pclClients.length + otherClients.length > 0}
             onClose={() => setShowMenu(false)}
             onLogsheet={() => { setShowMenu(false); setShowJobs(true); }}
             onAddSale={() => { setShowMenu(false); setQuickPending({}); }}
@@ -998,6 +1004,8 @@ const MapLogsheetPage: React.FC = () => {
             texted={pclTexted}
             onTexted={key => setPclTexted(prev => new Set([...prev, key]))}
             onClose={() => setShowPclOutreach(false)}
+            ownLabel={otherPcl?.line === 'sealing' ? 'Aeration' : 'Sealing'}
+            other={otherPcl ? { line: otherPcl.line, label: OTHER_PCL_LABEL[otherPcl.line], clients: otherClients } : null}
           />
         )}
 

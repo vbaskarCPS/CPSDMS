@@ -118,6 +118,8 @@ export interface RMPhoneCtx {
   geocodeProgress: GeocodeProgress;
   /** Layers › other managers (see / share). */
   othersLayers: OthersLayers;
+  /** The other service's PCL switch name ("Aeration PCLs" in a sealing session). */
+  otherPclLabel?: string;
   centerOnLocation: boolean;
   pinMode: boolean;
 
@@ -694,7 +696,7 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
 
       {sheet === 'layers' && (
         <PhoneSheet title="Map layers" onClose={() => setSheet(null)}>
-          <LayersList filterVisibility={ctx.filterVisibility} geocodeProgress={ctx.geocodeProgress} onToggle={shell.onToggleFilter} others={ctx.othersLayers} />
+          <LayersList filterVisibility={ctx.filterVisibility} geocodeProgress={ctx.geocodeProgress} onToggle={shell.onToggleFilter} others={ctx.othersLayers} otherPclLabel={ctx.otherPclLabel} />
         </PhoneSheet>
       )}
 

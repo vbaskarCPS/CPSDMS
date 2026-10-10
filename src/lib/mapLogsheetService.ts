@@ -315,7 +315,19 @@ export interface HouseView {
    *  house can have several — a repeat customer, or a name change. Purple. */
   historical: HistoricalProperty[];
   isHistorical: boolean;
+  /** A past client of the OTHER service (aeration in a sealing session, sealing in an aeration
+   *  one). Null when the house is a PCL of the session's own service — that one wins. */
+  otherPcl?: PCLClientGroup | null;
+  /** Which service otherPcl is from. */
+  otherLine?: 'aeration' | 'sealing' | null;
 }
+
+/** The other service's PCL colours: aeration lime green, sealing sky blue (paler when not home). */
+export const OTHER_PCL_COLORS = {
+  aeration: { pcl: '#84cc16', notHome: '#c3e88d' },
+  sealing: { pcl: '#0ea5e9', notHome: '#a5d8f5' },
+} as const;
+export const OTHER_PCL_LABEL = { aeration: 'Aeration PCL', sealing: 'Sealing PCL' } as const;
 
 // Colours. Base map is light (streets-v12) so these are chosen to read on it.
 export const HOUSE_COLORS = {
@@ -331,7 +343,7 @@ export const HOUSE_COLORS = {
   historical: '#7c3aed',
 } as const;
 
-export function houseColor(v: Pick<HouseView, 'state' | 'isPcl' | 'isHistorical'>): string {
+export function houseColor(v: Pick<HouseView, 'state' | 'isPcl' | 'isHistorical'> & Partial<Pick<HouseView, 'otherPcl' | 'otherLine'>>): string {
   if (v.state === 'completed') return HOUSE_COLORS.completed;
   if (v.state === 'pending') return HOUSE_COLORS.pending;
   // Historical (previously serviced) wins over dispositions and PCL. Only a
@@ -340,8 +352,10 @@ export function houseColor(v: Pick<HouseView, 'state' | 'isPcl' | 'isHistorical'
   if (v.state === 'no') return HOUSE_COLORS.no;
   if (v.state === 'go_back') return HOUSE_COLORS.go_back;
   if (v.state === 'invalid') return HOUSE_COLORS.invalid;
-  if (v.state === 'not_home') return v.isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home;
-  return v.isPcl ? HOUSE_COLORS.pcl : HOUSE_COLORS.none;
+  // The session's own PCL first; else the other service's (lime / sky).
+  const other = !v.isPcl && v.otherPcl && v.otherLine ? OTHER_PCL_COLORS[v.otherLine] : null;
+  if (v.state === 'not_home') return v.isPcl ? HOUSE_COLORS.pclNotHome : other ? other.notHome : HOUSE_COLORS.not_home;
+  return v.isPcl ? HOUSE_COLORS.pcl : other ? other.pcl : HOUSE_COLORS.none;
 }
 
 export const routeHouseId = (routeCode: string, houseKey: string) => `${routeCode}::${houseKey}`;
@@ -1847,6 +1861,8 @@ export function buildHouseViews(
   completed: Map<string, MasterBooking>,
   pcl: Map<string, PCLClientGroup>,
   historical: Map<string, HistoricalProperty[]> = new Map(),
+  /** The other service's PCLs by house (indexPcl), and which service they are. */
+  other: { line: 'aeration' | 'sealing'; byHouse: Map<string, PCLClientGroup> } | null = null,
 ): HouseView[] {
   return houses.map(h => {
     const id = routeHouseId(h.routeCode, h.houseKey);
@@ -1854,7 +1870,10 @@ export function buildHouseViews(
     const ps = pendingSales.get(id) || null;
     const ob = officePending.get(id) || null;
     const done = completed.get(id) || null;
-    const p = pcl.get(id) || null;
+    const own = pcl.get(id) || null;
+    // The session's own service wins; the other service's PCL only shows where there's none.
+    const otherPcl = own ? null : (other?.byHouse.get(id) || null);
+    const p = own || otherPcl;
     const hist = historical.get(id) || [];
     const hs = hist.length ? historicalSummary(hist) : null;
     let state: HouseVisualState = 'none';
@@ -1879,7 +1898,7 @@ export function buildHouseViews(
     return {
       house: h,
       state,
-      isPcl: !!p,
+      isPcl: !!own,
       pclName,
       pclLabel: p ? pclMapLabel(p) : null,
       mapLabel: mapLines.length ? mapLines.join('\n') : null,
@@ -1890,6 +1909,8 @@ export function buildHouseViews(
       completed: done,
       historical: hist,
       isHistorical: hist.length > 0,
+      otherPcl,
+      otherLine: otherPcl ? other!.line : null,
     };
   });
 }
