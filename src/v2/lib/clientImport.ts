@@ -209,9 +209,14 @@ export function cleanDate(s: string): string {
   const d = new Date(t);
   return isNaN(d.getTime()) ? '' : iso(d.getFullYear(), d.getMonth() + 1, d.getDate());
 }
-/** A date's year is a real service year: not before 1990, not after next year. */
+/**
+ * The first year the company has jobs from; anything earlier is a misread (a date with no year in
+ * it is read as 2001). The database refuses the same years (client_first_service_year).
+ */
+export const FIRST_SERVICE_YEAR = 2010;
+/** A date's year is a real service year: not before the first one, not after next year. */
 const iso = (y: number, mo: number, d: number) =>
-  y >= 1990 && y <= new Date().getFullYear() + 1 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` : '';
+  y >= FIRST_SERVICE_YEAR && y <= new Date().getFullYear() + 1 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` : '';
 
 /** A Client Type cell → how the job came: New = a door sale, Existing = prebooked, else an upsell badge. */
 export function clientTypeSource(v: string): { source: string; product?: string } {
@@ -542,17 +547,17 @@ export function yearSpread(a: Applied): { line: string; years: [string, number][
   return [...by.entries()].map(([line, m]) => ({ line, years: [...m.entries()].sort((x, y) => x[0].localeCompare(y[0])) }));
 }
 /**
- * What must be right before an import is approved. 'stop' means the years look wrong and the
- * person has to confirm they checked; 'warn' explains what the reader did; 'info' is the spread.
+ * What must be right before an import is approved. 'stop' blocks the import until the layout or
+ * the file is fixed; 'warn' explains what the reader did; 'info' is the spread.
  */
 export function importChecks(a: Applied, mapping: Mapping): ImportCheck[] {
   const out: ImportCheck[] = [];
   const now = new Date().getFullYear();
   const jobs = a.clients.flatMap(c => c.history.map(h => ({ h, c })));
-  const odd = jobs.filter(({ h }) => h.year != null && (h.year < 1995 || h.year > now + 1));
+  const odd = jobs.filter(({ h }) => h.year != null && (h.year < FIRST_SERVICE_YEAR || h.year > now + 1));
   if (odd.length) {
     const ys = [...new Set(odd.map(({ h }) => h.year))].slice(0, 5).join(', ');
-    out.push({ level: 'stop', text: `${odd.length.toLocaleString()} job${odd.length === 1 ? ' has' : 's have'} a year that can't be a service year (${ys}). Check which column holds the year.` });
+    out.push({ level: 'stop', text: `${odd.length.toLocaleString()} job${odd.length === 1 ? ' has' : 's have'} a year that can't be a service year (${ys}; jobs go from ${FIRST_SERVICE_YEAR} to ${now + 1}). Check which column holds the year.` });
   }
   const noYear = jobs.filter(({ h }) => h.year == null).length;
   const hasYearSource = Object.values(mapping.columns).some(r => r.field === 'year' || r.year) || mapping.defaultYear != null;
