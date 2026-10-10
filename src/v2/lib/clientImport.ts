@@ -126,7 +126,19 @@ export interface ClientRow {
   raw_address: string;        // what the address looked like, for "needs attention"
 }
 
-export interface Applied { clients: ClientRow[]; skipped: { row: number; reason: string; text: string }[]; rowsRead: number }
+export interface Applied {
+  clients: ClientRow[]; skipped: { row: number; reason: string; text: string }[]; rowsRead: number;
+  /** What the reader noticed about years and dates (see importChecks). */
+  notes?: ReadNotes;
+}
+export interface ReadNotes {
+  /** Date cells with no year in them ("August 9th", "27-May"): left off; the year comes from elsewhere. */
+  yearlessDates: { row: number; text: string }[];
+  /** Dates whose year disagreed with the row's YEAR column: the YEAR wins, the date is left off. */
+  datesDropped: { row: number; date: string; year: number }[];
+  /** Rows whose year came from a date because the YEAR cell was empty. */
+  yearFromDate: number;
+}
 
 // ─── cell helpers ───────────────────────────────────────────────────────────
 export const cell = (v: unknown): string => {
@@ -174,19 +186,32 @@ export function cleanPrice(s: string): string {
   return s.trim();
 }
 
-/** "2026-10-03", "Oct 3, 2026", "10/03/2026", "3-Oct-26" → "2026-10-03" (or '' when it isn't a date). */
+const MONTHS: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const monthOf = (w: string): number | undefined => MONTHS[w.slice(0, 3).toLowerCase()];
+/**
+ * "2026-10-03", "Oct 3, 2026", "10/03/2026", "3-Oct-26" → "2026-10-03"; '' when it isn't a date
+ * OR HAS NO YEAR. A date like "August 9th" or "27-May" never gets a year made up for it (the
+ * browser would quietly say 2001); the row's YEAR column gives that job its year instead.
+ */
 export function cleanDate(s: string): string {
-  const t = s.trim();
+  const t = s.trim().replace(/(\d)(st|nd|rd|th)\b/gi, '$1');
   if (!t) return '';
   let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) return iso(+m[1], +m[2], +m[3]);
-  m = t.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);            // month/day/year, the way the sheets write it
+  m = t.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/);            // month/day/year, the way the sheets write it
   if (m) return iso(m[3].length === 2 ? 2000 + +m[3] : +m[3], +m[1], +m[2]);
-  const d = new Date(t.replace(/(\d)(st|nd|rd|th)\b/g, '$1'));
+  m = t.match(/^(\d{1,2})[\s.-]+([A-Za-z]{3,9})\.?[\s.,-]+(\d{2}|\d{4})$/);  // 3-Oct-26, 3 October 2026
+  if (m) { const mo = monthOf(m[2]); if (mo) return iso(m[3].length === 2 ? 2000 + +m[3] : +m[3], mo, +m[1]); }
+  m = t.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})$/);                   // Oct 3, 2026
+  if (m) { const mo = monthOf(m[1]); if (mo) return iso(+m[3], mo, +m[2]); }
+  // anything else: only when it plainly carries a four-digit year
+  if (!/\b(19|20)\d{2}\b/.test(t)) return '';
+  const d = new Date(t);
   return isNaN(d.getTime()) ? '' : iso(d.getFullYear(), d.getMonth() + 1, d.getDate());
 }
+/** A date's year is a real service year: not before 1990, not after next year. */
 const iso = (y: number, mo: number, d: number) =>
-  y >= 1990 && y <= 2100 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` : '';
+  y >= 1990 && y <= new Date().getFullYear() + 1 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 ? `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}` : '';
 
 /** A Client Type cell → how the job came: New = a door sale, Existing = prebooked, else an upsell badge. */
 export function clientTypeSource(v: string): { source: string; product?: string } {
@@ -373,6 +398,7 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
   const byKey = new Map<string, ClientRow>();
   const skipped: Applied['skipped'] = [];
   let rowsRead = 0;
+  const readNotes: ReadNotes = { yearlessDates: [], datesDropped: [], yearFromDate: 0 };
 
   for (let r = mapping.headerRow + 1; r < rows.length; r++) {
     const row = rows[r] || [];
@@ -384,7 +410,10 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
     let house = '', street = '', unit = '', city = '', province = '', postal = '', route = '';
     let first = '', last = '';
     const people: Person[] = []; const phones: string[] = []; const emails: string[] = []; const tags: string[] = [];
-    const notes: string[] = []; let callFirst = ''; let dnc = false; let dnt = false; let rowYear: number | null = null;
+    const notes: string[] = []; let callFirst = ''; let dnc = false; let dnt = false;
+    // The row's year: a YEAR column always wins (whatever order the columns are in); a date's
+    // year only when the YEAR cell is empty; then the list's default year.
+    let colYear: number | null = null; let dateYear: number | null = null;
     const hist = new Map<string, HistoryEntry & { any: boolean }>();
     const h = (year: number | null | undefined) => {
       const k = year ? String(year) : 'row';
@@ -418,13 +447,17 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
         case 'do_not_call': if (isYes(v, yes) || /dnc|do not call|don'?t call/i.test(v)) dnc = true; break;
         case 'do_not_text': if (isYes(v, yes) || /dnt|do not text|no text/i.test(v)) dnt = true; break;
         case 'tag': if (!isNo(v)) tags.push(isYes(v, yes) ? (rule.tag || header) : `${rule.tag || header}: ${v}`); break;
-        case 'year': { const y = cleanYear(v); if (rule.year) h(rule.year); else rowYear = rowYear ?? y; break; }
+        case 'year': { const y = cleanYear(v); if (rule.year) h(rule.year); else colYear = colYear ?? y; break; }
         case 'service': { const e = h(rule.year); e.service = e.service || v.toUpperCase(); e.any = true; break; }
         case 'price': { const e = h(rule.year); e.price = e.price || cleanPrice(v); if (e.price) e.any = true; break; }
         case 'contractor': { const e = h(rule.year); e.contractor = e.contractor || titleCase(v); break; }
         case 'payment': { const e = h(rule.year); e.payment = e.payment || v; break; }
         case 'client_type': { const e = h(rule.year); const c = clientTypeSource(v); e.source = e.source || c.source; if (c.product) e.product = e.product || c.product; e.any = true; break; }
-        case 'job_date': { const d = cleanDate(v); if (!d) break; const e = h(rule.year); e.date = e.date || d; e.any = true; rowYear = rowYear ?? Number(d.slice(0, 4)); break; }
+        case 'job_date': {
+          const d = cleanDate(v);
+          if (!d) { if (readNotes.yearlessDates.length < 5000) readNotes.yearlessDates.push({ row: sheetRow, text: v }); break; }
+          const e = h(rule.year); e.date = e.date || d; e.any = true; dateYear = dateYear ?? Number(d.slice(0, 4)); break;
+        }
         case 'serviced': {
           if (isNo(v)) break;
           const e = h(rule.year);
@@ -452,11 +485,18 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
     // the row's phone belongs to the row's (first) person
     if (people.length && phones.length && !people[0].phone) people[0] = { ...people[0], phone: phones[0] };
 
+    const rowYear = colYear ?? dateYear;
+    if (colYear == null && dateYear != null && entries.some(([, rule]) => rule.field === 'year' && !rule.year)) readNotes.yearFromDate++;
     const history: HistoryEntry[] = [];
     const listLine = mapping.serviceLine || '';
     for (const e of hist.values()) {
       if (!e.any && !e.contractor) continue;
       const year = e.year ?? rowYear ?? mapping.defaultYear ?? null;
+      // a date from another year than the job's YEAR is not this job's date: leave it off
+      if (e.date && year != null && Number(e.date.slice(0, 4)) !== year) {
+        if (readNotes.datesDropped.length < 5000) readNotes.datesDropped.push({ row: sheetRow, date: e.date, year });
+        delete e.date;
+      }
       const service = e.service || (mapping.defaultService || '').toUpperCase();
       history.push({ year, service, price: e.price, contractor: e.contractor, payment: e.payment, line: classifyLine(service) || listLine,
         ...(e.source ? { source: e.source } : {}), ...(e.product ? { product: e.product } : {}), ...(e.date ? { date: e.date } : {}) });
@@ -487,7 +527,58 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
       cur.postal_code ||= postal; cur.province ||= province; cur.route_given ||= route;
     }
   }
-  return { clients: [...byKey.values()], skipped, rowsRead };
+  return { clients: [...byKey.values()], skipped, rowsRead, notes: readNotes };
+}
+
+// ─── checks before anything is saved ────────────────────────────────────────
+export interface ImportCheck { level: 'stop' | 'warn' | 'info'; text: string }
+/** Jobs per service and year, as the import would save them. */
+export function yearSpread(a: Applied): { line: string; years: [string, number][] }[] {
+  const by = new Map<string, Map<string, number>>();
+  for (const c of a.clients) for (const h of c.history) {
+    const l = h.line || '—'; if (!by.has(l)) by.set(l, new Map());
+    const y = h.year == null ? 'no year' : String(h.year); const m = by.get(l)!; m.set(y, (m.get(y) || 0) + 1);
+  }
+  return [...by.entries()].map(([line, m]) => ({ line, years: [...m.entries()].sort((x, y) => x[0].localeCompare(y[0])) }));
+}
+/**
+ * What must be right before an import is approved. 'stop' means the years look wrong and the
+ * person has to confirm they checked; 'warn' explains what the reader did; 'info' is the spread.
+ */
+export function importChecks(a: Applied, mapping: Mapping): ImportCheck[] {
+  const out: ImportCheck[] = [];
+  const now = new Date().getFullYear();
+  const jobs = a.clients.flatMap(c => c.history.map(h => ({ h, c })));
+  const odd = jobs.filter(({ h }) => h.year != null && (h.year < 1995 || h.year > now + 1));
+  if (odd.length) {
+    const ys = [...new Set(odd.map(({ h }) => h.year))].slice(0, 5).join(', ');
+    out.push({ level: 'stop', text: `${odd.length.toLocaleString()} job${odd.length === 1 ? ' has' : 's have'} a year that can't be a service year (${ys}). Check which column holds the year.` });
+  }
+  const noYear = jobs.filter(({ h }) => h.year == null).length;
+  const hasYearSource = Object.values(mapping.columns).some(r => r.field === 'year' || r.year) || mapping.defaultYear != null;
+  if (noYear && !hasYearSource) out.push({ level: 'stop', text: `No column gives the year, and no year is set for the list: ${noYear.toLocaleString()} job${noYear === 1 ? '' : 's'} would have no year. Set the year the list is for, or pick the YEAR column.` });
+  else if (noYear) out.push({ level: 'warn', text: `${noYear.toLocaleString()} job${noYear === 1 ? '' : 's'} have no year (their YEAR cell is empty).` });
+  // one year swallowing a list that should be spread out
+  const years = new Map<number, number>(); for (const { h } of jobs) if (h.year != null) years.set(h.year, (years.get(h.year) || 0) + 1);
+  const yearCol = Object.values(mapping.columns).some(r => r.field === 'year' && !r.year);
+  const top = [...years.entries()].sort((x, y) => y[1] - x[1])[0];
+  if (yearCol && top && jobs.length >= 50 && top[1] / jobs.length > 0.9 && years.size > 1) {
+    out.push({ level: 'warn', text: `${Math.round(100 * top[1] / jobs.length)}% of jobs are ${top[0]}. If the YEAR column is spread over several years, the wrong column may be the year.` });
+  }
+  const n = a.notes;
+  if (n?.yearlessDates.length) {
+    const ex = n.yearlessDates.slice(0, 2).map(d => `row ${d.row}: “${d.text}”`).join(', ');
+    out.push({ level: 'warn', text: `${n.yearlessDates.length.toLocaleString()} date${n.yearlessDates.length === 1 ? ' has' : 's have'} no year in them (${ex}). They're left off; the job's year comes from the YEAR column.` });
+  }
+  if (n?.datesDropped.length) {
+    const d = n.datesDropped[0];
+    out.push({ level: 'warn', text: `${n.datesDropped.length.toLocaleString()} date${n.datesDropped.length === 1 ? '' : 's'} didn't match the row's YEAR (e.g. row ${d.row}: ${d.date}, YEAR ${d.year}). The YEAR is kept and the date left off.` });
+  }
+  if (n?.yearFromDate) out.push({ level: 'info', text: `${n.yearFromDate.toLocaleString()} row${n.yearFromDate === 1 ? '' : 's'} had an empty YEAR cell; their year comes from their date.` });
+  for (const s of yearSpread(a)) {
+    out.push({ level: 'info', text: `${s.line === '—' ? 'Jobs' : s.line[0].toUpperCase() + s.line.slice(1)} by year: ${s.years.map(([y, c]) => `${y} ${c.toLocaleString()}`).join(' · ')}` });
+  }
+  return out;
 }
 
 function dedupePeople(list: Person[]): Person[] {

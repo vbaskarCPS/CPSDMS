@@ -98,9 +98,26 @@ export interface Sheet { name: string; rows: unknown[][] }
 export async function readWorkbook(file: File): Promise<Sheet[]> {
   const XLSX = await import('xlsx');
   const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-  return wb.SheetNames.map(name => ({
-    name, rows: XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: false, defval: '', blankrows: false }),
-  })).filter(s => s.rows.length > 0);
+  return wb.SheetNames.map(name => {
+    showFullDates(wb.Sheets[name]);
+    return { name, rows: XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: false, defval: '', blankrows: false }) };
+  }).filter(s => s.rows.length > 0);
+}
+
+/**
+ * Cells are read as they're shown, so a real date formatted "27-May" or "May 27" would arrive
+ * with its year hidden (and a browser then guesses 2001). Every true date cell is shown as the
+ * full date instead (2024-05-27); times of day (no calendar date) keep their own text.
+ */
+export function showFullDates(sheet: Record<string, unknown>): void {
+  for (const [addr, c] of Object.entries(sheet)) {
+    if (addr.startsWith('!')) continue;
+    const cellObj = c as { t?: string; v?: unknown; w?: string };
+    if (cellObj?.t !== 'd' || !(cellObj.v instanceof Date) || isNaN(cellObj.v.getTime())) continue;
+    const d = cellObj.v;
+    if (d.getFullYear() < 1905) continue;   // a time of day (Excel's day 0 is 1899/1900)
+    cellObj.w = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
 }
 export async function parseCsv(text: string): Promise<unknown[][]> {
   const Papa = (await import('papaparse')).default;
