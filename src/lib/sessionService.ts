@@ -848,7 +848,7 @@ class SessionService {
     if (fetchError || !user) throw new Error('Manager not found');
     const clean: ManagerMapFilters = {
       pendingBookings: !!filters.pendingBookings, pendingSalesAndCompleted: !!filters.pendingSalesAndCompleted,
-      historical: !!filters.historical, pcl: !!filters.pcl,
+      historical: !!filters.historical, pcl: !!filters.pcl, otherPcl: filters.otherPcl !== false,
     };
     const { error: updateError } = await supabase
       .from('users')
@@ -5307,6 +5307,6 @@ function readMapFilters(v: unknown): ManagerMapFilters | undefined {
   if (!v || typeof v !== 'object') return undefined;
   const o = v as Record<string, unknown>;
   const b = (k: string) => typeof o[k] === 'boolean' ? (o[k] as boolean) : undefined;
-  if ([b('pendingBookings'), b('pendingSalesAndCompleted'), b('historical'), b('pcl')].every(x => x === undefined)) return undefined;
-  return { pendingBookings: b('pendingBookings') ?? true, pendingSalesAndCompleted: b('pendingSalesAndCompleted') ?? true, historical: b('historical') ?? true, pcl: b('pcl') ?? true };
+  if ([b('pendingBookings'), b('pendingSalesAndCompleted'), b('historical'), b('pcl'), b('otherPcl')].every(x => x === undefined)) return undefined;
+  return { pendingBookings: b('pendingBookings') ?? true, pendingSalesAndCompleted: b('pendingSalesAndCompleted') ?? true, historical: b('historical') ?? true, pcl: b('pcl') ?? true, otherPcl: b('otherPcl') ?? true };
 }

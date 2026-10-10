@@ -9,7 +9,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus, Pencil, CircleSlash } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { HouseView, HouseDispositionStatus, HOUSE_COLORS, historicalSummary, houseAddressLabel } from '../../lib/mapLogsheetService';
+import { HouseView, HouseDispositionStatus, HOUSE_COLORS, OTHER_PCL_COLORS, OTHER_PCL_LABEL, historicalSummary, houseAddressLabel } from '../../lib/mapLogsheetService';
 
 interface HouseSheetProps {
   view: HouseView;
@@ -42,6 +42,9 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
   view, saving, onDispose, markedBy, onClearDisposition, onSale, onOpenPending, onOpenBooking, onClose,
 }) => {
   const { house, state, isPcl, pcl, disposition, pendingSale, officeBooking, completed, historical, isHistorical } = view;
+  // A past client of the other service (aeration in a sealing session …): lime / sky blue.
+  const other = !isPcl && view.otherPcl && view.otherLine ? { c: view.otherPcl, line: view.otherLine, col: OTHER_PCL_COLORS[view.otherLine] } : null;
+  const notHomeColor = isPcl ? HOUSE_COLORS.pclNotHome : other ? other.col.notHome : HOUSE_COLORS.not_home;
   const hist = isHistorical ? historicalSummary(historical) : null;
   const [showHistRows, setShowHistRows] = useState(false);
   const [note, setNote] = useState(disposition?.note || '');
@@ -113,8 +116,8 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
     state === 'go_back' ? HOUSE_COLORS.go_back :
     state === 'invalid' ? HOUSE_COLORS.invalid :
     isHistorical ? HOUSE_COLORS.historical :
-    state === 'not_home' ? (isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home) :
-    isPcl ? HOUSE_COLORS.pcl : '#e5e7eb';
+    state === 'not_home' ? notHomeColor :
+    isPcl ? HOUSE_COLORS.pcl : other ? other.col.pcl : '#e5e7eb';
 
     const dispoBtn = (status: HouseDispositionStatus, label: string, Icon: LucideIcon, color: string) => {
       const active = disposition?.status === status && state !== 'pending' && state !== 'completed';
@@ -136,7 +139,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
   };
 
   const STATUS_META: Record<HouseDispositionStatus, { label: string; color: string; Icon: LucideIcon }> = {
-    not_home: { label: 'Not home', color: isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home, Icon: DoorClosed },
+    not_home: { label: 'Not home', color: notHomeColor, Icon: DoorClosed },
     no: { label: 'No', color: HOUSE_COLORS.no, Icon: Ban },
     go_back: { label: 'Go back', color: HOUSE_COLORS.go_back, Icon: RotateCcw },
     invalid: { label: 'Invalid', color: HOUSE_COLORS.invalid, Icon: CircleSlash },
@@ -237,6 +240,41 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
           </button>
         )}
 
+        {/* The other service's past client (e.g. an aeration customer in a sealing session) */}
+        {other && (
+          <button
+            type="button"
+            onClick={() => setShowHistory(s => !s)}
+            className="w-full text-left rounded-lg px-3 py-2 border"
+            style={{ background: `${other.col.pcl}1f`, borderColor: other.col.pcl }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="min-w-0">
+                <div className="text-[10px] font-bold uppercase tracking-wide" style={{ color: other.col.pcl }}>{OTHER_PCL_LABEL[other.line]}</div>
+                <div className="text-white font-bold text-sm truncate">{other.c.firstName} {other.c.lastName}</div>
+                <div className="text-[11px] text-gray-300 flex items-center gap-2">
+                  {other.c.phone && <span className="flex items-center gap-1"><Phone size={10} />{other.c.phone}</span>}
+                  <span className="flex items-center gap-1"><Clock size={10} />{other.c.history.length}x</span>
+                  {other.c.history[0] && <span>last {other.c.history[0].year} · {other.c.history[0].price}</span>}
+                </div>
+              </div>
+              <span className="text-[10px] text-gray-300">{showHistory ? 'hide' : 'history'}</span>
+            </div>
+            {showHistory && (
+              <div className="mt-2 border-t border-gray-700 pt-1">
+                {other.c.history.map((h, i) => (
+                  <div key={i} className="grid grid-cols-4 text-[11px] py-0.5 text-gray-200">
+                    <span className="font-mono">{h.year}</span>
+                    <span className="font-mono">{h.price}</span>
+                    <span>{h.serviceType}</span>
+                    <span className="truncate text-gray-400">{h.contractor || '—'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </button>
+        )}
+
         {/* Completed — nothing else to do here */}
         {state === 'completed' && completed && (
           <div className="bg-green-950/50 border border-green-800 rounded-lg px-3 py-2 text-sm text-green-200 flex items-center gap-2">
@@ -297,7 +335,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
               </div>
             ) : (
               <div className="flex gap-2">
-                {dispoBtn('not_home', 'Not home', DoorClosed, isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home)}
+                {dispoBtn('not_home', 'Not home', DoorClosed, notHomeColor)}
                 {dispoBtn('no', 'No', Ban, HOUSE_COLORS.no)}
                 {dispoBtn('go_back', 'Go back', RotateCcw, HOUSE_COLORS.go_back)}
                 {dispoBtn('invalid', 'Invalid', CircleSlash, HOUSE_COLORS.invalid)}

@@ -21,6 +21,16 @@ export const DEFAULT_PCL_OUTREACH_TEMPLATE =
   '{{address}} in {{year}} and I\'m working your street today. Want me to stop by? ' +
   'Reply YES and I\'ll come to you.';
 
+/** The default message for the OTHER service's past clients (a separate list), by which service they had. */
+export const DEFAULT_OTHER_PCL_TEMPLATE: Record<'aeration' | 'sealing', string> = {
+  aeration: 'Hi {{firstName}}, it\'s {{workerFirstName}} from Property Stars. We aerated your lawn at ' +
+    '{{address}} in {{year}}, and I\'m sealing driveways on your street today. Want a quote on yours? ' +
+    'Reply YES and I\'ll come to you.',
+  sealing: 'Hi {{firstName}}, it\'s {{workerFirstName}} from Property Stars. We sealed your driveway at ' +
+    '{{address}} in {{year}}, and I\'m aerating lawns on your street today. Want me to do yours? ' +
+    'Reply YES and I\'ll come to you.',
+};
+
 export const PCL_OUTREACH_PLACEHOLDERS = [
   { p: '{{firstName}}',       d: 'Customer first name (falls back to "there" if blank)' },
   { p: '{{lastName}}',        d: 'Last name' },
@@ -77,18 +87,24 @@ export function pclClientKey(routeCode: string, houseNum: string, streetName: st
 
 // ─── TEMPLATE (per contractor) ────────────────────────────────────────────────
 
-export async function loadWorkerPclTemplate(contractorId: string): Promise<string> {
+/**
+ * The worker's message. kind 'own' is the PCL text for the session's own service (body_text);
+ * 'other' is the separate message for the other service's past clients (other_body_text, RUN_21).
+ */
+export async function loadWorkerPclTemplate(contractorId: string, kind: 'own' | 'other' = 'own', line: 'aeration' | 'sealing' = 'aeration'): Promise<string> {
+  const fallback = kind === 'own' ? DEFAULT_PCL_OUTREACH_TEMPLATE : DEFAULT_OTHER_PCL_TEMPLATE[line];
   try {
     const { data, error } = await supabase
       .from('worker_pcl_templates')
-      .select('body_text')
+      .select('*')
       .eq('contractor_id', contractorId)
       .maybeSingle();
-    if (error) { console.warn('[PCL Outreach] template read failed:', error.message); return DEFAULT_PCL_OUTREACH_TEMPLATE; }
-    const body = (data?.body_text || '').trim();
-    return body || DEFAULT_PCL_OUTREACH_TEMPLATE;
+    if (error) { console.warn('[PCL Outreach] template read failed:', error.message); return fallback; }
+    const row = (data || {}) as { body_text?: string | null; other_body_text?: string | null };
+    const body = ((kind === 'own' ? row.body_text : row.other_body_text) || '').trim();
+    return body || fallback;
   } catch {
-    return DEFAULT_PCL_OUTREACH_TEMPLATE;
+    return fallback;
   }
 }
 
@@ -96,16 +112,20 @@ export async function saveWorkerPclTemplate(
   contractorId: string,
   commandCenterId: string | null,
   bodyText: string,
+  kind: 'own' | 'other' = 'own',
 ): Promise<void> {
+  // (body_text is required on the row, so saving the other message keeps the worker's own one.)
+  const own = kind === 'own' ? bodyText : await loadWorkerPclTemplate(contractorId, 'own');
   const { error } = await supabase
     .from('worker_pcl_templates')
     .upsert({
       contractor_id: contractorId,
       command_center_id: commandCenterId,
-      body_text: bodyText,
+      body_text: own,
+      ...(kind === 'other' ? { other_body_text: bodyText } : {}),
       updated_at: new Date().toISOString(),
     }, { onConflict: 'contractor_id' });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(/other_body_text/.test(error.message) ? 'The office needs to run RUN_21 before this message can be saved.' : error.message);
 }
 
 // ─── TEXTED LOG (this calendar year) ─────────────────────────────────────────

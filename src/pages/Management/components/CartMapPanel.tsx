@@ -24,13 +24,13 @@ import { format } from 'date-fns';
 import { Loader, MapPin, X } from 'lucide-react';
 import { Worker, MasterBooking, PendingSale, HistoricalProperty, SessionTransaction } from '../../../types';
 import { sessionService } from '../../../lib/sessionService';
-import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
+import { getOtherServicePCL, getWorkerPCL, PCLClientGroup, type PclLine } from '../../../lib/pclCacheService';
 import {
   SavedRouteMap, RouteHouse, HouseDisposition, HouseView,
   fetchRouteMaps, fetchRouteHouses, fetchDispositions, fetchHistoricalForRoutes,
   subscribeToDispositions, subscribeToPendingSales,
   indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews, seasonJobsAsHistorical,
-  buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, placeRouteOnRoofs, tileCentre, cleanupRouteGhosts,
+  buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, OTHER_PCL_COLORS, OTHER_PCL_LABEL, placeRouteOnRoofs, tileCentre, cleanupRouteGhosts,
   fillRouteGaps, fetchStreetChecks, StreetCheck, streetBase,
   houseMapNumber, houseAddressLabel,
 } from '../../../lib/mapLogsheetService';
@@ -102,6 +102,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   const [dispositions, setDispositions] = useState<Map<string, HouseDisposition>>(new Map());
   const [pendingSales, setPendingSales] = useState<PendingSale[]>([]);
   const [pclByRoute, setPclByRoute] = useState<Map<string, PCLClientGroup[]>>(new Map());
+  const [otherPcl, setOtherPcl] = useState<{ line: PclLine; byRoute: Map<string, PCLClientGroup[]> } | null>(null);
   const [historicalRows, setHistoricalRows] = useState<HistoricalProperty[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -118,15 +119,16 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     setSelectedId(null);
     (async () => {
       try {
-        const [maps, hs, dispos, pcl, hist] = await Promise.all([
+        const [maps, hs, dispos, pcl, hist, other] = await Promise.all([
           fetchRouteMaps(routeCodes),
           fetchRouteHouses(routeCodes),
           fetchDispositions(routeCodes),
           commandCenterId ? getWorkerPCL(routeCodes, commandCenterId).catch(() => new Map<string, PCLClientGroup[]>()) : Promise.resolve(new Map<string, PCLClientGroup[]>()),
           commandCenterId ? fetchHistoricalForRoutes(commandCenterId, routeCodes).catch(() => [] as HistoricalProperty[]) : Promise.resolve([] as HistoricalProperty[]),
+          commandCenterId ? getOtherServicePCL(routeCodes, commandCenterId).catch(() => null) : Promise.resolve(null),
         ]);
         if (cancelled) return;
-        setRouteMaps(maps); setHouses(hs); setDispositions(dispos); setPclByRoute(pcl); setHistoricalRows(hist);
+        setRouteMaps(maps); setHouses(hs); setDispositions(dispos); setPclByRoute(pcl); setHistoricalRows(hist); setOtherPcl(other);
       } catch (err) {
         console.warn('[CartMapPanel] load failed', err);
       } finally {
@@ -205,8 +207,9 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   const houseViews: HouseView[] = useMemo(() => {
     const ps = indexPendingSales(pendingSales, houses);
     const { pending, completed } = indexBookings(cart.sharedBookings || [], houses);
-    return buildHouseViews(houses, dispositions, ps, pending, completed, indexPcl(pclByRoute, houses), indexHistorical([...historicalRows, ...seasonJobsAsHistorical(pclByRoute)], houses));
-  }, [houses, dispositions, pendingSales, cart.sharedBookings, pclByRoute, historicalRows]);
+    return buildHouseViews(houses, dispositions, ps, pending, completed, indexPcl(pclByRoute, houses), indexHistorical([...historicalRows, ...seasonJobsAsHistorical(pclByRoute)], houses),
+      otherPcl ? { line: otherPcl.line, byHouse: indexPcl(otherPcl.byRoute, houses) } : null);
+  }, [houses, dispositions, pendingSales, cart.sharedBookings, pclByRoute, historicalRows, otherPcl]);
 
   const scope: CartScope = useMemo(() => ({
     workerIds: new Set(cart.members.map(m => m.contractorId)),
@@ -378,7 +381,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       if (tile) fp.push({ type: 'Feature', properties: { id, color, fillOpacity: hasState ? 0.45 : 0.10, lineOpacity: hasState ? 0.9 : 0.35, b: onBuilding ? 1 : 0 }, geometry: tile });
       pt.push({
         type: 'Feature',
-        properties: { id, color, num: houseMapNumber(v.house), name: v.mapLabel || '', sort: hasState || v.isPcl ? 0 : 1 },
+        properties: { id, color, num: houseMapNumber(v.house), name: v.mapLabel || '', sort: hasState || v.isPcl || v.otherPcl ? 0 : 1 },
         geometry: { type: 'Point', coordinates: labelAt },
       });
     }
@@ -512,7 +515,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
           <div className="min-w-0">
             <div className="text-white font-bold text-sm truncate">{houseAddressLabel(v.house)}</div>
             <div className="text-[11px] font-bold" style={{ color: color === '#e5e7eb' ? '#9ca3af' : color }}>
-              {STATE_LABEL[v.state]}{v.isPcl ? ' · PCL' : ''}{v.isHistorical ? ' · Historical' : ''}
+              {STATE_LABEL[v.state]}{v.isPcl ? ' · PCL' : ''}{!v.isPcl && v.otherPcl && v.otherLine ? ` · ${OTHER_PCL_LABEL[v.otherLine]}` : ''}{v.isHistorical ? ' · Historical' : ''}
             </div>
           </div>
           <button onClick={() => setSelectedId(null)} className="p-1 text-gray-400 hover:text-white" title="Close"><X size={14} /></button>
@@ -541,7 +544,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
         {v.completed && (
           <div className="text-xs text-green-300">Completed{v.completed.Price ? ` · $${v.completed.Price}` : ''}</div>
         )}
-        {v.pclName && <div className="text-xs" style={{ color: HOUSE_COLORS.pcl }}>PCL client · {v.pclName}</div>}
+        {v.pclName && <div className="text-xs" style={{ color: v.isPcl ? HOUSE_COLORS.pcl : v.otherLine ? OTHER_PCL_COLORS[v.otherLine].pcl : HOUSE_COLORS.pcl }}>{v.isPcl ? 'PCL client' : v.otherLine ? OTHER_PCL_LABEL[v.otherLine] : 'PCL client'} · {v.pclName}</div>}
         {hist && <div className="text-xs" style={{ color: HOUSE_COLORS.historical }}>Previously serviced · {hist.name}</div>}
       </div>
     );

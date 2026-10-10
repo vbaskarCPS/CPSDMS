@@ -17,7 +17,7 @@ import { Worker } from '../../types';
 import { HouseView } from '../../lib/mapLogsheetService';
 import { buildSmsLink } from '../../lib/workerbookEmailService';
 import {
-  DEFAULT_PCL_OUTREACH_TEMPLATE, PCL_OUTREACH_PLACEHOLDERS,
+  DEFAULT_PCL_OUTREACH_TEMPLATE, DEFAULT_OTHER_PCL_TEMPLATE, PCL_OUTREACH_PLACEHOLDERS,
   buildPclOutreachMessage, pclClientKey,
   loadWorkerPclTemplate, saveWorkerPclTemplate, logPclText,
 } from '../../lib/pclOutreachService';
@@ -57,10 +57,12 @@ export function phoneKey(raw: unknown): string {
 /** Houses that are candidates for a text: a PCL with a phone, not already dealt
  *  with today, and NOT in the historicals (Load Historical) — neither the same
  *  house nor the same phone number as any historical row on these routes. */
-export function pclOutreachClients(views: HouseView[], historicalPhones: Set<string> = new Set()): PclOutreachClient[] {
+export function pclOutreachClients(views: HouseView[], historicalPhones: Set<string> = new Set(), which: 'own' | 'other' = 'own'): PclOutreachClient[] {
   const list: PclOutreachClient[] = [];
   for (const v of views) {
-    const c = v.pcl;
+    // 'own': the session's service's PCLs; 'other': the other service's (a separate list and message).
+    // (a house's pcl is the other service's client exactly when otherPcl is set)
+    const c = which === 'own' ? (v.otherPcl ? null : v.pcl) : (v.otherPcl || null);
     if (!c) continue;
     if (v.isHistorical) continue;
     if (v.state === 'no' || v.state === 'invalid' || v.state === 'pending' || v.state === 'completed') continue;
@@ -116,9 +118,17 @@ interface Props {
   texted: Set<string>;
   onTexted: (key: string) => void;
   onClose: () => void;
+  /** The session's own service ("Sealing"), for the list's name. */
+  ownLabel?: string;
+  /** The other service's past clients: their own list, with their own message. */
+  other?: { line: 'aeration' | 'sealing'; label: string; clients: PclOutreachClient[] } | null;
 }
 
-const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients, texted, onTexted, onClose }) => {
+const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients: ownClients, texted, onTexted, onClose, ownLabel = 'PCL', other = null }) => {
+  // Which list: the session's own PCLs, or the other service's (separate list and message).
+  const [which, setWhich] = useState<'own' | 'other'>('own');
+  const clients = which === 'other' && other ? other.clients : ownClients;
+  const defaultTemplate = which === 'other' && other ? DEFAULT_OTHER_PCL_TEMPLATE[other.line] : DEFAULT_PCL_OUTREACH_TEMPLATE;
   const [search, setSearch] = useState('');
   const [hideTexted, setHideTexted] = useState(true);
   const [showFilters, setShowFilters] = useState(false);
@@ -138,11 +148,12 @@ const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients, t
 
   useEffect(() => {
     let cancelled = false;
-    loadWorkerPclTemplate(worker.contractorId)
+    setTemplateLoaded(false);
+    loadWorkerPclTemplate(worker.contractorId, which, other?.line)
       .then(t => { if (!cancelled) setTemplate(t); })
       .finally(() => { if (!cancelled) setTemplateLoaded(true); });
     return () => { cancelled = true; };
-  }, [worker.contractorId]);
+  }, [worker.contractorId, which, other?.line]);
 
   const yearOptions = useMemo(() => {
     const set = new Set<number>();
@@ -199,7 +210,7 @@ const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients, t
     setSaving(true);
     setSaveError(null);
     try {
-      await saveWorkerPclTemplate(worker.contractorId, commandCenterId, template.trim() || DEFAULT_PCL_OUTREACH_TEMPLATE);
+      await saveWorkerPclTemplate(worker.contractorId, commandCenterId, template.trim() || defaultTemplate, which);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err) {
@@ -230,7 +241,7 @@ const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients, t
             <MessageSquare size={18} className="text-teal-400 ml-1" />
           )}
           <span className="text-white font-bold text-sm">
-            {mode === 'template' ? 'My PCL text' : 'PCL Outreach'}
+            {mode === 'template' ? (which === 'other' && other ? `My ${other.label} text` : 'My PCL text') : 'PCL Outreach'}
           </span>
           {mode === 'list' && (
             <span className="text-xs text-gray-500">
@@ -249,6 +260,18 @@ const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients, t
             <button onClick={onClose} className="p-1.5 text-gray-400"><X size={20} /></button>
           </div>
         </div>
+
+        {other && (
+          <div className="flex gap-1.5 px-3 pb-2 shrink-0" role="tablist">
+            {([['own', `${ownLabel} PCLs`, ownClients.length, '#1d4ed8'], ['other', `${other.label}s`, other.clients.length, other.line === 'aeration' ? '#84cc16' : '#0ea5e9']] as const).map(([k, label, n, col]) => (
+              <button key={k} role="tab" aria-selected={which === k} onClick={() => setWhich(k)}
+                className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 ${which === k ? 'bg-gray-800 text-white' : 'bg-gray-900 text-gray-400 border-gray-800'}`}
+                style={which === k ? { borderColor: col } : undefined}>
+                <span className="w-2 h-2 rounded-full" style={{ background: col }} />{label}<span className="text-gray-500">{n}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {mode === 'template' ? (
           <div className="flex-1 overflow-y-auto px-3 pb-5 space-y-3 custom-scrollbar">
@@ -286,7 +309,7 @@ const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients, t
                       <span className="text-amber-400 ml-1">· may split into {Math.ceil(template.length / 160)} messages</span>
                     )}
                   </span>
-                  <button onClick={() => setTemplate(DEFAULT_PCL_OUTREACH_TEMPLATE)} className="text-gray-400 underline">Reset to default</button>
+                  <button onClick={() => setTemplate(defaultTemplate)} className="text-gray-400 underline">Reset to default</button>
                 </div>
                 <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
                   <div className="px-3 py-2 bg-gray-800/60 text-[10px] font-bold text-gray-400 uppercase tracking-wide">

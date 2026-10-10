@@ -184,6 +184,8 @@ export interface ManagerMapFilters {
   pendingSalesAndCompleted: boolean;
   historical: boolean;
   pcl: boolean;
+  /** The other service's PCL dots (aeration in a sealing session …). */
+  otherPcl?: boolean;
 }
 
 export interface ManagerMapSharing {

@@ -160,12 +160,15 @@ export const LayersList: React.FC<{
   geocodeProgress: GeocodeProgress;
   onToggle: (k: keyof FilterVisibility) => void;
   others?: OthersLayers;
-}> = ({ filterVisibility: f, geocodeProgress: g, onToggle, others: o }) => (
+  /** "Aeration PCLs" in a sealing session, "Sealing PCLs" in an aeration one. */
+  otherPclLabel?: string;
+}> = ({ filterVisibility: f, geocodeProgress: g, onToggle, others: o, otherPclLabel = 'Aeration PCLs' }) => (
   <div className="space-y-2 pb-2">
     <LayerRow icon={Clock} label="Pending prebooks" on={f.pendingBookings} progress={g.pendingBookings} onToggle={() => onToggle('pendingBookings')} />
     <LayerRow icon={CheckCircle2} label="Sales & completed" on={f.pendingSalesAndCompleted} progress={g.pendingSalesAndCompleted} onToggle={() => onToggle('pendingSalesAndCompleted')} />
     <LayerRow icon={History} label="Previously done" on={f.historical} progress={g.historical} onToggle={() => onToggle('historical')} />
     <LayerRow icon={Users} label="Callbook clients (PCL)" on={f.pcl} progress={g.pcl} onToggle={() => onToggle('pcl')} />
+    <LayerRow icon={Users} label={otherPclLabel} on={f.otherPcl} progress={{ current: 0, total: 0, done: true }} onToggle={() => onToggle('otherPcl')} />
     {o && <OthersSection o={o} />}
   </div>
 );
