@@ -61,7 +61,8 @@ export function pclOutreachClients(views: HouseView[], historicalPhones: Set<str
   const list: PclOutreachClient[] = [];
   for (const v of views) {
     // 'own': the session's service's PCLs; 'other': the other service's (a separate list and message).
-    const c = which === 'own' ? (v.isPcl ? v.pcl : null) : (!v.isPcl ? v.otherPcl || null : null);
+    // (a house's pcl is the other service's client exactly when otherPcl is set)
+    const c = which === 'own' ? (v.otherPcl ? null : v.pcl) : (v.otherPcl || null);
     if (!c) continue;
     if (v.isHistorical) continue;
     if (v.state === 'no' || v.state === 'invalid' || v.state === 'pending' || v.state === 'completed') continue;
