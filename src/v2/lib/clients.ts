@@ -108,9 +108,9 @@ export async function fetchSheetCsv(url: string): Promise<string> {
 export interface Sheet { name: string; rows: unknown[][] }
 export async function readWorkbook(file: File): Promise<Sheet[]> {
   const XLSX = await import('xlsx');
-  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellNF: true });
   return wb.SheetNames.map(name => {
-    showFullDates(wb.Sheets[name]);
+    showFullDates(wb.Sheets[name], XLSX.SSF);
     return { name, rows: XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: false, defval: '', blankrows: false }) };
   }).filter(s => s.rows.length > 0);
 }
@@ -118,16 +118,18 @@ export async function readWorkbook(file: File): Promise<Sheet[]> {
 /**
  * Cells are read as they're shown, so a real date formatted "27-May" or "May 27" would arrive
  * with its year hidden (and a browser then guesses 2001). Every true date cell is shown as the
- * full date instead (2024-05-27); times of day (no calendar date) keep their own text.
+ * full date instead (2024-05-27), worked out from Excel's own day number, so the computer's time
+ * zone can't move it a day. Times of day (no calendar date) keep their own text.
  */
-export function showFullDates(sheet: Record<string, unknown>): void {
+export function showFullDates(sheet: Record<string, unknown>, SSF: { is_date: (f: string) => boolean; parse_date_code: (v: number) => { y: number; m: number; d: number } | null }): void {
   for (const [addr, c] of Object.entries(sheet)) {
     if (addr.startsWith('!')) continue;
-    const cellObj = c as { t?: string; v?: unknown; w?: string };
-    if (cellObj?.t !== 'd' || !(cellObj.v instanceof Date) || isNaN(cellObj.v.getTime())) continue;
-    const d = cellObj.v;
-    if (d.getFullYear() < 1905) continue;   // a time of day (Excel's day 0 is 1899/1900)
-    cellObj.w = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const cellObj = c as { t?: string; v?: unknown; w?: string; z?: string };
+    if (cellObj?.t !== 'n' || typeof cellObj.v !== 'number' || !cellObj.z || !SSF.is_date(String(cellObj.z))) continue;
+    if (cellObj.v < 1) continue;                     // a time of day
+    const p = SSF.parse_date_code(cellObj.v);
+    if (!p || p.y < 1905) continue;
+    cellObj.w = `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
   }
 }
 export async function parseCsv(text: string): Promise<unknown[][]> {
@@ -193,24 +195,6 @@ export interface ImportRow {
   tags: string[]; notes: string; call_first: string; do_not_call: boolean; do_not_text: boolean;
 }
 
-export async function commitImport(p: {
-  fileName: string; source: 'file' | 'sheet'; sheetUrl: string | null; fingerprint: string; recipeName: string;
-  headers: string[]; mapping: Mapping; rows: ImportRow[]; counts: Record<string, number>;
-}, onProgress?: (done: number) => void): Promise<{ id: string; inserted: number; merged: number }> {
-  const id = must(await db.rpc('app_client_import_begin', {
-    p_file: p.fileName, p_source: p.source, p_sheet_url: p.sheetUrl, p_fingerprint: p.fingerprint, p_recipe_name: p.recipeName,
-    p_headers: p.headers, p_mapping: p.mapping, p_notes: p.mapping.notes || null,
-  })) as string;
-  let inserted = 0, merged = 0;
-  for (let k = 0; k < p.rows.length; k += 500) {
-    const res = must(await db.rpc('app_client_import_add', { p_import: id, p_rows: p.rows.slice(k, k + 500) })) as { inserted: number; merged: number };
-    inserted += res.inserted; merged += res.merged;
-    onProgress?.(Math.min(p.rows.length, k + 500));
-  }
-  must(await db.rpc('app_client_import_finish', { p_import: id, p_counts: { ...p.counts, inserted, merged } }));
-  return { id, inserted, merged };
-}
-
 export interface ImportRecord { id: string; file_name: string; source: string; sheet_url: string | null; status: 'staged' | 'running' | 'done' | 'undone' | 'cancelled'; counts: Record<string, unknown>; created_at: string; finished_at: string | null; undone_at: string | null; recipe: { name: string } | null }
 export async function listImports(): Promise<ImportRecord[]> {
   return must(await db.from('client_imports').select('id, file_name, source, sheet_url, status, counts, created_at, finished_at, undone_at, recipe:client_import_recipes(name)')
@@ -232,10 +216,11 @@ export interface ImportPreview {
 const addCounts = (a: Record<string, number>, b: Record<string, number> = {}) => { const o = { ...a }; for (const [k, v] of Object.entries(b)) o[k] = (o[k] || 0) + Number(v); return o; };
 
 export async function openImport(p: { fileName: string; source: 'file' | 'sheet'; sheetUrl: string | null; fingerprint: string; recipeName: string;
-  headers: string[]; mapping: Mapping; fileHash: string | null; checks: ImportCheck[]; audit: AuditResult | null }): Promise<string> {
+  headers: string[]; mapping: Mapping; fileHash: string | null; checks: ImportCheck[]; audit: AuditResult | null; counts: Record<string, unknown> }): Promise<string> {
   return must(await db.rpc('app_client_import_open', {
     p_file: p.fileName, p_source: p.source, p_sheet_url: p.sheetUrl, p_fingerprint: p.fingerprint, p_recipe_name: p.recipeName,
     p_headers: p.headers, p_mapping: p.mapping, p_notes: p.mapping.notes || null, p_file_hash: p.fileHash, p_checks: p.checks, p_audit: p.audit,
+    p_counts: p.counts,
   })) as string;
 }
 export async function sameFileImports(hash: string): Promise<{ id: string; file_name: string; created_at: string; status: string }[]> {
@@ -314,9 +299,6 @@ export async function rebuildRoutes(routes: string[], onProgress?: (done: number
     must(await db.rpc('app_client_refresh_routes', { p_routes: routes.slice(k, k + 25) }));
     onProgress?.(Math.min(routes.length, k + 25));
   }
-}
-export async function finishStuckImport(id: string): Promise<void> {
-  must(await db.rpc('app_client_import_finish', { p_import: id, p_counts: { note: 'finished after an interrupted upload' } }));
 }
 
 // ─── clients ────────────────────────────────────────────────────────────────

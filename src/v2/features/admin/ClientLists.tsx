@@ -104,6 +104,9 @@ export const ClientLists: React.FC = () => {
     return () => { live = false; };
   }, [tabHash]);
 
+  /** Forget a previewed import (its held rows are cleared on the server). */
+  const dropPending = () => setPending(p => { if (p) void cancelImport(p.id).catch(() => undefined); return null; });
+
   const run = async (label: string, fn: () => Promise<void>) => {
     setBusy(label); setError(null);
     try { await fn(); } catch (e) { setError(e); } finally { setBusy(null); }
@@ -116,7 +119,7 @@ export const ClientLists: React.FC = () => {
     const fp = fingerprint((r[guessRow] || []).map(cell));
     setLookupFp(fp);
     const known = forceBenny ? null : await findRecipe(fp).catch(() => null);
-    setFixed(new Map()); setBennyNote(null); setAudit(null); setPending(null);
+    setFixed(new Map()); setBennyNote(null); setAudit(null); dropPending();
     if (known) {
       setRecipe(known); setRecipeName(known.name); setMapping(known.mapping);
       setChat([{ role: 'assistant', text: openingMessage([], true) }]);
@@ -279,7 +282,7 @@ export const ClientLists: React.FC = () => {
     setApplied(preview);
     const nextMatched = list.map((client, i) => ({ client, match: res.get(i) || null, fix: fixes.get(i) }));
     setMatched(nextMatched);
-    setPending(null);
+    dropPending();
     setStep('review');
     void runAudit(preview);
     // The Benny looks over the results and says what stands out
@@ -357,7 +360,7 @@ export const ClientLists: React.FC = () => {
       const { mapping: next, changes } = applyChatActions(mapping, res.actions, (rows[mapping.headerRow] || []).map(cell));
       if (changes.length) {
         setMapping(next);
-        if (stage === 'review') { setStep('columns'); setBennyNote('The Benny changed the layout, so the addresses need matching again: check the columns, then Next: match to routes.'); }
+        if (stage === 'review') { dropPending(); setStep('columns'); setBennyNote('The Benny changed the layout, so the addresses need matching again: check the columns, then Next: match to routes.'); }
       }
       setChat(c => [...c, { role: 'assistant', text: res.reply || (changes.length ? 'Done.' : lessons.length ? 'Want me to remember this?' : 'I don’t have anything to add.'), changes, lessons }]);
     } catch (e) {
@@ -400,18 +403,20 @@ export const ClientLists: React.FC = () => {
       call_first: c.call_first, do_not_call: c.do_not_call, do_not_text: c.do_not_text,
       source: sourceCells(rows, safeMapping, c.rows, sensitive),
     });
-    const staged = chosen.map(toRow);
+    // neighbours together, so the preview's parts see the same customer together
+    const staged = chosen.map(toRow).sort((a, b) => `${a.street_name.toLowerCase()}|${a.house_no.padStart(6, '0')}`.localeCompare(`${b.street_name.toLowerCase()}|${b.house_no.padStart(6, '0')}`));
+    const importCounts = {
+      rows_read: counts.rowsRead, clients_in_file: counts.clients, rows_combined: counts.combined, rows_skipped: counts.skipped,
+      on_route: counts.routed, needs_attention: counts.unrouted, left_out: matched.length - chosen.length, summary: importSummary(applied),
+    };
     const id = await openImport({
       fileName: src.fileName, source: src.kind, sheetUrl: src.sheetUrl, fingerprint: lookupFp || fingerprint(headers), recipeName: recipeName || src.fileName,
-      headers, mapping: safeMapping, fileHash: tabHash, checks, audit: audit?.state === 'done' ? audit : null,
+      headers, mapping: safeMapping, fileHash: tabHash, checks, audit: audit?.state === 'done' ? audit : null, counts: importCounts,
     });
     try {
       await stageImport(id, staged, n => setBusy(`Holding the rows… ${n} of ${staged.length}`));
       const pv = await previewImport(id, staged.length, n => setBusy(`Working out what will change… ${n} of ${staged.length}`));
-      setPending({ id, preview: pv, rows: staged.length, counts: {
-        rows_read: counts.rowsRead, clients_in_file: counts.clients, rows_combined: counts.combined, rows_skipped: counts.skipped,
-        on_route: counts.routed, needs_attention: counts.unrouted, left_out: matched.length - chosen.length, summary: importSummary(applied),
-      } });
+      setPending({ id, preview: pv, rows: staged.length, counts: importCounts });
     } catch (e) {
       await cancelImport(id).catch(() => undefined);
       throw e;
@@ -556,7 +561,7 @@ export const ClientLists: React.FC = () => {
         <Review counts={counts} matched={matched} skipped={applied?.skipped || []} busy={!!busy} note={bennyNote}
           bennyLeft={matched.filter(m => !effective(m).match?.route_code && !m.fix?.match?.route_code && !bennyTried.has(m.client.key)).length}
           bennyOpen={matched.filter(m => !effective(m).match?.route_code && !m.fix?.match?.route_code).length}
-          busyLabel={busy} onRerunBenny={rerunBenny}
+          busyLabel={busy} onRerunBenny={rerunBenny} locked={!!pending}
           onToggleFix={key => setMatched(ms => ms.map(m => m.client.key === key && m.fix ? { ...m, fix: { ...m.fix, on: !m.fix.on } } : m))}
           recipeName={recipeName} setRecipeName={setRecipeName} includeUnrouted={includeUnrouted} setIncludeUnrouted={setIncludeUnrouted}
           checks={checks} stopped={stopped} auditRunning={audit?.state === 'running'} onAuditAgain={() => { void runAudit(); }}
@@ -604,8 +609,10 @@ const Review: React.FC<{
   includeUnrouted: boolean; setIncludeUnrouted: (b: boolean) => void; onBack: () => void; onApprove: () => void;
   checks: ImportCheck[]; stopped: boolean; auditRunning: boolean; onAuditAgain: () => void;
   pending: Pending | null; onSave: () => void; onDontSave: () => void;
+  /** a preview is showing: what will be saved can't change under it */
+  locked: boolean;
 }> = ({ counts, matched, skipped, busy, note, onToggleFix, bennyLeft, bennyOpen, busyLabel, onRerunBenny, recipeName, setRecipeName, includeUnrouted, setIncludeUnrouted, onBack, onApprove,
-  checks, stopped, auditRunning, onAuditAgain, pending, onSave, onDontSave }) => {
+  checks, stopped, auditRunning, onAuditAgain, pending, onSave, onDontSave, locked }) => {
   const [tab, setTab] = useState<'new' | 'merge' | 'fixed' | 'attention' | 'skipped'>('new');
   const eff = matched.map(effective);
   const list = tab === 'new' ? eff.filter(m => !m.match?.client_id) : tab === 'merge' ? eff.filter(m => m.match?.client_id)
@@ -630,7 +637,7 @@ const Review: React.FC<{
           {note && <div className="v2-note" style={{ margin: '0 0 8px' }}>{note}</div>}
           {tab === 'attention' && bennyOpen > 0 && (
             <div className="v2-row" style={{ margin: '0 0 10px', gap: 10 }}>
-              <Btn size="sm" icon={Sparkles} disabled={busy} onClick={onRerunBenny}>
+              <Btn size="sm" icon={Sparkles} disabled={busy || locked} onClick={onRerunBenny}>
                 {busy && busyLabel ? busyLabel : `Run The Benny again on ${Math.min(BENNY_BATCH, bennyLeft || bennyOpen).toLocaleString()} address${Math.min(BENNY_BATCH, bennyLeft || bennyOpen) === 1 ? '' : 'es'}`}
               </Btn>
               <span className="v2-small v2-mut">{bennyLeft
@@ -648,7 +655,7 @@ const Review: React.FC<{
                   <td><b>{m.fix!.house_no} {m.fix!.street}</b> <Tag tone={m.fix!.confidence === 'high' ? 'g' : m.fix!.confidence === 'medium' ? 'b' : 'a'}>{m.fix!.confidence}</Tag></td>
                   <td>{m.fix!.match?.route_code ? <b>{m.fix!.match.route_code}</b> : <Tag tone="a">Still no route</Tag>}</td>
                   <td className="v2-small v2-mut">{m.fix!.reason}</td>
-                  <td><Toggle on={m.fix!.on} onChange={() => onToggleFix(m.client.key)} label={`Use The Benny’s reading for ${m.client.raw_address}`} /></td>
+                  <td><Toggle on={m.fix!.on} disabled={locked} onChange={() => onToggleFix(m.client.key)} label={`Use The Benny’s reading for ${m.client.raw_address}`} /></td>
                 </tr>
               ))}
               {fixes.length === 0 && <tr><td colSpan={5} className="v2-mut" style={{ textAlign: 'center', padding: 20 }}>Every address was found as written.</td></tr>}</tbody></table>
@@ -678,7 +685,7 @@ const Review: React.FC<{
       <ChecksCard checks={checks} onAuditAgain={onAuditAgain} />
       {pending ? <PreviewPanel preview={pending.preview} rows={pending.rows} busy={busy} progress={busyLabel} onSave={onSave} onCancel={onDontSave} /> : (
       <div className="v2-card v2-row">
-        <label className="v2-row" style={{ gap: 8 }}><Toggle on={includeUnrouted} onChange={setIncludeUnrouted} label="Import addresses with no route" />Also import the {counts.unrouted} addresses with no route yet</label>
+        <label className="v2-row" style={{ gap: 8 }}><Toggle on={includeUnrouted} disabled={locked} onChange={setIncludeUnrouted} label="Import addresses with no route" />Also import the {counts.unrouted} addresses with no route yet</label>
         <label className="v2-row" style={{ gap: 8 }}>Save this layout as
           <input className="v2-input" style={{ width: 240 }} value={recipeName} onChange={e => setRecipeName(e.target.value)} aria-label="Recipe name" /></label>
         <span className="v2-spacer" />

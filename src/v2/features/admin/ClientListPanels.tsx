@@ -64,7 +64,8 @@ export const PreviewPanel: React.FC<{ preview: ImportPreview; rows: number; busy
     return (
       <section className="v2-card" aria-label="What saving will change" style={{ borderColor: 'var(--green)' }}>
         <div className="v2-card-h"><ShieldCheck size={14} color="var(--green)" /> Exactly what saving will change</div>
-        <p className="v2-small v2-mut" style={{ marginTop: 0 }}>Worked out by saving the {rows.toLocaleString()} rows and rolling it back, so this is what will happen. Nothing is saved until you press Save.</p>
+        <p className="v2-small v2-mut" style={{ marginTop: 0 }}>Worked out by saving the {rows.toLocaleString()} rows and rolling it back, so this is what will happen. Nothing is saved until you press Save.
+          {rows > 300 && ' (Worked out 300 rows at a time: a customer listed twice under two spellings far apart in the list can be counted twice.)'}</p>
         <div className="v2-grid4">
           {[['New customers', p.inserted], ['Existing customers updated', p.merged - p.nothing_new], ['Already had everything', p.nothing_new], ['Jobs added', totalAdded]].map(([l, n]) => (
             <div key={String(l)} className="v2-card" style={{ padding: 10 }}><div className="v2-card-h">{l}</div><div className="v2-kpi">{Number(n).toLocaleString()}</div></div>

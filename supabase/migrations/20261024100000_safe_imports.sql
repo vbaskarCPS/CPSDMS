@@ -17,7 +17,7 @@
 --    changed after the import, instead of wiping that change.
 -- 4. THE BENNY'S LESSONS: short rules the office confirmed ("YEAR decides, the DATE column has no
 --    year"), given to The Benny every time it reads a file.
--- 5. DATA HEALTH, nightly at 3:15 (Toronto), or within a minute when asked for from the app: jobs
+-- 5. DATA HEALTH, nightly at 3:15 a.m. Toronto (2:15 in winter), or within a minute when asked for from the app: jobs
 --    with impossible years or dates, the same job saved twice, and routes whose past-client map
 --    lists are behind. Report only; fixes are run from Client Lists.
 
@@ -70,7 +70,7 @@ returns boolean language sql immutable set search_path = public as $$
            select 1 from regexp_matches(coalesce(t, ''),
              '(?<!\d)((?:4\d{3}|5[1-5]\d{2}|2[2-7]\d{2}|6011|65\d{2})(?:[ -]?\d{4}){3}|3[47]\d{2}[ -]?\d{6}[ -]?\d{5})(?!\d)', 'g') m
             where luhn_ok(regexp_replace(m[1], '\D', '', 'g')))
-      or (coalesce(t, '') ~* '(^|[^a-z])(sin|s\.i\.n\.?|social insurance)([^a-z]|$)'
+      or ((coalesce(t, '') ~ '(^|[^A-Za-z])(SIN|S\.I\.N\.?)([^A-Za-z]|$)' or coalesce(t, '') ~* 'social insurance')
           and exists (select 1 from regexp_matches(t, '(?<!\d)(\d{3}[ -]?\d{3}[ -]?\d{3})(?!\d)', 'g') m
                        where luhn_ok(regexp_replace(m[1], '\D', '', 'g'))))
 $$;
@@ -111,8 +111,8 @@ begin
     p := client_job_problem(h);
     if p is not null then return format('%s: %s', addr, p); end if;
   end loop;
-  if looks_like_card_or_sin(concat_ws(' | ', r->>'notes', r->>'call_first', r->>'tags', r->>'people', r->>'emails',
-                                      r->>'unit', r->>'house_no', r->>'street_name', r->>'postal_code')) then
+  if looks_like_card_or_sin(concat_ws(' | ', r->>'notes', r->>'call_first', r->>'tags', r->>'people', r->>'emails', r->>'phones',
+                                      r->>'history', r->>'unit', r->>'house_no', r->>'street_name', r->>'postal_code', r->>'city', r->>'province')) then
     return format('%s: has what looks like a card number or SIN. Those are never saved; set that column to Ignore.', addr);
   end if;
   return null;
@@ -125,18 +125,23 @@ returns jsonb language sql stable set search_path = public as $$
        ah as (select h from jsonb_array_elements(a.history) h),
        added as (select h from ah where not exists (select 1 from bh where bh.h = ah.h)),
        removed as (select h from bh where not exists (select 1 from ah where ah.h = bh.h)),
-       pairs as (select r.h as was, (select x.h from added x where x.h @> r.h limit 1) as now from removed r),
+       -- a saved job the import filled in pairs with what it became (one saved job per new one; a
+       -- second saved job folded into the same one is recorded as dropped, and comes back on undo)
+       pairs0 as (select r.h as was, (select x.h from added x where x.h @> r.h limit 1) as now from removed r),
+       pairs as (select was, now, row_number() over (partition by now order by was::text) rn from pairs0),
        bp as (select p from jsonb_array_elements(b.people) p),
        ap as (select p from jsonb_array_elements(a.people) p),
        padded as (select p from ap where not exists (select 1 from bp where bp.p = ap.p)),
        premoved as (select p from bp where not exists (select 1 from ap where ap.p = bp.p)),
-       ppairs as (select r.p as was, (select x.p from padded x where x.p @> r.p limit 1) as now from premoved r)
+       ppairs0 as (select r.p as was, (select x.p from padded x where x.p @> r.p limit 1) as now from premoved r),
+       ppairs as (select was, now, row_number() over (partition by now order by was::text) rn from ppairs0)
   select jsonb_strip_nulls(jsonb_build_object(
-    'history', (select coalesce(jsonb_agg(h), '[]') from added where not exists (select 1 from pairs where pairs.now = added.h)),
-    'replaced', (select jsonb_agg(jsonb_build_object('was', was, 'now', now)) from pairs where now is not null),
-    'dropped', (select jsonb_agg(was) from pairs where now is null),
-    'people', (select jsonb_agg(p) from padded where not exists (select 1 from ppairs where ppairs.now = padded.p)),
-    'people_replaced', (select jsonb_agg(jsonb_build_object('was', was, 'now', now)) from ppairs where now is not null),
+    'history', (select coalesce(jsonb_agg(h), '[]') from added where not exists (select 1 from pairs where pairs.now = added.h and pairs.rn = 1)),
+    'replaced', (select jsonb_agg(jsonb_build_object('was', was, 'now', now)) from pairs where now is not null and rn = 1),
+    'dropped', (select jsonb_agg(was) from pairs where now is null or rn > 1),
+    'people', (select jsonb_agg(p) from padded where not exists (select 1 from ppairs where ppairs.now = padded.p and ppairs.rn = 1)),
+    'people_replaced', (select jsonb_agg(jsonb_build_object('was', was, 'now', now)) from ppairs where now is not null and rn = 1),
+    'people_dropped', (select jsonb_agg(was) from ppairs where now is null or rn > 1),
     'phones', (select jsonb_agg(x) from unnest(a.phones) x where not (x = any(b.phones))),
     'emails', (select jsonb_agg(x) from unnest(a.emails) x where not (x = any(b.emails))),
     'tags', (select jsonb_agg(x) from unnest(a.tags) x where not (x = any(b.tags))),
@@ -166,6 +171,7 @@ returns jsonb language sql immutable set search_path = public as $$
     'dropped', nullif(coalesce(x->'dropped', '[]') || coalesce(y->'dropped', '[]'), '[]'),
     'people', nullif(coalesce(x->'people', '[]') || coalesce(y->'people', '[]'), '[]'),
     'people_replaced', nullif(coalesce(x->'people_replaced', '[]') || coalesce(y->'people_replaced', '[]'), '[]'),
+    'people_dropped', nullif(coalesce(x->'people_dropped', '[]') || coalesce(y->'people_dropped', '[]'), '[]'),
     'phones', nullif(coalesce(x->'phones', '[]') || coalesce(y->'phones', '[]'), '[]'),
     'emails', nullif(coalesce(x->'emails', '[]') || coalesce(y->'emails', '[]'), '[]'),
     'tags', nullif(coalesce(x->'tags', '[]') || coalesce(y->'tags', '[]'), '[]'),
@@ -285,7 +291,7 @@ end $$;
 
 -- ───────────── stage → preview → save ─────────────
 create or replace function public.app_client_import_open(p_file text, p_source text, p_sheet_url text, p_fingerprint text,
-  p_recipe_name text, p_headers text[], p_mapping jsonb, p_notes text, p_file_hash text, p_checks jsonb, p_audit jsonb)
+  p_recipe_name text, p_headers text[], p_mapping jsonb, p_notes text, p_file_hash text, p_checks jsonb, p_audit jsonb, p_counts jsonb)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare v_id uuid;
 begin
@@ -294,9 +300,9 @@ begin
     raise exception 'This import has a check that stops it. Fix the layout or the file first.';
   end if;
   insert into client_imports (file_name, source, sheet_url, status, created_by, file_hash, checks, audit,
-                              fingerprint, recipe_name, headers, mapping, notes)
+                              fingerprint, recipe_name, headers, mapping, notes, counts)
   values (p_file, p_source, p_sheet_url, 'staged', auth.uid(), nullif(p_file_hash, ''), p_checks, p_audit,
-          p_fingerprint, nullif(trim(p_recipe_name), ''), coalesce(p_headers, '{}'), p_mapping, p_notes)
+          p_fingerprint, nullif(trim(p_recipe_name), ''), coalesce(p_headers, '{}'), p_mapping, p_notes, coalesce(p_counts, '{}'))
   returning id into v_id;
   return v_id;
 end $$;
@@ -415,7 +421,7 @@ begin
           times_used = client_import_recipes.times_used + 1, last_used_at = now()
     returning id into v_recipe;
   end if;
-  select coalesce(p_counts, '{}') || jsonb_build_object(
+  select coalesce(i.counts, '{}') || coalesce(p_counts, '{}') || jsonb_build_object(
            'inserted', count(*) filter (where action = 'insert'), 'merged', count(*) filter (where action = 'merge'))
     into v_counts from client_import_changes where import_id = p_import;
   update client_imports set status = 'done', counts = v_counts, finished_at = now(), recipe_id = coalesce(v_recipe, recipe_id)
@@ -456,7 +462,7 @@ returns jsonb language sql immutable set search_path = public as $$
               else cur end
 $$;
 
-create or replace function public.client_undo_change(p_change bigint)
+create or replace function public.client_undo_change(p_change bigint, p_saved_until timestamptz)
 returns text language plpgsql security definer set search_path = public as $$
 declare ch client_import_changes; c clients; a jsonb; h jsonb; pp jsonb; x jsonb; f jsonb; v_key text;
 begin
@@ -475,7 +481,12 @@ begin
 
   if ch.action = 'insert' then
     -- a customer this import created goes away, unless something else has been added to it since
-    if jsonb_array_length(h) = 0 and not exists (
+    -- (another import, or an edit after the import was saved: a do-not-call, a note, a phone…)
+    -- (an undo of a later import also touches the customer; that doesn't count as an edit)
+    if jsonb_array_length(h) = 0
+       and c.updated_at <= greatest(p_saved_until, (select max(i.undone_at) from client_import_changes o join client_imports i on i.id = o.import_id
+                                                     where o.client_id = c.id and i.status = 'undone')) + interval '2 seconds'
+       and not exists (
          select 1 from client_import_changes o join client_imports i on i.id = o.import_id
           where o.client_id = c.id and o.import_id <> ch.import_id and i.status in ('running', 'done')) then
       delete from clients where id = c.id;
@@ -489,6 +500,9 @@ begin
     pp := client_json_replace_one(pp, x->'now', x->'was');
   end loop;
   for x in select * from jsonb_array_elements(coalesce(a->'people', '[]')) loop pp := client_json_remove_one(pp, x); end loop;
+  for x in select * from jsonb_array_elements(coalesce(a->'people_dropped', '[]')) loop
+    if not exists (select 1 from jsonb_array_elements(pp) e where e = x) then pp := pp || jsonb_build_array(x); end if;
+  end loop;
   f := coalesce(a->'fields', '{}');
   v_key := client_field_back(to_jsonb(c.address_key), f->'address_key') #>> '{}';
   if v_key is distinct from c.address_key and exists (select 1 from clients where address_key = v_key and id <> c.id) then v_key := c.address_key; end if;
@@ -510,13 +524,12 @@ begin
     match_how = client_field_back(to_jsonb(c.match_how), f->'match_how') #>> '{}',
     notes = client_field_back(to_jsonb(c.notes), f->'notes') #>> '{}',
     call_first = client_field_back(to_jsonb(c.call_first), f->'call_first') #>> '{}',
-    do_not_call = coalesce((client_field_back(to_jsonb(c.do_not_call), f->'do_not_call') #>> '{}')::boolean, c.do_not_call),
-    do_not_text = coalesce((client_field_back(to_jsonb(c.do_not_text), f->'do_not_text') #>> '{}')::boolean, c.do_not_text),
+    -- do-not-call and do-not-text are never switched back off by an undo
     updated_at = now()
   where id = c.id;
   return 'restored';
 end $$;
-revoke all on function public.client_undo_change(bigint) from public, anon, authenticated;
+revoke all on function public.client_undo_change(bigint, timestamptz) from public, anon, authenticated;
 
 create or replace function public.app_client_import_undo(p_import uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
@@ -561,14 +574,22 @@ begin
     where ch.import_id = p_import and ch.action = 'merge' and c.id = ch.client_id;
     get diagnostics v_restored = row_count;
   else
+    -- a later import that filled in or merged what this one added has to be undone first
+    select count(distinct ch2.import_id) into v_later
+      from client_import_changes ch join client_import_changes ch2 on ch2.client_id = ch.client_id and ch2.import_id <> ch.import_id
+      join client_imports i2 on i2.id = ch2.import_id
+     where ch.import_id = p_import and i2.status in ('running', 'done') and ch2.id > ch.id
+       and (ch.action = 'insert' or ch2.added is null
+            or ch2.added ?| array['replaced', 'dropped', 'people_replaced', 'people_dropped', 'fields']);
+    if v_later > 0 then raise exception 'A later import changed what this one added to some customers. Undo the later import first.'; end if;
     for v_ch in select id from client_import_changes where import_id = p_import order by id desc loop
-      v := client_undo_change(v_ch.id);
+      v := client_undo_change(v_ch.id, coalesce(v_finished, now()));
       if v = 'removed' then v_removed := v_removed + 1; elsif v = 'restored' then v_restored := v_restored + 1; elsif v = 'kept' then v_kept := v_kept + 1; end if;
     end loop;
   end if;
 
   update client_imports set status = 'undone', undone_at = now(), undone_by = auth.uid() where id = p_import;
-  update client_import_rows set applied_at = null, result = null where import_id = p_import;
+  update client_import_rows set applied_at = null, result = null, source = null where import_id = p_import;
   perform client_refresh_map_pcl(v_routes);
   return jsonb_build_object('removed', v_removed, 'restored', v_restored, 'kept', v_kept);
 end $$;
@@ -681,6 +702,11 @@ declare v_id bigint;
 begin
   insert into client_integrity_reports (ran_at, report) values (now(), client_integrity_check()) returning id into v_id;
   delete from client_integrity_reports where requested_at < now() - interval '120 days';
+  -- the every-minute job's run log stays a week
+  begin
+    execute 'delete from cron.job_run_details where end_time < now() - interval ''7 days''';
+  exception when others then null;
+  end;
   return v_id;
 end $$;
 revoke all on function public.client_integrity_run() from public, anon, authenticated;
@@ -737,7 +763,7 @@ do $$
 declare f text;
 begin
   foreach f in array array[
-    'app_client_import_add(uuid, jsonb)', 'app_client_import_open(text, text, text, text, text, text[], jsonb, text, text, jsonb, jsonb)',
+    'app_client_import_open(text, text, text, text, text, text[], jsonb, text, text, jsonb, jsonb, jsonb)',
     'app_client_import_same_file(text)', 'app_client_import_stage(uuid, jsonb)', 'app_client_import_preview(uuid, integer, integer)',
     'app_client_import_apply(uuid, integer)', 'app_client_import_complete(uuid, jsonb)', 'app_client_import_cancel(uuid)',
     'app_client_import_undo(uuid)', 'app_benny_lessons(text)', 'app_benny_lessons_all()',
@@ -747,8 +773,13 @@ begin
     execute format('grant execute on function public.%s to authenticated', f);
   end loop;
 end $$;
+-- the old one-step import (begin → add → finish) skipped the checks and the preview: the app no
+-- longer uses it, so nobody can call it
+revoke all on function public.app_client_import_begin(text, text, text, text, text, text[], jsonb, text) from public, anon, authenticated;
+revoke all on function public.app_client_import_add(uuid, jsonb) from public, anon, authenticated;
+revoke all on function public.app_client_import_finish(uuid, jsonb) from public, anon, authenticated;
 
--- ───────────── nightly data health at 3:15 Toronto (7:15 UTC) ─────────────
+-- ───────────── nightly data health at 7:15 UTC (3:15 a.m. Toronto in summer, 2:15 in winter) ─────────────
 create extension if not exists pg_cron with schema pg_catalog;
 grant usage on schema cron to postgres;
 select cron.schedule('client-data-health', '15 7 * * *', $$select public.client_integrity_run()$$);

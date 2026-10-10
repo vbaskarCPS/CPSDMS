@@ -16,7 +16,7 @@ import { cell, cleanYear, FIRST_SERVICE_YEAR, type Applied, type ImportCheck, ty
 export interface Sensitive { i: number; header: string; why: string }
 
 const SENSITIVE_HEADER: [RegExp, string][] = [
-  [/\b(card ?(no|num|number|#)?|credit|cc ?(no|num|#)?|visa|master ?card|amex)\b/i, 'card numbers'],
+  [/\b(card ?(no\.?|num(ber)?|#)|credit ?card|cc ?(no\.?|num(ber)?|#)|visa|master ?card|amex)(\b|$)/i, 'card numbers'],
   [/\b(cvv|cvc|csc|cvv2|security code)\b/i, 'card security codes'],
   [/\b(expiry|expiration|exp\.? ?date)\b/i, 'card expiry dates'],
   [/\b(sin|s\.i\.n\.?|social insurance)\b/i, 'SIN numbers'],
