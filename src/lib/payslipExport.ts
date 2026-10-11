@@ -20,6 +20,8 @@ export interface PayslipDayRow {
   totalPayout: number;
   indivGross: number;     // Payout Stats col P — worker's individual gross (post-split)
   crackfillBase: number;  // Payout Stats col AM — crackfill base (× 4 = crackfill cost)
+  sealantCost?: number;   // the product cost the payout actually took off this day (from the day line)
+  crackfillCost?: number; // the crackfill cost in dollars (from the day line)
 }
 
 export interface ExtraItem {
@@ -90,18 +92,37 @@ function num2(v: number): string {
 }
 
 // ─── Sealing product-cost helpers (display-only — never touch pay) ────────────
-// Sealant cost = (worker's individual gross ÷ tax divisor) × 20%.
-//   East is the only sealing region; its tax rate is 13%, so the divisor is 1.13.
-// Crackfill cost = crackfill base (col AM) × 4.
+// Sealant = the product cost the payout took off that day. A day line keeps what it was paid on,
+// so the cost is worked back from it: payable = non-flats after tax × (1 − pc%) + flats after tax,
+// so the cost = (payable − flats after tax) × pc ÷ (100 − pc). 0% product cost → $0.
+// Days read straight from the old Payout Stats sheet don't carry that, so they keep the old
+// estimate: (worker's individual gross ÷ 1.13) × 20%.
+// Crackfill = the day line's crackfill dollars; old sheet rows: crackfill base (col AM) × 4.
 const SEALING_TAX_DIVISOR = 1.13;
 const SEALANT_NET_PCT     = 0.20;
 const CRACKFILL_MULT      = 4;
 
+const num = (v: unknown) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
+const given = (v: unknown) => v !== undefined && v !== null && v !== '' && Number.isFinite(Number(v));
+
+/** The product cost the payout took off a day, from the day line's saved numbers. null when the line doesn't say. */
+export function productCostTaken(stats: Record<string, unknown> | null | undefined, fallbackTaxRate = 13): number | null {
+  if (!stats || !given(stats.productCostPercent) || !given(stats.prodPayable)) return null;
+  const pc = num(stats.productCostPercent);
+  if (pc <= 0) return 0;
+  if (pc >= 100) return null;
+  const tax = given(stats.taxRate) ? num(stats.taxRate) : fallbackTaxRate;
+  const flatsAfterTax = num(stats.prodFlats) / (1 + tax / 100);
+  return Math.max(0, (num(stats.prodPayable) - flatsAfterTax) * pc / (100 - pc));
+}
+
 export function sealantCostFor(d: PayslipDayRow): number {
+  if (d.sealantCost !== undefined) return r2(d.sealantCost);
   return r2((d.indivGross / SEALING_TAX_DIVISOR) * SEALANT_NET_PCT);
 }
 
 export function crackfillCostFor(d: PayslipDayRow): number {
+  if (d.crackfillCost !== undefined) return r2(d.crackfillCost);
   return r2(d.crackfillBase * CRACKFILL_MULT);
 }
 
