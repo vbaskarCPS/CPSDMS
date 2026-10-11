@@ -47,12 +47,20 @@ export function statsToLine(r: Record<string, unknown>): NewLine {
   };
 }
 
+/** The settings a day's money was worked out with, kept on each line so the payslip can show the maths. */
+async function withSettings(rows: Record<string, unknown>[], s: { seasonType: string; taxRate: number; productCostPercent: number; noTaxOnCash: boolean }) {
+  const { SEASON_CONFIGS, EQ_DIVISOR } = await import('../../types');
+  const season = (SEASON_CONFIGS as Record<string, { prepaidWeight: number; billedWeight: number }>)[s.seasonType];
+  return rows.map(r => ({ ...r, taxRate: s.taxRate, productCostPercent: r.productCostPercent ?? s.productCostPercent, noTaxOnCash: s.noTaxOnCash,
+    prepaidWeight: season?.prepaidWeight, billedWeight: season?.billedWeight, eqDivisor: EQ_DIVISOR }));
+}
+
 /** Lines for the live session at a center (used by Close day, before the session is cleared). */
 export async function linesFromLiveSession(centerId: string): Promise<{ date: string; lines: NewLine[] }> {
   await pointLegacyAt(centerId);
   const { loadLivePayoutInput, computePayoutStats } = await import('../../lib/exportService');
   const input = await loadLivePayoutInput();
-  return { date: input.date, lines: computePayoutStats(input).map(statsToLine) };
+  return { date: input.date, lines: (await withSettings(computePayoutStats(input), input)).map(statsToLine) };
 }
 
 /** Lines for an already-closed day, rebuilt from its saved copy with the same maths. */
@@ -67,13 +75,14 @@ export async function linesFromSavedDay(centerId: string, day: string): Promise<
   };
   const seasonType = (a.daily_session?.season_type || 'aeration') as keyof typeof SEASON_CONFIGS;
   const meta = a.daily_session?.import_meta || {};
-  return computePayoutStats({
+  const settings = {
+    seasonType, productCostPercent: meta.productCostPercent ?? SEASON_CONFIGS[seasonType]?.defaultProductCostPercent ?? 0,
+    noTaxOnCash: meta.noTaxOnCash ?? false, taxRate: commandCenterService.getCurrentTaxRate(),
+  };
+  return (await withSettings(computePayoutStats({
     sessions: a.sessions as any[], transactions: a.transactions as any[], users: a.users as any[], // eslint-disable-line @typescript-eslint/no-explicit-any
-    seasonType: seasonType as never,
-    productCostPercent: meta.productCostPercent ?? SEASON_CONFIGS[seasonType]?.defaultProductCostPercent ?? 0,
-    noTaxOnCash: meta.noTaxOnCash ?? false,
-    taxRate: commandCenterService.getCurrentTaxRate(),
-  }).map(statsToLine);
+    seasonType: seasonType as never, productCostPercent: settings.productCostPercent, noTaxOnCash: settings.noTaxOnCash, taxRate: settings.taxRate,
+  }), settings)).map(statsToLine);
 }
 
 export async function saveLines(centerId: string, day: string, lines: NewLine[]): Promise<number> {

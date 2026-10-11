@@ -7,7 +7,8 @@
 // account (PIN, phones, email). Everything goes through the worker's pass (src/lib/workerPass).
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ChevronLeft, Download, FileText, GraduationCap, LogOut, MapPinned, UserCog } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Download, FileText, GraduationCap, LogOut, MapPinned, UserCog } from 'lucide-react';
+import { DayBreakdown, type BreakdownLine } from './DayBreakdown';
 import { forgetPass, getPass, signInProblem, SignedOut, withPass, workerSignIn, workerSignOut, type WorkerProfile } from '../../../lib/workerPass';
 import { payslipTotals, type ExtraItem, type HiddenFields, type PayslipDayRow, type PayslipSeason } from '../../../lib/payslipExport';
 import { Btn, ErrorBox, Field, Loading, Tag, Tile } from '../../ui';
@@ -223,6 +224,16 @@ const PayslipView: React.FC<{ onSignedOut: () => void }> = ({ onSignedOut }) => 
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (slips.signedOut) onSignedOut(); }, [slips.signedOut]); // eslint-disable-line react-hooks/exhaustive-deps
   const s = (slips.data || []).find(x => x.id === id);
+  // each day's line, with everything its pay was worked out from (tap a day to see it)
+  const [lines, setLines] = useState<{ lines: (BreakdownLine & { id: string })[]; tax_rate: number | null } | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    if (id) withPass<{ ok: boolean; lines?: (BreakdownLine & { id: string })[]; tax_rate?: number | null }>('app_worker_payslip_lines', { p_payslip: id })
+      .then(d => { if (live && d.ok) setLines({ lines: d.lines || [], tax_rate: d.tax_rate ?? null }); })
+      .catch(e => { if (e instanceof SignedOut) onSignedOut(); });
+    return () => { live = false; };
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
   const download = useCallback(async () => {
     if (!s) return;
     setBusy(true);
@@ -251,12 +262,21 @@ const PayslipView: React.FC<{ onSignedOut: () => void }> = ({ onSignedOut }) => 
         </div>
       </div>
       <div className="v2-card" style={{ padding: 0 }}>
+        {lines && lines.lines.length === s.days.length && <div className="v2-small v2-mut" style={{ padding: '10px 12px 0' }}>Tap a day to see how its pay was worked out.</div>}
         <div className="v2-table-wrap"><table className="v2-table">
           <thead><tr><th>Day</th><th>Manager</th><th style={{ textAlign: 'right' }}>Steps</th><th style={{ textAlign: 'right' }}>EQ</th><th style={{ textAlign: 'right' }}>Bonus</th><th style={{ textAlign: 'right' }}>Day total</th></tr></thead>
-          <tbody>{s.days.map((d, i) => (
-            <tr key={i}><td>{d.date}</td><td className="v2-small">{d.manager || '—'}</td><td style={{ textAlign: 'right' }}>{Number(d.steps).toFixed(1)}</td>
-              <td style={{ textAlign: 'right' }}>{Number(d.equiv).toFixed(2)}</td><td style={{ textAlign: 'right' }}>{money(d.dailyBonus)}</td><td style={{ textAlign: 'right' }}><b>{money(d.totalPayout)}</b></td></tr>
-          ))}</tbody>
+          <tbody>{s.days.map((d, i) => {
+            const line = lines?.lines[i];
+            const isOpen = !!line && open === line.id;
+            return (
+              <React.Fragment key={i}>
+                <tr onClick={() => line && setOpen(isOpen ? null : line.id)} style={{ cursor: line ? 'pointer' : undefined }} aria-expanded={line ? isOpen : undefined}>
+                  <td style={{ whiteSpace: 'nowrap' }}>{line && (isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />)} {d.date}</td><td className="v2-small">{d.manager || '—'}</td><td style={{ textAlign: 'right' }}>{Number(d.steps).toFixed(1)}</td>
+                  <td style={{ textAlign: 'right' }}>{Number(d.equiv).toFixed(2)}</td><td style={{ textAlign: 'right' }}>{money(d.dailyBonus)}</td><td style={{ textAlign: 'right' }}><b>{money(d.totalPayout)}</b></td></tr>
+                {isOpen && line && <tr><td colSpan={6} style={{ background: 'var(--soft)', padding: '6px 12px 12px' }}><DayBreakdown line={line} season={s.season} centerTaxRate={lines?.tax_rate} /></td></tr>}
+              </React.Fragment>
+            );
+          })}</tbody>
         </table></div>
       </div>
       <div className="v2-card">

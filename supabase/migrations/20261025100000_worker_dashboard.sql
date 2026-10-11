@@ -168,6 +168,27 @@ begin
             or (s.hire_id is null and upper(s.cn) = upper(h.cn) and s.center_id = h.center_id and extract(year from r.start_day)::int = h.year))));
 end $$;
 
+-- The day lines on one of the worker's payslips, with everything each day's pay was worked out
+-- from (steps, money collected by payment type, product cost, EQ, rate parts, bonuses …). Totals
+-- only: no customer names or addresses are kept on a day line.
+create or replace function public.app_worker_payslip_lines(p_token text, p_payslip uuid)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare h hires; s payslips; r payslip_runs;
+begin
+  h := worker_pass_hire(p_token);
+  if h.id is null then return jsonb_build_object('ok', false, 'reason', 'signed_out'); end if;
+  select * into s from payslips where id = p_payslip and status in ('generated', 'paid');
+  if s.id is null then return jsonb_build_object('ok', false, 'reason', 'not_found'); end if;
+  select * into r from payslip_runs where id = s.run_id;
+  if not (s.hire_id = h.id or (s.hire_id is null and upper(s.cn) = upper(h.cn) and s.center_id = h.center_id and extract(year from r.start_day)::int = h.year)) then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+  return jsonb_build_object('ok', true, 'tax_rate', (select tax_rate from command_centers where id = s.center_id), 'lines', (
+    select coalesce(jsonb_agg(jsonb_build_object('id', l.id, 'day', l.day, 'manager', l.manager, 'steps', l.steps, 'equiv', l.equiv,
+             'payout_rate', l.payout_rate, 'total_payout', l.total_payout, 'stats', l.stats) order by l.day, l.created_at, l.id), '[]')
+      from payout_lines l where l.payslip_id = s.id));
+end $$;
+
 -- ───────────── the worker's account (PIN, phones, email) through the pass ─────────────
 create or replace function public.app_worker_pass_account(p_token text)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
@@ -488,6 +509,7 @@ do $$
 declare f text;
 begin
   foreach f in array array['app_worker_sign_in(text, text)', 'app_worker_sign_out(text)', 'app_worker_me(text)', 'app_worker_payslips(text)',
+    'app_worker_payslip_lines(text, uuid)',
     'app_worker_set_pin(text, uuid, text, text)',
     'app_worker_pass_account(text)', 'app_worker_pass_save_account(text, text, text, text)', 'app_worker_pass_set_pin(text, text, text)'] loop
     execute format('revoke all on function public.%s from public', f);
