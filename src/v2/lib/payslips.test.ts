@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { daysBetween, defaultSettings, lineToDay, mmmdd, statsToLine, toWorkerData, type PayoutLine } from './payslips';
-import { payslipTotals } from '../../lib/payslipExport';
+import { daysBetween, defaultSettings, lineCosts, lineToDay, mmmdd, statsToLine, toWorkerData, type PayoutLine } from './payslips';
+import { crackfillCostFor, payslipTotals, productCostTaken, sealantCostFor } from '../../lib/payslipExport';
 
 describe('payout lines', () => {
   it('maps a Payout Stats row the way the old payslip read the sheet', () => {
@@ -27,5 +27,32 @@ describe('payout lines', () => {
       extraDeductions: [{ id: '1', label: 'x', amount: 5 }], additions: [{ id: '2', label: 'y', amount: 15 }] }), shown, 'sealing');
     expect(extras.finalPay).toBe(190 - 50 - 20 - 19 - 5 + 15);
     expect(payslipTotals(toWorkerData('I1', 'A', 'B', days, { ...defaultSettings(), hotels: 50 }), { ...shown, hotels: true }, 'sealing').finalPay).toBe(190);
+  });
+});
+
+describe('sealant and crackfill on the payslip', () => {
+  const base = { date: 'Oct09', manager: 'Sam', steps: 4, equiv: 14.6, totalPrepay: 0, payoutRate: 20, aerComm: 292, upsellComm: 0, machRent: 0, deductions: 0, dailyBonus: 0, totalPayout: 292 };
+  it('a day paid with 0% product cost shows $0 sealant, not the old 20% estimate', () => {
+    // a real sealing day this trip: $413 cash, 13% tax, 0% product cost → payable 365.49
+    const st = { prodGross: 413, prodCash: 413, prodPayable: 365.4867, productCostPercent: 0 };
+    expect(productCostTaken(st)).toBe(0);
+    const d = { ...base, indivGross: 413, crackfillBase: 0, ...lineCosts({ crackfill_base: 0, stats: st }) };
+    expect(sealantCostFor(d)).toBe(0);
+    expect(sealantCostFor({ ...d, sealantCost: undefined })).toBe(73.1);   // what the PDF printed before
+  });
+  it('a day paid with product cost shows exactly what was taken off', () => {
+    // payable 283.19 after 20% off: the cost was 283.19 × 20 ÷ 80 = 70.80 (the day breakdown shows the same)
+    expect(Math.round(productCostTaken({ prodPayable: 283.1858, productCostPercent: 20, taxRate: 13 })! * 100) / 100).toBe(70.8);
+    // flats aren't charged product cost: $113 of flats is $100 after tax, left out of the cost
+    expect(Math.round(productCostTaken({ prodPayable: 383.1858, prodFlats: 113, productCostPercent: 20, taxRate: 13 })! * 100) / 100).toBe(70.8);
+  });
+  it('crackfill is the day line’s dollars, not ×4 again; old sheet rows keep base × 4', () => {
+    const d = { ...base, indivGross: 300, crackfillBase: 12, ...lineCosts({ crackfill_base: 12, stats: { prodGross: 300, prodPayable: 265.49, productCostPercent: 0 } }) };
+    expect(crackfillCostFor(d)).toBe(12);
+    expect(crackfillCostFor({ ...base, indivGross: 300, crackfillBase: 3 })).toBe(12);
+  });
+  it('a line that doesn’t say its product cost keeps the old estimate', () => {
+    expect(productCostTaken({ prodGross: 226 })).toBeNull();
+    expect(lineCosts({ crackfill_base: 0, stats: {} })).toEqual({ crackfillCost: 0 });
   });
 });

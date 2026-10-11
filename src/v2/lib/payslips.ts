@@ -6,6 +6,7 @@
 // payslip extras; Generated → Paid when signed off, or Void (frees the days again).
 import { db, must } from './client';
 import { pointLegacyAt } from './legacy';
+import { productCostTaken } from '../../lib/payslipExport';
 import type { HiddenFields, PayslipDayRow, PayslipSeason, WorkerPayslipData, ExtraItem } from '../../lib/payslipExport';
 
 export interface PayoutLine {
@@ -138,18 +139,42 @@ export function lineToDay(l: PayoutLine): PayslipDayRow {
     date: mmmdd(l.day), manager: l.manager || '', steps: n(l.steps), equiv: n(l.equiv), totalPrepay: n(l.total_prepay),
     payoutRate: n(l.payout_rate), aerComm: n(l.aer_comm), upsellComm: n(l.upsell_comm), machRent: n(l.mach_rent),
     deductions: n(l.deductions), dailyBonus: n(l.daily_bonus), totalPayout: n(l.total_payout),
-    indivGross: n(l.indiv_gross), crackfillBase: n(l.crackfill_base),
+    indivGross: n(l.indiv_gross), crackfillBase: n(l.crackfill_base), ...lineCosts(l),
   };
+}
+
+/** Sealant and crackfill as the day was actually paid: the product cost taken off, and crackfill in
+ *  dollars (every day line keeps crackfill as dollars, not the old sheet's ×4 base). */
+export function lineCosts(l: Pick<PayoutLine, 'crackfill_base' | 'stats'>): Pick<PayslipDayRow, 'sealantCost' | 'crackfillCost'> {
+  const st = (l.stats || {}) as Record<string, unknown>;
+  const sealant = productCostTaken(st);
+  return { ...(sealant === null ? {} : { sealantCost: sealant }), crackfillCost: n(l.crackfill_base) };
 }
 export const defaultSettings = (): SlipSettings => ({ is120Program: false, hotels: 0, advances: 0, travelPkg: 0, crackfillPct: 0, extraDeductions: [], additions: [] });
 export function toWorkerData(cn: string, first: string, last: string, days: PayslipDayRow[], s: SlipSettings): WorkerPayslipData {
   return { contractorId: cn, firstName: first, lastName: last, days, ...s };
 }
 
+/** A sealing run's payslip days with the sealant and crackfill the day lines were paid with. */
+async function withLineCosts(run: PayslipRun, slips: Payslip[]): Promise<Payslip[]> {
+  if (run.season !== 'sealing' || !slips.length) return slips;
+  const rows = must(await db.from('payout_lines').select('payslip_id, day, total_payout, crackfill_base, stats').in('payslip_id', slips.map(p => p.id))
+    .order('day').order('created_at').order('id')) as { payslip_id: string; day: string; total_payout: number; crackfill_base: number; stats: Record<string, unknown> | null }[];
+  return slips.map(p => {
+    const left = rows.filter(r => r.payslip_id === p.id);
+    return { ...p, days: p.days.map(d => {
+      const i = left.findIndex(r => mmmdd(r.day) === d.date && Math.abs(n(r.total_payout) - n(d.totalPayout)) < 0.005);
+      if (i < 0) return d;
+      const [r] = left.splice(i, 1);
+      return { ...d, ...lineCosts(r) };
+    }) };
+  });
+}
+
 /** Download a run's payslips (one PDF per batch), exactly as generated. */
 export async function downloadRunPdf(run: PayslipRun, centerName: string, only?: (p: Payslip) => boolean): Promise<void> {
   const { generatePayslipsPDF } = await import('../../lib/payslipExport');
-  const slips = run.payslips.filter(p => p.status !== 'void' && (!only || only(p)));
+  const slips = await withLineCosts(run, run.payslips.filter(p => p.status !== 'void' && (!only || only(p))));
   const batches = [...new Set(slips.map(p => p.batch || 'Payslips'))];
   for (const b of batches) {
     const ws = slips.filter(p => (p.batch || 'Payslips') === b).map(p => toWorkerData(p.cn, p.first_name, p.last_name, p.days, { ...defaultSettings(), ...p.settings }));

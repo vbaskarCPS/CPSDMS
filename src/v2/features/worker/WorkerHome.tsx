@@ -5,9 +5,9 @@
 // map logsheet; the dashboard is a tile on its menu. Here: Online Training (every module
 // unlocked), their payslips (the copy the office generated, Generated or Paid), and their
 // account (PIN, phones, email). Everything goes through the worker's pass (src/lib/workerPass).
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronLeft, ChevronRight, Download, FileText, GraduationCap, LogOut, MapPinned, UserCog } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, FileText, GraduationCap, LogOut, MapPinned, UserCog } from 'lucide-react';
 import { DayBreakdown, type BreakdownLine } from './DayBreakdown';
 import { forgetPass, getPass, signInProblem, SignedOut, withPass, workerSignIn, workerSignOut, type WorkerProfile } from '../../../lib/workerPass';
 import { payslipTotals, type ExtraItem, type HiddenFields, type PayslipDayRow, type PayslipSeason } from '../../../lib/payslipExport';
@@ -24,11 +24,8 @@ interface Me { worker: WorkerProfile; today: Record<string, unknown> | null }
 const money = (v: number) => `$${(Math.round(Number(v) * 100) / 100).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const pretty = (iso: string) => new Date(iso.slice(0, 10) + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
 const prettyY = (iso: string) => new Date(iso.slice(0, 10) + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' });
-const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const mmmdd = (iso: string) => `${MON[Number(iso.slice(5, 7)) - 1]}${iso.slice(8, 10)}`;
-const daysBetween = (a: string, b: string) => Math.round((new Date(b + 'T12:00').getTime() - new Date(a + 'T12:00').getTime()) / 86400000) + 1;
 
-/** A saved payslip → the shape the payslip maths and PDF take. */
+/** A saved payslip → the shape the payslip maths take. */
 export function slipData(p: WorkerPayslip) {
   const st = p.settings || {};
   const items = (v: unknown): ExtraItem[] => (Array.isArray(v) ? v : []).map((x: Record<string, unknown>, i) => ({ id: String(x.id ?? i), label: String(x.label ?? ''), amount: Number(x.amount) || 0 }));
@@ -221,7 +218,6 @@ const PayslipList: React.FC<{ onSignedOut: () => void }> = ({ onSignedOut }) => 
 const PayslipView: React.FC<{ onSignedOut: () => void }> = ({ onSignedOut }) => {
   const { id } = useParams();
   const slips = useWorkerData<WorkerPayslip[]>('app_worker_payslips', d => (d as { payslips?: WorkerPayslip[] }).payslips || []);
-  const [busy, setBusy] = useState(false);
   useEffect(() => { if (slips.signedOut) onSignedOut(); }, [slips.signedOut]); // eslint-disable-line react-hooks/exhaustive-deps
   const s = (slips.data || []).find(x => x.id === id);
   // each day's line, with everything its pay was worked out from (tap a day to see it)
@@ -234,15 +230,6 @@ const PayslipView: React.FC<{ onSignedOut: () => void }> = ({ onSignedOut }) => 
       .catch(e => { if (e instanceof SignedOut) onSignedOut(); });
     return () => { live = false; };
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
-  const download = useCallback(async () => {
-    if (!s) return;
-    setBusy(true);
-    try {
-      const { generatePayslipsPDF } = await import('../../../lib/payslipExport');
-      await generatePayslipsPDF([slipData(s)], mmmdd(s.start_day), mmmdd(s.end_day), s.center_name, daysBetween(s.start_day, s.end_day), s.hidden, s.season, undefined,
-        { signOutList: false, fileName: `Payslip ${s.first_name} ${s.last_name} ${s.start_day} to ${s.end_day}.pdf` });
-    } finally { setBusy(false); }
-  }, [s]);
   if (slips.error) return <ErrorBox error={slips.error} />;
   if (!slips.data) return <Loading />;
   if (!s) return <div className="v2-card">That payslip isn’t available. <Link className="v2-link" to="/app/worker/payslips">All payslips ›</Link></div>;
@@ -289,7 +276,6 @@ const PayslipView: React.FC<{ onSignedOut: () => void }> = ({ onSignedOut }) => 
           {w.additions.filter(x => x.amount).map(x => <tr key={`a${x.id}`}><td>{x.label || 'Addition'}</td><td style={{ textAlign: 'right', color: 'var(--green)' }}>+{money(x.amount)}</td></tr>)}
           <tr><td><b>Final pay</b></td><td style={{ textAlign: 'right' }}><b className="v2-kpi" style={{ fontSize: 20 }}>{money(t.finalPay)}</b></td></tr>
         </tbody></table>
-        <Btn icon={Download} disabled={busy} onClick={download} style={{ marginTop: 10 }}>{busy ? 'Making the PDF…' : 'Download PDF'}</Btn>
       </div>
     </div>
   );
