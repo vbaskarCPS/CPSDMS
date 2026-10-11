@@ -106,7 +106,24 @@
 .v2-pick.on { border-color: var(--blue); background: var(--sel); }
 .v2-pick:disabled { opacity: .5; cursor: not-allowed; }
 
-@media (max-width: 860px) { .v2-wb-links { display: none; } }
+/* phones: the Workerbook links (Payslips, Contractors, Crew list, Rate cards) drop to their own row */
+@media (max-width: 860px) { .v2-wb-links { order: 10; width: 100%; } }
+
+/* Payslips: a table on a desk, one card per payslip on a phone */
+.v2-slip-cards { display: none; }
+.v2-slip { padding: 12px 14px; border-top: 1px solid var(--line); }
+.v2-slip .top { display: flex; align-items: flex-start; gap: 10px; }
+.v2-slip .nm { font-weight: 700; }
+.v2-slip .pay { margin-left: auto; text-align: right; white-space: nowrap; }
+.v2-slip .acts { display: flex; gap: 8px; margin-top: 10px; }
+.v2-slip .acts > :first-child { flex: 1; justify-content: center; }
+.v2-slip input[type=checkbox] { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; }
+@media (max-width: 640px) {
+  .v2-slip-table { display: none; }
+  .v2-slip-cards { display: block; }
+  .v2-slip-foot > .v2-spacer { display: none; }
+  .v2-slip-foot > button { flex: 1; justify-content: center; }
+}
 
 /* home dashboard: one large stat card per component */
 .v2-stats { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); }
