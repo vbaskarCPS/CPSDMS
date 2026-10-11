@@ -116,7 +116,7 @@ const RunCard: React.FC<{ run: PayslipRun; centerId: string; centerName: string;
       </div>
       {open && (
         <>
-          <div className="v2-table-wrap">
+          <div className="v2-table-wrap v2-slip-table">
             <table className="v2-table">
               <thead><tr><th style={{ width: 30 }} /><th>CN #</th><th>Name</th><th>Batch</th><th style={{ textAlign: 'right' }}>Days</th>
                 <th style={{ textAlign: 'right' }}>Earned</th><th style={{ textAlign: 'right' }}>Final pay</th><th>Status</th><th /></tr></thead>
@@ -143,7 +143,31 @@ const RunCard: React.FC<{ run: PayslipRun; centerId: string; centerName: string;
               </tbody>
             </table>
           </div>
-          <div className="v2-row" style={{ padding: 12, gap: 8 }}>
+          <div className="v2-slip-cards">
+            {sorted.map(p => (
+              <div key={p.id} className="v2-slip" style={{ opacity: p.status === 'void' ? 0.5 : 1 }}>
+                <div className="top">
+                  {p.status === 'generated' && <input type="checkbox" checked={picked.has(p.id)} onChange={() => toggle(p.id)} aria-label={`Select ${p.first_name} ${p.last_name}`} />}
+                  <div style={{ minWidth: 0 }}>
+                    <div className="nm"><ContractorLink hireId={p.hire_id}>{p.first_name} {p.last_name}</ContractorLink></div>
+                    <div className="v2-small v2-mut">{p.cn}{p.batch ? ` · ${p.batch}` : ''} · {p.status === 'void' ? `${p.days.length} days`
+                      : <button type="button" className="v2-link" style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit' }} onClick={() => setViewing(p)}>{p.days.length} day{p.days.length === 1 ? '' : 's'} ›</button>}</div>
+                    <div style={{ marginTop: 4 }}>{p.status === 'paid' ? <Tag tone="g">Paid {p.paid_at ? pretty(p.paid_at.slice(0, 10)) : ''}</Tag> : p.status === 'void' ? <Tag>Void</Tag> : <Tag tone="a">Generated</Tag>}
+                      {p.updated_at && p.status !== 'void' && <span className="v2-small v2-mut"> · edited {pretty(p.updated_at.slice(0, 10))}</span>}</div>
+                  </div>
+                  <div className="pay"><div className="v2-kpi" style={{ fontSize: 18 }}>{money(Number(p.final_pay))}</div><div className="v2-small v2-mut">earned {money(Number(p.earned))}</div></div>
+                </div>
+                {p.status === 'generated' && (
+                  <div className="acts">
+                    <Btn size="sm" icon={CheckCircle2} disabled={busy} onClick={() => setConfirm([p])}>Sign off</Btn>
+                    <Btn size="sm" kind="o" icon={Pencil} disabled={busy} onClick={() => setEditing(p)}>Edit</Btn>
+                    <Btn size="sm" kind="o" disabled={busy} onClick={() => doVoid(p)}>Void</Btn>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="v2-row v2-slip-foot" style={{ padding: 12, gap: 8 }}>
             <ErrorBox error={error} />
             <span className="v2-spacer" />
             <Btn size="sm" kind="o" disabled={busy} onClick={() => setPicked(new Set(sorted.filter(p => p.status === 'generated').map(p => p.id)))}>Select all unpaid</Btn>
