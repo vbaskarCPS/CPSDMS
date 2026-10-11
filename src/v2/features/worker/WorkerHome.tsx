@@ -201,7 +201,7 @@ const PayslipList: React.FC<{ onSignedOut: () => void }> = ({ onSignedOut }) => 
   return (
     <div className="v2-stack" style={{ gap: 10 }}>
       {slips.data.map(s => (
-        <Link key={s.id} to={`/app/worker/payslips/${s.id}`} className="v2-card v2-row" style={{ gap: 10, textDecoration: 'none', color: 'inherit' }}>
+        <Link key={s.id} to={`/app/worker/payslips/${s.id}`} className="v2-card v2-row" style={{ gap: 10, textDecoration: 'none' }}>
           <FileText size={20} color="var(--green)" />
           <div style={{ flex: 1, minWidth: 0 }}>
             <b>{pretty(s.start_day)} – {prettyY(s.end_day)}</b>
