@@ -28,6 +28,7 @@ import { Clients } from './features/clients/Clients';
 import { CustomerMap } from './features/clients/CustomerMap';
 import { Customer } from './features/clients/Customer';
 import { MyAccount } from './features/account/MyAccount';
+import { WorkerHome } from './features/worker/WorkerHome';
 import { Loading } from './ui';
 
 const Guard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ perm, children }) => {
@@ -65,6 +66,8 @@ const V2Routes: React.FC = () => (
     <Route path="login" element={<Login />} />
     <Route path="password" element={<ChangePassword />} />
     <Route path="setup" element={<AccountSetup />} />
+    {/* the worker dashboard: workers have no app account, so it has its own sign-in (a pass) */}
+    <Route path="worker/*" element={<WorkerHome />} />
     <Route index element={<Guard><Home /></Guard>} />
     <Route path="admin/users" element={<Guard perm="sa_users"><Users /></Guard>} />
     <Route path="admin/centers" element={<Guard perm="sa_users"><Centers /></Guard>} />

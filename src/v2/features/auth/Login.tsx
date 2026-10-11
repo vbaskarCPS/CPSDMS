@@ -1,6 +1,7 @@
 // src/v2/features/auth/Login.tsx — manager sign-in (username + password) and first-login password change.
 import React, { useState } from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { getPass, signInProblem, workerSignIn } from '../../../lib/workerPass';
 import { useAuth } from '../../lib/auth';
 import { completeSetup, setupInfo, useLoad } from '../../lib/data';
 import { Btn, Field, Loading } from '../../ui';
@@ -36,7 +37,17 @@ export const Login: React.FC = () => {
     setError(null); setFinalized(false); setBusy(true);
     try {
       if (tab === 'worker') {
-        if (!(await tryLegacy(username, password, true))) setError('That CN # and PIN (or first name) don’t match anyone working today.');
+        // This year's contractor list gives the worker dashboard pass; a running session they're on
+        // still takes them straight to their logsheet.
+        const pass = await workerSignIn(username, password);
+        if (!pass.ok && (pass.reason === 'wrong' || pass.reason === 'locked')) { setError(signInProblem(pass)); return; }
+        const { legacyLogin } = await import('../../../lib/legacyLogin');
+        // a session problem (e.g. no day open yet) still lets a worker with a pass into their dashboard
+        const res = await legacyLogin(username.trim(), password, { workersOnly: true }).catch(e => { if (pass.ok) return null; throw e; });
+        if (res && 'path' in res && (res.path !== '/training' || !pass.ok)) { nav(res.path, { replace: true }); return; }
+        if (pass.ok) { nav(res && 'finalized' in res ? '/app/worker?done=1' : '/app/worker', { replace: true }); return; }
+        if (res && 'finalized' in res) { setFinalized(true); return; }
+        setError(pass.reason === 'left' ? signInProblem(pass) : 'That CN # and PIN (or first name) don’t match anyone on this year’s contractor list or today’s session.');
         return;
       }
       try { await signIn(username, password); nav(target, { replace: true, state: target === '/app' ? { fromLogin: true } : undefined }); }
@@ -57,6 +68,10 @@ export const Login: React.FC = () => {
         <button type="button" className={tab === 'manager' ? 'on' : ''} onClick={() => { setTab('manager'); setError(null); }}>Manager</button>
         <button type="button" className={tab === 'worker' ? 'on' : ''} onClick={() => { setTab('worker'); setError(null); }}>Worker</button>
       </div>
+      {tab === 'worker' && getPass() && (() => { const w = getPass()!.worker; return (
+        <Link to="/app/worker" className="v2-card v2-row" style={{ padding: 12, marginBottom: 10, textDecoration: 'none', color: 'inherit', gap: 8 }}>
+          <span style={{ flex: 1 }}>Continue as <b>{w.first_name} {w.last_name}</b> <span className="v2-mut">({w.cn})</span></span><b className="v2-link">Open ›</b>
+        </Link>); })()}
       <form className="v2-card" style={{ padding: 18 }} onSubmit={submit}>
         <Field label={tab === 'worker' ? 'CN #' : 'Username'}>
           <input className="v2-input" autoComplete="username" autoCapitalize={tab === 'worker' ? 'characters' : 'none'} placeholder={tab === 'worker' ? 'e.g. I1004' : ''}

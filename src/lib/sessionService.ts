@@ -2408,7 +2408,16 @@ class SessionService {
       const { data } = await supabase.rpc('legacy_login_worker', { p_contractor_id: contractorId, p_password: password });
       
       if (!data) return null;
-      
+      return this.adoptWorkerRow(data);
+    }
+
+    /**
+     * A worker's row on today's session (from sign-in, or from the worker dashboard's pass) → the
+     * signed-in worker: points the app at their center, refuses a finished day (SESSION_FINALIZED).
+     */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    public async adoptWorkerRow(data: any): Promise<Worker> {
+      const contractorId = String(data.user_id);
       if (data.command_center_id) {
         const cc = await commandCenterService.getCommandCenterById(data.command_center_id);
         if (cc) {

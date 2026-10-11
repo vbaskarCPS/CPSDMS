@@ -1,7 +1,8 @@
 // src/pages/Training/TrainingPortal.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BookOpen, CheckCircle, LogOut, ChevronRight, Trophy, Lock } from 'lucide-react';
+import { BookOpen, CheckCircle, LogOut, ChevronRight, Trophy, Lock, LayoutDashboard } from 'lucide-react';
+import { getPass } from '../../lib/workerPass';
 import { contractorService, TrainingProgress } from '../../lib/contractorService';
 import { getModulesForLevel, TrainingModule, QUIZ_PASS_THRESHOLD } from '../../lib/training/index';
 
@@ -82,13 +83,24 @@ const TrainingPortal: React.FC = () => {
               </p>
             </div>
           </div>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors text-sm"
-          >
-            <LogOut size={16} />
-            Logout
-          </button>
+          {/* opened from the worker dashboard: back there (the dashboard has Sign out) */}
+          {getPass() ? (
+            <button
+              onClick={() => navigate('/app/worker')}
+              className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors text-sm"
+            >
+              <LayoutDashboard size={16} />
+              My Dashboard
+            </button>
+          ) : (
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors text-sm"
+            >
+              <LogOut size={16} />
+              Logout
+            </button>
+          )}
         </div>
       </div>
 
