@@ -1,7 +1,7 @@
 // src/v2/features/auth/Login.tsx — manager sign-in (username + password) and first-login password change.
 import React, { useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { getPass, signInProblem, workerSignIn } from '../../../lib/workerPass';
+import { forgetPass, getPass, signInProblem, workerSignIn } from '../../../lib/workerPass';
 import { useAuth } from '../../lib/auth';
 import { completeSetup, setupInfo, useLoad } from '../../lib/data';
 import { Btn, Field, Loading } from '../../ui';
@@ -39,8 +39,10 @@ export const Login: React.FC = () => {
       if (tab === 'worker') {
         // This year's contractor list gives the worker dashboard pass; a running session they're on
         // still takes them straight to their logsheet.
+        forgetPass();   // a shared phone: the last worker's pass never carries over
         const pass = await workerSignIn(username, password);
-        if (!pass.ok && (pass.reason === 'wrong' || pass.reason === 'locked')) { setError(signInProblem(pass)); return; }
+        // a wrong PIN (or a locked one) stops here; a wrong first name may still be today's session's
+        if (!pass.ok && (pass.reason === 'locked' || (pass.reason === 'wrong' && pass.hasPin))) { setError(signInProblem(pass)); return; }
         const { legacyLogin } = await import('../../../lib/legacyLogin');
         // a session problem (e.g. no day open yet) still lets a worker with a pass into their dashboard
         const res = await legacyLogin(username.trim(), password, { workersOnly: true }).catch(e => { if (pass.ok) return null; throw e; });

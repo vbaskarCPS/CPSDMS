@@ -14,7 +14,7 @@ export interface WorkerProfile {
   center_id: string; center_name: string; region: string | null; services: string[]; has_pin: boolean;
 }
 export interface WorkerPass { token: string; expires_at: string; worker: WorkerProfile }
-export type SignInResult = { ok: true; pass: WorkerPass } | { ok: false; reason: 'not_found' | 'wrong' | 'locked' | 'left' | 'unavailable'; until?: string };
+export type SignInResult = { ok: true; pass: WorkerPass } | { ok: false; reason: 'not_found' | 'wrong' | 'locked' | 'left' | 'unavailable'; until?: string; hasPin?: boolean };
 
 export function getPass(): WorkerPass | null {
   try {
@@ -36,10 +36,10 @@ export function forgetPass(): void {
 export async function workerSignIn(cn: string, secret: string): Promise<SignInResult> {
   const { data, error } = await supabase.rpc('app_worker_sign_in', { p_cn: cn.trim(), p_secret: secret });
   if (error || !data) return { ok: false, reason: 'unavailable' };
-  const d = data as { ok: boolean; reason?: string; until?: string; token?: string; expires_at?: string; worker?: WorkerProfile };
+  const d = data as { ok: boolean; reason?: string; until?: string; has_pin?: boolean; token?: string; expires_at?: string; worker?: WorkerProfile };
   if (!d.ok || !d.token || !d.worker) {
     const reason = (['not_found', 'wrong', 'locked', 'left'] as const).find(x => x === d.reason) || 'not_found';
-    return { ok: false, reason, until: d.until };
+    return { ok: false, reason, until: d.until ?? undefined, hasPin: d.has_pin };
   }
   const pass = { token: d.token, expires_at: d.expires_at || new Date(Date.now() + 30 * 864e5).toISOString(), worker: d.worker };
   savePass(pass);

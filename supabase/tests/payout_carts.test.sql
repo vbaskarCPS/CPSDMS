@@ -1,4 +1,4 @@
--- Editable payouts: save carts + sales + lines together; replaced on save; locked by a generated
+-- Editable payouts: save carts + sales + lines together; replaced on save; locked by a paid
 -- payslip (unlocked when it's voided); no card numbers in notes; read needs Workerbook. Rolled back.
 \set ON_ERROR_STOP 1
 begin;
@@ -36,17 +36,20 @@ select 'no perm sees' k, (select count(*) from payout_carts) carts, (select coun
 do $$ begin perform app_save_payout_day('c0000000-0000-0000-0000-0000000000c1', '2026-10-02', '[]', '[]'); raise notice 'FAIL no-perm saved';
   exception when others then raise notice 'ok no-perm: %', sqlerrm; end $$;
 reset role;
--- generated payslip locks the day; void unlocks
+-- a paid payslip locks the day (a Generated one doesn't: RUN_23); void unlocks
 insert into payout_lines (center_id, day, cn) values ('c0000000-0000-0000-0000-0000000000c1', '2026-10-02', 'I2004');
 insert into payslip_runs (id, center_id, start_day, end_day, season) values ('f0000000-0000-0000-0000-0000000000f1', 'c0000000-0000-0000-0000-0000000000c1', '2026-10-01', '2026-10-05', 'sealing');
 insert into payslips (id, run_id, center_id, cn) values ('f0000000-0000-0000-0000-0000000000f2', 'f0000000-0000-0000-0000-0000000000f1', 'c0000000-0000-0000-0000-0000000000c1', 'I2004');
 update payout_lines set payslip_id = 'f0000000-0000-0000-0000-0000000000f2';
+update payslips set status = 'paid' where id = 'f0000000-0000-0000-0000-0000000000f2';
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a0000000-0000-0000-0000-0000000000c9', true);
 do $$ begin perform app_save_payout_day('c0000000-0000-0000-0000-0000000000c1', '2026-10-02', '[]', '[]'); raise notice 'FAIL locked day saved';
   exception when others then raise notice 'ok locked: %', sqlerrm; end $$;
 reset role;
+alter table payslips disable trigger payslips_paid_lock;   -- only to set up the next case
 update payslips set status = 'void';
+alter table payslips enable trigger payslips_paid_lock;
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'a0000000-0000-0000-0000-0000000000c9', true);
 select 'after void' k, app_save_payout_day('c0000000-0000-0000-0000-0000000000c1', '2026-10-02', '[]', '[]') n;

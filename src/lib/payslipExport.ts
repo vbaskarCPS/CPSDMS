@@ -164,7 +164,8 @@ export function payslipTotals(w: WorkerPayslipData, hiddenFields: HiddenFields, 
   const hotels       = hiddenFields.hotels ? 0 : w.hotels;
   const advances     = hiddenFields.advances ? 0 : w.advances;
   const travelPkg    = hiddenFields.travelPkg ? 0 : w.travelPkg;
-  const crackfillDed = season === 'sealing' ? r2(earnedComm * ((w.crackfillPct || 0) / 100)) : 0;
+  // in whole cents, so it matches the server (payslip_refresh) to the cent
+  const crackfillDed = season === 'sealing' ? Math.round(Math.round(earnedComm * 100) * Math.round((w.crackfillPct || 0) * 100) / 10000) / 100 : 0;
   const extraDeductions = w.extraDeductions.reduce((s, d) => s + d.amount, 0);
   const additions       = w.additions.reduce((s, a) => s + a.amount, 0);
   const finalPay = r2(gi - hotels - advances - travelPkg - crackfillDed - extraDeductions + additions);

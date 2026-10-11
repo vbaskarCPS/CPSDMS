@@ -8,7 +8,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, Download, FileText, GraduationCap, LogOut, MapPinned, UserCog } from 'lucide-react';
-import { getPass, signInProblem, SignedOut, withPass, workerSignIn, workerSignOut, type WorkerProfile } from '../../../lib/workerPass';
+import { forgetPass, getPass, signInProblem, SignedOut, withPass, workerSignIn, workerSignOut, type WorkerProfile } from '../../../lib/workerPass';
 import { payslipTotals, type ExtraItem, type HiddenFields, type PayslipDayRow, type PayslipSeason } from '../../../lib/payslipExport';
 import { Btn, ErrorBox, Field, Loading, Tag, Tile } from '../../ui';
 
@@ -54,8 +54,16 @@ function useWorkerData<T>(fn: string, pick: (d: unknown) => T): { data: T | null
 }
 
 // ───────────── shell ─────────────
+/** The worker signed in on today's logsheet on this phone, if any (the old app's current_user). */
+const logsheetWorker = (): string | null => {
+  try { const u = JSON.parse(localStorage.getItem('current_user') || 'null'); return u?.contractorId ? String(u.contractorId) : null; } catch { return null; }
+};
+
 export const WorkerHome: React.FC = () => {
   const [, setTick] = useState(0);
+  // someone else's pass on this phone (a different worker is on the logsheet) is never shown
+  const onSheet = logsheetWorker();
+  if (onSheet && getPass() && getPass()!.worker.cn.toUpperCase() !== onSheet.toUpperCase()) forgetPass();
   const pass = getPass();
   if (!pass) return <Frame><WorkerSignIn onIn={() => setTick(t => t + 1)} /></Frame>;
   return (
@@ -113,6 +121,7 @@ export const WorkerSignIn: React.FC<{ onIn: () => void }> = ({ onIn }) => {
       <Field label="PIN (or first name if you haven’t made one)"><input className="v2-input" type="password" value={secret} onChange={e => setSecret(e.target.value)} required /></Field>
       {error && <div className="v2-err" style={{ marginBottom: 12 }}>{error}</div>}
       <Btn type="submit" disabled={busy} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Signing in…' : 'Sign in'}</Btn>
+      {logsheetWorker() && <div className="v2-note" style={{ textAlign: 'center' }}><Link className="v2-link" to="/map-logsheet">‹ Back to today’s logsheet</Link></div>}
     </form>
   );
 };
