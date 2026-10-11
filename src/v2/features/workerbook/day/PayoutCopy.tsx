@@ -6,7 +6,7 @@ import React, { useState } from 'react';
 import { Lock, Pencil, RefreshCw } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useLoad } from '../../../lib/data';
-import { listLines } from '../../../lib/payslips';
+import { lineLock, listLines } from '../../../lib/payslips';
 import { fullName, type Day, type RosterRow } from '../../../lib/workerbook';
 import { recalcDay } from '../../../lib/payoutEngine';
 import { isFinalized, listCarts } from '../../../lib/payoutCarts';
@@ -27,7 +27,9 @@ export const PayoutCopy: React.FC<{ centerId: string; region: string; date: stri
     const [params, setParams] = useSearchParams();
     const editCn = params.get('edit');
     const carts = useLoad(() => listCarts(centerId, date).catch(() => []), [centerId, date]);
-    const locked = (lines.data || []).some(l => l.payslip_id);
+    // a paid payslip locks the day; one that's only Generated takes the changes
+    const lock = lineLock(lines.data || []);
+    const locked = lock.paid;
     const unpaid = (lines.data || []).length > 0 && !locked;
     const canEditDay = canEdit && !locked && (carts.data || []).length > 0;
     const open = day.state === 'live';
@@ -50,7 +52,8 @@ export const PayoutCopy: React.FC<{ centerId: string; region: string; date: stri
     const ns = rows.filter(r => r.attendance === 'no_show');
     const toolbar = <>
       {canEditDay && <Btn size="sm" icon={Pencil} onClick={() => { setNote(null); setEditing(true); }}>Edit payouts</Btn>}
-      {locked && <span className="v2-small v2-mut v2-row" style={{ gap: 4 }} title="Void the payslip on the Payslips page to edit this day"><Lock size={13} /> Locked by a payslip</span>}
+      {locked && <span className="v2-small v2-mut v2-row" style={{ gap: 4 }} title="This day is on a paid payslip"><Lock size={13} /> Locked: on a paid payslip</span>}
+      {!locked && lock.generated && <span className="v2-small v2-mut" title="Saving changes here updates that payslip">On a generated payslip: changes update it</span>}
       {canEdit && unpaid && <Btn size="sm" kind="o" icon={RefreshCw} disabled={busy} onClick={recalc}
         title="Work the pay out again with each worker's days and Silver Hats as they are now">{busy ? 'Working out…' : 'Work out again'}</Btn>}
       <Link className="v2-link v2-small" to="/app/workerbook/payslips">Payslips ›</Link>
@@ -88,7 +91,7 @@ export const PayoutCopy: React.FC<{ centerId: string; region: string; date: stri
                       <td style={{ textAlign: 'right' }}>{Number(l.steps).toFixed(1)}</td><td style={{ textAlign: 'right' }}>{Number(l.equiv).toFixed(2)}</td>
                       <td style={{ textAlign: 'right' }}>{Number(l.payout_rate)}</td><td style={{ textAlign: 'right' }}>{money(l.daily_bonus)}</td>
                       <td style={{ textAlign: 'right' }}>{money(l.mach_rent)}</td><td style={{ textAlign: 'right' }}><b>{money(l.total_payout)}</b></td>
-                      <td>{l.payslip_id ? <Tag tone="g">On a payslip</Tag> : <Tag tone="a">Unpaid</Tag>}</td>
+                      <td>{l.payslip_id ? (l.payslip?.status === 'paid' ? <Tag tone="g">Paid</Tag> : <Tag tone="b">On a payslip</Tag>) : <Tag tone="a">Unpaid</Tag>}</td>
                     </tr>))}
                   </tbody>
                 </table>

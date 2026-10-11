@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../../lib/localStorage';
+import { getPass, workerSignOut } from '../../lib/workerPass';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
@@ -328,7 +329,7 @@ const Dashboard: React.FC = () => {
       removeStorageItem('rm_view_mode');
       removeStorageItem('rm_view_cart_names');
     }
-    navigate('/');
+    navigate(!isTrainingMode && !isRMViewMode && getPass() ? '/app/worker?done=1' : '/');
   };
 
   // Return to RM view handler
@@ -515,6 +516,7 @@ const Dashboard: React.FC = () => {
 
   const handleLogout = () => {
     removeStorageItem('current_user');
+    if (!isRMViewMode) void workerSignOut();
     if (isTrainingMode) trainingService.disableTrainingMode();
     if (isRMViewMode) {
       removeStorageItem('rm_original_user');
@@ -737,9 +739,9 @@ const Dashboard: React.FC = () => {
                   </button>
                 )}
                 <button
-                  onClick={() => navigate('/worker/account')}
+                  onClick={() => navigate('/app/worker')}
                   className="p-2 bg-gray-800 text-amber-300 rounded-lg border border-gray-700"
-                  aria-label="My account" title="My account"
+                  aria-label="My dashboard" title="My dashboard"
                 >
                   <UserCog size={20} />
                 </button>

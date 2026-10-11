@@ -16,7 +16,7 @@
 import React, { useState } from 'react';
 import {
   X, ListChecks, Receipt, BarChart3, Images, MapPinned, MessageSquare, Phone,
-  UserCog, LogOut, Plus, FileText, Home, Route,
+  LayoutDashboard, LogOut, Plus, FileText, Home, Route,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -140,7 +140,7 @@ const MenuGrid: React.FC<MenuGridProps> = (p) => {
             disabled={!p.hasPcl} badge={p.pclToText > 0 ? String(p.pclToText) : null} badgeClass="bg-teal-600 text-white" />
 
           <Tile icon={Phone} label="Contacts" iconClass="text-emerald-300" onClick={p.onContacts} />
-          <Tile icon={UserCog} label="My Account" iconClass="text-amber-300" onClick={p.onAccount} />
+          <Tile icon={LayoutDashboard} label="My Dashboard" iconClass="text-amber-300" onClick={p.onAccount} />
           <Tile icon={LogOut} label="Log out" iconClass="text-red-400" onClick={p.onLogout} danger />
         </div>
       </div>

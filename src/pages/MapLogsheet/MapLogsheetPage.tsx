@@ -23,6 +23,7 @@ import { primeSpeech } from '../Management/mobile/rmPhone';
 import type { MapPin as DriverStop } from '../../lib/sessionService';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
+import { getPass, workerSignOut } from '../../lib/workerPass';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
@@ -309,9 +310,10 @@ const MapLogsheetPage: React.FC = () => {
     if (rest.length === 0) showToast('All stops done ✓');
   };
 
+  // a finished day: back to the worker dashboard when they have one (their payslips, training)
   const forceLogout = useCallback(() => {
     removeStorageItem('current_user');
-    navigate('/');
+    navigate(getPass() ? '/app/worker?done=1' : '/');
   }, [navigate]);
 
   // ---------------------------------------------------------------------
@@ -727,7 +729,7 @@ const MapLogsheetPage: React.FC = () => {
     }
   };
 
-  const handleLogout = () => { removeStorageItem('current_user'); navigate('/'); };
+  const handleLogout = () => { removeStorageItem('current_user'); void workerSignOut(); navigate('/'); };
 
   // ---------------------------------------------------------------------
   // RENDER
@@ -923,7 +925,7 @@ const MapLogsheetPage: React.FC = () => {
             onLoadStreet={() => { setShowMenu(false); setPickingStreet(true); setSelectedId(null); }}
             onPcl={() => { setShowMenu(false); setShowPclOutreach(true); }}
             onContacts={() => { setShowMenu(false); setShowContacts(true); }}
-            onAccount={() => { setShowMenu(false); navigate('/worker/account'); }}
+            onAccount={() => { setShowMenu(false); navigate('/app/worker'); }}
             onLogout={handleLogout}
           />
         )}

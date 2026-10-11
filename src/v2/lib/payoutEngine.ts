@@ -87,12 +87,12 @@ const hasInputs = (st: unknown): st is Record<string, unknown> =>
   !!st && typeof st === 'object' && (typeof (st as Record<string, unknown>).assignedEQ === 'number' || typeof (st as Record<string, unknown>).totalEQ === 'number');
 
 /**
- * Works out a closed day's unpaid lines again from their inputs, with each worker's days and
- * Silver Hats as they are now in the app. Lines already on a payslip block it (void that first).
+ * Works out a closed day's lines again from their inputs, with each worker's days and Silver Hats
+ * as they are now in the app. A day on a Generated payslip updates that payslip; a paid one is locked.
  */
 export async function recalcDay(centerId: string, region: string, day: string): Promise<{ lines: number; changed: number; before: number; after: number }> {
   const lines = await listLines(centerId, day, day);
-  if (lines.some(l => l.payslip_id)) throw new Error(`${day} is already on a payslip. Void that payslip first to work the day out again.`);
+  if (lines.some(l => l.payslip_id && l.payslip?.status === 'paid')) throw new Error(`${day} is on a paid payslip, so it's locked.`);
   const total = (xs: { total_payout: number }[]) => xs.reduce((a, x) => a + (Number(x.total_payout) || 0), 0);
   // a day with its carts and sales: work it out from those
   const cartsLib = await import('./payoutCarts');

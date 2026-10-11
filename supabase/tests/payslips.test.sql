@@ -1,4 +1,5 @@
--- Payslips: save day lines, gaps from the archive, generate (no double-paying a day), mark paid, void frees lines.
+-- Payslips: save day lines, gaps from the archive, generate (no double-paying a day), a Generated
+-- payslip takes a fixed day, mark paid (then locked), void frees lines.
 \set ON_ERROR_STOP 1
 begin;
 insert into command_centers (id, username, password, display_name, workerbook_sheet_id, masterbookings_sheet_id)
@@ -33,9 +34,14 @@ do $$ begin
     jsonb_build_array(jsonb_build_object('cn','T1','line_ids', (select jsonb_agg(id) from payout_lines where cn = 'T1'), 'earned', 240, 'final_pay', 240)));
   raise notice 'FAIL double payslip';
 exception when others then raise notice 'ok no double: %', sqlerrm; end $$;
-do $$ begin perform app_save_payout_lines('c0000000-0000-0000-0000-0000000000f1', '2026-10-07', '[]'); raise notice 'FAIL rebuilt a paid-out day';
-  exception when others then raise notice 'ok rebuild blocked: %', sqlerrm; end $$;
+-- a day on a Generated payslip can still be fixed: the payslip takes the new numbers (RUN_23)
+select 'fix 7th' k, app_save_payout_lines('c0000000-0000-0000-0000-0000000000f1', '2026-10-07', '[{"cn":"T1","first_name":"Ann","last_name":"A","total_payout":120}]');
+select 'slip after fix' k, earned, jsonb_array_length(days) days, updated_at is not null edited from payslips where cn = 'T1';
 select 'paid' k, app_payslips_mark_paid(array(select id from payslips where cn = 'T1'));
+do $$ begin perform app_save_payout_lines('c0000000-0000-0000-0000-0000000000f1', '2026-10-07', '[]'); raise notice 'FAIL rebuilt a paid-out day';
+  exception when others then raise notice 'ok paid day locked: %', sqlerrm; end $$;
+do $$ begin perform app_payslip_update((select id from payslips where cn = 'T1'), '{}', null, array(select id from payout_lines where cn = 'T1')); raise notice 'FAIL edited a paid payslip';
+  exception when others then raise notice 'ok paid payslip locked: %', sqlerrm; end $$;
 do $$ begin perform app_payslip_void((select id from payslips where cn = 'T1')); raise notice 'FAIL voided paid';
   exception when others then raise notice 'ok paid not voidable: %', sqlerrm; end $$;
 reset role;

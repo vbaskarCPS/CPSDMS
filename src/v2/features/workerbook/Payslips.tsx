@@ -3,16 +3,17 @@
 // Workers are paid on a payslip for a pay period, not on the day. Pick a date range, the unpaid
 // day lines are grouped per worker, add the extras the old payslips had (hotels, advances,
 // travel package, crackfill %, $120 program, extra deductions / additions, batches) and
-// Generate: the payslips are saved as Generated and the PDFs download. Signing a payslip off
-// marks it Paid. A Generated payslip can be voided, which frees its days for a new one.
+// Generate: the payslips are saved as Generated, the PDFs download, and each worker sees their
+// own copy in the worker dashboard. A Generated payslip can be edited (extras, batch, which days)
+// or voided, which frees its days for a new one. Signing it off marks it Paid, and locks it.
 import { Link } from 'react-router-dom';
 import React, { useMemo, useState } from 'react';
-import { CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import {
   daysBetween, defaultSettings, downloadRunPdf, generatePayslips, lineGaps, lineToDay, linesFromSavedDay, listLines, listRuns,
-  markPaid, mmmdd, saveLines, toWorkerData, voidPayslip, type PayoutLine, type Payslip, type PayslipRun, type SlipSettings,
+  markPaid, mmmdd, saveLines, toWorkerData, updatePayslip, voidPayslip, type PayoutLine, type Payslip, type PayslipRun, type SlipSettings,
 } from '../../lib/payslips';
 import { payslipTotals, type HiddenFields, type PayslipSeason } from '../../../lib/payslipExport';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
@@ -70,7 +71,7 @@ export const Payslips: React.FC = () => {
         </div>
       ) : (
         <div className="v2-stack" style={{ gap: 12 }}>
-          {(runs.data || []).map(r => <RunCard key={r.id} run={r} centerName={center.display_name} onChanged={runs.reload} />)}
+          {(runs.data || []).map(r => <RunCard key={r.id} run={r} centerId={center.id} centerName={center.display_name} onChanged={runs.reload} />)}
         </div>
       )}
     </div>
@@ -78,7 +79,8 @@ export const Payslips: React.FC = () => {
 };
 
 // ───────────── a generated run ─────────────
-const RunCard: React.FC<{ run: PayslipRun; centerName: string; onChanged: () => void }> = ({ run, centerName, onChanged }) => {
+const RunCard: React.FC<{ run: PayslipRun; centerId: string; centerName: string; onChanged: () => void }> = ({ run, centerId, centerName, onChanged }) => {
+  const [editing, setEditing] = useState<Payslip | null>(null);
   const live = run.payslips.filter(p => p.status !== 'void');
   const paid = live.filter(p => p.status === 'paid');
   const [open, setOpen] = useState(live.length !== paid.length);
@@ -123,9 +125,11 @@ const RunCard: React.FC<{ run: PayslipRun; centerName: string; onChanged: () => 
                     <td style={{ textAlign: 'right' }}>{p.days.length}</td>
                     <td style={{ textAlign: 'right' }}>{money(Number(p.earned))}</td>
                     <td style={{ textAlign: 'right' }}><b>{money(Number(p.final_pay))}</b></td>
-                    <td>{p.status === 'paid' ? <Tag tone="g">Paid {p.paid_at ? pretty(p.paid_at.slice(0, 10)) : ''}</Tag> : p.status === 'void' ? <Tag>Void</Tag> : <Tag tone="a">Generated</Tag>}</td>
+                    <td>{p.status === 'paid' ? <Tag tone="g">Paid {p.paid_at ? pretty(p.paid_at.slice(0, 10)) : ''}</Tag> : p.status === 'void' ? <Tag>Void</Tag> : <Tag tone="a">Generated</Tag>}
+                      {p.updated_at && p.status !== 'void' && <div className="v2-small v2-mut">Edited {pretty(p.updated_at.slice(0, 10))}</div>}</td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {p.status === 'generated' && <>
+                        <Btn size="sm" kind="o" icon={Pencil} disabled={busy} onClick={() => setEditing(p)}>Edit</Btn>{' '}
                         <Btn size="sm" icon={CheckCircle2} disabled={busy} onClick={() => setConfirm([p])}>Sign off</Btn>{' '}
                         <Btn size="sm" kind="o" disabled={busy} onClick={() => doVoid(p)}>Void</Btn>
                       </>}
@@ -143,11 +147,12 @@ const RunCard: React.FC<{ run: PayslipRun; centerName: string; onChanged: () => 
           </div>
         </>
       )}
+      {editing && <PayslipEditor run={run} slip={editing} centerId={centerId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged(); }} />}
       {confirm && (
         <Modal title={`Sign off ${confirm.length} payslip${confirm.length === 1 ? '' : 's'} as paid?`} onClose={() => setConfirm(null)}
           footer={<><Btn kind="o" onClick={() => setConfirm(null)}>Cancel</Btn><Btn icon={CheckCircle2} disabled={busy} onClick={() => signOff(confirm)}>{busy ? 'Saving…' : 'Mark paid'}</Btn></>}>
           <p style={{ marginTop: 0 }}>{confirm.length === 1 ? `${confirm[0].first_name} ${confirm[0].last_name}` : `${confirm.length} workers`} · <b>{money(confirm.reduce((s, p) => s + Number(p.final_pay), 0))}</b> for {pretty(run.start_day)} – {pretty(run.end_day)}.</p>
-          <p className="v2-small v2-mut">Your name and the time are recorded. A paid payslip can’t be voided.</p>
+          <p className="v2-small v2-mut">Your name and the time are recorded. A paid payslip is locked: it can’t be edited or voided, and neither can its days.</p>
           <ErrorBox error={error} />
         </Modal>
       )}
@@ -306,11 +311,69 @@ const Generator: React.FC<{ centerId: string; centerName: string; services: stri
           </div>
         )}
         <div className="v2-note" style={{ marginTop: 10 }}>
-          Generating saves these payslips as <b>Generated</b> and downloads the PDFs ({daysBetween(start, end)}-day layout, one PDF per batch, sign-out list first). They’re marked <b>Paid</b> when signed off on the Payslips page.
+          Generating saves these payslips as <b>Generated</b>, downloads the PDFs ({daysBetween(start, end)}-day layout, one PDF per batch, sign-out list first) and shares each worker’s own copy in their worker dashboard. A Generated payslip can still be edited; once it’s signed off as <b>Paid</b> it’s locked.
         </div>
       </div>
     );
   };
+
+// ───────────── edit a Generated payslip ─────────────
+const PayslipEditor: React.FC<{ run: PayslipRun; slip: Payslip; centerId: string; onClose: () => void; onSaved: () => void }> = ({ run, slip, centerId, onClose, onSaved }) => {
+  const lines = useLoad(() => listLines(centerId, run.start_day, run.end_day), [centerId, run.start_day, run.end_day]);
+  const mine = (lines.data || []).filter(l => l.cn.toUpperCase() === slip.cn.toUpperCase());
+  const [s, setS] = useState<SlipSettings>({ ...defaultSettings(), ...slip.settings });
+  const [batch, setBatch] = useState(slip.batch || '');
+  const [picked, setPicked] = useState<Set<string> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const on = picked || new Set(mine.filter(l => l.payslip_id === slip.id).map(l => l.id));
+  const chosen = mine.filter(l => on.has(l.id));
+  const t = payslipTotals(toWorkerData(slip.cn, slip.first_name, slip.last_name, chosen.map(lineToDay), s), run.hidden, run.season);
+  const batches = [...new Set([...run.payslips.map(p => p.batch).filter((b): b is string => !!b), batch].filter(Boolean))];
+  const numIn = (v: string) => { const x = parseFloat(v); return isFinite(x) ? x : 0; };
+  const num = (k: 'hotels' | 'advances' | 'travelPkg' | 'crackfillPct', label: string) => (
+    <Field label={label}><input className="v2-input" inputMode="decimal" value={s[k] || ''} placeholder="0" onChange={e => setS({ ...s, [k]: numIn(e.target.value) })} /></Field>);
+  const toggle = (id: string) => setPicked(() => { const n = new Set(on); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const save = async () => {
+    setBusy(true); setError(null);
+    try { await updatePayslip(slip.id, s, batch, chosen.map(l => l.id)); onSaved(); } catch (e) { setError(e); } finally { setBusy(false); }
+  };
+  return (
+    <Modal title={`Edit payslip · ${slip.first_name} ${slip.last_name} (${slip.cn})`} onClose={onClose}
+      footer={<><span className="v2-small v2-mut" style={{ marginRight: 'auto' }}>Final pay <b>{money(t.finalPay)}</b> (was {money(Number(slip.final_pay))})</span>
+        <Btn kind="o" onClick={onClose}>Cancel</Btn><Btn disabled={busy || chosen.length === 0} onClick={save}>{busy ? 'Saving…' : 'Save changes'}</Btn></>}>
+      <div className="v2-small v2-mut" style={{ marginBottom: 8 }}>{pretty(run.start_day)} – {pretty(run.end_day)} · {run.season}. The worker sees the new version right away.</div>
+      <b className="v2-small">Days on this payslip</b>
+      {lines.loading && !lines.data ? <Loading /> : (
+        <table className="v2-table" style={{ margin: '4px 0 10px' }}><tbody>
+          {mine.map(l => {
+            const elsewhere = !!l.payslip_id && l.payslip_id !== slip.id;
+            return (
+              <tr key={l.id} style={{ opacity: elsewhere ? 0.5 : 1 }}>
+                <td style={{ width: 30 }}><input type="checkbox" checked={on.has(l.id)} disabled={elsewhere} onChange={() => toggle(l.id)} aria-label={`Day ${mmmdd(l.day)}`} /></td>
+                <td>{pretty(l.day)}</td><td className="v2-small">{l.manager || '—'}</td>
+                <td style={{ textAlign: 'right' }}>{money(Number(l.total_payout))}</td>
+                <td className="v2-small v2-mut">{elsewhere ? 'on another payslip' : ''}</td>
+              </tr>
+            );
+          })}
+          {mine.length === 0 && <tr><td className="v2-mut">No days for {slip.cn} in this pay period.</td></tr>}
+        </tbody></table>
+      )}
+      <div className="v2-grid4" style={{ alignItems: 'end' }}>
+        <label className="v2-check" style={{ border: 0, padding: 0 }}><input type="checkbox" checked={s.is120Program} onChange={e => setS({ ...s, is120Program: e.target.checked })} /> $120 program</label>
+        {!run.hidden.hotels && num('hotels', 'Hotels')}{!run.hidden.advances && num('advances', 'Advances')}{!run.hidden.travelPkg && num('travelPkg', 'Travel package')}
+        {run.season === 'sealing' && num('crackfillPct', 'Crackfill %')}
+        <Field label="Batch"><input className="v2-input" list={`batches-${slip.id}`} value={batch} onChange={e => setBatch(e.target.value)} />
+          <datalist id={`batches-${slip.id}`}>{batches.map(b => <option key={b} value={b} />)}</datalist></Field>
+      </div>
+      <Extras label="Extra deductions" items={s.extraDeductions} onChange={v => setS({ ...s, extraDeductions: v })} />
+      <Extras label="Additions" items={s.additions} onChange={v => setS({ ...s, additions: v })} />
+      <div className="v2-small v2-mut" style={{ marginTop: 8 }}>Earned {money(t.earnedComm)} · {t.daysWorked} day{t.daysWorked === 1 ? '' : 's'}. To change a day’s numbers, edit that day in Payouts: this payslip picks it up.</div>
+      <ErrorBox error={error} />
+    </Modal>
+  );
+};
 
 const Extras: React.FC<{ label: string; items: SlipSettings['additions']; onChange: (v: SlipSettings['additions']) => void }> = ({ label, items, onChange }) => (
   <div className="v2-row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 4 }}>

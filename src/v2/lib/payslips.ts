@@ -13,6 +13,8 @@ export interface PayoutLine {
   steps: number; equiv: number; total_prepay: number; payout_rate: number; aer_comm: number; upsell_comm: number;
   mach_rent: number; deductions: number; daily_bonus: number; total_payout: number; indiv_gross: number; crackfill_base: number;
   payslip_id: string | null; stats?: unknown;
+  /** the payslip this day line is on, if any */
+  payslip?: { status: 'generated' | 'paid' | 'void' } | null;
 }
 export type NewLine = Omit<PayoutLine, 'id' | 'center_id' | 'day' | 'hire_id' | 'payslip_id'> & { stats: unknown };
 
@@ -24,6 +26,8 @@ export interface Payslip {
   id: string; run_id: string; cn: string; hire_id?: string | null; first_name: string; last_name: string; batch: string | null;
   settings: SlipSettings; days: PayslipDayRow[]; earned: number; final_pay: number;
   status: 'generated' | 'paid' | 'void'; generated_at: string; paid_at: string | null;
+  /** last edited (a Generated payslip can be edited until it's paid) */
+  updated_at?: string | null;
 }
 export interface PayslipRun {
   id: string; start_day: string; end_day: string; season: PayslipSeason; hidden: HiddenFields; created_at: string; payslips: Payslip[];
@@ -79,7 +83,7 @@ export async function lineGaps(centerId: string): Promise<{ day: string; carts: 
   return must(await db.rpc('app_payout_line_gaps', { p_center: centerId })) as { day: string; carts: number }[];
 }
 export async function listLines(centerId: string, from: string, to: string): Promise<PayoutLine[]> {
-  return must(await db.from('payout_lines').select('*').eq('center_id', centerId).gte('day', from).lte('day', to)
+  return must(await db.from('payout_lines').select('*, payslip:payslips(status)').eq('center_id', centerId).gte('day', from).lte('day', to)
     .order('day').order('cn')) as PayoutLine[];
 }
 export async function listRuns(centerId: string): Promise<PayslipRun[]> {
@@ -97,6 +101,18 @@ export async function generatePayslips(p: {
 export async function markPaid(ids: string[]): Promise<number> {
   return must(await db.rpc('app_payslips_mark_paid', { p_ids: ids })) as number;
 }
+/**
+ * Edit a Generated payslip: its extras, batch and which of the worker's unpaid days are on it. The
+ * server works the days, earned and final pay out again from the day lines. Refused once paid.
+ */
+export async function updatePayslip(id: string, settings: SlipSettings, batch: string, lineIds: string[]): Promise<{ earned: number; final_pay: number; days: number }> {
+  return must(await db.rpc('app_payslip_update', { p_id: id, p_settings: settings, p_batch: batch, p_line_ids: lineIds })) as { earned: number; final_pay: number; days: number };
+}
+/** A day line is locked only by a paid payslip; one that's Generated can still change (and updates it). */
+export const lineLock = (lines: Pick<PayoutLine, 'payslip_id' | 'payslip'>[]) => ({
+  paid: lines.some(l => l.payslip_id && l.payslip?.status === 'paid'),
+  generated: lines.some(l => l.payslip_id && l.payslip?.status !== 'paid'),
+});
 export async function voidPayslip(id: string): Promise<void> {
   must(await db.rpc('app_payslip_void', { p_id: id }));
 }

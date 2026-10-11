@@ -164,7 +164,8 @@ export function payslipTotals(w: WorkerPayslipData, hiddenFields: HiddenFields, 
   const hotels       = hiddenFields.hotels ? 0 : w.hotels;
   const advances     = hiddenFields.advances ? 0 : w.advances;
   const travelPkg    = hiddenFields.travelPkg ? 0 : w.travelPkg;
-  const crackfillDed = season === 'sealing' ? r2(earnedComm * ((w.crackfillPct || 0) / 100)) : 0;
+  // in whole cents, so it matches the server (payslip_refresh) to the cent
+  const crackfillDed = season === 'sealing' ? Math.round(Math.round(earnedComm * 100) * Math.round((w.crackfillPct || 0) * 100) / 10000) / 100 : 0;
   const extraDeductions = w.extraDeductions.reduce((s, d) => s + d.amount, 0);
   const additions       = w.additions.reduce((s, a) => s + a.amount, 0);
   const finalPay = r2(gi - hotels - advances - travelPkg - crackfillDed - extraDeductions + additions);
@@ -679,6 +680,8 @@ export async function generatePayslipsPDF(
   hiddenFields: HiddenFields,
   season: PayslipSeason,
   batchName?: string,
+  /** A worker's own copy: no sign-out list, and its own file name. */
+  opts: { signOutList?: boolean; fileName?: string } = {},
 ): Promise<void> {
   // Count summary rows (drives both block height and the per-page math).
   let nSummary = 2; // Earned Income + Final Pay always present
@@ -697,7 +700,8 @@ export async function generatePayslipsPDF(
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format });
 
   // ── Sign-out list (first pages) ──
-  renderSignOutList(doc, workers, startDate, endDate, hiddenFields, season, batchName, pageHeight);
+  const withSignOut = opts.signOutList !== false;
+  if (withSignOut) renderSignOutList(doc, workers, startDate, endDate, hiddenFields, season, batchName, pageHeight);
 
   // ── Payslips ──
   let y = MT;
@@ -705,7 +709,7 @@ export async function generatePayslipsPDF(
 
   workers.forEach((worker, wi) => {
     if (onPage >= perPage || wi === 0) {
-      doc.addPage();
+      if (withSignOut || wi > 0) doc.addPage();
       y = MT;
       onPage = 0;
     }
@@ -717,5 +721,5 @@ export async function generatePayslipsPDF(
 
   // ── Save / download ──
   const filePrefix = batchName ? `${batchName}_` : '';
-  doc.save(`${filePrefix}${ccDisplayName} ${startDate} - ${endDate} Payslips.pdf`);
+  doc.save(opts.fileName || `${filePrefix}${ccDisplayName} ${startDate} - ${endDate} Payslips.pdf`);
 }
