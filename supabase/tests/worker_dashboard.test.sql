@@ -79,6 +79,14 @@ begin
       'days', '[]', 'line_ids', jsonb_build_array(l1, l2), 'earned', 275.35, 'final_pay', 227.82)));
   select id into slip from payslips where run_id = run;
 
+  -- each day's line, with what its pay was worked out from; nobody else's pass can read it
+  update payout_lines set stats = '{"prodCash": 300, "prodPayable": 265.49, "basePayoutRate": 17}' where id = l1;
+  r := app_worker_payslip_lines(tok, slip);
+  assert jsonb_array_length(r->'lines') = 2 and (r->'lines'->0->'stats'->>'prodCash')::numeric = 300, 'day lines: ' || r::text;
+  insert into people (id, first_name) values ('22222222-0000-0000-0000-000000000009', 'Di');
+  insert into hires (person_id, center_id, year, cn, status) values ('22222222-0000-0000-0000-000000000009', c, y, 'I1009', 'active');
+  assert app_worker_payslip_lines(app_worker_sign_in('I1009', 'Di')->>'token', slip)->>'reason' = 'not_found', 'another worker can''t read it';
+
   -- the worker sees it
   r := app_worker_payslips(tok);
   assert jsonb_array_length(r->'payslips') = 1 and r->'payslips'->0->>'status' = 'generated', 'worker sees generated: ' || r::text;

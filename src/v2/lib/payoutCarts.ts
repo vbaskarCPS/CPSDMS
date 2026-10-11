@@ -13,6 +13,7 @@ import type { RateCardData } from './rateCard';
 import { appShowedDates, countBefore, payFromInputs, rateFacts, rateFor, type WorkerRateFacts } from './payoutEngine';
 import { dayContext } from './dayContext';
 import { statsToLine, type NewLine } from './payslips';
+import { EQ_DIVISOR, SEASON_CONFIGS } from '../../types';
 
 export const PAYMENT_TYPES = ['Cash', 'Cheque', 'Credit Card', 'E-Transfer', 'Prepaid', 'Billed', 'IOS'] as const;
 export const SALE_TYPES = ['Sale', 'Production', 'Upgrade', 'Add-On'] as const;
@@ -97,13 +98,18 @@ export async function cartContext(centerId: string, region: string, day: string,
 export async function cartLines(cart: PayoutCart, ctx: CartContext): Promise<NewLine[]> {
   const stats = await cartStats(cart, ctx.service, ctx.settings);
   const teamEQ = cart.eq_override != null ? cart.eq_override : stats.totalEQ || 0;
+  // the settings the money was worked out with, kept on each line so the payslip can show the maths
+  const used = { ...ctx.settings, ...cart.settings };
+  const season = (SEASON_CONFIGS as Record<string, { prepaidWeight: number; billedWeight: number }>)[ctx.service];
   const teamSize = Math.max(1, cart.members.length);
   return cart.members.map(m => {
     const eqShare = (Number(m.equiv_split) || 0) / 100, upShare = (Number(m.upsell_split) || 0) / 100;
     const row: Record<string, unknown> = {
       contractorId: m.cn, firstName: m.first_name, lastName: m.last_name, manager: cart.manager || '',
       teamSize, equivSplitPercent: m.equiv_split, upsellSplitPercent: m.upsell_split, cart: cart.label,
-      productCostPercent: ctx.settings.productCostPercent, source: cart.source || 'cart',
+      productCostPercent: used.productCostPercent, taxRate: used.taxRate, noTaxOnCash: !!used.noTaxOnCash,
+      prepaidWeight: season?.prepaidWeight, billedWeight: season?.billedWeight, eqDivisor: EQ_DIVISOR, eqSetByManager: cart.eq_override != null,
+      source: cart.source || 'cart',
       assignedEQ: teamEQ * eqShare, teamTotalEQ: teamEQ,
       bonuses: cart.bonuses.reduce((a, b) => a + (Number(b.amount) || 0) * ((b.split?.[m.cn] ?? m.equiv_split) / 100), 0),
       machineRental: Number(m.machine_rental) || 0, deductions: Number(m.deductions) || 0,

@@ -18,6 +18,8 @@ import {
 import { payslipTotals, type HiddenFields, type PayslipSeason } from '../../../lib/payslipExport';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 import { ContractorLink } from './ContractorCard';
+import { DayBreakdown } from '../worker/DayBreakdown';
+import { db, must } from '../../lib/client';
 
 const money = (v: number) => `$${(Math.round(v * 100) / 100).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const pretty = (iso: string) => new Date(iso + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
@@ -71,7 +73,7 @@ export const Payslips: React.FC = () => {
         </div>
       ) : (
         <div className="v2-stack" style={{ gap: 12 }}>
-          {(runs.data || []).map(r => <RunCard key={r.id} run={r} centerId={center.id} centerName={center.display_name} onChanged={runs.reload} />)}
+          {(runs.data || []).map(r => <RunCard key={r.id} run={r} centerId={center.id} centerName={center.display_name} taxRate={center.tax_rate} onChanged={runs.reload} />)}
         </div>
       )}
     </div>
@@ -79,8 +81,9 @@ export const Payslips: React.FC = () => {
 };
 
 // ───────────── a generated run ─────────────
-const RunCard: React.FC<{ run: PayslipRun; centerId: string; centerName: string; onChanged: () => void }> = ({ run, centerId, centerName, onChanged }) => {
+const RunCard: React.FC<{ run: PayslipRun; centerId: string; centerName: string; taxRate?: number | null; onChanged: () => void }> = ({ run, centerId, centerName, taxRate, onChanged }) => {
   const [editing, setEditing] = useState<Payslip | null>(null);
+  const [viewing, setViewing] = useState<Payslip | null>(null);
   const live = run.payslips.filter(p => p.status !== 'void');
   const paid = live.filter(p => p.status === 'paid');
   const [open, setOpen] = useState(live.length !== paid.length);
@@ -122,7 +125,8 @@ const RunCard: React.FC<{ run: PayslipRun; centerId: string; centerName: string;
                   <tr key={p.id} style={{ opacity: p.status === 'void' ? 0.5 : 1 }}>
                     <td>{p.status === 'generated' && <input type="checkbox" checked={picked.has(p.id)} onChange={() => toggle(p.id)} aria-label={`Select ${p.first_name} ${p.last_name}`} />}</td>
                     <td><b>{p.cn}</b></td><td><b><ContractorLink hireId={p.hire_id}>{p.first_name} {p.last_name}</ContractorLink></b></td><td className="v2-small">{p.batch || '—'}</td>
-                    <td style={{ textAlign: 'right' }}>{p.days.length}</td>
+                    <td style={{ textAlign: 'right' }}>{p.status === 'void' ? p.days.length
+                      : <button type="button" className="v2-link" style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }} title="See how each day was worked out" onClick={() => setViewing(p)}>{p.days.length}</button>}</td>
                     <td style={{ textAlign: 'right' }}>{money(Number(p.earned))}</td>
                     <td style={{ textAlign: 'right' }}><b>{money(Number(p.final_pay))}</b></td>
                     <td>{p.status === 'paid' ? <Tag tone="g">Paid {p.paid_at ? pretty(p.paid_at.slice(0, 10)) : ''}</Tag> : p.status === 'void' ? <Tag>Void</Tag> : <Tag tone="a">Generated</Tag>}
@@ -147,6 +151,7 @@ const RunCard: React.FC<{ run: PayslipRun; centerId: string; centerName: string;
           </div>
         </>
       )}
+      {viewing && <PayslipDays run={run} slip={viewing} taxRate={taxRate} onClose={() => setViewing(null)} />}
       {editing && <PayslipEditor run={run} slip={editing} centerId={centerId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged(); }} />}
       {confirm && (
         <Modal title={`Sign off ${confirm.length} payslip${confirm.length === 1 ? '' : 's'} as paid?`} onClose={() => setConfirm(null)}
@@ -316,6 +321,29 @@ const Generator: React.FC<{ centerId: string; centerName: string; services: stri
       </div>
     );
   };
+
+// ───────────── each day of a payslip, worked out (what the worker sees in their dashboard) ─────────────
+const PayslipDays: React.FC<{ run: PayslipRun; slip: Payslip; taxRate?: number | null; onClose: () => void }> = ({ run, slip, taxRate, onClose }) => {
+  const lines = useLoad(async () => must(await db.from('payout_lines').select('*').eq('payslip_id', slip.id).order('day').order('created_at')) as PayoutLine[], [slip.id]);
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    <Modal title={`${slip.first_name} ${slip.last_name} (${slip.cn}) · ${pretty(run.start_day)} – ${pretty(run.end_day)}`} onClose={onClose}
+      footer={<Btn kind="o" onClick={onClose}>Close</Btn>}>
+      <div className="v2-small v2-mut" style={{ marginBottom: 8 }}>Each day, worked out from what was saved with it. The worker sees the same breakdown in their dashboard.</div>
+      <ErrorBox error={lines.error} />
+      {lines.loading && !lines.data ? <Loading /> : (lines.data || []).map(l => (
+        <div key={l.id} className="v2-card" style={{ padding: '8px 12px', marginBottom: 8 }}>
+          <button type="button" className="v2-row" onClick={() => setOpen(open === l.id ? null : l.id)} aria-expanded={open === l.id}
+            style={{ width: '100%', background: 'none', border: 0, padding: 0, cursor: 'pointer', gap: 8, color: 'inherit', font: 'inherit' }}>
+            {open === l.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<b>{pretty(l.day)}</b>
+            <span className="v2-small v2-mut">{l.manager || ''}</span><span className="v2-spacer" /><b>{money(Number(l.total_payout))}</b>
+          </button>
+          {open === l.id && <DayBreakdown line={{ ...l, stats: (l.stats || {}) as Record<string, unknown> }} season={run.season} centerTaxRate={taxRate} />}
+        </div>
+      ))}
+    </Modal>
+  );
+};
 
 // ───────────── edit a Generated payslip ─────────────
 const PayslipEditor: React.FC<{ run: PayslipRun; slip: Payslip; centerId: string; onClose: () => void; onSaved: () => void }> = ({ run, slip, centerId, onClose, onSaved }) => {
