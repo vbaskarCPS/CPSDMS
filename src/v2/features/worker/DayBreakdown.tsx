@@ -3,7 +3,7 @@
 // Alumni + Silver) and the pay. Shown to the worker in their dashboard and to the office on the
 // Payslips page. Totals only: no customer names or addresses are on a day line.
 import React from 'react';
-import type { PayslipSeason } from '../../../lib/payslipExport';
+import { productCostTaken, type PayslipSeason } from '../../../lib/payslipExport';
 
 export interface BreakdownLine {
   day: string; manager?: string | null; steps?: number; equiv?: number; payout_rate?: number; total_payout: number;
@@ -92,7 +92,8 @@ export const DayBreakdown: React.FC<{ line: BreakdownLine; season: PayslipSeason
   const taxOff = taxable - taxable / (1 + taxRate / 100);
   const afterTax = taxable - taxOff + (noTaxOnCash ? n(s.prodCash) : 0);
   const flatsAfterTax = n(s.prodFlats) / (1 + taxRate / 100);
-  const costOff = (afterTax - flatsAfterTax) * productCost / 100;
+  // the same figure the payslip prints as Sealant: worked back from what the day paid
+  const costOff = productCostTaken(s, taxRate) ?? (afterTax - flatsAfterTax) * productCost / 100;
   const payable = n(s.prodPayable);
   const adjusted = Math.abs(afterTax - costOff - payable) > 0.05;
   const eqFromMoney = payable / divisor;
