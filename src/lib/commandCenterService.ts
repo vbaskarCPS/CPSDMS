@@ -280,6 +280,23 @@ export const createEqualSplit = (workerIds: string[]): TeamSplitConfig => {
   return split;
 };
 
+// --- A CART THAT LISTS NOBODY IS THE WORKER'S OWN ---
+// A cart made when a worker signs in on their own (a late arrival, say) used to be saved with no
+// members and no split. Everything that lists carts by their members then skipped that worker
+// (Manage Team, the RM cart cards, payouts) and their split read as 0%. Read such a cart as the
+// worker's solo cart: just them, split 100%. Carts that list members are returned unchanged.
+export function withCartMembers<T extends { worker_id: string; team_worker_ids?: string[] | null; equiv_split?: TeamSplitConfig | null; upsell_split?: TeamSplitConfig | null }>(row: T): T {
+  if (!row || (Array.isArray(row.team_worker_ids) && row.team_worker_ids.length > 0)) return row;
+  const members = [row.worker_id];
+  const hasSplit = (s: TeamSplitConfig | null | undefined) => !!s && Object.keys(s).length > 0;
+  return {
+    ...row,
+    team_worker_ids: members,
+    equiv_split: hasSplit(row.equiv_split) ? row.equiv_split : createEqualSplit(members),
+    upsell_split: hasSplit(row.upsell_split) ? row.upsell_split : createEqualSplit(members),
+  };
+}
+
 // --- VALIDATE SPLIT TOTALS 100% ---
 export const validateSplitTotal = (split: TeamSplitConfig): boolean => {
   const total = Object.values(split).reduce((sum, val) => sum + val, 0);
