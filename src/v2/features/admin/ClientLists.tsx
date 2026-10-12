@@ -1,26 +1,36 @@
 // src/v2/features/admin/ClientLists.tsx — Super Admin › Territory & Client Data › Client lists.
 // Bring in a client list (file or Google Sheet link) → The Benny reads its layout → clean and
-// match each address to its route → review the counts → approve. Every import can be undone,
-// and each layout is saved as a recipe so the same kind of file reads the same way next time.
-import React, { useMemo, useState } from 'react';
+// match each address to its route → review the counts and the checks → see exactly what saving
+// will change → save. A check that says STOP blocks the import. Every import can be undone (undo
+// takes back only what it added), and each layout is saved as a recipe so the same kind of file
+// reads the same way next time. Card numbers, SINs and ID numbers are never read or saved.
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FileSpreadsheet, Link2, Sparkles, Undo2, Upload } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import {
-  applyMapping, cell, FIELDS, findHeaderRow, fingerprint, guessMapping, formatPhone, lineLabel, profileColumns, SERVICE_LINES, titleCase,
-  type Applied, type ClientRow, type ColumnRule, type Field, type Mapping, type ServiceLine,
+  applyMapping, cell, FIELDS, findHeaderRow, fingerprint, guessMapping, formatPhone, importChecks, lineLabel, profileColumns, SERVICE_LINES, titleCase,
+  type Applied, type ClientRow, type ColumnRule, type Field, type ImportCheck, type Mapping, type ServiceLine,
 } from '../../lib/clientImport';
 import {
-  bennyChat, bennyFixAddresses, bennyMap, bennyPlace, commitImport, streetCandidates, fetchSheetCsv, findRecipe, finishStuckImport, geocode, listImports, listRecipes,
-  matchClients, parseCsv, readWorkbook, undoImport, updateRecipe, type ImportRecord, type ImportRow, type MatchResult, type Recipe, type Sheet,
+  bennyAudit, bennyChat, bennyFixAddresses, bennyMap, bennyPlace, cancelImport, streetCandidates, fetchSheetCsv, fileHash, findRecipe, geocode, layoutBaseline, listImports, listRecipes,
+  matchClients, openImport, parseCsv, previewImport, readWorkbook, saveImport, saveLesson, sameFileImports, stageImport, undoImport, updateRecipe,
+  type ImportPreview, type ImportRecord, type MatchResult, type Recipe, type Sheet, type StagedRow,
 } from '../../lib/clients';
+import {
+  auditSample, guardChecks, hasStop, importSummary, lockSensitive, maskRows, sensitiveColumns, sourceCells,
+  type AuditResult, type ImportSummary, type Sensitive,
+} from '../../lib/importGuard';
+import { ChecksCard, HealthCard, LessonsCard, PreviewPanel } from './ClientListPanels';
 import { Btn, ErrorBox, Loading, Tabs, Tag, Toggle } from '../../ui';
 import { TerritoryTabs } from './Territory';
 import { BennyChat, type ChatMessage } from './BennyChat';
-import { applyChatActions, openingMessage, REVIEW_PROMPT } from '../../lib/bennyChat';
+import { applyChatActions, lessonProposals, openingMessage, REVIEW_PROMPT } from '../../lib/bennyChat';
 
 type Step = 'source' | 'columns' | 'review' | 'done';
-interface Source { fileName: string; kind: 'file' | 'sheet'; sheetUrl: string | null; sheets: Sheet[]; sheet: number }
+interface Source { fileName: string; kind: 'file' | 'sheet'; sheetUrl: string | null; sheets: Sheet[]; sheet: number; hash: string | null }
+/** An import whose rows are held on the server and previewed, waiting for Save. */
+interface Pending { id: string; preview: ImportPreview; rows: number; counts: Record<string, unknown> }
 /** The Benny's correction of an address that couldn't be placed as written. */
 interface Fix { house_no: string; street: string; confidence: 'high' | 'medium' | 'low'; reason: string; match: MatchResult | null; on: boolean }
 interface Matched { client: ClientRow; match: MatchResult | null; fix?: Fix }
@@ -58,12 +68,44 @@ export const ClientLists: React.FC = () => {
   const [result, setResult] = useState<{ id: string; inserted: number; merged: number } | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
+  const [audit, setAudit] = useState<AuditResult | null>(null);
+  const [baseline, setBaseline] = useState<{ summary: ImportSummary; at: string } | null>(null);
+  const [sameFile, setSameFile] = useState<{ file_name: string; created_at: string }[]>([]);
+  const [pending, setPending] = useState<Pending | null>(null);
   const imports = useLoad(listImports, []);
   const recipes = useLoad(listRecipes, []);
 
   const rows = src ? src.sheets[src.sheet].rows : [];
+  const tabHash = src?.hash ? `${src.hash}:${src.sheets[src.sheet].name}` : null;
+  // columns that look like card numbers, SINs or ID numbers: always ignored, never shown to The Benny
+  const sensitive = useMemo<Sensitive[]>(() => mapping && rows.length ? sensitiveColumns(rows, mapping.headerRow) : [], [rows, mapping?.headerRow]);
+  const safeMapping = useMemo(() => mapping ? lockSensitive(mapping, sensitive) : null, [mapping, sensitive]);
+  const masked = useMemo(() => mapping ? maskRows(rows, sensitive, mapping.headerRow) : rows, [rows, sensitive, mapping?.headerRow]);
   const headers = useMemo(() => mapping ? (rows[mapping.headerRow] || []).map(cell) : [], [rows, mapping]);
-  const preview = useMemo(() => mapping && rows.length ? applyMapping(rows, mapping, { fixedAddresses: fixed }) : null, [rows, mapping, fixed]);
+  const preview = useMemo(() => safeMapping && rows.length ? applyMapping(rows, safeMapping, { fixedAddresses: fixed }) : null, [rows, safeMapping, fixed]);
+  // what the checks look at: the rows as they'll be imported (fixed at matching time on the review step)
+  const checked = step === 'review' ? applied : preview;
+  const checks = useMemo(() => checked && safeMapping
+    ? [...importChecks(checked, safeMapping), ...guardChecks({ rows, mapping: safeMapping, applied: checked, sensitive, baseline, sameFile, audit: step === 'review' ? audit : null })]
+    : [], [checked, safeMapping, rows, sensitive, baseline, sameFile, audit, step]);
+  const stopped = hasStop(checks);
+
+  // the last import with the same layout, and earlier imports of this exact file, for the checks
+  useEffect(() => {
+    let live = true;
+    if (recipe) layoutBaseline(recipe.id).then(b => { if (live) setBaseline(b); }).catch(() => { if (live) setBaseline(null); });
+    else setBaseline(null);
+    return () => { live = false; };
+  }, [recipe?.id]);
+  useEffect(() => {
+    let live = true;
+    if (tabHash) sameFileImports(tabHash).then(r => { if (live) setSameFile(r); }).catch(() => { if (live) setSameFile([]); });
+    else setSameFile([]);
+    return () => { live = false; };
+  }, [tabHash]);
+
+  /** Forget a previewed import (its held rows are cleared on the server). */
+  const dropPending = () => setPending(p => { if (p) void cancelImport(p.id).catch(() => undefined); return null; });
 
   const run = async (label: string, fn: () => Promise<void>) => {
     setBusy(label); setError(null);
@@ -77,7 +119,7 @@ export const ClientLists: React.FC = () => {
     const fp = fingerprint((r[guessRow] || []).map(cell));
     setLookupFp(fp);
     const known = forceBenny ? null : await findRecipe(fp).catch(() => null);
-    setFixed(new Map()); setBennyNote(null);
+    setFixed(new Map()); setBennyNote(null); setAudit(null); dropPending();
     if (known) {
       setRecipe(known); setRecipeName(known.name); setMapping(known.mapping);
       setChat([{ role: 'assistant', text: openingMessage([], true) }]);
@@ -85,7 +127,8 @@ export const ClientLists: React.FC = () => {
       setRecipe(null); setRecipeName(s.fileName.replace(/\.[^.]+$/, ''));
       setChat([]);
       try {
-        const { questions, ...m } = await bennyMap(s.fileName, r, guessRow, { names: s.sheets.map(x => x.name), current: s.sheets[s.sheet].name });
+        const hidden = maskRows(r, sensitiveColumns(r, guessRow), guessRow);
+        const { questions, ...m } = await bennyMap(s.fileName, hidden, guessRow, { names: s.sheets.map(x => x.name), current: s.sheets[s.sheet].name }, fp);
         setMapping(m);
         setChat([{ role: 'assistant', text: openingMessage(questions, false) }]);
       } catch (e) {
@@ -100,14 +143,16 @@ export const ClientLists: React.FC = () => {
   const onFile = (f: File | undefined) => f && run('Reading the file…', async () => {
     const sheets = /\.csv$/i.test(f.name) ? [{ name: f.name, rows: await parseCsv(await f.text()) }] : await readWorkbook(f);
     if (!sheets.length) throw new Error('That file has no rows.');
-    const s: Source = { fileName: f.name, kind: 'file', sheetUrl: null, sheets, sheet: 0 };
+    const hash = await fileHash(await f.arrayBuffer()).catch(() => null);
+    const s: Source = { fileName: f.name, kind: 'file', sheetUrl: null, sheets, sheet: 0, hash };
     setSrc(s); await readLayout(s);
   });
   const onLink = () => run('Opening the sheet…', async () => {
     const csv = await fetchSheetCsv(link.trim());
     const r = await parseCsv(csv);
     if (!r.length) throw new Error('That sheet has no rows.');
-    const s: Source = { fileName: `Google Sheet ${link.match(/\/d\/([\w-]{6})/)?.[1] || ''}`.trim(), kind: 'sheet', sheetUrl: link.trim(), sheets: [{ name: 'Sheet', rows: r }], sheet: 0 };
+    const hash = await fileHash(csv).catch(() => null);
+    const s: Source = { fileName: `Google Sheet ${link.match(/\/d\/([\w-]{6})/)?.[1] || ''}`.trim(), kind: 'sheet', sheetUrl: link.trim(), sheets: [{ name: 'Sheet', rows: r }], sheet: 0, hash };
     setSrc(s); await readLayout(s);
   });
 
@@ -182,7 +227,7 @@ export const ClientLists: React.FC = () => {
   });
 
   /** Match every address to a route: the map's own address data first, then a map search. */
-  const matchAll = () => preview && mapping && run('Matching addresses to routes…', async () => {
+  const matchAll = () => preview && safeMapping && run('Matching addresses to routes…', async () => {
     const list = preview.clients;
     const ask = (idx: number[], extra?: Map<number, { lat: number; lng: number }>) => idx.map(i => {
       const c = list[i]; const g = extra?.get(i);
@@ -237,16 +282,31 @@ export const ClientLists: React.FC = () => {
     setApplied(preview);
     const nextMatched = list.map((client, i) => ({ client, match: res.get(i) || null, fix: fixes.get(i) }));
     setMatched(nextMatched);
+    dropPending();
     setStep('review');
+    void runAudit(preview);
     // The Benny looks over the results and says what stands out
     void talk(REVIEW_PROMPT, { hidden: true, stage: 'review', matchedNow: nextMatched, appliedNow: preview });
   });
 
+  /** The Benny double-checks 25 rows: as the sheet has them, and as they were read. */
+  const runAudit = async (a: Applied | null = applied) => {
+    if (!src || !safeMapping || !a) return;
+    setAudit({ state: 'running' });
+    try {
+      const hs = (rows[safeMapping.headerRow] || []).map(cell);
+      const columns = Object.entries(safeMapping.columns).filter(([, r]) => r.field !== 'ignore')
+        .map(([i, r]) => ({ title: hs[Number(i)] || `column ${Number(i) + 1}`, means: `${r.field}${r.year ? ` (${r.year})` : ''}` }));
+      setAudit(await bennyAudit({ fileName: src.fileName, serviceLine: safeMapping.serviceLine ?? null, columns, rows: auditSample(rows, safeMapping, a, sensitive) }));
+    } catch (e) {
+      setAudit({ state: 'failed', error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
   /** What The Benny is told about the upload as it stands. */
   const chatContext = (stage: string, matchedNow: Matched[] = matched, appliedNow: Applied | null = applied): Record<string, unknown> => {
     if (!src || !mapping) return {};
-    const r = src.sheets[src.sheet].rows;
-    const hs = (r[mapping.headerRow] || []).map(cell);
+    const hs = (rows[mapping.headerRow] || []).map(cell);
     const p = preview;
     const ctx: Record<string, unknown> = {
       file: src.fileName, tab: src.sheets[src.sheet].name, tabs: src.sheets.map(x => `${x.name} (${x.rows.length} rows)`), stage,
@@ -255,8 +315,10 @@ export const ClientLists: React.FC = () => {
       settings: { titleRow: mapping.headerRow + 1, defaultYear: mapping.defaultYear ?? null, defaultService: mapping.defaultService ?? null,
         serviceLine: mapping.serviceLine ?? null, defaultCity: mapping.defaultCity ?? null, defaultProvince: mapping.defaultProvince ?? null,
         yesValues: mapping.yesValues || [], rowsLeftOut: mapping.skipRows || [] },
-      profile: profileColumns(r, mapping.headerRow).map(c => ({ i: c.i, filled: c.filled, distinct: c.distinct, top: c.top.slice(0, 5), samples: c.samples, looks: c.looks })),
-      topRows: r.slice(mapping.headerRow + 1, mapping.headerRow + 13).map((row, k) => ({ row: mapping.headerRow + 2 + k, cells: (row || []).map(cell).slice(0, 40) })),
+      profile: profileColumns(masked, mapping.headerRow).map(c => ({ i: c.i, filled: c.filled, distinct: c.distinct, top: c.top.slice(0, 5), samples: c.samples, looks: c.looks })),
+      topRows: masked.slice(mapping.headerRow + 1, mapping.headerRow + 13).map((row, k) => ({ row: mapping.headerRow + 2 + k, cells: (row || []).map(cell).slice(0, 40) })),
+      hiddenColumns: sensitive.map(x => ({ i: x.i, title: x.header, why: `looks like ${x.why}; never read or saved` })),
+      checks: checks.map(c => `${c.level.toUpperCase()}: ${c.text}`),
     };
     if (p) ctx.read = { rowsRead: p.rowsRead, addresses: p.clients.length, rowsWithoutAddress: p.skipped.length,
       examplesWithoutAddress: p.skipped.slice(0, 12), firstAddresses: p.clients.slice(0, 8).map(c => ({ rows: c.rows, address: `${c.house_no} ${c.street_name}`, people: c.people.length, phones: c.phones.length, history: c.history })) };
@@ -293,16 +355,29 @@ export const ClientLists: React.FC = () => {
     try {
       const stage = opts.stage || step;
       const res = await bennyChat(history.filter(m => !m.error).map(m => ({ role: m.role, text: m.changes?.length ? `${m.text}\n(Changed: ${m.changes.join('; ')})` : m.text })),
-        chatContext(stage, opts.matchedNow, opts.appliedNow));
+        chatContext(stage, opts.matchedNow, opts.appliedNow), lookupFp || undefined);
+      const lessons = lessonProposals(res.actions).map(l => ({ ...l, state: 'open' as const }));
       const { mapping: next, changes } = applyChatActions(mapping, res.actions, (rows[mapping.headerRow] || []).map(cell));
       if (changes.length) {
         setMapping(next);
-        if (stage === 'review') { setStep('columns'); setBennyNote('The Benny changed the layout, so the addresses need matching again: check the columns, then Next: match to routes.'); }
+        if (stage === 'review') { dropPending(); setStep('columns'); setBennyNote('The Benny changed the layout, so the addresses need matching again: check the columns, then Next: match to routes.'); }
       }
-      setChat(c => [...c, { role: 'assistant', text: res.reply || (changes.length ? 'Done.' : 'I don’t have anything to add.'), changes }]);
+      setChat(c => [...c, { role: 'assistant', text: res.reply || (changes.length ? 'Done.' : lessons.length ? 'Want me to remember this?' : 'I don’t have anything to add.'), changes, lessons }]);
     } catch (e) {
       setChat(c => [...c, { role: 'assistant', text: `I couldn’t answer just now (${e instanceof Error ? e.message : String(e)}).`, error: true }]);
     } finally { setChatBusy(false); }
+  };
+
+  /** Save (or skip) a lesson The Benny suggested in the chat. */
+  const onLesson = (at: number, li: number, save: boolean) => {
+    const setState = (state: 'open' | 'saving' | 'saved' | 'skipped') =>
+      setChat(c => c.map((m, k) => k === at && m.lessons ? { ...m, lessons: m.lessons.map((l, j) => j === li ? { ...l, state } : l) } : m));
+    const l = chat[at]?.lessons?.[li];
+    if (!l) return;
+    if (!save) { setState('skipped'); return; }
+    setState('saving');
+    saveLesson({ text: l.text, fingerprint: l.scope === 'layout' ? lookupFp || null : null, layoutName: l.scope === 'layout' ? recipeName || src?.fileName || null : null })
+      .then(() => setState('saved')).catch(e => { setState('open'); setError(e); });
   };
 
   const counts = useMemo(() => {
@@ -317,24 +392,48 @@ export const ClientLists: React.FC = () => {
     return n;
   }, [applied, matched]);
 
-  const approve = () => src && mapping && run('Saving…', async () => {
+  /** Hold the rows on the server and work out exactly what saving them will change. */
+  const prepare = () => src && safeMapping && applied && !stopped && run('Checking exactly what will change…', async () => {
     const chosen = matched.map(effective).filter(m => includeUnrouted || m.match?.route_code);
-    const toRow = ({ client: c, match: m, fixed }: ReturnType<typeof effective>): ImportRow => ({
+    const toRow = ({ client: c, match: m, fixed }: ReturnType<typeof effective>): StagedRow => ({
       house_no: c.house_no, street_name: c.street_name, unit: c.unit, city: c.city, province: c.province, postal_code: c.postal_code,
       lat: m?.lat ?? null, lng: m?.lng ?? null, route_code: m?.route_code ?? null, match_how: fixed && m?.how ? `${m.how}_benny` : m?.how ?? null,
       people: c.people, phones: c.phones, emails: c.emails, history: c.history, tags: c.tags,
       notes: [c.notes, fixed ? `Address on the list: “${c.raw_address}”, corrected by The Benny.` : ''].filter(Boolean).join('\n'),
       call_first: c.call_first, do_not_call: c.do_not_call, do_not_text: c.do_not_text,
+      source: sourceCells(rows, safeMapping, c.rows, sensitive),
     });
-    const res = await commitImport({
+    // neighbours together, so the preview's parts see the same customer together
+    const staged = chosen.map(toRow).sort((a, b) => `${a.street_name.toLowerCase()}|${a.house_no.padStart(6, '0')}`.localeCompare(`${b.street_name.toLowerCase()}|${b.house_no.padStart(6, '0')}`));
+    const importCounts = {
+      rows_read: counts.rowsRead, clients_in_file: counts.clients, rows_combined: counts.combined, rows_skipped: counts.skipped,
+      on_route: counts.routed, needs_attention: counts.unrouted, left_out: matched.length - chosen.length, summary: importSummary(applied),
+    };
+    const id = await openImport({
       fileName: src.fileName, source: src.kind, sheetUrl: src.sheetUrl, fingerprint: lookupFp || fingerprint(headers), recipeName: recipeName || src.fileName,
-      headers, mapping, rows: chosen.map(toRow),
-      counts: { rows_read: counts.rowsRead, clients_in_file: counts.clients, rows_combined: counts.combined, rows_skipped: counts.skipped, on_route: counts.routed, needs_attention: counts.unrouted, left_out: matched.length - chosen.length },
-    }, n => setBusy(`Saving… ${n} of ${chosen.length}`));
-    setResult(res); setStep('done'); imports.reload(); recipes.reload();
+      headers, mapping: safeMapping, fileHash: tabHash, checks, audit: audit?.state === 'done' ? audit : null, counts: importCounts,
+    });
+    try {
+      await stageImport(id, staged, n => setBusy(`Holding the rows… ${n} of ${staged.length}`));
+      const pv = await previewImport(id, staged.length, n => setBusy(`Working out what will change… ${n} of ${staged.length}`));
+      setPending({ id, preview: pv, rows: staged.length, counts: importCounts });
+    } catch (e) {
+      await cancelImport(id).catch(() => undefined);
+      throw e;
+    }
   });
 
-  const reset = () => { setStep('source'); setSrc(null); setMapping(null); setRecipe(null); setApplied(null); setMatched([]); setResult(null); setFixed(new Map()); setLink(''); setBennyNote(null); setChat([]); };
+  const save = () => pending && run('Saving…', async () => {
+    const res = await saveImport(pending.id, pending.counts, left => setBusy(`Saving… ${Math.max(0, pending.rows - left).toLocaleString()} of ${pending.rows.toLocaleString()}`));
+    setResult({ id: pending.id, ...res }); setPending(null); setStep('done'); imports.reload(); recipes.reload();
+  });
+  const dontSave = () => pending && run('Cancelling…', async () => { await cancelImport(pending.id); setPending(null); imports.reload(); });
+
+  const reset = () => {
+    if (pending) void cancelImport(pending.id).catch(() => undefined);
+    setStep('source'); setSrc(null); setMapping(null); setRecipe(null); setApplied(null); setMatched([]); setResult(null); setFixed(new Map()); setLink(''); setBennyNote(null); setChat([]);
+    setAudit(null); setPending(null); setBaseline(null); setSameFile([]);
+  };
 
   return (
     <div className="v2-main">
@@ -411,14 +510,17 @@ export const ClientLists: React.FC = () => {
                 <thead><tr><th>Column</th><th>Examples</th><th style={{ width: 260 }}>Means</th><th style={{ width: 170 }}>Year / name</th></tr></thead>
                 <tbody>
                   {headers.map((h, i) => {
-                    const rule = mapping.columns[i] || { field: 'ignore' as Field };
-                    const samples = rows.slice(mapping.headerRow + 1).map(r => cell((r || [])[i])).filter(Boolean).slice(0, 3);
+                    const hidden = sensitive.find(x => x.i === i);
+                    const rule = (safeMapping || mapping).columns[i] || { field: 'ignore' as Field };
+                    const samples = hidden ? [] : rows.slice(mapping.headerRow + 1).map(r => cell((r || [])[i])).filter(Boolean).slice(0, 3);
                     return (
                       <tr key={i} style={{ opacity: rule.field === 'ignore' ? 0.55 : 1 }}>
                         <td><b>{h || `(column ${i + 1})`}</b></td>
-                        <td className="v2-small v2-mut" style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{samples.join(' · ') || '—'}</td>
+                        <td className="v2-small v2-mut" style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {hidden ? <Tag tone="r">Hidden: looks like {hidden.why}</Tag> : samples.join(' · ') || '—'}</td>
                         <td>
-                          <select className="v2-sel" value={rule.field} aria-label={`What ${h || `column ${i + 1}`} means`} onChange={e => setRule(i, { field: e.target.value as Field })}>
+                          <select className="v2-sel" value={rule.field} disabled={!!hidden} title={hidden ? 'Never read or saved' : undefined}
+                            aria-label={`What ${h || `column ${i + 1}`} means`} onChange={e => setRule(i, { field: e.target.value as Field })}>
                             {['', 'Person', 'Address', 'Contact', 'Flags', 'History'].map(g => (
                               <optgroup key={g || 'none'} label={g || 'Skip'}>
                                 {FIELDS.filter(f => f.group === g).map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
@@ -441,6 +543,8 @@ export const ClientLists: React.FC = () => {
             </div>
           </div>
 
+          <ChecksCard checks={checks} compact />
+
           <div className="v2-card v2-row">
             <span><b>{preview.rowsRead}</b> rows → <b>{preview.clients.length}</b> addresses</span>
             {preview.skipped.length > 0 && <span className="v2-mut">· {preview.skipped.length} rows without a usable address</span>}
@@ -448,7 +552,7 @@ export const ClientLists: React.FC = () => {
               <Btn kind="o" size="sm" icon={Sparkles} disabled={!!busy} onClick={fixWithBenny}>Ask The Benny to read {preview.skipped.filter(s => s.reason !== 'No address' && s.text).length} addresses</Btn>
             )}
             <span className="v2-spacer" />
-            <Btn disabled={!!busy || preview.clients.length === 0 || !mapping.serviceLine} onClick={matchAll}>Next: match to routes</Btn>
+            <Btn disabled={!!busy || preview.clients.length === 0 || !mapping.serviceLine || stopped} title={stopped ? 'Fix what the checks say first' : undefined} onClick={matchAll}>Next: match to routes</Btn>
           </div>
         </div>
       )}
@@ -457,10 +561,12 @@ export const ClientLists: React.FC = () => {
         <Review counts={counts} matched={matched} skipped={applied?.skipped || []} busy={!!busy} note={bennyNote}
           bennyLeft={matched.filter(m => !effective(m).match?.route_code && !m.fix?.match?.route_code && !bennyTried.has(m.client.key)).length}
           bennyOpen={matched.filter(m => !effective(m).match?.route_code && !m.fix?.match?.route_code).length}
-          busyLabel={busy} onRerunBenny={rerunBenny}
+          busyLabel={busy} onRerunBenny={rerunBenny} locked={!!pending}
           onToggleFix={key => setMatched(ms => ms.map(m => m.client.key === key && m.fix ? { ...m, fix: { ...m.fix, on: !m.fix.on } } : m))}
           recipeName={recipeName} setRecipeName={setRecipeName} includeUnrouted={includeUnrouted} setIncludeUnrouted={setIncludeUnrouted}
-          onBack={() => setStep('columns')} onApprove={approve} />
+          checks={checks} stopped={stopped} auditRunning={audit?.state === 'running'} onAuditAgain={() => { void runAudit(); }}
+          pending={pending} onSave={save} onDontSave={dontSave}
+          onBack={() => { if (pending) void cancelImport(pending.id).catch(() => undefined); setPending(null); setStep('columns'); }} onApprove={prepare} />
       )}
       </div>
       <div style={{ flex: '1 1 320px', maxWidth: 420, minWidth: 0 }}>
@@ -468,7 +574,7 @@ export const ClientLists: React.FC = () => {
           suggestions={chat.filter(m => m.role === 'user').length ? [] : step === 'review'
             ? ['Why do some addresses have no route?', 'Which rows were combined?']
             : ['What’s in this file?', 'Which columns did you skip?', 'Why were some rows left out?']}
-          onSend={t => { void talk(t); }} />
+          onSend={t => { void talk(t); }} onLesson={onLesson} />
       </div>
       </div>
       )}
@@ -486,7 +592,10 @@ export const ClientLists: React.FC = () => {
         </div>
       )}
 
-      {step === 'source' && <History imports={imports} recipes={recipes} run={run} busy={!!busy} />}
+      {step === 'source' && <>
+        <div className="v2-grid2" style={{ alignItems: 'start', marginBottom: 14 }}><HealthCard /><LessonsCard /></div>
+        <History imports={imports} recipes={recipes} run={run} busy={!!busy} />
+      </>}
     </div>
   );
 };
@@ -498,7 +607,12 @@ const Review: React.FC<{
   bennyLeft: number; bennyOpen: number; busyLabel: string | null; onRerunBenny: () => void;
   recipeName: string; setRecipeName: (s: string) => void;
   includeUnrouted: boolean; setIncludeUnrouted: (b: boolean) => void; onBack: () => void; onApprove: () => void;
-}> = ({ counts, matched, skipped, busy, note, onToggleFix, bennyLeft, bennyOpen, busyLabel, onRerunBenny, recipeName, setRecipeName, includeUnrouted, setIncludeUnrouted, onBack, onApprove }) => {
+  checks: ImportCheck[]; stopped: boolean; auditRunning: boolean; onAuditAgain: () => void;
+  pending: Pending | null; onSave: () => void; onDontSave: () => void;
+  /** a preview is showing: what will be saved can't change under it */
+  locked: boolean;
+}> = ({ counts, matched, skipped, busy, note, onToggleFix, bennyLeft, bennyOpen, busyLabel, onRerunBenny, recipeName, setRecipeName, includeUnrouted, setIncludeUnrouted, onBack, onApprove,
+  checks, stopped, auditRunning, onAuditAgain, pending, onSave, onDontSave, locked }) => {
   const [tab, setTab] = useState<'new' | 'merge' | 'fixed' | 'attention' | 'skipped'>('new');
   const eff = matched.map(effective);
   const list = tab === 'new' ? eff.filter(m => !m.match?.client_id) : tab === 'merge' ? eff.filter(m => m.match?.client_id)
@@ -523,7 +637,7 @@ const Review: React.FC<{
           {note && <div className="v2-note" style={{ margin: '0 0 8px' }}>{note}</div>}
           {tab === 'attention' && bennyOpen > 0 && (
             <div className="v2-row" style={{ margin: '0 0 10px', gap: 10 }}>
-              <Btn size="sm" icon={Sparkles} disabled={busy} onClick={onRerunBenny}>
+              <Btn size="sm" icon={Sparkles} disabled={busy || locked} onClick={onRerunBenny}>
                 {busy && busyLabel ? busyLabel : `Run The Benny again on ${Math.min(BENNY_BATCH, bennyLeft || bennyOpen).toLocaleString()} address${Math.min(BENNY_BATCH, bennyLeft || bennyOpen) === 1 ? '' : 'es'}`}
               </Btn>
               <span className="v2-small v2-mut">{bennyLeft
@@ -541,7 +655,7 @@ const Review: React.FC<{
                   <td><b>{m.fix!.house_no} {m.fix!.street}</b> <Tag tone={m.fix!.confidence === 'high' ? 'g' : m.fix!.confidence === 'medium' ? 'b' : 'a'}>{m.fix!.confidence}</Tag></td>
                   <td>{m.fix!.match?.route_code ? <b>{m.fix!.match.route_code}</b> : <Tag tone="a">Still no route</Tag>}</td>
                   <td className="v2-small v2-mut">{m.fix!.reason}</td>
-                  <td><Toggle on={m.fix!.on} onChange={() => onToggleFix(m.client.key)} label={`Use The Benny’s reading for ${m.client.raw_address}`} /></td>
+                  <td><Toggle on={m.fix!.on} disabled={locked} onChange={() => onToggleFix(m.client.key)} label={`Use The Benny’s reading for ${m.client.raw_address}`} /></td>
                 </tr>
               ))}
               {fixes.length === 0 && <tr><td colSpan={5} className="v2-mut" style={{ textAlign: 'center', padding: 20 }}>Every address was found as written.</td></tr>}</tbody></table>
@@ -568,14 +682,18 @@ const Review: React.FC<{
           {(tab === 'skipped' ? skipped.length : list.length) > 300 && <div className="v2-note" style={{ padding: '0 12px 10px' }}>Showing the first 300.</div>}
         </div>
       </div>
+      <ChecksCard checks={checks} onAuditAgain={onAuditAgain} />
+      {pending ? <PreviewPanel preview={pending.preview} rows={pending.rows} busy={busy} progress={busyLabel} onSave={onSave} onCancel={onDontSave} /> : (
       <div className="v2-card v2-row">
-        <label className="v2-row" style={{ gap: 8 }}><Toggle on={includeUnrouted} onChange={setIncludeUnrouted} label="Import addresses with no route" />Also import the {counts.unrouted} addresses with no route yet</label>
+        <label className="v2-row" style={{ gap: 8 }}><Toggle on={includeUnrouted} disabled={locked} onChange={setIncludeUnrouted} label="Import addresses with no route" />Also import the {counts.unrouted} addresses with no route yet</label>
         <label className="v2-row" style={{ gap: 8 }}>Save this layout as
           <input className="v2-input" style={{ width: 240 }} value={recipeName} onChange={e => setRecipeName(e.target.value)} aria-label="Recipe name" /></label>
         <span className="v2-spacer" />
         <Btn kind="o" onClick={onBack} disabled={busy}>Back</Btn>
-        <Btn kind="g" onClick={onApprove} disabled={busy || willImport === 0}>Approve and import {willImport}</Btn>
-      </div>
+        <Btn kind="g" onClick={onApprove} disabled={busy || willImport === 0 || stopped || auditRunning}
+          title={stopped ? 'A check says stop: fix it first' : auditRunning ? 'The Benny is still double-checking' : undefined}>
+          {stopped ? 'Can’t import: see the checks' : auditRunning ? 'The Benny is double-checking…' : `Check what ${willImport.toLocaleString()} will change`}</Btn>
+      </div>)}
     </div>
   );
 };
@@ -593,11 +711,14 @@ const History: React.FC<{ imports: Loaded<ImportRecord[]>; recipes: Loaded<Recip
             {(imports.data || []).map(i => (
               <tr key={i.id}>
                 <td><b>{i.file_name}</b><div className="v2-small v2-mut">{fmtDate(i.created_at)}{i.recipe ? ` · ${i.recipe.name}` : ''}</div></td>
-                <td className="v2-small">{i.counts?.inserted ?? 0} new · {i.counts?.merged ?? 0} merged{i.counts?.needs_attention ? ` · ${i.counts.needs_attention} no route` : ''}</td>
+                <td className="v2-small">{i.status === 'staged' || i.status === 'cancelled' ? '—' : <>{Number(i.counts?.inserted ?? 0)} new · {Number(i.counts?.merged ?? 0)} merged{i.counts?.needs_attention ? ` · ${Number(i.counts.needs_attention)} no route` : ''}</>}</td>
                 <td style={{ textAlign: 'right' }}>
-                  {i.status === 'undone' ? <Tag>Undone</Tag> : i.status === 'running' ? (
+                  {i.status === 'undone' ? <Tag>Undone</Tag> : i.status === 'cancelled' ? <Tag>Not saved</Tag> : i.status === 'staged' ? (
+                    <span className="v2-row" style={{ justifyContent: 'flex-end', gap: 6 }}><Tag>Previewed, not saved</Tag>
+                      <Btn size="sm" kind="o" disabled={busy} onClick={() => run('Cancelling…', async () => { await cancelImport(i.id); imports.reload(); })}>Clear</Btn></span>
+                  ) : i.status === 'running' ? (
                     <span className="v2-row" style={{ justifyContent: 'flex-end', gap: 6 }}><Tag tone="a">Interrupted</Tag>
-                      <Btn size="sm" kind="o" disabled={busy} onClick={() => run('Finishing…', async () => { await finishStuckImport(i.id); imports.reload(); })}>Keep</Btn>
+                      <Btn size="sm" kind="o" disabled={busy} onClick={() => run('Finishing the save…', async () => { await saveImport(i.id, i.counts || {}); imports.reload(); })}>Finish saving</Btn>
                       <Btn size="sm" kind="r" disabled={busy} onClick={() => run('Undoing…', async () => { await undoImport(i.id); imports.reload(); })}>Undo</Btn></span>
                   ) : confirm === i.id ? (
                     <span className="v2-row" style={{ justifyContent: 'flex-end', gap: 6 }}>

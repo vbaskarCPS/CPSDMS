@@ -60,6 +60,15 @@ export function applyChatActions(mapping: Mapping, actions: ChatAction[], header
   return { mapping: m, changes };
 }
 
+/** A lesson The Benny suggests keeping: saved only when the person confirms it. */
+export interface LessonProposal { text: string; scope: 'all' | 'layout' }
+export function lessonProposals(actions: ChatAction[]): LessonProposal[] {
+  return actions.filter(a => a.tool === 'propose_lesson').map(a => {
+    const t = text((a.input || {}).text, 400);
+    return t ? { text: t, scope: (a.input || {}).applies_to === 'this_layout' ? 'layout' as const : 'all' as const } : null;
+  }).filter((x): x is LessonProposal => !!x).slice(0, 3);
+}
+
 /** What The Benny opens the chat with, after reading the layout. */
 export function openingMessage(questions: string[], fromRecipe: boolean): string {
   if (questions.length) {
