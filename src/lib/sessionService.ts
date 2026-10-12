@@ -15,6 +15,7 @@ import {
   isRampCrewTeamId,
   calculateAsphaltSplit,
   createEqualSplit,
+  withCartMembers,
   EQ_DIVISOR
 } from './commandCenterService';
 import {
@@ -1075,13 +1076,14 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
-    const { data: teamSession } = await supabase
+    const { data: teamSessionRow } = await supabase
       .from('logsheet_sessions')
       .select('*')
       .eq('date', date)
       .eq('command_center_id', ccId)
       .contains('team_worker_ids', [workerId])
       .maybeSingle();
+    const teamSession = teamSessionRow ? withCartMembers(teamSessionRow) : null;
 
     if (teamSession) {
       return {
@@ -1111,6 +1113,7 @@ class SessionService {
       .maybeSingle();
 
     if (!data) return null;
+    const cart = withCartMembers(data);
 
     return {
       id: data.id,
@@ -1123,9 +1126,9 @@ class SessionService {
       dailyRouteStore: [],
       financialStore: [],
       commandCenterId: data.command_center_id,
-      teamWorkerIds: data.team_worker_ids,
-      equivSplit: data.equiv_split,
-      upsellSplit: data.upsell_split,
+      teamWorkerIds: cart.team_worker_ids,
+      equivSplit: cart.equiv_split,
+      upsellSplit: cart.upsell_split,
       crackfillerBottles: data.crackfiller_bottles ?? 0,
     };
   }
@@ -2727,7 +2730,8 @@ class SessionService {
         supabase.from('transactions').select('*').eq('command_center_id', ccId)
       ]);
       
-      const sessions = sessionsRes.data || [];
+      // a cart that lists nobody is that worker's own (see withCartMembers)
+      const sessions = (sessionsRes.data || []).map(withCartMembers);
       const allTransactions = (transactionsRes.data || []).map(tx => this.mapDbTransaction(tx));
       
       const transactionsBySessionId: Record<string, SessionTransaction[]> = {};
@@ -2795,13 +2799,14 @@ class SessionService {
         .contains('team_worker_ids', [workerId])
         .maybeSingle();
   
-      const sessionData = teamSession || (await supabase
+      const sessionRow = teamSession || (await supabase
         .from('logsheet_sessions')
         .select('*')
         .eq('worker_id', workerId)
         .eq('date', date)
         .eq('command_center_id', ccId)
         .single()).data;
+      const sessionData = sessionRow ? withCartMembers(sessionRow) : null;
   
       if (!sessionData) return null;
   
@@ -2868,6 +2873,11 @@ class SessionService {
       const existing = await this.getActiveLogsheetSession(workerId);
       if (existing) return existing;
       
+      // In a team season (sealing, cleaning, rejuv) a worker who signs in without a cart (a late
+      // arrival) gets a solo cart that lists them, split 100%, like the solo carts made at Start.
+      // A cart saved with no members was skipped by Manage Team and the payouts.
+      const isTeamSeason = seasonHasTeams(await this.getSessionSeasonType());
+      const solo = createEqualSplit([workerId]);
       const newSession = {
         id: `sess_${workerId}_${Date.now()}`,
         worker_id: workerId,
@@ -2876,11 +2886,17 @@ class SessionService {
         stats: this.getEmptyStats(),
         email_enabled: true,
         command_center_id: ccId,
+        ...(isTeamSeason ? { team_worker_ids: [workerId], equiv_split: solo, upsell_split: solo } : {}),
       };
-      
+
       const { error } = await supabase.from('logsheet_sessions').insert(newSession);
       if (error) throw error;
-      
+      // …and is keyed to that cart (users.metadata.teamId), so the team lists agree with it.
+      if (isTeamSeason) {
+        try { await this.setWorkerTeamKey(workerId, workerId); }
+        catch (e) { console.warn('[startLogsheetSession] team key not set:', e); }
+      }
+
       return this.getActiveLogsheetSession(workerId) as Promise<LogsheetSession>;
     }
   

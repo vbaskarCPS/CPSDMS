@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { supabase } from './supabase';
 import { maskCardNumber } from './cardSafety';
 import { USER_COLS } from './legacyColumns';
-import { commandCenterService, seasonHasTeams, getSeasonConfig, getPayoutRate, createEqualSplit, EQ_DIVISOR } from './commandCenterService';
+import { commandCenterService, seasonHasTeams, getSeasonConfig, getPayoutRate, createEqualSplit, withCartMembers, EQ_DIVISOR } from './commandCenterService';
 import { sessionService } from './sessionService';
 import { googleSheetsService } from './googleSheetsService';
 import { LogsheetSession, Worker, ManagementUser, SeasonType, ServiceFlags, SessionTransaction, CRACKFILLER_RATE_PER_LB } from '../types';
@@ -573,7 +573,7 @@ export async function generateSessionExport(): Promise<void> {
     supabase.from('bookings').select('*').eq('session_date', date).eq('command_center_id', ccId),
   ]);
 
-  const sessions = sessionsRes.data || [];
+  const sessions = (sessionsRes.data || []).map(withCartMembers);   // a cart that lists nobody is that worker's own
   const transactions = transactionsRes.data || [];
   const users = usersRes.data || [];
   const bookings = bookingsRes.data || [];
@@ -952,7 +952,7 @@ export async function loadLivePayoutInput(): Promise<PayoutInput & { date: strin
   ]);
   for (const r of [sessionsRes, transactionsRes, usersRes]) if (r.error) throw new Error(r.error.message);
   return {
-    date, sessions: sessionsRes.data || [], transactions: transactionsRes.data || [], users: usersRes.data || [],
+    date, sessions: (sessionsRes.data || []).map(withCartMembers), transactions: transactionsRes.data || [], users: usersRes.data || [],
     seasonType, productCostPercent, noTaxOnCash, taxRate: commandCenterService.getCurrentTaxRate(),
   };
 }
@@ -984,7 +984,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     supabase.from('users').select(USER_COLS).eq('command_center_id', ccId),
   ]);
 
-  const sessions = sessionsRes.data || [];
+  const sessions = (sessionsRes.data || []).map(withCartMembers);   // a cart that lists nobody is that worker's own
   const transactions = transactionsRes.data || [];
   const users = usersRes.data || [];
 
