@@ -37,6 +37,7 @@ interface AreaPrefix {
   pdf_page: number;
   route_count: number;
   route_start: number;
+  city?: string | null;
 }
 
 interface RouteData {
@@ -186,10 +187,13 @@ function buildGhostGeoJSON(
   return { type: 'FeatureCollection', features };
 }
 
-const OVERPASS_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.osm.ch/api/interpreter',
+// Road servers (OpenStreetMap's Overpass), tried in turn. A big area on a busy day can take the
+// main server well over 20 seconds, so it gets 45. (overpass.osm.ch was dropped: it only has
+// Switzerland, answered "no roads" for Ontario, and the saved routes then never showed.)
+const OVERPASS_ENDPOINTS: { url: string; ms: number }[] = [
+  { url: 'https://overpass-api.de/api/interpreter', ms: 45000 },
+  { url: 'https://overpass.private.coffee/api/interpreter', ms: 30000 },
+  { url: 'https://overpass.kumi.systems/api/interpreter', ms: 30000 },
 ];
 
 async function fetchOverpass(bbox: string): Promise<OsmWay[]> {
@@ -197,9 +201,9 @@ async function fetchOverpass(bbox: string): Promise<OsmWay[]> {
     `[out:json][timeout:60];(way["highway"]["name"](${bbox});way["highway"]["highway"~"residential|service|unclassified|living_street"][!"name"](${bbox}););out geom;`
   )}`;
 
-  const tryEndpoint = (url: string): Promise<Response> => {
+  const tryEndpoint = (url: string, ms: number): Promise<Response> => {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 18000);
+    const t = setTimeout(() => ctrl.abort(), ms);
     return fetch(url, {
       method: 'POST',
       body: query,
@@ -208,12 +212,13 @@ async function fetchOverpass(bbox: string): Promise<OsmWay[]> {
     }).finally(() => clearTimeout(t));
   };
 
-  for (const endpoint of OVERPASS_ENDPOINTS) {
+  let answeredEmpty = false;
+  for (const { url, ms } of OVERPASS_ENDPOINTS) {
     try {
-      const r = await tryEndpoint(endpoint);
+      const r = await tryEndpoint(url, ms);
       if (r.ok) {
         const data = await r.json();
-        return data.elements
+        const ways: OsmWay[] = (data.elements || [])
           .filter((el: any) => el.type === 'way' && el.geometry)
           .map((el: any) => ({
             id: el.id,
@@ -221,9 +226,12 @@ async function fetchOverpass(bbox: string): Promise<OsmWay[]> {
             unnamed: !el.tags?.name,
             geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]),
           }));
+        if (ways.length) return ways;
+        answeredEmpty = true;   // a server without this part of the world: try the next one
       }
     } catch { /* try next mirror */ }
   }
+  if (answeredEmpty) return [];
   throw new Error('All Overpass mirrors failed');
 }
 
@@ -277,6 +285,10 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
   const [activeRouteNum, setActiveRouteNum] = useState(1);
   const [allWays, setAllWays] = useState<OsmWay[]>([]);
   const [loadingRoads, setLoadingRoads] = useState(false);
+  // the area whose road load has finished (even if it failed) and the area whose saved routes are on
+  // the map: the saved routes are drawn from their own saved shapes when the roads don't come
+  const [roadsTriedFor, setRoadsTriedFor] = useState<string | null>(null);
+  const [restoredFor, setRestoredFor] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // a route number being deleted (the later routes of the prefix move down one)
   const [deletingNum, setDeletingNum] = useState<number | null>(null);
@@ -560,6 +572,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
 
   const handleBackToGrid = () => {
     restoredAreaRef.current = null;
+    setRoadsTriedFor(null); setRestoredFor(null);
     setView('grid');
     setCurrentArea(null);
     setTimeout(() => mapRef.current?.resize(), 100);
@@ -567,6 +580,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
 
   const initRoutesForArea = (area: AreaPrefix) => {
     restoredAreaRef.current = null;
+    setRoadsTriedFor(null); setRestoredFor(null);
     // This map's numbers: its span, less numbers that belong to other maps (a map that grew past
     // its neighbours has a gap: AN01–AN22 · AN87), plus anything it has saved.
     let nums = ownedNumbers(area, areas, drawnNums);
@@ -923,39 +937,69 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
   const loadRoads = useCallback(async (area: AreaPrefix) => {
     setLoadingRoads(true); setError(null);
     try {
-      const fullName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
-      let center: [number, number] = [-79.870, 43.270];
-      const searchCandidates = [fullName, fullName.split(' ')[0], fullName.split(' ').slice(0, 2).join(' ')].filter((v, i, a) => a.indexOf(v) === i);
-      for (const candidate of searchCandidates) {
-        try {
-          const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate + ', Hamilton, Ontario, Canada')}&format=json&limit=1`, { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } });
-          const data = await resp.json();
-          if (data.length > 0) { center = [parseFloat(data[0].lon), parseFloat(data[0].lat)]; break; }
-        } catch { /* try next */ }
+      const map0 = mapRef.current;
+      // Open on the area's saved routes; a new area is found by its name and city.
+      const { data: savedRows } = await supabase.from('route_maps').select('segments').eq('area_name', area.area_name);
+      let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+      for (const row of (savedRows || []) as { segments: { coordinates: [number, number][] }[] }[]) {
+        for (const seg of row.segments || []) for (const [lng, lat] of seg.coordinates || []) {
+          if (lng < w) w = lng; if (lng > e) e = lng; if (lat < s) s = lat; if (lat > n) n = lat;
+        }
       }
-      await new Promise<void>(resolve => {
-        const map = mapRef.current;
-        if (!map) { resolve(); return; }
-        const timer = setTimeout(resolve, 3000);
-        map.once('moveend', () => { clearTimeout(timer); resolve(); });
-        map.flyTo({ center, zoom: 14 });
-      });
+      let bbox: string | null = null;
+      if (Number.isFinite(w) && map0) {
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(resolve, 3000);
+          map0.once('moveend', () => { clearTimeout(timer); resolve(); });
+          map0.fitBounds([[w, s], [e, n]], { padding: 40, duration: 600, maxZoom: 16 });
+        });
+        const latPad = Math.max((n - s) * 0.1, 0.003), lngPad = Math.max((e - w) * 0.1, 0.004);
+        bbox = `${s - latPad},${w - lngPad},${n + latPad},${e + lngPad}`;
+      } else {
+        const fullName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
+        const city = (area.city || '').trim();
+        let center: [number, number] = [-79.870, 43.270];
+        const searchCandidates = [
+          ...(city ? [`${fullName}, ${city}`, city] : []),
+          fullName, fullName.split(' ')[0], fullName.split(' ').slice(0, 2).join(' '),
+        ].filter((v, i, a) => v && a.indexOf(v) === i);
+        for (const candidate of searchCandidates) {
+          try {
+            const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate + ', Ontario, Canada')}&format=json&limit=1`, { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } });
+            const data = await resp.json();
+            if (data.length > 0) { center = [parseFloat(data[0].lon), parseFloat(data[0].lat)]; break; }
+          } catch { /* try next */ }
+        }
+        await new Promise<void>(resolve => {
+          const map = mapRef.current;
+          if (!map) { resolve(); return; }
+          const timer = setTimeout(resolve, 3000);
+          map.once('moveend', () => { clearTimeout(timer); resolve(); });
+          map.flyTo({ center, zoom: 14 });
+        });
+      }
       const map = mapRef.current;
       if (!map) throw new Error('Map not available');
-      const b = map.getBounds();
-      const latPad = (b.getNorth() - b.getSouth()) * 0.1;
-      const lngPad = (b.getEast() - b.getWest()) * 0.1;
-      const bbox = `${b.getSouth() - latPad},${b.getWest() - lngPad},${b.getNorth() + latPad},${b.getEast() + lngPad}`;
+      if (!bbox) {
+        const b = map.getBounds();
+        if (!b) throw new Error('Map not available');
+        const latPad = (b.getNorth() - b.getSouth()) * 0.1;
+        const lngPad = (b.getEast() - b.getWest()) * 0.1;
+        bbox = `${b.getSouth() - latPad},${b.getWest() - lngPad},${b.getNorth() + latPad},${b.getEast() + lngPad}`;
+      }
       const ways = await fetchOverpass(bbox);
       setAllWays(ways);
-    } catch { setError('Failed to load roads — click "Load More Roads" to retry.'); }
-    finally { setLoadingRoads(false); }
+      if (!ways.length) setError('No roads came back for this area — your saved routes are shown from their saved shapes. Click "Load More Roads" to try again.');
+    } catch { setError('Roads didn\'t load (the road server is busy) — your saved routes are shown from their saved shapes. Click "Load More Roads" to retry.'); }
+    finally { setLoadingRoads(false); setRoadsTriedFor(area.area_name); }
   }, []);
 
   useEffect(() => { if (mapLoaded && currentArea && view === 'map') loadRoads(currentArea); }, [currentArea, mapLoaded, view]);
 
   useEffect(() => {
-    if (!currentArea || allWays.length === 0) return;
+    // after the roads arrive, or once the road load has given up (the saved routes are then drawn
+    // from their own saved shapes)
+    if (!currentArea || (allWays.length === 0 && roadsTriedFor !== currentArea.area_name)) return;
     if (restoredAreaRef.current === currentArea.area_name) return;
     restoredAreaRef.current = currentArea.area_name;
     const restore = async () => {
@@ -994,9 +1038,10 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
         setRoutes(prev => prev.map(route => { const update = routeUpdates.get(route.num); if (!update) return route; return { ...route, ...update }; }));
         if (syntheticWaysToAdd.length > 0) setAllWays(prev => [...prev, ...syntheticWaysToAdd]);
       } catch { /* silent */ }
+      finally { setRestoredFor(currentArea.area_name); }
     };
     restore();
-  }, [allWays, currentArea]);
+  }, [allWays, currentArea, roadsTriedFor]);
 
   const loadRoadsFromViewport = useCallback(async () => {
     const map = mapRef.current;
@@ -1087,7 +1132,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
    *  them). 'loading' until the roads and the saved routes are on the map: saving then would save an empty map. */
   const mapSaveState = useCallback(async (): Promise<'saved' | 'unsaved' | 'loading'> => {
     if (!currentArea) return 'loading';
-    if (allWays.length === 0 || restoredAreaRef.current !== currentArea.area_name) return 'loading';
+    if (restoredFor !== currentArea.area_name) return 'loading';
     const { data, error: dbErr } = await supabase.from('route_maps').select('route_number, status, segments').eq('area_name', currentArea.area_name);
     if (dbErr) throw new Error(dbErr.message);
     const sig = (segs: { osmId: number; coordinates: unknown[] }[]) =>
@@ -1104,7 +1149,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
     if (saved.size !== mine.size) return 'unsaved';
     for (const [n, s] of mine) if (saved.get(n) !== s) return 'unsaved';
     return 'saved';
-  }, [currentArea, routes, effectiveWays, allWays]);
+  }, [currentArea, routes, effectiveWays, restoredFor]);
 
   const boxRect = boxState ? {
     left: Math.min(boxState.startX, boxState.currentX),
