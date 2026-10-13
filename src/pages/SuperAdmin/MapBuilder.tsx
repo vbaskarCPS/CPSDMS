@@ -6,12 +6,13 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   ArrowLeft, Loader, Check, X, AlertCircle,
   Plus, Map as MapIcon, Scissors, RefreshCw, Pencil, Eye, EyeOff, Edit2,
-  BookOpen, Users,
+  BookOpen, Users, Trash2,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { googleAuthService } from '../../lib/googleAuthService';
 import { loadAndCacheMapPCL, getMapPCLCounts, recalibrateMapPCL } from '../../lib/pclCacheService';
 import { firstFree, ownedNumbers, runsLabel, takenNumbers, type Drawn } from '../../lib/areaNumbers';
+import { RouteDeleteModal } from './RouteDeleteModal';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -277,6 +278,8 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
   const [allWays, setAllWays] = useState<OsmWay[]>([]);
   const [loadingRoads, setLoadingRoads] = useState(false);
   const [saving, setSaving] = useState(false);
+  // a route number being deleted (the later routes of the prefix move down one)
+  const [deletingNum, setDeletingNum] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addStreetInput, setAddStreetInput] = useState('');
   const [hoveredWayName, setHoveredWayName] = useState<string | null>(null);
@@ -1080,6 +1083,29 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
     finally { setSaving(false); }
   };
 
+  /** Whether this map matches what's saved (the approved routes and their segments, as Save would write
+   *  them). 'loading' until the roads and the saved routes are on the map: saving then would save an empty map. */
+  const mapSaveState = useCallback(async (): Promise<'saved' | 'unsaved' | 'loading'> => {
+    if (!currentArea) return 'loading';
+    if (allWays.length === 0 || restoredAreaRef.current !== currentArea.area_name) return 'loading';
+    const { data, error: dbErr } = await supabase.from('route_maps').select('route_number, status, segments').eq('area_name', currentArea.area_name);
+    if (dbErr) throw new Error(dbErr.message);
+    const sig = (segs: { osmId: number; coordinates: unknown[] }[]) =>
+      segs.map(g => `${g.osmId}:${(g.coordinates || []).length}`).sort().join(',');
+    const saved = new Map<number, string>();
+    for (const r of (data || []) as { route_number: number; status: string; segments: { osmId: number; coordinates: unknown[] }[] }[]) {
+      if (r.status === 'approved') saved.set(r.route_number, sig(r.segments || []));
+    }
+    const mine = new Map<number, string>();
+    for (const route of routes) {
+      if (route.status !== 'approved' || route.selectedWayIds.size === 0) continue;
+      mine.set(route.num, sig(effectiveWays.filter(w => route.selectedWayIds.has(w.id)).map(w => ({ osmId: w.rootId ?? w.id, coordinates: w.geometry }))));
+    }
+    if (saved.size !== mine.size) return 'unsaved';
+    for (const [n, s] of mine) if (saved.get(n) !== s) return 'unsaved';
+    return 'saved';
+  }, [currentArea, routes, effectiveWays, allWays]);
+
   const boxRect = boxState ? {
     left: Math.min(boxState.startX, boxState.currentX),
     top: Math.min(boxState.startY, boxState.currentY),
@@ -1201,6 +1227,12 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
       {/* PCL LOAD MODAL — connect, spreadsheet id, region, go. Region is confirmed
           explicitly rather than inferred, because the run touches every area in
           it and picking the wrong one is forty minutes you don't get back. */}
+      {deletingNum != null && currentArea && (
+        <RouteDeleteModal prefix={currentArea.prefix} number={deletingNum} code={formatRouteCode(currentArea.prefix, deletingNum)}
+          mapState={mapSaveState} onClose={() => setDeletingNum(null)}
+          onDone={() => { setDeletingNum(null); window.location.reload(); }} />
+      )}
+
       {pclModalOpen && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => !pclRunning && setPclModalOpen(false)}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
@@ -1346,6 +1378,12 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
                     </span>
                     {r.status !== 'pending' && r.num === activeRouteNum && (
                       <button onClick={e => { e.stopPropagation(); setRoutes(prev => prev.map(rt => rt.num === r.num ? { ...rt, status: 'pending' } : rt)); }} title="Unlock for editing" className="text-gray-500 hover:text-yellow-400 transition-colors flex-shrink-0 ml-1"><Pencil size={9} /></button>
+                    )}
+                    {r.num === activeRouteNum && (
+                      <span role="button" tabIndex={0} onClick={e => { e.stopPropagation(); setDeletingNum(r.num); }}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); setDeletingNum(r.num); } }}
+                        title={`Delete ${formatRouteCode(currentArea.prefix, r.num)} and move the later routes down one`} aria-label={`Delete ${formatRouteCode(currentArea.prefix, r.num)}`}
+                        className="text-gray-500 hover:text-red-400 transition-colors flex-shrink-0 ml-1 cursor-pointer"><Trash2 size={10} /></span>
                     )}
                   </button>
                   <div className="group relative flex items-center justify-center h-0 overflow-visible z-10">
