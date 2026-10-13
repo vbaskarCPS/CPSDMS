@@ -67,12 +67,13 @@ begin
   -- 2. The register rows routes are built from, at the town's positions. Names as the register
   --    writes them ("Steeles", "AVE", "E") so house names read the same as Burlington's and Oakville's.
   --    The town's list has no home/business flag, so every point counts as a home (bu_use 1).
+  --    street_norm and geom are worked out by the table itself (generated columns); the street key
+  --    comes out the same as the town list's for all ~46,000 points (checked).
   with ins as (
-    insert into nar_addresses (civic_no, civic_suffix, street_name, street_type, street_dir, unit, csd_code, csd_name, prov_code, bu_use, postal_code, lat, lng, street_norm, geom)
+    insert into nar_addresses (civic_no, civic_suffix, street_name, street_type, street_dir, unit, csd_code, csd_name, prov_code, bu_use, postal_code, lat, lng)
     select civic_no, civic_suffix, initcap(lower(street_name)),
            nullif(upper(norm_street(street_type)), ''), street_dir, unit,
-           '3524009', 'Milton', 35, 1, null, lat, lng, street_norm,
-           ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography
+           '3524009', 'Milton', 35, 1, null, lat, lng
     from milton_pts
     returning id, lat, lng
   ), bk as (
