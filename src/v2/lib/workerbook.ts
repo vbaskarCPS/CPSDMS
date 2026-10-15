@@ -233,6 +233,9 @@ export function summarize(day: string, state: Day['state'], roster: { confirmed_
   };
 }
 
+/** A closed day's payouts open sorted by Bonus EQ; a day still being finished keeps the standard (by RM) order. */
+export const closedDaySort = (day: { state: string }): 'bonusEquiv' | 'standard' => day.state === 'closed' ? 'bonusEquiv' : 'standard';
+
 /** Calendar cells for a month: leading blanks (null) then one ISO date per day. Weeks start on Sunday. */
 export function monthCells(year: number, month0: number): (string | null)[] {
   const first = new Date(year, month0, 1);

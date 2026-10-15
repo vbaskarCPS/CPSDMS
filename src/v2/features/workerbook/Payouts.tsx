@@ -1,6 +1,6 @@
 // src/v2/features/workerbook/Payouts.tsx — the live day's payouts (shown on the day page). The screen itself is the old
 // app's payout screen (same numbers, same saves), shown in the new app's colours.
-import React, { Suspense, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
@@ -102,9 +102,13 @@ export const SessionPayouts: React.FC<{ centerId: string; centerName: string; da
 export const SavedDayPayouts: React.FC<{
   centerId: string; region: string; date: string; carts: PayoutCart[]; lines: PayoutLine[]; readOnly: boolean;
   onChanged: () => void; toolbar?: React.ReactNode;
-}> = ({ centerId, region, date, carts, lines, readOnly, onChanged, toolbar }) => {
+  /** how the list is sorted when the day is opened (a closed day opens on Bonus EQ) */
+  defaultSort?: SortOption;
+}> = ({ centerId, region, date, carts, lines, readOnly, onChanged, toolbar, defaultSort = 'standard' }) => {
   const [search, setSearch] = useState('');
-  const [sort, setSort] = useState<SortOption>('standard');
+  const [sort, setSort] = useState<SortOption>(defaultSort);
+  // moving to another day starts that day on its own default again
+  useEffect(() => { setSort(defaultSort); }, [date, defaultSort]);
   const ctx = useLoad(() => cartContext(centerId, region, date, carts), [centerId, region, date, carts]);
   const stats = useLoad(async () => ctx.data ? Promise.all(carts.map(c => cartStats(c, ctx.data!.service, ctx.data!.settings))) : null, [ctx.data, carts]);
   const changed = useRef(onChanged); changed.current = onChanged;
