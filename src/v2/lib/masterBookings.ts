@@ -107,6 +107,8 @@ export async function areaView(areas: string[], s: Season, round: RoundPick): Pr
 export interface HouseRow {
   k: string; lat: number; lng: number; a: string; s: string; st: string | null; fast: boolean; day: string | null;
   carried: boolean; c: string | null; n: string | null; f: number;
+  /** civic number, suffix and unit (RUN_27; missing before it's run) */
+  no?: number | null; sx?: string | null; u?: string | null;
 }
 export interface RouteView {
   route: string; area: string; round: number | null; open: boolean; started: string | null; ended: string | null; done_pct: number;
@@ -172,6 +174,32 @@ export function clientLayerOf(flags: number, on: Set<ClientLayer>, service: Serv
   for (const l of order) if (on.has(l.key) && (flags & l.bit)) return l.key;
   return null;
 }
+
+/**
+ * A house's colour on the route level, as the RM map colours it: this season's job for the
+ * season's service (purple) wins; then no / go back / invalid; then not home (lighter for a past
+ * client); then past clients (blue for the season's service, lime / sky for the other); else black.
+ * Only customer layers switched on in the filters count.
+ */
+export const RM_HOUSE = {
+  none: '#111111', not_home: '#8b8f98', no: '#dc2626', go_back: '#f97316', invalid: '#ec4899',
+  done: '#7c3aed', pcl: '#1d4ed8', pclNotHome: '#93b4f5',
+  other: { aeration: { pcl: '#84cc16', notHome: '#c3e88d' }, sealing: { pcl: '#0ea5e9', notHome: '#a5d8f5' } },
+} as const;
+export function houseLook(st: string | null, flags: number, on: Set<ClientLayer>, service: Service): { color: string; strong: boolean } {
+  const bits = CLIENT_LAYERS.filter(l => on.has(l.key)).reduce((b, l) => b | l.bit, 0);
+  const f = flags & bits;
+  const mine = service === 'sealing' ? { prev: 2, done: 8 } : { prev: 1, done: 4 };
+  const otherLine: Service = service === 'sealing' ? 'aeration' : 'sealing';
+  const otherBits = service === 'sealing' ? 1 | 4 : 2 | 8;
+  if (f & mine.done) return { color: RM_HOUSE.done, strong: true };
+  if (st === 'no' || st === 'go_back' || st === 'invalid') return { color: RM_HOUSE[st], strong: true };
+  const pcl = !!(f & mine.prev), other = !pcl && !!(f & otherBits);
+  if (st === 'not_home') return { color: pcl ? RM_HOUSE.pclNotHome : other ? RM_HOUSE.other[otherLine].notHome : RM_HOUSE.not_home, strong: true };
+  return { color: pcl ? RM_HOUSE.pcl : other ? RM_HOUSE.other[otherLine].pcl : RM_HOUSE.none, strong: false };
+}
+/** Aeration customer (any year) → leaf; sealing customer → black drop. */
+export const serviceMarks = (flags: number) => ({ leaf: !!(flags & (1 | 4)), drop: !!(flags & (2 | 8)) });
 
 // ───────────── words ─────────────
 /** "2026-10-12" → "Oct 12". */

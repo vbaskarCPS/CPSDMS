@@ -13,7 +13,7 @@
 // shows each map's own current round. Settings (gear): default season and round, and how much of
 // a route has to be knocked for it to count as done.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import type { Map as MbMap, MapboxGeoJSONFeature } from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { AlertTriangle, ArrowLeft, Check, ChevronRight, Flame, Layers, Play, Settings, X } from 'lucide-react';
@@ -23,19 +23,21 @@ import { routeShapes, type RouteShape } from '../../lib/territory';
 import {
   areaView, CLIENT_LAYERS, clientLayerOf, daysLabel, getSettings, heatColor, house as loadHouse, KNOCKS, knockOf, NEVER, NO_DOORS,
   outlines as loadOutlines, overview as loadOverview, parseRound, parseSeason, pctOf, roundName, routeView, seasonKey, seasonLabel,
-  shortDay, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
+  houseLook, serviceMarks, shortDay, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
   type RouteView, type Season, type StreetHeat,
 } from '../../lib/masterBookings';
 import { fmtDay, VISIT } from '../../lib/customers';
 import { Btn, ErrorBox, Loading, Modal, Tag, Toggle } from '../../ui';
 import { coordsOf, createMap, EMPTY, fc, fit, hull, middle, removeMap, setData } from './mbMap';
 import { MbSettingsModal } from './MbSettings';
+import { MB_HOUSE_ZOOM, useMbHouses, type MbHouse } from './useMbHouses';
+import { CustomerModal } from '../clients/Customer';
+import type { SavedRouteMap } from '../../../lib/mapLogsheetService';
 
 const splitMaps = (v: string | null) => (v ? v.split('|').map(s => s.trim()).filter(Boolean) : []);
 
 export const MasterBookings: React.FC = () => {
   const { center, can } = useAuth();
-  const nav = useNavigate();
   const [params, setParams] = useSearchParams();
   const allowed = can('bookings');
   const year = new Date().getFullYear();
@@ -76,11 +78,12 @@ export const MasterBookings: React.FC = () => {
   const [heat, setHeat] = useState(true);
   const [knockOn, setKnockOn] = useState<Set<string>>(new Set([...KNOCKS.map(k => k.key), NEVER.key]));
   const [clientOn, setClientOn] = useState<Set<ClientLayer>>(new Set());
-  useEffect(() => { setClientOn(new Set(season.service === 'sealing' ? ['done_sealing', 'prev_sealing'] : ['done_aeration', 'prev_aeration'])); }, [season.service]);
+  // every customer layer on to start: aeration and sealing customers both show (leaf / drop on the route level)
+  useEffect(() => { setClientOn(new Set(CLIENT_LAYERS.map(l => l.key))); }, [season.service]);
   const [filtersOpen, setFiltersOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth > 860);
   const [selHouse, setSelHouse] = useState<HouseRow | null>(null);
-  const [selClient, setSelClient] = useState<{ id: string; address: string; name: string | null; flags: number } | null>(null);
-  useEffect(() => { setSelHouse(null); setSelClient(null); }, [route, mapsKey]);
+  const [customerId, setCustomerId] = useState<string | null>(null);
+  useEffect(() => { setSelHouse(null); }, [route, mapsKey]);
   const [starting, setStarting] = useState<MapCard | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -89,7 +92,7 @@ export const MasterBookings: React.FC = () => {
   const map = useRef<MbMap | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const clickRef = useRef<{ outline: (a: string) => void; route: (c: string) => void; house: (k: string) => void; client: (i: number) => void }>({ outline: () => {}, route: () => {}, house: () => {}, client: () => {} });
+  const clickRef = useRef<{ outline: (a: string) => void; route: (c: string) => void; client: (i: number) => void }>({ outline: () => {}, route: () => {}, client: () => {} });
   useEffect(() => {
     if (!box.current || map.current) return;
     map.current = createMap(box.current, m => {
@@ -100,7 +103,6 @@ export const MasterBookings: React.FC = () => {
       };
       on('mb-outline-fill', f => clickRef.current.outline(String(f.properties?.area)));
       for (const l of ['mb-routes', 'mb-heat', 'mb-nums']) on(l, f => { if (f.properties?.code) clickRef.current.route(String(f.properties.code)); });
-      on('mb-houses', f => clickRef.current.house(String(f.properties?.k)));
       on('mb-clients', f => clickRef.current.client(Number(f.properties?.i)));
       setMapReady(true);
     }, setFailed);
@@ -112,8 +114,7 @@ export const MasterBookings: React.FC = () => {
   clickRef.current = {
     outline: a => { if (level === 1) flipPick(a); },
     route: c => { if (level === 2) go({ route: c }); },
-    house: k => { const h = rv.data?.houses.find(x => x.k === k); if (h) setSelHouse(h); },
-    client: i => { const c = av.data?.clients[i]; if (c) setSelClient({ id: c.id, address: c.address, name: c.name, flags: c.flags }); },
+    client: i => { const c = av.data?.clients[i]; if (c) setCustomerId(c.id); },
   };
 
   // level 1: outlines
@@ -174,21 +175,38 @@ export const MasterBookings: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady, level, mapsKey, shapes.data]);
 
-  // level 3: houses
+  // level 3: houses, drawn as the RM map draws them zoomed in; customers' names over their houses
+  const routeMaps = useMemo<SavedRouteMap[]>(() => {
+    if (level !== 3) return [];
+    const list = (shapes.data || []).filter(s => s.code === route);
+    const lines = list.length ? list.flatMap(s => s.lines) : (rv.data?.line || []).map(s => s.coordinates).filter(c => c?.length > 1);
+    return [{ id: route || '', route_code: route || '', route_color: list[0]?.color || '#6b7280', route_number: list[0]?.number || 0,
+      segments: lines.map((coordinates, i) => ({ osmId: i, name: '', coordinates })) }];
+  }, [level, shapes.data, rv.data, route]);
+  const houseItems = useMemo<MbHouse[]>(() => level !== 3 ? [] : (rv.data?.houses || []).filter(h => knockOn.has(h.st || NEVER.key)).map(h => {
+    const look = houseLook(h.st, h.f, clientOn, season.service);
+    const marks = serviceMarks(h.f);
+    const civic = h.no ?? (Number(String(h.k).match(/^\d+/)?.[0]) || 0);
+    const shown = !!h.c && (h.f === 0 ? clientOn.size > 0 : !!clientLayerOf(h.f, clientOn, season.service));
+    return {
+      house: { routeCode: rv.data!.route, houseKey: h.k, civicNo: civic, civicSuffix: h.sx ?? null, streetName: h.s, streetNorm: h.s, unitCount: 1,
+        lat: h.lat, lng: h.lng, footprint: null, source: 'nar', geoSource: null, geoTriedAt: null, unit: h.u ?? null },
+      color: look.color, strong: look.strong, name: shown ? (h.n || 'Customer') : null, leaf: shown && marks.leaf, drop: shown && marks.drop,
+    };
+  }), [level, rv.data, knockOn, clientOn, season.service]);
+  useMbHouses({ map: map.current, ready: mapReady, items: houseItems, routeMaps, onPick: k => {
+    const h = rv.data?.houses.find(x => x.k === k); if (!h) return;
+    if (h.c) setCustomerId(h.c); else setSelHouse(h);
+  } });
   useEffect(() => {
     const m = map.current; if (!m || !mapReady) return;
-    if (level !== 3) { setData(m, 'mb-houses', EMPTY); setData(m, 'mb-sel', EMPTY); return; }
-    setData(m, 'mb-houses', fc((rv.data?.houses || []).filter(h => knockOn.has(h.st || NEVER.key)).map(h => {
-      const layer = clientLayerOf(h.f, clientOn, season.service);
-      const ring = layer ? CLIENT_LAYERS.find(l => l.key === layer)!.color : h.fast ? '#facc15' : '#111827';
-      return { type: 'Feature', geometry: { type: 'Point', coordinates: [h.lng, h.lat] },
-        properties: { k: h.k, color: knockOf(h.st)?.color || NEVER.color, ring, ringW: layer ? 3 : h.fast ? 2 : 1.2 } };
-    })));
-    setData(m, 'mb-sel', selHouse ? fc([{ type: 'Feature', geometry: { type: 'Point', coordinates: [selHouse.lng, selHouse.lat] }, properties: {} }]) : EMPTY);
-  }, [mapReady, level, rv.data, knockOn, clientOn, season.service, selHouse]);
+    setData(m, 'mb-sel', level === 3 && selHouse ? fc([{ type: 'Feature', geometry: { type: 'Point', coordinates: [selHouse.lng, selHouse.lat] }, properties: {} }]) : EMPTY);
+  }, [mapReady, level, selHouse]);
   useEffect(() => {
     if (level !== 3 || !mapReady || !rv.data) return;
-    fit(map.current, rv.data.houses.map(h => [h.lng, h.lat] as [number, number]), 17);
+    fit(map.current, rv.data.houses.map(h => [h.lng, h.lat] as [number, number]), 17.5);
+    const m = map.current;
+    if (m && m.getZoom() < MB_HOUSE_ZOOM + 0.5) m.jumpTo({ zoom: MB_HOUSE_ZOOM + 0.5 });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady, level, route, !!rv.data]);
 
@@ -232,7 +250,7 @@ export const MasterBookings: React.FC = () => {
           {level === 2 && <Level2 cards={cards.filter(c => maps.includes(c.area))} view={av.data} loading={av.loading && !av.data} season={season} year={year}
             onRoute={c => go({ route: c })} onStart={setStarting} />}
           {level === 3 && <Level3 view={rv.data} loading={rv.loading && !rv.data} sel={selHouse} onClose={() => setSelHouse(null)} season={season}
-            onCustomer={id => nav(`/app/clients/c/${id}`)} />}
+            onCustomer={setCustomerId} />}
         </div>
       </aside>
 
@@ -255,20 +273,9 @@ export const MasterBookings: React.FC = () => {
               }} />}
           </div>
         )}
-        {level === 2 && selClient && (
-          <div className="v2-crm-pick v2-island" role="dialog" aria-label="Customer">
-            <div className="v2-row" style={{ gap: 8, flexWrap: 'nowrap' }}>
-              <b style={{ fontSize: 15 }}>{selClient.address}</b><span className="v2-spacer" />
-              <button type="button" className="v2-x" onClick={() => setSelClient(null)} aria-label="Close"><X size={16} /></button>
-            </div>
-            <div className="v2-mut v2-small" style={{ margin: '4px 0 10px' }}>
-              {[selClient.name, ...CLIENT_LAYERS.filter(l => selClient.flags & l.bit).map(l => l.label(season.season))].filter(Boolean).join(' · ')}
-            </div>
-            <Btn size="sm" onClick={() => nav(`/app/clients/c/${selClient.id}`)}>Open customer page</Btn>
-          </div>
-        )}
       </section>
 
+      {customerId && <CustomerModal id={customerId} onClose={() => setCustomerId(null)} />}
       {starting && <StartRoundModal card={starting} season={season} onClose={() => setStarting(null)}
         onDone={() => { setStarting(null); ov.reload(); av.reload(); rv.reload(); }} />}
       {showSettings && <MbSettingsModal centerId={center.id} seasons={seasons} onClose={() => setShowSettings(false)}

@@ -5,9 +5,9 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, MessageSquare, Phone } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
-import { customer, fmtDay, fmtMoney, jobsByYear, money, moneySummary, PAID, timeline, type Job } from '../../lib/customers';
+import { customer, type CustomerFull, fmtDay, fmtMoney, jobsByYear, money, moneySummary, PAID, timeline, type Job } from '../../lib/customers';
 import { formatPhone, lineLabel } from '../../lib/clientImport';
-import { ErrorBox, Loading, Tag } from '../../ui';
+import { ErrorBox, Loading, Modal, Tag } from '../../ui';
 import { canReadCustomers } from './CustomerMap';
 
 export const Customer: React.FC = () => {
@@ -21,22 +21,42 @@ export const Customer: React.FC = () => {
   if (!allowed) return <div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to customers.</div></div>;
   if (res.loading && !res.data) return <div className="v2-main v2-narrow"><Loading /></div>;
   if (!res.data) return <div className="v2-main v2-narrow"><Link to={back} className="v2-crm-back"><ChevronLeft size={16} />Customers</Link><ErrorBox error={res.error || 'That customer isn’t on file.'} /></div>;
+  return (
+    <div className="v2-main v2-narrow">
+      <Link to={back} className="v2-crm-back"><ChevronLeft size={16} />{res.data.area || 'Customers'}</Link>
+      <CustomerDetails data={res.data} />
+    </div>
+  );
+};
 
-  const { client: c, area } = res.data;
+/** The customer page in a window over the screen you're on (Master Bookings): closing it leaves you where you were. */
+export const CustomerModal: React.FC<{ id: string; onClose: () => void }> = ({ id, onClose }) => {
+  const res = useLoad(() => customer(id), [id]);
+  const c = res.data?.client;
+  return (
+    <Modal wide title={c ? `${c.house_no} ${c.street_name}${c.unit ? ` Unit ${c.unit}` : ''}` : 'Customer'} onClose={onClose}>
+      <ErrorBox error={res.error} />
+      {res.loading && !res.data ? <Loading /> : res.data && <CustomerDetails data={res.data} inModal />}
+    </Modal>
+  );
+};
+
+/** Everything about one customer: who, money, jobs by year, and every touch at the house. */
+export const CustomerDetails: React.FC<{ data: CustomerFull; inModal?: boolean }> = ({ data, inModal }) => {
+  const { client: c, area } = data;
   const year = new Date().getFullYear();
   const m = moneySummary(c.history, year);
   const years = jobsByYear(c.history);
-  const items = timeline(res.data);
+  const items = timeline(data);
   const doneNow = c.history.some(j => String(j.year) === String(year));
   const before = c.history.some(j => Number(j.year) && Number(j.year) < year);
   const phoneOf = (i: number) => c.people[i]?.phone;
   const looseNumbers = c.phones.filter(p => !c.people.some(x => x.phone === p));
 
   return (
-    <div className="v2-main v2-narrow">
-      <Link to={back} className="v2-crm-back"><ChevronLeft size={16} />{area || 'Customers'}</Link>
+    <>
       <div className="v2-head" style={{ marginBottom: 6 }}>
-        <span className="v2-h1">{c.house_no} {c.street_name}{c.unit ? ` Unit ${c.unit}` : ''}</span>
+        {!inModal && <span className="v2-h1">{c.house_no} {c.street_name}{c.unit ? ` Unit ${c.unit}` : ''}</span>}
         {doneNow && <Tag tone="g">{before ? 'Back again' : 'New'} · done {year}</Tag>}
         {!doneNow && before && <Tag>Past customer</Tag>}
         {m.owed > 0 && <Tag tone="r">Owes {fmtMoney(m.owed)}</Tag>}
@@ -119,7 +139,7 @@ export const Customer: React.FC = () => {
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };
 
