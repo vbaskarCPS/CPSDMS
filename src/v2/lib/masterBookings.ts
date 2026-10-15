@@ -198,6 +198,13 @@ export function houseLook(st: string | null, flags: number, on: Set<ClientLayer>
   if (st === 'not_home') return { color: pcl ? RM_HOUSE.pclNotHome : other ? RM_HOUSE.other[otherLine].notHome : RM_HOUSE.not_home, strong: true };
   return { color: pcl ? RM_HOUSE.pcl : other ? RM_HOUSE.other[otherLine].pcl : RM_HOUSE.none, strong: false };
 }
+/** "Jane Doe" → "Jane D."; one word stays as it is. */
+export function shortName(full: string | null | undefined): string | null {
+  const parts = (full || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return null;
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`;
+}
 /** Aeration customer (any year) → leaf; sealing customer → black drop. */
 export const serviceMarks = (flags: number) => ({ leaf: !!(flags & (1 | 4)), drop: !!(flags & (2 | 8)) });
 

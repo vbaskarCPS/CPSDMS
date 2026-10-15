@@ -23,7 +23,7 @@ import { routeShapes, type RouteShape } from '../../lib/territory';
 import {
   areaView, CLIENT_LAYERS, clientLayerOf, daysLabel, getSettings, heatColor, house as loadHouse, KNOCKS, knockOf, NEVER, NO_DOORS,
   outlines as loadOutlines, overview as loadOverview, parseRound, parseSeason, pctOf, roundName, routeView, seasonKey, seasonLabel,
-  houseLook, serviceMarks, shortDay, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
+  houseLook, serviceMarks, shortDay, shortName, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
   type RouteView, type Season, type StreetHeat,
 } from '../../lib/masterBookings';
 import { fmtDay, VISIT } from '../../lib/customers';
@@ -78,6 +78,7 @@ export const MasterBookings: React.FC = () => {
   const [heat, setHeat] = useState(true);
   const [knockOn, setKnockOn] = useState<Set<string>>(new Set([...KNOCKS.map(k => k.key), NEVER.key]));
   const [clientOn, setClientOn] = useState<Set<ClientLayer>>(new Set());
+  const [bookingOn, setBookingOn] = useState<Set<string>>(new Set(['aeration', 'sealing']));
   // every customer layer on to start: aeration and sealing customers both show (leaf / drop on the route level)
   useEffect(() => { setClientOn(new Set(CLIENT_LAYERS.map(l => l.key))); }, [season.service]);
   const [filtersOpen, setFiltersOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth > 860);
@@ -191,7 +192,7 @@ export const MasterBookings: React.FC = () => {
     return {
       house: { routeCode: rv.data!.route, houseKey: h.k, civicNo: civic, civicSuffix: h.sx ?? null, streetName: h.s, streetNorm: h.s, unitCount: 1,
         lat: h.lat, lng: h.lng, footprint: null, source: 'nar', geoSource: null, geoTriedAt: null, unit: h.u ?? null },
-      color: look.color, strong: look.strong, name: shown ? (h.n || 'Customer') : null, leaf: shown && marks.leaf, drop: shown && marks.drop,
+      color: look.color, strong: look.strong, name: shown ? (shortName(h.n) || 'Customer') : null, leaf: shown && marks.leaf, drop: shown && marks.drop,
     };
   }), [level, rv.data, knockOn, clientOn, season.service]);
   useMbHouses({ map: map.current, ready: mapReady, items: houseItems, routeMaps, onPick: k => {
@@ -264,7 +265,7 @@ export const MasterBookings: React.FC = () => {
               <Layers size={15} /><b>Filters</b>{heat && <Tag tone="a">Heat map</Tag>}<span className="v2-spacer" /><ChevronRight size={15} className="chev" />
             </button>
             {filtersOpen && <Filters level={level} season={season} heat={heat} setHeat={setHeat} knockOn={knockOn} setKnockOn={setKnockOn}
-              clientOn={clientOn} setClientOn={setClientOn} counts={{
+              clientOn={clientOn} setClientOn={setClientOn} bookingOn={bookingOn} setBookingOn={setBookingOn} counts={{
                 clients: CLIENT_LAYERS.reduce((o, l) => ({ ...o, [l.key]: (av.data?.clients || []).filter(c => c.flags & l.bit).length }), {} as Record<ClientLayer, number>),
                 knocks: level === 3
                   ? (rv.data?.houses || []).reduce((o, h) => { const k = h.st || NEVER.key; o[k] = (o[k] || 0) + 1; return o; }, {} as Record<string, number>)
@@ -486,11 +487,17 @@ const HousePanel: React.FC<{ route: string; row: HouseRow; onClose: () => void; 
 const Filters: React.FC<{
   level: number; season: Season; heat: boolean; setHeat: (v: boolean) => void;
   knockOn: Set<string>; setKnockOn: (s: Set<string>) => void; clientOn: Set<ClientLayer>; setClientOn: (s: Set<ClientLayer>) => void;
+  bookingOn: Set<string>; setBookingOn: (s: Set<string>) => void;
   counts: { clients: Record<ClientLayer, number>; knocks: Record<string, number>; bookings: number };
-}> = ({ level, season, heat, setHeat, knockOn, setKnockOn, clientOn, setClientOn, counts }) => {
+}> = ({ level, season, heat, setHeat, knockOn, setKnockOn, clientOn, setClientOn, bookingOn, setBookingOn, counts }) => {
   const flip = <T,>(s: Set<T>, k: T) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; };
   const layers = [...CLIENT_LAYERS].sort((a, b) => (a.service === season.service ? 0 : 1) - (b.service === season.service ? 0 : 1) || b.bit - a.bit);
   const knocksHidden = level === 2 && heat;
+  const knockKeys = [...KNOCKS.map(k => k.key), NEVER.key];
+  // a group's master switch: on while anything in it is on; switching it sets the whole group
+  const Group: React.FC<{ label: string; note?: React.ReactNode; on: boolean; set: (v: boolean) => void }> = ({ label, note, on, set }) => (
+    <div className="v2-mb-fgroup v2-mb-ghead"><span>{label}{note}</span><Toggle on={on} onChange={set} label={`All ${label.toLowerCase()}`} /></div>
+  );
   return (
     <div className="v2-mb-fbody">
       <div className="v2-mb-frow">
@@ -498,23 +505,24 @@ const Filters: React.FC<{
         <Toggle on={heat} onChange={setHeat} label="Heat map" />
       </div>
       {heat && <div className="v2-mb-scale"><span>10% or less</span><i /><span>70% or more</span></div>}
-      <div className="v2-mb-fgroup">Knocks this round{knocksHidden && <small> · off in heat map</small>}</div>
+      <Group label="Knocks this round" note={knocksHidden && <small> · off in heat map</small>} on={knockKeys.some(k => knockOn.has(k))}
+        set={v => setKnockOn(new Set(v ? knockKeys : []))} />
       {[...KNOCKS, ...(level === 3 ? [NEVER] : [])].map(k => (
         <button key={k.key} type="button" className={`v2-crm-leg${knockOn.has(k.key) ? '' : ' off'}${knocksHidden ? ' dim' : ''}`} onClick={() => setKnockOn(flip(knockOn, k.key))} aria-pressed={knockOn.has(k.key)}>
           <i style={{ background: k.color, boxShadow: k.key === NEVER.key ? 'inset 0 0 0 1.5px #111827' : undefined }} /><span>{k.label}</span><b>{(counts.knocks[k.key] || 0).toLocaleString()}</b>
         </button>
       ))}
-      <div className="v2-mb-fgroup">Customers</div>
+      <Group label="Customers" on={clientOn.size > 0} set={v => setClientOn(new Set(v ? CLIENT_LAYERS.map(l => l.key) : []))} />
       {layers.map(l => (
         <button key={l.key} type="button" className={`v2-crm-leg${clientOn.has(l.key) ? '' : ' off'}`} onClick={() => setClientOn(flip(clientOn, l.key))} aria-pressed={clientOn.has(l.key)} title={l.hint}>
           <i style={{ background: l.color }} /><span>{l.label(season.season)}</span><b>{(counts.clients[l.key] || 0).toLocaleString()}</b>
         </button>
       ))}
-      <div className="v2-mb-fgroup">Bookings</div>
+      <Group label="Bookings" on={bookingOn.size > 0} set={v => setBookingOn(new Set(v ? ['aeration', 'sealing'] : []))} />
       {(['aeration', 'sealing'] as const).map(s => (
-        <div key={s} className="v2-crm-leg off" title="Bookings aren’t kept in the app yet">
+        <button key={s} type="button" className={`v2-crm-leg${bookingOn.has(s) ? '' : ' off'}`} onClick={() => setBookingOn(flip(bookingOn, s))} aria-pressed={bookingOn.has(s)} title="Bookings aren’t kept in the app yet">
           <i style={{ background: s === 'aeration' ? '#84cc16' : '#0ea5e9' }} /><span>{s === 'aeration' ? 'Aeration' : 'Sealing'} bookings</span><b>{counts.bookings ? '' : '0'}</b>
-        </div>
+        </button>
       ))}
       <div className="v2-note" style={{ margin: '4px 6px 0' }}>Bookings show here once they’re kept in the app.</div>
     </div>
