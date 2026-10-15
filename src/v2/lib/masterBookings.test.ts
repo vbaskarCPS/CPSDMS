@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  clientLayerOf, houseLook, RM_HOUSE, serviceMarks, daysLabel, heatColor, parseAreaView, parseRound, parseSeason, pctOf, seasonKey, shownRound, startingSeason,
+  clientLayerOf, houseLook, RM_HOUSE, serviceMarks, shortName, daysLabel, heatColor, parseAreaView, parseRound, parseSeason, pctOf, seasonKey, shownRound, startingSeason,
   type ClientLayer, type MapCard,
 } from './masterBookings';
 
@@ -106,5 +106,15 @@ describe('route level houses (RM map colours)', () => {
     expect(serviceMarks(8)).toEqual({ leaf: false, drop: true });
     expect(serviceMarks(2 | 4)).toEqual({ leaf: true, drop: true });
     expect(serviceMarks(0)).toEqual({ leaf: false, drop: false });
+  });
+});
+
+describe('names on houses', () => {
+  it('first name and last initial', () => {
+    expect(shortName('Jane Doe')).toBe('Jane D.');
+    expect(shortName('  mary ann   smith ')).toBe('mary S.');
+    expect(shortName('Cher')).toBe('Cher');
+    expect(shortName('')).toBeNull();
+    expect(shortName(null)).toBeNull();
   });
 });

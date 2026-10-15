@@ -517,3 +517,5 @@
   .v2-mb .v2-crm-map { height: 64vh; }
   .v2-mb-filters { width: min(290px, calc(100% - 24px)); }
 }
+.v2-mb-ghead { display: flex; align-items: center; gap: 8px; padding-right: 8px; }
+.v2-mb-ghead > span { flex: 1; }

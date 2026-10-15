@@ -15,6 +15,8 @@ import {
 } from '../../../lib/mapBuildings';
 
 export const MB_HOUSE_ZOOM = 14.5;
+/** A customer's name on the house: the RM map's name size (0.62 of the number) and 20% bigger. */
+export const NAME_SCALE = 0.62 * 1.2;
 const P = 'mbh';
 const SRC_FP = `${P}-fp-src`, SRC_PT = `${P}-pt-src`, SRC_HIT = `${P}-hit-src`, SRC_NAME = `${P}-name-src`;
 const L_FILL = `${P}-fp-fill`, L_LINE = `${P}-fp-line`, L_NUM = `${P}-num`, L_HIT = `${P}-hit`, L_NAME = `${P}-name`;
@@ -108,16 +110,18 @@ export function useMbHouses({ map, ready, items, routeMaps, onPick }: {
     // an invisible dot on every house, so any house (on a building or a tile) can be tapped
     if (!map.getLayer(L_HIT)) map.addLayer({ id: L_HIT, type: 'circle', source: SRC_HIT, minzoom: MB_HOUSE_ZOOM, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], MB_HOUSE_ZOOM, 6, 18, 14], 'circle-color': '#000000', 'circle-opacity': 0.01 } }, before);
     if (!map.getLayer(L_NUM)) map.addLayer({ id: L_NUM, type: 'symbol', source: SRC_PT, minzoom: MB_HOUSE_ZOOM, layout: {
-      'text-field': ['get', 'num'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-      'text-size': ['interpolate', ['linear'], ['zoom'], MB_HOUSE_ZOOM, 10, 17, 14, 19, 18], 'text-padding': 1, 'text-allow-overlap': false, 'symbol-sort-key': ['get', 'sort'] },
+      // the RM map's label: the number, and a customer's name under it on the house (20% bigger than the RM map's)
+      'text-field': ['format', ['get', 'num'], { 'font-scale': 1 },
+        ['case', ['==', ['get', 'name'], ''], '', ['concat', '\n', ['get', 'name']]], { 'font-scale': NAME_SCALE }],
+      'text-size': ['interpolate', ['linear'], ['zoom'], MB_HOUSE_ZOOM, 10, 17, 14, 19, 18], 'text-line-height': 1.05,
+      'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-padding': 1, 'text-allow-overlap': false, 'symbol-sort-key': ['get', 'sort'] },
       paint: { 'text-color': ['get', 'color'], 'text-halo-color': 'rgba(255,255,255,0.95)', 'text-halo-width': 1.6 } }, before);
+    // the leaf / drop under a customer's label
     if (!map.getLayer(L_NAME)) map.addLayer({ id: L_NAME, type: 'symbol', source: SRC_NAME, minzoom: MB_HOUSE_ZOOM, layout: {
-      'text-field': ['get', 'name'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-      'text-size': ['interpolate', ['linear'], ['zoom'], MB_HOUSE_ZOOM, 13, 17, 18, 19, 23],
-      'text-anchor': 'bottom', 'text-offset': ['case', ['has', 'icon'], ['literal', [0, -2.2]], ['literal', [0, -0.9]]], 'text-max-width': 9,
-      'icon-image': ['coalesce', ['get', 'icon'], ''], 'icon-anchor': 'bottom', 'icon-offset': [0, -10], 'icon-size': ['interpolate', ['linear'], ['zoom'], MB_HOUSE_ZOOM, 0.75, 18, 1.1],
-      'text-allow-overlap': false, 'icon-allow-overlap': false, 'symbol-sort-key': 0 },
-      paint: { 'text-color': ['get', 'color'], 'text-halo-color': '#ffffff', 'text-halo-width': 2.2 } });
+      'icon-image': ['get', 'icon'], 'icon-anchor': 'top',
+      'icon-offset': ['interpolate', ['linear'], ['zoom'], MB_HOUSE_ZOOM, ['literal', [0, 30]], 17, ['literal', [0, 32]], 19, ['literal', [0, 34]]],
+      'icon-size': ['interpolate', ['linear'], ['zoom'], MB_HOUSE_ZOOM, 0.45, 17, 0.6, 19, 0.75],
+      'icon-allow-overlap': true, 'icon-ignore-placement': true } });
 
     const click = (e: { features?: { properties?: Record<string, unknown> | null }[] }) => { const k = e.features?.[0]?.properties?.k; if (k) pickRef.current(String(k)); };
     const on = () => { map.getCanvas().style.cursor = 'pointer'; };
@@ -154,12 +158,10 @@ export function useMbHouses({ map, ready, items, routeMaps, onPick }: {
       const onBuilding = match.houseToBuilding.has(id) || !!match.houseToSlice?.has(id);
       const at: [number, number] = tile && !onBuilding ? tileCentre(tile) : [h.lng, h.lat];
       if (tile) fp.push({ type: 'Feature', properties: { id, color: it.color, fillOpacity: it.strong ? 0.45 : 0.10, lineOpacity: it.strong ? 0.9 : 0.35, b: onBuilding ? 1 : 0 }, geometry: tile });
-      pt.push({ type: 'Feature', properties: { k: h.houseKey, color: it.color, num: houseMapNumber(h), sort: it.strong || it.name ? 0 : 1 }, geometry: { type: 'Point', coordinates: at } });
+      pt.push({ type: 'Feature', properties: { k: h.houseKey, color: it.color, num: houseMapNumber(h), name: it.name || '', sort: it.name ? 0 : it.strong ? 1 : 2 }, geometry: { type: 'Point', coordinates: at } });
       hit.push({ type: 'Feature', properties: { k: h.houseKey }, geometry: { type: 'Point', coordinates: at } });
-      if (it.name) {
-        const icon = iconName(it.leaf, it.drop);
-        names.push({ type: 'Feature', properties: { k: h.houseKey, name: it.name, color: it.color, ...(icon ? { icon } : {}) }, geometry: { type: 'Point', coordinates: at } });
-      }
+      const icon = it.name ? iconName(it.leaf, it.drop) : null;
+      if (icon) names.push({ type: 'Feature', properties: { k: h.houseKey, icon }, geometry: { type: 'Point', coordinates: at } });
       const st: BuildingStyle = { color: it.color, fill: it.strong ? 0.55 : 0.18, line: it.strong ? 0.95 : 0.6, width: it.strong ? 1.6 : 1 };
       byHouse.set(id, st);
       const bid = match.houseToBuilding.get(id);
