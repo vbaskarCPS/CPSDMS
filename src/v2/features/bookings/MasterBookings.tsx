@@ -1,0 +1,546 @@
+// src/v2/features/bookings/MasterBookings.tsx — Master Bookings, in three levels.
+//
+//   Level 1  the center's master maps: outlines on the map, a card per map in the sidebar (routes,
+//            bookings, past customers per service, each round's days and % of routes done).
+//            Pick one or more, then Open.
+//   Level 2  the picked maps, RM-map style, with one filter panel (customers by service, knocks,
+//            bookings) and heat map mode: route colours off, route outlines on, every street
+//            coloured by how much of it was knocked this round. Tap a route for level 3.
+//   Level 3  one route: every house coloured by its knock this round; tap a house for its whole
+//            knock history and its customer page.
+//
+// The season and round picker sits at the top of every level; everything follows it. "Current"
+// shows each map's own current round. Settings (gear): default season and round, and how much of
+// a route has to be knocked for it to count as done.
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import type { Map as MbMap, MapboxGeoJSONFeature } from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
+import { AlertTriangle, ArrowLeft, Check, ChevronRight, Flame, Layers, Play, Settings, X } from 'lucide-react';
+import { useAuth } from '../../lib/auth';
+import { useLoad } from '../../lib/data';
+import { routeShapes, type RouteShape } from '../../lib/territory';
+import {
+  areaView, CLIENT_LAYERS, clientLayerOf, daysLabel, getSettings, heatColor, house as loadHouse, KNOCKS, knockOf, NEVER, NO_DOORS,
+  outlines as loadOutlines, overview as loadOverview, parseRound, parseSeason, pctOf, roundName, routeView, seasonKey, seasonLabel,
+  shortDay, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
+  type RouteView, type Season, type StreetHeat,
+} from '../../lib/masterBookings';
+import { fmtDay, VISIT } from '../../lib/customers';
+import { Btn, ErrorBox, Loading, Modal, Tag, Toggle } from '../../ui';
+import { coordsOf, createMap, EMPTY, fc, fit, hull, middle, removeMap, setData } from './mbMap';
+import { MbSettingsModal } from './MbSettings';
+
+const splitMaps = (v: string | null) => (v ? v.split('|').map(s => s.trim()).filter(Boolean) : []);
+
+export const MasterBookings: React.FC = () => {
+  const { center, can } = useAuth();
+  const nav = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const allowed = can('bookings');
+  const year = new Date().getFullYear();
+
+  // ── the picker ──
+  const settings = useLoad(() => (allowed && center ? getSettings(center.id) : Promise.resolve(null)), [allowed, center?.id]);
+  const season: Season = startingSeason(parseSeason(params.get('s')), settings.data, center?.services, year);
+  const round: RoundPick = params.has('r') ? parseRound(params.get('r')) : (settings.data?.round ?? 'current');
+  const maps = splitMaps(params.get('maps'));
+  const route = params.get('route');
+  const level: 1 | 2 | 3 = route ? 3 : maps.length ? 2 : 1;
+  const go = (next: Record<string, string | null>) => {
+    const p = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(next)) { if (v === null) p.delete(k); else p.set(k, v); }
+    setParams(p);
+  };
+  const setSeason = (s: Season) => go({ s: seasonKey(s), r: 'current' });
+  const setRound = (r: RoundPick) => go({ r: r === 'current' ? 'current' : String(r) });
+
+  const ready = allowed && !!center && !settings.loading;
+  const ov = useLoad(() => (ready ? loadOverview(center!.id, season, round) : Promise.resolve(null)),
+    [ready, center?.id, seasonKey(season), String(round)]);
+  const outl = useLoad(() => (ready ? loadOutlines(center!.id) : Promise.resolve({} as Record<string, GeoJSON.Geometry>)), [ready, center?.id]);
+  const mapsKey = maps.join('|');
+  const av = useLoad(() => (ready && maps.length ? areaView(maps, season, round) : Promise.resolve(null)),
+    [ready, mapsKey, seasonKey(season), String(round)]);
+  const shapes = useLoad(() => (maps.length ? routeShapes(maps) : Promise.resolve([] as RouteShape[])), [mapsKey]);
+  const rv = useLoad(() => (ready && route ? routeView(route, season, round) : Promise.resolve(null)), [ready, route, seasonKey(season), String(round)]);
+
+  // ── level 1 selection ──
+  const [picked, setPicked] = useState<Set<string>>(new Set(maps));
+  useEffect(() => { if (level === 1 && maps.length === 0) return; setPicked(new Set(maps)); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapsKey]);
+  const flipPick = (a: string) => setPicked(s => { const n = new Set(s); if (n.has(a)) n.delete(a); else n.add(a); return n; });
+  const openPicked = () => { const list = (ov.data?.maps || []).map(m => m.area).filter(a => picked.has(a)); if (list.length) go({ maps: list.join('|'), route: null }); };
+
+  // ── filters ──
+  const [heat, setHeat] = useState(true);
+  const [knockOn, setKnockOn] = useState<Set<string>>(new Set([...KNOCKS.map(k => k.key), NEVER.key]));
+  const [clientOn, setClientOn] = useState<Set<ClientLayer>>(new Set());
+  useEffect(() => { setClientOn(new Set(season.service === 'sealing' ? ['done_sealing', 'prev_sealing'] : ['done_aeration', 'prev_aeration'])); }, [season.service]);
+  const [filtersOpen, setFiltersOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth > 860);
+  const [selHouse, setSelHouse] = useState<HouseRow | null>(null);
+  const [selClient, setSelClient] = useState<{ id: string; address: string; name: string | null; flags: number } | null>(null);
+  useEffect(() => { setSelHouse(null); setSelClient(null); }, [route, mapsKey]);
+  const [starting, setStarting] = useState<MapCard | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+
+  // ── the map ──
+  const box = useRef<HTMLDivElement>(null);
+  const map = useRef<MbMap | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const clickRef = useRef<{ outline: (a: string) => void; route: (c: string) => void; house: (k: string) => void; client: (i: number) => void }>({ outline: () => {}, route: () => {}, house: () => {}, client: () => {} });
+  useEffect(() => {
+    if (!box.current || map.current) return;
+    map.current = createMap(box.current, m => {
+      const on = (layer: string, fn: (f: MapboxGeoJSONFeature) => void) => {
+        m.on('click', layer, e => { const f = e.features?.[0]; if (f) fn(f); });
+        m.on('mouseenter', layer, () => { m.getCanvas().style.cursor = 'pointer'; });
+        m.on('mouseleave', layer, () => { m.getCanvas().style.cursor = ''; });
+      };
+      on('mb-outline-fill', f => clickRef.current.outline(String(f.properties?.area)));
+      for (const l of ['mb-routes', 'mb-heat', 'mb-nums']) on(l, f => { if (f.properties?.code) clickRef.current.route(String(f.properties.code)); });
+      on('mb-houses', f => clickRef.current.house(String(f.properties?.k)));
+      on('mb-clients', f => clickRef.current.client(Number(f.properties?.i)));
+      setMapReady(true);
+    }, setFailed);
+    return () => { removeMap(map.current); map.current = null; setMapReady(false); };
+  }, []);
+
+  const clientsShown = useMemo(() => (av.data?.clients || []).map((c, i) => ({ c, i, layer: clientLayerOf(c.flags, clientOn, season.service) })).filter(x => x.layer),
+    [av.data, clientOn, season.service]);
+  clickRef.current = {
+    outline: a => { if (level === 1) flipPick(a); },
+    route: c => { if (level === 2) go({ route: c }); },
+    house: k => { const h = rv.data?.houses.find(x => x.k === k); if (h) setSelHouse(h); },
+    client: i => { const c = av.data?.clients[i]; if (c) setSelClient({ id: c.id, address: c.address, name: c.name, flags: c.flags }); },
+  };
+
+  // level 1: outlines
+  useEffect(() => {
+    const m = map.current; if (!m || !mapReady) return;
+    if (level !== 1) { setData(m, 'mb-outline', EMPTY); setData(m, 'mb-outline-labels', EMPTY); return; }
+    const cards = new Map((ov.data?.maps || []).map(c => [c.area, c]));
+    const shown = Object.entries(outl.data || {}).filter(([a]) => cards.has(a));
+    setData(m, 'mb-outline', fc(shown.map(([area, g]) => ({ type: 'Feature', geometry: g, properties: { area, sel: picked.has(area) ? 1 : 0 } }))));
+    setData(m, 'mb-outline-labels', fc(shown.flatMap(([area, g]) => {
+      const c = middle(coordsOf(g)); return c ? [{ type: 'Feature' as const, geometry: { type: 'Point' as const, coordinates: c }, properties: { label: area } }] : [];
+    })));
+  }, [mapReady, level, outl.data, ov.data, picked]);
+  useEffect(() => {
+    if (level !== 1 || !mapReady || !outl.data) return;
+    fit(map.current, Object.values(outl.data).flatMap(g => coordsOf(g)), 14);
+  }, [mapReady, level, outl.data]);
+
+  // level 2 and 3: routes / outlines / heat / numbers
+  const routeStats = useMemo(() => new Map((av.data?.routes || []).map(r => [r.code, r])), [av.data]);
+  useEffect(() => {
+    const m = map.current; if (!m || !mapReady) return;
+    if (level === 1) { (['mb-routes', 'mb-hull', 'mb-heat', 'mb-nums'] as const).forEach(id => setData(m, id, EMPTY)); return; }
+    const list = level === 3 ? (shapes.data || []).filter(s => s.code === route) : (shapes.data || []);
+    const own = level === 3 && !list.length && rv.data?.line ? [{ code: route!, number: 0, color: '#6b7280', lines: rv.data.line.map(s => s.coordinates).filter(c => c?.length > 1) }] : [];
+    const drawn = [...list, ...own];
+    setData(m, 'mb-routes', heat ? EMPTY : fc(drawn.flatMap(s => s.lines.map(l => ({ type: 'Feature' as const, properties: { code: s.code, color: s.color || '#6b7280' }, geometry: { type: 'LineString' as const, coordinates: l } })))));
+    setData(m, 'mb-hull', !heat ? EMPTY : fc(drawn.flatMap(s => {
+      const h = hull(s.lines.flat()); if (h.length < 3) return [];
+      return [{ type: 'Feature' as const, properties: { code: s.code }, geometry: { type: 'LineString' as const, coordinates: [...h, h[0]] } }];
+    })));
+    const streets: StreetHeat[] = level === 3 ? (rv.data?.streets || []) : (av.data?.streets || []);
+    setData(m, 'mb-heat', !heat ? EMPTY : fc(streets.filter(s => s.line).map(s => ({
+      type: 'Feature', geometry: s.line!, properties: { code: s.route, color: s.doors > 0 ? heatColor(pctOf(s.knocked, s.doors)) : NO_DOORS },
+    }))));
+    setData(m, 'mb-nums', fc(drawn.flatMap(s => {
+      const c = middle(s.lines.flat()); if (!c) return [];
+      const st = routeStats.get(s.code);
+      return [{ type: 'Feature' as const, geometry: { type: 'Point' as const, coordinates: c }, properties: {
+        code: s.code, num: s.number ? String(s.number) : s.code, size: level === 3 ? 20 : 24,
+        color: heat ? (st && st.doors ? heatColor(st.pct) : '#334155') : (s.color || '#334155') } }];
+    })));
+  }, [mapReady, level, heat, shapes.data, av.data, rv.data, route, routeStats]);
+
+  // level 2: customers and knocks
+  useEffect(() => {
+    const m = map.current; if (!m || !mapReady) return;
+    if (level !== 2) { setData(m, 'mb-clients', EMPTY); setData(m, 'mb-knocks', EMPTY); return; }
+    setData(m, 'mb-clients', fc(clientsShown.map(({ c, i, layer }) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lng, c.lat] },
+      properties: { i, color: CLIENT_LAYERS.find(l => l.key === layer)!.color } }))));
+    setData(m, 'mb-knocks', heat ? EMPTY : fc((av.data?.knocks || []).filter(k => knockOn.has(k.status)).map(k => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [k.lng, k.lat] },
+      properties: { color: knockOf(k.status)?.color || '#111827', fast: k.fast ? 1 : 0 } }))));
+  }, [mapReady, level, clientsShown, av.data, heat, knockOn]);
+  useEffect(() => {
+    if (level !== 2 || !mapReady) return;
+    const pts = [...(shapes.data || []).flatMap(s => s.lines.flat()), ...(shapes.data?.length ? [] : maps.flatMap(a => coordsOf(outl.data?.[a])))];
+    fit(map.current, pts, 15.5);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, level, mapsKey, shapes.data]);
+
+  // level 3: houses
+  useEffect(() => {
+    const m = map.current; if (!m || !mapReady) return;
+    if (level !== 3) { setData(m, 'mb-houses', EMPTY); setData(m, 'mb-sel', EMPTY); return; }
+    setData(m, 'mb-houses', fc((rv.data?.houses || []).filter(h => knockOn.has(h.st || NEVER.key)).map(h => {
+      const layer = clientLayerOf(h.f, clientOn, season.service);
+      const ring = layer ? CLIENT_LAYERS.find(l => l.key === layer)!.color : h.fast ? '#facc15' : '#111827';
+      return { type: 'Feature', geometry: { type: 'Point', coordinates: [h.lng, h.lat] },
+        properties: { k: h.k, color: knockOf(h.st)?.color || NEVER.color, ring, ringW: layer ? 3 : h.fast ? 2 : 1.2 } };
+    })));
+    setData(m, 'mb-sel', selHouse ? fc([{ type: 'Feature', geometry: { type: 'Point', coordinates: [selHouse.lng, selHouse.lat] }, properties: {} }]) : EMPTY);
+  }, [mapReady, level, rv.data, knockOn, clientOn, season.service, selHouse]);
+  useEffect(() => {
+    if (level !== 3 || !mapReady || !rv.data) return;
+    fit(map.current, rv.data.houses.map(h => [h.lng, h.lat] as [number, number]), 17);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, level, route, !!rv.data]);
+
+  if (!allowed) return <div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to Master Bookings.</div></div>;
+  if (!center) return <div className="v2-main v2-narrow"><div className="v2-card v2-mut">Pick a center in the top bar to see its master maps.</div></div>;
+
+  const cards = ov.data?.maps || [];
+  const seasons = (() => {
+    const list = [...(ov.data?.seasons || [])];
+    if (!list.some(s => seasonKey(s) === seasonKey(season))) list.push(season);
+    return list.sort((a, b) => b.season - a.season || a.service.localeCompare(b.service));
+  })();
+  const maxRound = Math.max(1, ...cards.flatMap(c => c.rounds.map(r => r.no)));
+  const busy = ov.loading || (level >= 2 && av.loading) || (level === 3 && rv.loading);
+
+  return (
+    <div className="v2-crm v2-mb">
+      <aside className="v2-crm-side">
+        <div className="v2-crm-top">
+          <div className="v2-row" style={{ gap: 8 }}>
+            <span className="v2-h1" style={{ fontSize: 20 }}>Master Bookings</span>
+            <span className="v2-spacer" />
+            <button type="button" className="v2-gbtn" style={{ width: 34, height: 34 }} onClick={() => setShowSettings(true)} aria-label="Master Bookings settings" title="Settings"><Settings size={17} /></button>
+          </div>
+          <div className="v2-mb-picker" role="group" aria-label="Season and round">
+            <select className="v2-input" value={seasonKey(season)} onChange={e => { const s = parseSeason(e.target.value); if (s) setSeason(s); }} aria-label="Season">
+              {seasons.map(s => <option key={seasonKey(s)} value={seasonKey(s)}>{seasonLabel(s)}</option>)}
+            </select>
+            <select className="v2-input" value={String(round)} onChange={e => setRound(parseRound(e.target.value))} aria-label="Round">
+              <option value="current">Current</option>
+              {Array.from({ length: Math.max(maxRound, typeof round === 'number' ? round : 1) }, (_, i) => i + 1).map(n => <option key={n} value={n}>Round {n}</option>)}
+            </select>
+          </div>
+          <Crumbs level={level} maps={maps} route={route} onMaps={() => go({ maps: null, route: null })} onRoute={() => go({ route: null })} />
+          <ErrorBox error={settings.error || ov.error || av.error || rv.error || shapes.error} />
+        </div>
+
+        <div className="v2-crm-stats">
+          {level === 1 && <Level1 cards={cards} loading={ov.loading && !ov.data} picked={picked} onPick={flipPick} onOpen={openPicked}
+            onAll={() => setPicked(new Set(picked.size === cards.length ? [] : cards.map(c => c.area)))} centerName={center.display_name} />}
+          {level === 2 && <Level2 cards={cards.filter(c => maps.includes(c.area))} view={av.data} loading={av.loading && !av.data} season={season} year={year}
+            onRoute={c => go({ route: c })} onStart={setStarting} />}
+          {level === 3 && <Level3 view={rv.data} loading={rv.loading && !rv.data} sel={selHouse} onClose={() => setSelHouse(null)} season={season}
+            onCustomer={id => nav(`/app/clients/c/${id}`)} />}
+        </div>
+      </aside>
+
+      <section className="v2-crm-map">
+        <div ref={box} className="v2-crm-canvas" data-testid="mb-map" />
+        {failed && <div className="v2-crm-over v2-island v2-err">{failed}</div>}
+        {busy && <div className="v2-crm-over v2-island v2-mut v2-small">Loading…</div>}
+        {level >= 2 && (
+          <div className={`v2-mb-filters v2-island${filtersOpen ? ' open' : ''}`}>
+            <button type="button" className="v2-mb-fhead" onClick={() => setFiltersOpen(o => !o)} aria-expanded={filtersOpen}>
+              <Layers size={15} /><b>Filters</b>{heat && <Tag tone="a">Heat map</Tag>}<span className="v2-spacer" /><ChevronRight size={15} className="chev" />
+            </button>
+            {filtersOpen && <Filters level={level} season={season} heat={heat} setHeat={setHeat} knockOn={knockOn} setKnockOn={setKnockOn}
+              clientOn={clientOn} setClientOn={setClientOn} counts={{
+                clients: CLIENT_LAYERS.reduce((o, l) => ({ ...o, [l.key]: (av.data?.clients || []).filter(c => c.flags & l.bit).length }), {} as Record<ClientLayer, number>),
+                knocks: level === 3
+                  ? (rv.data?.houses || []).reduce((o, h) => { const k = h.st || NEVER.key; o[k] = (o[k] || 0) + 1; return o; }, {} as Record<string, number>)
+                  : (av.data?.knocks || []).reduce((o, k) => { o[k.status] = (o[k.status] || 0) + 1; return o; }, {} as Record<string, number>),
+                bookings: av.data?.bookings || 0,
+              }} />}
+          </div>
+        )}
+        {level === 2 && selClient && (
+          <div className="v2-crm-pick v2-island" role="dialog" aria-label="Customer">
+            <div className="v2-row" style={{ gap: 8, flexWrap: 'nowrap' }}>
+              <b style={{ fontSize: 15 }}>{selClient.address}</b><span className="v2-spacer" />
+              <button type="button" className="v2-x" onClick={() => setSelClient(null)} aria-label="Close"><X size={16} /></button>
+            </div>
+            <div className="v2-mut v2-small" style={{ margin: '4px 0 10px' }}>
+              {[selClient.name, ...CLIENT_LAYERS.filter(l => selClient.flags & l.bit).map(l => l.label(season.season))].filter(Boolean).join(' · ')}
+            </div>
+            <Btn size="sm" onClick={() => nav(`/app/clients/c/${selClient.id}`)}>Open customer page</Btn>
+          </div>
+        )}
+      </section>
+
+      {starting && <StartRoundModal card={starting} season={season} onClose={() => setStarting(null)}
+        onDone={() => { setStarting(null); ov.reload(); av.reload(); rv.reload(); }} />}
+      {showSettings && <MbSettingsModal centerId={center.id} seasons={seasons} onClose={() => setShowSettings(false)}
+        onSaved={s => { setShowSettings(false); settings.reload(); if (!params.has('s') && s.service && s.season) go({ s: `${s.service}-${s.season}` }); }} />}
+    </div>
+  );
+};
+
+const Crumbs: React.FC<{ level: number; maps: string[]; route: string | null; onMaps: () => void; onRoute: () => void }> = ({ level, maps, route, onMaps, onRoute }) => {
+  if (level === 1) return null;
+  return (
+    <nav className="v2-mb-crumbs" aria-label="Where you are">
+      <button type="button" onClick={onMaps}><ArrowLeft size={14} />All maps</button>
+      <ChevronRight size={13} className="v2-mut" />
+      {level === 3 ? <button type="button" onClick={onRoute}>{maps.length === 1 ? maps[0] : `${maps.length} maps`}</button> : <b>{maps.length === 1 ? maps[0] : `${maps.length} maps`}</b>}
+      {level === 3 && <><ChevronRight size={13} className="v2-mut" /><b>{route}</b></>}
+    </nav>
+  );
+};
+
+// ───────────── level 1 ─────────────
+const Level1: React.FC<{ cards: MapCard[]; loading: boolean; picked: Set<string>; onPick: (a: string) => void; onOpen: () => void; onAll: () => void; centerName: string }> =
+  ({ cards, loading, picked, onPick, onOpen, onAll, centerName }) => {
+    if (loading) return <Loading label="Finding your master maps…" />;
+    if (!cards.length) return <div className="v2-card v2-mut">No master maps are assigned to {centerName} yet. A Super Admin assigns them under Territory.</div>;
+    return (
+      <>
+        <div className="v2-row v2-small" style={{ gap: 8 }}>
+          <span className="v2-mut">{cards.length} master map{cards.length === 1 ? '' : 's'} · tap to pick</span>
+          <span className="v2-spacer" />
+          <button type="button" className="v2-link" onClick={onAll}>{picked.size === cards.length ? 'Clear' : 'Pick all'}</button>
+        </div>
+        <div className="v2-mb-cards">
+          {cards.map(c => <Card key={c.area} card={c} on={picked.has(c.area)} onClick={() => onPick(c.area)} />)}
+        </div>
+        <div className="v2-mb-open">
+          <Btn onClick={onOpen} disabled={!picked.size} icon={ChevronRight}>{picked.size ? `Open ${picked.size} map${picked.size === 1 ? '' : 's'}` : 'Pick a map to open'}</Btn>
+        </div>
+      </>
+    );
+  };
+
+const Card: React.FC<{ card: MapCard; on: boolean; onClick: () => void }> = ({ card: c, on, onClick }) => {
+  const shown = shownRound(c);
+  return (
+    <button type="button" className={`v2-card v2-mb-card${on ? ' on' : ''}`} onClick={onClick} aria-pressed={on}>
+      <div className="v2-row" style={{ gap: 8, flexWrap: 'nowrap' }}>
+        <span className={`v2-mb-check${on ? ' on' : ''}`} aria-hidden>{on && <Check size={12} />}</span>
+        <b className="v2-mb-name">{c.area}</b>
+        <span className="v2-spacer" />
+        <span className="v2-mut v2-small">{c.first && c.last ? `${c.first}–${c.last}` : 'No routes drawn'}</span>
+      </div>
+      <div className="v2-mb-nums">
+        <span><b>{c.bookings}</b> bookings</span>
+        <span><b>{c.prev_aeration.toLocaleString()}</b> prev aeration</span>
+        <span><b>{c.prev_sealing.toLocaleString()}</b> prev sealing</span>
+      </div>
+      {c.rounds.length === 0
+        ? <div className="v2-mut v2-small">{c.loose ? `${c.loose} knocks since ${shortDay(c.loose_from || '')}, not in a round yet` : 'No rounds yet this season'}</div>
+        : c.rounds.map(r => (
+          <div key={r.no} className={`v2-mb-round${r.no === shown?.no ? ' shown' : ''}`}>
+            <span className="n">{roundName(r.no)}{r.open && <i title="Open">•</i>}</span>
+            <span className="d">{r.days.length ? daysLabel(r.days) : 'not worked yet'}</span>
+            <span className="p" style={{ color: r.routes ? heatColor(pctOf(r.done, r.routes)) : undefined }}>{pctOf(r.done, c.routes)}% done</span>
+            <span className="bar"><i style={{ width: `${pctOf(r.done, c.routes)}%`, background: heatColor(pctOf(r.done, c.routes)) }} /></span>
+          </div>
+        ))}
+      {shown && shown.flagged > 0 && <div className="v2-mb-warn"><AlertTriangle size={13} />{shown.flagged} route{shown.flagged === 1 ? '' : 's'} bulk-tapped (knocks seconds apart)</div>}
+      {c.suggest_new && c.last_day && <div className="v2-mb-hint"><Play size={12} />Last worked {shortDay(c.last_day)}: time for Round {(c.current || 0) + 1}?</div>}
+    </button>
+  );
+};
+
+// ───────────── level 2 ─────────────
+const Level2: React.FC<{ cards: MapCard[]; view: AreaView | null; loading: boolean; season: Season; year: number; onRoute: (c: string) => void; onStart: (c: MapCard) => void }> =
+  ({ cards, view, loading, season, year, onRoute, onStart }) => {
+    if (loading) return <Loading label="Loading the maps…" />;
+    if (!view) return null;
+    return (
+      <>
+        {cards.map(c => {
+          const mr = view.maps.find(m => m.area === c.area);
+          const routes = view.routes.filter(r => r.area === c.area);
+          const done = routes.filter(r => r.done).length;
+          const canStart = season.season === year && (c.rounds.length === 0 || c.current !== null);
+          const next = c.rounds.length === 0 ? 1 : (c.current || 0) + 1;
+          return (
+            <div key={c.area} className="v2-card v2-mb-map">
+              <div className="v2-row" style={{ gap: 8 }}>
+                <b>{c.area}</b>
+                <Tag tone={mr?.round ? (mr.open ? 'b' : undefined) : 'a'}>{mr?.round ? `${roundName(mr.round)}${mr.open ? '' : ' · ended'}` : 'No such round'}</Tag>
+                <span className="v2-spacer" />
+                {canStart && <Btn size="sm" kind="o" icon={Play} onClick={() => onStart(c)}>Start Round {next}</Btn>}
+              </div>
+              {mr?.round ? (
+                <div className="v2-mut v2-small" style={{ margin: '6px 0 8px' }}>
+                  {done} of {routes.length} routes done ({pctOf(done, routes.length)}%) · {daysLabel([...new Set(routes.flatMap(r => r.days))]) || 'not worked yet'}
+                </div>
+              ) : <div className="v2-mut v2-small" style={{ margin: '6px 0 8px' }}>{c.loose ? `${c.loose} knocks since ${shortDay(c.loose_from || '')} aren’t in a round yet.` : 'Nothing to show for this round.'}</div>}
+              <div className="v2-mb-routes">
+                {routes.map(r => (
+                  <button key={r.code} type="button" className="v2-mb-route" onClick={() => onRoute(r.code)}>
+                    <b>{r.code}</b>
+                    <span className="bar"><i style={{ width: `${Math.min(100, r.pct)}%`, background: r.doors ? heatColor(r.pct) : NO_DOORS }} /></span>
+                    <span className="pct">{r.doors ? `${r.pct}%` : '—'}</span>
+                    {r.done ? <Check size={14} className="ok" aria-label="Done" /> : <span style={{ width: 14 }} />}
+                    {r.flagged && <AlertTriangle size={13} className="warn" aria-label="Bulk-tapped" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        <div className="v2-note">A route is done when {view.done_pct}% of its doors have a knock this round. Knocks tapped seconds apart don’t count.</div>
+      </>
+    );
+  };
+
+// ───────────── level 3 ─────────────
+const Level3: React.FC<{ view: RouteView | null; loading: boolean; sel: HouseRow | null; onClose: () => void; season: Season; onCustomer: (id: string) => void }> =
+  ({ view, loading, sel, onClose, season, onCustomer }) => {
+    if (loading) return <Loading label="Loading the route…" />;
+    if (!view) return null;
+    if (sel) return <HousePanel route={view.route} row={sel} onClose={onClose} season={season} onCustomer={onCustomer} />;
+    const pct = pctOf(view.knocked, view.doors);
+    const byStreet = [...view.streets].filter(s => s.doors > 0).sort((a, b) => a.street.localeCompare(b.street));
+    return (
+      <>
+        <div className="v2-card">
+          <div className="v2-row" style={{ gap: 8 }}>
+            <b style={{ fontSize: 17 }}>{view.route}</b>
+            <Tag tone={view.round ? 'b' : 'a'}>{roundName(view.round)}</Tag>
+            {view.done && <Tag tone="g">Done</Tag>}
+            {view.flagged && <Tag tone="r">Bulk-tapped</Tag>}
+          </div>
+          <div className="v2-mb-big"><b style={{ color: heatColor(pct) }}>{pct}%</b><span>{view.knocked} of {view.doors} doors knocked{view.days.length ? ` · ${daysLabel(view.days)}` : ''}</span></div>
+          <div className="v2-note" style={{ margin: 0 }}>Tap a house on the map for its knock history.</div>
+        </div>
+        <div className="v2-card" style={{ padding: 8 }}>
+          <div className="v2-card-h" style={{ margin: '4px 6px 6px' }}>Streets</div>
+          {byStreet.map(s => {
+            const p = pctOf(s.knocked, s.doors);
+            return (
+              <div key={s.street} className="v2-mb-route" style={{ cursor: 'default' }}>
+                <span className="st">{s.street}</span>
+                <span className="bar"><i style={{ width: `${p}%`, background: heatColor(p) }} /></span>
+                <span className="pct">{s.knocked}/{s.doors}</span>
+              </div>
+            );
+          })}
+        </div>
+      </>
+    );
+  };
+
+const HousePanel: React.FC<{ route: string; row: HouseRow; onClose: () => void; season: Season; onCustomer: (id: string) => void }> = ({ route, row, onClose, season, onCustomer }) => {
+  const h = useLoad(() => loadHouse(route, row.k), [route, row.k]);
+  const st = knockOf(row.st);
+  return (
+    <div className="v2-card v2-mb-house">
+      <div className="v2-row" style={{ gap: 8, flexWrap: 'nowrap' }}>
+        <i className="dot" style={{ background: st?.color || '#fff', boxShadow: 'inset 0 0 0 1.5px #111827' }} />
+        <b style={{ fontSize: 16 }}>{row.a}</b>
+        <span className="v2-spacer" />
+        <button type="button" className="v2-x" onClick={onClose} aria-label="Close"><X size={16} /></button>
+      </div>
+      <div className="v2-mut v2-small" style={{ margin: '4px 0 10px' }}>
+        {[st ? `${st.label} this round${row.day ? ` (${shortDay(row.day)})` : ''}` : 'Not knocked this round', row.carried ? 'invalid two rounds in a row' : null,
+          row.fast ? 'tapped seconds after the last knock' : null].filter(Boolean).join(' · ')}
+      </div>
+      <ErrorBox error={h.error} />
+      {h.loading && !h.data ? <Loading label="Loading its history…" /> : h.data && <>
+        {h.data.client ? (
+          <div className="v2-mb-client">
+            <div className="v2-row" style={{ gap: 6 }}>
+              <b>{h.data.client.name || 'Customer on file'}</b>
+              {CLIENT_LAYERS.filter(l => row.f & l.bit).map(l => <span key={l.key} className="v2-mb-chip" style={{ borderColor: l.color, color: l.color }}>{l.label(season.season)}</span>)}
+            </div>
+            {h.data.client.jobs.length > 0 && <div className="v2-small v2-mut" style={{ marginTop: 4 }}>
+              Jobs: {[...h.data.client.jobs].sort((a, b) => String(b.year || '').localeCompare(String(a.year || ''))).slice(0, 6)
+                .map(j => [j.year, j.line, j.price && `$${String(j.price).replace(/[^0-9.]/g, '') || j.price}`].filter(Boolean).join(' ')).join(' · ')}
+            </div>}
+            <Btn size="sm" onClick={() => onCustomer(h.data!.client!.id)} style={{ marginTop: 8 }}>Open customer page</Btn>
+          </div>
+        ) : <div className="v2-note" style={{ margin: '0 0 8px' }}>Not a customer on file.</div>}
+        <div className="v2-card-h" style={{ margin: '12px 0 4px' }}>Knock history</div>
+        {h.data.visits.length === 0 ? <div className="v2-mut v2-small">Never knocked.</div> : (
+          <ul className="v2-crm-tl">
+            {h.data.visits.map((v, i) => {
+              const s = VISIT[v.status] || { label: v.status, tone: undefined };
+              return (
+                <li key={i} className={`visit ${s.tone || ''}`}>
+                  <span className="when">{fmtDay(v.day)}</span>
+                  <span><b>{s.label}</b>{v.rounds?.length ? <span className="v2-mut"> · {v.rounds.map(r => `${r.service === 'aeration' ? 'Aeration' : 'Sealing'} ${r.season} R${r.no}`).join(', ')}</span> : null}
+                    <span className="v2-mut v2-small" style={{ display: 'block' }}>{[v.worker || v.worker_id, v.first_name && `spoke to ${v.first_name}`, v.note && `“${v.note}”`].filter(Boolean).join(' · ')}</span></span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {h.data.carried.length > 0 && <div className="v2-note">Kept invalid into {h.data.carried.map(r => `${r.service === 'aeration' ? 'Aeration' : 'Sealing'} ${r.season} Round ${r.no}`).join(', ')}.</div>}
+      </>}
+    </div>
+  );
+};
+
+// ───────────── filters ─────────────
+const Filters: React.FC<{
+  level: number; season: Season; heat: boolean; setHeat: (v: boolean) => void;
+  knockOn: Set<string>; setKnockOn: (s: Set<string>) => void; clientOn: Set<ClientLayer>; setClientOn: (s: Set<ClientLayer>) => void;
+  counts: { clients: Record<ClientLayer, number>; knocks: Record<string, number>; bookings: number };
+}> = ({ level, season, heat, setHeat, knockOn, setKnockOn, clientOn, setClientOn, counts }) => {
+  const flip = <T,>(s: Set<T>, k: T) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; };
+  const layers = [...CLIENT_LAYERS].sort((a, b) => (a.service === season.service ? 0 : 1) - (b.service === season.service ? 0 : 1) || b.bit - a.bit);
+  const knocksHidden = level === 2 && heat;
+  return (
+    <div className="v2-mb-fbody">
+      <div className="v2-mb-frow">
+        <Flame size={15} style={{ color: '#ea580c' }} /><span><b>Heat map</b><small>Streets coloured by knocks this round; route colours and knock dots off</small></span>
+        <Toggle on={heat} onChange={setHeat} label="Heat map" />
+      </div>
+      {heat && <div className="v2-mb-scale"><span>10% or less</span><i /><span>70% or more</span></div>}
+      <div className="v2-mb-fgroup">Knocks this round{knocksHidden && <small> · off in heat map</small>}</div>
+      {[...KNOCKS, ...(level === 3 ? [NEVER] : [])].map(k => (
+        <button key={k.key} type="button" className={`v2-crm-leg${knockOn.has(k.key) ? '' : ' off'}${knocksHidden ? ' dim' : ''}`} onClick={() => setKnockOn(flip(knockOn, k.key))} aria-pressed={knockOn.has(k.key)}>
+          <i style={{ background: k.color, boxShadow: k.key === NEVER.key ? 'inset 0 0 0 1.5px #111827' : undefined }} /><span>{k.label}</span><b>{(counts.knocks[k.key] || 0).toLocaleString()}</b>
+        </button>
+      ))}
+      <div className="v2-mb-fgroup">Customers</div>
+      {layers.map(l => (
+        <button key={l.key} type="button" className={`v2-crm-leg${clientOn.has(l.key) ? '' : ' off'}`} onClick={() => setClientOn(flip(clientOn, l.key))} aria-pressed={clientOn.has(l.key)} title={l.hint}>
+          <i style={{ background: l.color }} /><span>{l.label(season.season)}</span><b>{(counts.clients[l.key] || 0).toLocaleString()}</b>
+        </button>
+      ))}
+      <div className="v2-mb-fgroup">Bookings</div>
+      {(['aeration', 'sealing'] as const).map(s => (
+        <div key={s} className="v2-crm-leg off" title="Bookings aren’t kept in the app yet">
+          <i style={{ background: s === 'aeration' ? '#84cc16' : '#0ea5e9' }} /><span>{s === 'aeration' ? 'Aeration' : 'Sealing'} bookings</span><b>{counts.bookings ? '' : '0'}</b>
+        </div>
+      ))}
+      <div className="v2-note" style={{ margin: '4px 6px 0' }}>Bookings show here once they’re kept in the app.</div>
+    </div>
+  );
+};
+
+// ───────────── start a round ─────────────
+const StartRoundModal: React.FC<{ card: MapCard; season: Season; onClose: () => void; onDone: () => void }> = ({ card, season, onClose, onDone }) => {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const [result, setResult] = useState<{ round: number; cleared: number; carried: number } | null>(null);
+  const first = card.rounds.length === 0;
+  const cur = card.rounds.find(r => r.open);
+  const next = first ? 1 : (card.current || 0) + 1;
+  const run = async () => { setBusy(true); setErr(null); try { setResult(await startRound(card.area, season)); } catch (e) { setErr(e); } finally { setBusy(false); } };
+  return (
+    <Modal title={`Start ${roundName(next)} on ${card.area}?`} onClose={result ? onDone : onClose}
+      footer={result ? <Btn onClick={onDone}>Done</Btn> : <><Btn kind="o" onClick={onClose} disabled={busy}>Cancel</Btn><Btn onClick={run} disabled={busy} icon={Play}>{busy ? 'Starting…' : `Start ${roundName(next)}`}</Btn></>}>
+      {result ? (
+        <p>{roundName(result.round)} has started on {card.area}.{result.cleared ? ` ${result.cleared.toLocaleString()} knocks were cleared off the workers’ maps (all kept in history).` : ''}{result.carried ? ` ${result.carried} addresses stay invalid (invalid two rounds in a row).` : ''}</p>
+      ) : first ? (
+        <p>{seasonLabel(season)} · {roundName(1)} starts on {card.area}{card.loose ? `, from ${shortDay(card.loose_from || '')}: the ${card.loose.toLocaleString()} knocks since then become Round 1` : ' today'}. Nothing is cleared.</p>
+      ) : (
+        <>
+          <p>{roundName(card.current)} ends now{cur ? ` (${cur.days.length ? daysLabel(cur.days) : 'not worked'}, ${pctOf(cur.done, card.routes)}% of routes done)` : ''}, and {roundName(next)} starts.</p>
+          <ul className="v2-mb-list">
+            <li>Every knock on {card.area} clears off the workers’ maps, so each house gets knocked again.</li>
+            <li>Nothing is lost: every knock stays in the history under {roundName(card.current)}, and a copy is kept.</li>
+            <li>Addresses invalid in each of the last two rounds stay invalid.</li>
+          </ul>
+        </>
+      )}
+      <ErrorBox error={err} />
+    </Modal>
+  );
+};
