@@ -16,7 +16,7 @@ import { todayISO, useLoad } from '../../lib/data';
 import { crewList, getCenterType, syncCrewDay, type CrewRow } from '../../lib/crew';
 import { availableManagers } from '../../lib/startSession';
 import {
-  getDay, listRoster, showedCounts, updateRoster, removeFromDay, moveBooking, fullName, type RosterRow,
+  calendarHref, getDay, listRoster, showedCounts, updateRoster, removeFromDay, moveBooking, fullName, type RosterRow,
 } from '../../lib/workerbook';
 import { Btn, ErrorBox, Loading, Tag } from '../../ui';
 import { BookContractors } from './BookContractors';
@@ -88,7 +88,7 @@ export const Day: React.FC = () => {
   return (
     <div className="v2-main">
       <div className="v2-head">
-        <Link to="/app/workerbook/days" className="v2-link">‹ Calendar</Link>
+        <Link to={calendarHref(date)} className="v2-link">‹ Calendar</Link>
         <span className="v2-h1">{pretty}</span>
         <Tag tone={tag.tone}>{tag.label}</Tag>
         <span className="v2-spacer" />

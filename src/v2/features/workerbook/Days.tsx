@@ -1,14 +1,14 @@
 // src/v2/features/workerbook/Days.tsx — Workerbook's home: the calendar. A day becomes a payout day once a
 // session is started on it; until then it's a Workerbook day (bookings and confirmations, or on a
 // road trip, the crew). Payout days show who worked, steps and gross.
-import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BedDouble, ChevronLeft, ChevronRight, Contact, FileText, SlidersHorizontal } from 'lucide-react';
 import { crewList, getCenterType } from '../../lib/crew';
 import { liveStats } from '../../lib/dashboard';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
-import { listHires, monthCells, monthSummary, STATUS_LISTS, type DaySummary } from '../../lib/workerbook';
+import { listHires, monthCells, monthParam, monthSummary, parseMonthParam, STATUS_LISTS, type DaySummary } from '../../lib/workerbook';
 import { Btn, ErrorBox, Loading } from '../../ui';
 
 const todayPlus = (iso: string, n: number) => { const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -16,7 +16,12 @@ const todayPlus = (iso: string, n: number) => { const d = new Date(iso + 'T12:00
 export const Days: React.FC = () => {
   const { center } = useAuth();
   const nav = useNavigate();
-  const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  // the month lives in the URL (?m=2026-09), so coming back from a day opens the month you were on
+  const [params, setParams] = useSearchParams();
+  const month = useMemo(() => parseMonthParam(params.get('m')) || (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params.get('m')]);
+  const setMonth = (d: Date) => setParams(p => { const n = new URLSearchParams(p); n.set('m', monthParam(d)); return n; }, { replace: true });
   const cells = useMemo(() => monthCells(month.getFullYear(), month.getMonth()), [month]);
   const from = cells.find(Boolean) as string;
   const to = cells[cells.length - 1] as string;
