@@ -215,6 +215,40 @@ export function shortName(full: string | null | undefined): string | null {
 /** Aeration customer (any year) → leaf; sealing customer → black drop. */
 export const serviceMarks = (flags: number) => ({ leaf: !!(flags & (1 | 4)), drop: !!(flags & (2 | 8)) });
 
+// ───────────── each person's filters (remembered) ─────────────
+export interface MbFilters { heat: boolean; knocks: string[]; clients: ClientLayer[]; bookings: Service[]; open: boolean | null }
+export const DEFAULT_FILTERS: MbFilters = {
+  heat: true, knocks: KNOCKS.map(k => k.key), clients: CLIENT_LAYERS.map(l => l.key), bookings: ['aeration', 'sealing'], open: null,
+};
+/** Saved filters, checked: unknown keys dropped, anything missing from the defaults. */
+export function cleanFilters(raw: unknown): MbFilters {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const list = <T extends string>(v: unknown, ok: readonly T[], dflt: T[]): T[] => (Array.isArray(v) ? v.filter((x): x is T => ok.includes(x as T)) : dflt);
+  return {
+    heat: typeof r.heat === 'boolean' ? r.heat : DEFAULT_FILTERS.heat,
+    knocks: list(r.knocks, KNOCKS.map(k => k.key), DEFAULT_FILTERS.knocks),
+    clients: list(r.clients, CLIENT_LAYERS.map(l => l.key), DEFAULT_FILTERS.clients),
+    bookings: list(r.bookings, SERVICES, DEFAULT_FILTERS.bookings),
+    open: typeof r.open === 'boolean' ? r.open : null,
+  };
+}
+const filtersKey = (uid: string) => `v2.mb.filters.${uid}`;
+/** This device's copy, for an instant start (the account's copy follows). */
+export function cachedFilters(uid: string | undefined): MbFilters | null {
+  if (!uid) return null;
+  try { const v = localStorage.getItem(filtersKey(uid)); return v ? cleanFilters(JSON.parse(v)) : null; } catch { return null; }
+}
+/** The person's saved filters (null before RUN_29 or when none are saved yet). */
+export async function loadFilters(uid: string): Promise<MbFilters | null> {
+  const { data, error } = await db.from('mb_user_filters').select('filters').eq('user_id', uid).maybeSingle();
+  if (error || !data) return null;
+  return cleanFilters((data as { filters: unknown }).filters);
+}
+export async function saveFilters(uid: string, f: MbFilters): Promise<void> {
+  try { localStorage.setItem(filtersKey(uid), JSON.stringify(f)); } catch { /* private window */ }
+  await db.from('mb_user_filters').upsert({ user_id: uid, filters: f, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
+}
+
 // ───────────── words ─────────────
 /** "2026-10-12" → "Oct 12". */
 export function shortDay(d: string): string {
