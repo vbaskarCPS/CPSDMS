@@ -175,10 +175,12 @@ export async function startSession(p: Plan, dayId: string, centerId: string, _op
 }
 
 /**
- * A worker who arrives after the session started: put them on the live map (old users table),
- * under a manager, with no team yet — the manager puts them on a cart from Manage Team.
+ * A worker who arrives after the session started: put them on the live map (old users table)
+ * under a manager, on a cart of their own for the day, so they show on that manager's team and
+ * payouts straight away; the manager can pair them up from Manage Team. (Before, they had no cart
+ * until they signed in, so they didn't show anywhere.)
  */
-export async function addLateArrival(centerId: string, row: RosterRow, manager: PlanManager, card: RateCardData, seasonYear: number, service: Service, appDaysBefore = 0): Promise<void> {
+export async function addLateArrival(centerId: string, row: RosterRow, manager: PlanManager, card: RateCardData, seasonYear: number, service: Service, appDaysBefore = 0, date?: string): Promise<void> {
   await import('./legacy').then(m => m.pointLegacyAt(centerId));
   const [{ supabase }, { upsertUsers }] = await Promise.all([import('../../lib/supabase'), import('../../lib/userWrites')]);
   const person = row.hire.person;
@@ -192,6 +194,29 @@ export async function addLateArrival(centerId: string, row: RosterRow, manager: 
     },
     command_center_id: centerId,
   }]);
+  if (date) await giveSoloCart(supabase, centerId, row.hire.cn, date);
+}
+
+/** A cart of their own for the day (if the day is live and they aren't on one yet), keyed to them. */
+export async function giveSoloCart(supabase: typeof import('../../lib/supabase').supabase, centerId: string, cn: string, date: string): Promise<void> {
+  const { data: day } = await supabase.from('daily_sessions').select('date').eq('date', date).eq('command_center_id', centerId).maybeSingle();
+  if (!day) return;   // no live day yet: Start session puts them on a cart
+  const { data: carts, error } = await supabase.from('logsheet_sessions').select('id').eq('date', date).eq('command_center_id', centerId).contains('team_worker_ids', [cn]);
+  if (error) throw new Error(error.message);
+  if (!carts?.length) {
+    const { sessionService } = await import('../../lib/sessionService');
+    const { error: e1 } = await supabase.from('logsheet_sessions').insert({
+      id: `sess_${cn}_${Date.now()}`, worker_id: cn, team_worker_ids: [cn], date, status: 'OPEN', stats: sessionService.getEmptyStats(),
+      email_enabled: true, command_center_id: centerId, equiv_split: { [cn]: 100 }, upsell_split: { [cn]: 100 },
+    });
+    if (e1) throw new Error(e1.message);
+  }
+  // keyed to their own cart, so the team lists agree with it
+  const { data: u } = await supabase.from('users').select('metadata').eq('user_id', cn).eq('command_center_id', centerId).maybeSingle();
+  if (u && !carts?.length) {
+    const { error: e2 } = await supabase.from('users').update({ metadata: { ...(u.metadata || {}), teamId: cn } }).eq('user_id', cn).eq('command_center_id', centerId);
+    if (e2) throw new Error(e2.message);
+  }
 }
 
 interface SessionRecord {

@@ -1,5 +1,5 @@
-// Someone turned up after the session started: put them on the live map under a manager, so
-// they can sign in and their manager can put them on a cart. Lists today's roster people who
+// Someone turned up after the session started: put them on the live map under a manager, on a
+// cart of their own for the day (so they show on that manager's team and payouts at once). Lists today's roster people who
 // aren't on the live map yet; anyone not on today's list is booked first ("Book someone").
 import React, { useMemo, useState } from 'react';
 import { Search, UserPlus } from 'lucide-react';
@@ -34,7 +34,7 @@ export const LateArrivals: React.FC<{
     try {
       const ctx = await dayContext(centerId, date, region);
       const shown = await appShowedDates([pick.hire_id]);
-      await addLateArrival(centerId, pick, m, ctx.card, ctx.seasonYear, ctx.service, countBefore(shown[pick.hire_id], date));
+      await addLateArrival(centerId, pick, m, ctx.card, ctx.seasonYear, ctx.service, countBefore(shown[pick.hire_id], date), date);
       if (pick.attendance !== 'showed') await updateRoster(pick.id, { attendance: 'showed' });
       onAdded();
     } catch (e) { setError(e); } finally { setBusy(false); }
@@ -44,7 +44,7 @@ export const LateArrivals: React.FC<{
     <Modal title="Late arrival" onClose={onClose}
       footer={<><Btn kind="o" icon={UserPlus} onClick={onBook}>Book someone</Btn><span className="v2-spacer" />
         <Btn kind="o" onClick={onClose}>Cancel</Btn><Btn disabled={busy || !pick || !mgr} onClick={add}>{busy ? 'Adding…' : 'Put on the live map'}</Btn></>}>
-      <p style={{ marginTop: 0 }} className="v2-small v2-mut">Puts them on the live map so they can sign in; their manager then puts them on a cart (Manage Team on the RM map).</p>
+      <p style={{ marginTop: 0 }} className="v2-small v2-mut">Puts them on the live map under the manager, on a cart of their own; the manager can pair them up in Manage Team on the RM map.</p>
       <div style={{ position: 'relative', marginBottom: 8 }}>
         <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: '#6b7280' }} />
         <input className="v2-input" style={{ paddingLeft: 30 }} placeholder="Name or CN #" value={q} onChange={e => setQ(e.target.value)} aria-label="Search today’s list" autoFocus />
