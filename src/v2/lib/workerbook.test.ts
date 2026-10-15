@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseContractorSheet, monthCells, summarize } from './workerbook';
+import { parseContractorSheet, monthCells, summarize, monthParam, parseMonthParam, calendarHref } from './workerbook';
 
 // Shaped like the Workerbook Contractors tab: a title row, the header on row 2, data from row 3.
 const GRID: unknown[][] = [
@@ -59,5 +59,20 @@ describe('days calendar', () => {
       { confirmed_at: null, attendance: 'no_show', firstDay: false },
     ]);
     expect(s).toEqual({ day: '2026-10-08', state: 'planned', booked: 4, confirmed: 2, showed: 1, noShow: 1, firstDay: 1 });
+  });
+});
+
+describe('calendar month in the URL', () => {
+  it('writes and reads the month', () => {
+    expect(monthParam(new Date(2026, 8, 1))).toBe('2026-09');
+    const d = parseMonthParam('2026-09')!;
+    expect([d.getFullYear(), d.getMonth(), d.getDate()]).toEqual([2026, 8, 1]);
+    expect(parseMonthParam('2026-13')).toBeNull();
+    expect(parseMonthParam('sept')).toBeNull();
+    expect(parseMonthParam(null)).toBeNull();
+  });
+  it('a day goes back to its own month', () => {
+    expect(calendarHref('2026-09-13')).toBe('/app/workerbook/days?m=2026-09');
+    expect(calendarHref('nope')).toBe('/app/workerbook/days');
   });
 });

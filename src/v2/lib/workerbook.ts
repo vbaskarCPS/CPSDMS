@@ -241,6 +241,17 @@ export function monthCells(year: number, month0: number): (string | null)[] {
   return [...Array.from({ length: first.getDay() }, () => null), ...Array.from({ length: n }, (_, i) => iso(i + 1))];
 }
 
+/** The calendar's month in its URL (?m=2026-09), so going back to it lands on the month you were on. */
+export const monthParam = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+/** The first of the month a ?m= value names, or null when it isn't one. */
+export function parseMonthParam(v: string | null | undefined): Date | null {
+  const m = /^(\d{4})-(\d{2})$/.exec(v || '');
+  if (!m || +m[2] < 1 || +m[2] > 12) return null;
+  return new Date(+m[1], +m[2] - 1, 1);
+}
+/** The calendar, open on the month of a day (YYYY-MM-DD). */
+export const calendarHref = (day: string) => /^\d{4}-\d{2}-\d{2}$/.test(day) ? `/app/workerbook/days?m=${day.slice(0, 7)}` : '/app/workerbook/days';
+
 export async function getDay(centerId: string, day: string): Promise<Day | null> {
   const res = await db.from('days').select('id, center_id, day, state, notes, closed_at, summary, handed_off_at').eq('center_id', centerId).eq('day', day).maybeSingle();
   // (before the newer columns exist, read without them)
