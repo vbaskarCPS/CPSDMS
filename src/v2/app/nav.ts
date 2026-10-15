@@ -34,7 +34,8 @@ export const COMPONENTS: Component[] = [
     { key: 'crew', label: 'Crew list', icon: BedDouble, color: 'violet', path: '/app/workerbook/crew', ready: true },
     { key: 'status', label: 'Status lists', icon: AlertCircle, color: 'amber', path: '/app/workerbook/status', ready: true },
   ] },
-  { key: 'mb', label: 'Master Bookings', icon: CalendarCheck, color: 'amber', perm: 'bookings', home: '/app/bookings/customers', blurb: 'Customers on the map; bookings and accounts coming', subs: [
+  { key: 'mb', label: 'Master Bookings', icon: CalendarCheck, color: 'amber', perm: 'bookings', home: '/app/bookings/maps', blurb: 'Master maps by round, the heat map and every house’s knocks', subs: [
+    { key: 'maps', label: 'Master maps', icon: Map, color: 'amber', path: '/app/bookings/maps', ready: true },
     { key: 'customers', label: 'Customers', icon: MapPin, color: 'amber', path: '/app/bookings/customers', ready: true },
     { key: 'bookings', label: 'Bookings', icon: List, color: 'amber', path: '/app/bookings', ready: false },
     { key: 'inbox', label: 'Inbox', icon: Inbox, color: 'blue', path: '/app/bookings/inbox', ready: false },

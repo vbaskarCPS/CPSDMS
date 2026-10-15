@@ -27,6 +27,7 @@ import { ClientLists } from './features/admin/ClientLists';
 import { Clients } from './features/clients/Clients';
 import { CustomerMap } from './features/clients/CustomerMap';
 import { Customer } from './features/clients/Customer';
+import { MasterBookings } from './features/bookings/MasterBookings';
 import { MyAccount } from './features/account/MyAccount';
 import { WorkerHome } from './features/worker/WorkerHome';
 import { Loading } from './ui';
@@ -93,6 +94,7 @@ const V2Routes: React.FC = () => (
     <Route path="admin/territory/view" element={<BareGuard perm="sa_territory"><MapViewerPage /></BareGuard>} />
     <Route path="clients" element={<Guard><CustomerMap /></Guard>} />
     <Route path="bookings/customers" element={<Guard><CustomerMap /></Guard>} />
+    <Route path="bookings/maps" element={<Guard perm="bookings"><MasterBookings /></Guard>} />
     <Route path="clients/list" element={<Guard><Clients /></Guard>} />
     <Route path="clients/c/:id" element={<Guard><Customer /></Guard>} />
     <Route path="account" element={<Guard><MyAccount /></Guard>} />
