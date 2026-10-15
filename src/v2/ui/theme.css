@@ -519,3 +519,5 @@
 }
 .v2-mb-ghead { display: flex; align-items: center; gap: 8px; padding-right: 8px; }
 .v2-mb-ghead > span { flex: 1; }
+.v2-mb-booking { padding: 7px 8px; border-top: 1px solid var(--line-soft); display: grid; gap: 2px; font-size: 13px; }
+.v2-mb-price { font-weight: 800; font-variant-numeric: tabular-nums; }

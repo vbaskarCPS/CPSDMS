@@ -13,6 +13,7 @@ export const BLANK_STYLE: mapboxgl.StyleSpecification = {
 };
 export const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
+export type AreaSource = 'mb-area';
 export const SOURCES = ['mb-outline', 'mb-outline-labels', 'mb-routes', 'mb-hull', 'mb-heat', 'mb-nums', 'mb-clients', 'mb-knocks', 'mb-sel'] as const;
 export type SourceId = typeof SOURCES[number];
 
@@ -39,6 +40,8 @@ export function removeMap(m: mapboxgl.Map | null): void {
 
 function addLayers(m: mapboxgl.Map): void {
   for (const id of SOURCES) if (!m.getSource(id)) m.addSource(id, { type: 'geojson', data: EMPTY });
+  // level 2: each route's area, so a tap anywhere on a route opens it (lit up under the pointer)
+  if (!m.getSource('mb-area')) m.addSource('mb-area', { type: 'geojson', data: EMPTY, promoteId: 'code' });
   // level 1: map outlines
   m.addLayer({ id: 'mb-outline-fill', type: 'fill', source: 'mb-outline', paint: {
     'fill-color': ['case', ['==', ['get', 'sel'], 1], '#f59e0b', '#64748b'],
@@ -50,6 +53,10 @@ function addLayers(m: mapboxgl.Map): void {
     'text-field': ['get', 'label'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 13, 'text-allow-overlap': false },
     paint: { 'text-color': '#111827', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
   // level 2/3: routes in their colours (heat map off), or their outlines (heat map on)
+  m.addLayer({ id: 'mb-area-fill', type: 'fill', source: 'mb-area', paint: {
+    'fill-color': '#2563eb', 'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.16, 0.02] } });
+  m.addLayer({ id: 'mb-area-line', type: 'line', source: 'mb-area', paint: {
+    'line-color': '#1d4ed8', 'line-width': 2.5, 'line-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.9, 0] } });
   m.addLayer({ id: 'mb-routes', type: 'line', source: 'mb-routes', layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: { 'line-color': ['get', 'color'], 'line-width': RM_LINE.width, 'line-opacity': RM_LINE.opacity } });
   m.addLayer({ id: 'mb-hull', type: 'line', source: 'mb-hull', paint: { 'line-color': '#334155', 'line-width': 1.6, 'line-dasharray': [3, 2], 'line-opacity': 0.8 } });
@@ -73,7 +80,7 @@ function addLayers(m: mapboxgl.Map): void {
     paint: { 'text-color': ['get', 'color'], 'text-halo-color': RM_NUMBER.halo, 'text-halo-width': RM_NUMBER.haloWidth } });
 }
 
-export function setData(m: mapboxgl.Map | null, id: SourceId, fc: GeoJSON.FeatureCollection): void {
+export function setData(m: mapboxgl.Map | null, id: SourceId | AreaSource, fc: GeoJSON.FeatureCollection): void {
   (m?.getSource(id) as mapboxgl.GeoJSONSource | undefined)?.setData(fc);
 }
 
@@ -114,4 +121,12 @@ export function fit(m: mapboxgl.Map | null, points: [number, number][], maxZoom 
   const b = new mapboxgl.LngLatBounds();
   for (const p of points) b.extend(p);
   try { m.fitBounds(b, { padding: 50, animate: false, maxZoom }); } catch { /* sized 0 */ }
+}
+
+/** A route's tap area: the hull of its streets, widened about 30 m so a thin route is easy to hit. */
+export function routeArea(lines: [number, number][][]): [number, number][] | null {
+  const d = 0.0003, pts: [number, number][] = [];
+  for (const l of lines) for (const [x, y] of l) pts.push([x - d, y], [x + d, y], [x, y - d], [x, y + d]);
+  const h = hull(pts);
+  return h.length >= 3 ? [...h, h[0]] : null;
 }
