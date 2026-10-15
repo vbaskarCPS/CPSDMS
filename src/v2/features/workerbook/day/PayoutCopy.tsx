@@ -7,7 +7,7 @@ import { Lock, Pencil, RefreshCw } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useLoad } from '../../../lib/data';
 import { lineLock, listLines } from '../../../lib/payslips';
-import { fullName, type Day, type RosterRow } from '../../../lib/workerbook';
+import { closedDaySort, fullName, type Day, type RosterRow } from '../../../lib/workerbook';
 import { recalcDay } from '../../../lib/payoutEngine';
 import { isFinalized, listCarts } from '../../../lib/payoutCarts';
 import { PayoutEditor } from './PayoutEditor';
@@ -66,12 +66,13 @@ export const PayoutCopy: React.FC<{ centerId: string; region: string; date: stri
           {pending.length > 0 ? <> <b>{pending.length} cart{pending.length === 1 ? '' : 's'} not paid out yet</b> ({pending.map(c => c.label).join(', ')}): open a worker, then tick <b>Paid out</b>. Close the day once every cart with sales is paid out.</>
             : ' Every cart with sales is paid out, so the day can be closed.'}
         </div>}
-        {day.summary && 'imported_from' in day.summary && <div className="v2-note" style={{ margin: 0 }}>Imported from the {String(day.summary.imported_from)}: the sheet’s inputs, with rates and pay worked out in the app.</div>}
+        {day.summary && 'imported_from' in day.summary && <div className="v2-note" style={{ margin: 0 }}>Imported from the {String(day.summary.imported_from)}: {
+          /backfill/i.test(String(day.summary.imported_from)) ? 'the pay exactly as it was paid.' : 'the sheet’s inputs, with rates and pay worked out in the app.'}</div>}
         {note && <div className="v2-small" style={{ color: '#047857' }}>{note}</div>}
         <ErrorBox error={lines.error || error} />
         {(lines.loading && !lines.data) || (carts.loading && !carts.data) ? <Loading /> : (carts.data || []).length > 0 ? (
           <SavedDayPayouts centerId={centerId} region={region} date={date} carts={carts.data || []} lines={lines.data || []}
-            readOnly={!canEditDay} onChanged={reload} toolbar={toolbar} />
+            readOnly={!canEditDay} onChanged={reload} toolbar={toolbar} defaultSort={closedDaySort(day)} />
         ) : (
           <section className="v2-card" style={{ padding: 0 }}>
             <div className="v2-row" style={{ padding: '12px 14px 6px' }}>

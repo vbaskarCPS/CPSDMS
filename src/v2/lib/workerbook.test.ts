@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseContractorSheet, monthCells, summarize, monthParam, parseMonthParam, calendarHref } from './workerbook';
+import { parseContractorSheet, monthCells, summarize, monthParam, parseMonthParam, calendarHref, closedDaySort } from './workerbook';
 
 // Shaped like the Workerbook Contractors tab: a title row, the header on row 2, data from row 3.
 const GRID: unknown[][] = [
@@ -74,5 +74,12 @@ describe('calendar month in the URL', () => {
   it('a day goes back to its own month', () => {
     expect(calendarHref('2026-09-13')).toBe('/app/workerbook/days?m=2026-09');
     expect(calendarHref('nope')).toBe('/app/workerbook/days');
+  });
+});
+
+describe('closed day payouts', () => {
+  it('open sorted by Bonus EQ; a day still being finished keeps the standard order', () => {
+    expect(closedDaySort({ state: 'closed' })).toBe('bonusEquiv');
+    expect(closedDaySort({ state: 'live' })).toBe('standard');
   });
 });
