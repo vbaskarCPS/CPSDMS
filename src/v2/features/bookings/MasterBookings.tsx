@@ -28,7 +28,7 @@ import {
 } from '../../lib/masterBookings';
 import { fmtDay, VISIT } from '../../lib/customers';
 import { Btn, ErrorBox, Loading, Modal, Tag, Toggle } from '../../ui';
-import { coordsOf, createMap, EMPTY, fc, fit, hull, middle, removeMap, setData } from './mbMap';
+import { coordsOf, createMap, EMPTY, fc, fit, hull, middle, removeMap, routeArea, setData } from './mbMap';
 import { MbSettingsModal } from './MbSettings';
 import { MB_HOUSE_ZOOM, useMbHouses, type MbHouse } from './useMbHouses';
 import { CustomerModal } from '../clients/Customer';
@@ -76,7 +76,7 @@ export const MasterBookings: React.FC = () => {
 
   // ── filters ──
   const [heat, setHeat] = useState(true);
-  const [knockOn, setKnockOn] = useState<Set<string>>(new Set([...KNOCKS.map(k => k.key), NEVER.key]));
+  const [knockOn, setKnockOn] = useState<Set<string>>(new Set(KNOCKS.map(k => k.key)));
   const [clientOn, setClientOn] = useState<Set<ClientLayer>>(new Set());
   const [bookingOn, setBookingOn] = useState<Set<string>>(new Set(['aeration', 'sealing']));
   // every customer layer on to start: aeration and sealing customers both show (leaf / drop on the route level)
@@ -93,7 +93,7 @@ export const MasterBookings: React.FC = () => {
   const map = useRef<MbMap | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const clickRef = useRef<{ outline: (a: string) => void; route: (c: string) => void; client: (i: number) => void }>({ outline: () => {}, route: () => {}, client: () => {} });
+  const clickRef = useRef<{ outline: (a: string) => void; route: (c: string) => void }>({ outline: () => {}, route: () => {} });
   useEffect(() => {
     if (!box.current || map.current) return;
     map.current = createMap(box.current, m => {
@@ -103,8 +103,17 @@ export const MasterBookings: React.FC = () => {
         m.on('mouseleave', layer, () => { m.getCanvas().style.cursor = ''; });
       };
       on('mb-outline-fill', f => clickRef.current.outline(String(f.properties?.area)));
-      for (const l of ['mb-routes', 'mb-heat', 'mb-nums']) on(l, f => { if (f.properties?.code) clickRef.current.route(String(f.properties.code)); });
-      on('mb-clients', f => clickRef.current.client(Number(f.properties?.i)));
+      for (const l of ['mb-area-fill', 'mb-routes', 'mb-heat', 'mb-nums']) on(l, f => { if (f.properties?.code) clickRef.current.route(String(f.properties.code)); });
+      // the route under the pointer lights up: tap anywhere in it to open it
+      let hover: string | null = null;
+      const light = (code: string | null) => {
+        if (hover === code) return;
+        if (hover) m.setFeatureState({ source: 'mb-area', id: hover }, { hover: false });
+        hover = code;
+        if (code) m.setFeatureState({ source: 'mb-area', id: code }, { hover: true });
+      };
+      m.on('mousemove', 'mb-area-fill', e => light(e.features?.[0]?.properties?.code ? String(e.features[0].properties.code) : null));
+      m.on('mouseleave', 'mb-area-fill', () => light(null));
       setMapReady(true);
     }, setFailed);
     return () => { removeMap(map.current); map.current = null; setMapReady(false); };
@@ -115,7 +124,6 @@ export const MasterBookings: React.FC = () => {
   clickRef.current = {
     outline: a => { if (level === 1) flipPick(a); },
     route: c => { if (level === 2) go({ route: c }); },
-    client: i => { const c = av.data?.clients[i]; if (c) setCustomerId(c.id); },
   };
 
   // level 1: outlines
@@ -138,7 +146,7 @@ export const MasterBookings: React.FC = () => {
   const routeStats = useMemo(() => new Map((av.data?.routes || []).map(r => [r.code, r])), [av.data]);
   useEffect(() => {
     const m = map.current; if (!m || !mapReady) return;
-    if (level === 1) { (['mb-routes', 'mb-hull', 'mb-heat', 'mb-nums'] as const).forEach(id => setData(m, id, EMPTY)); return; }
+    if (level === 1) { (['mb-routes', 'mb-hull', 'mb-heat', 'mb-nums', 'mb-area'] as const).forEach(id => setData(m, id, EMPTY)); return; }
     const list = level === 3 ? (shapes.data || []).filter(s => s.code === route) : (shapes.data || []);
     const own = level === 3 && !list.length && rv.data?.line ? [{ code: route!, number: 0, color: '#6b7280', lines: rv.data.line.map(s => s.coordinates).filter(c => c?.length > 1) }] : [];
     const drawn = [...list, ...own];
@@ -146,6 +154,10 @@ export const MasterBookings: React.FC = () => {
     setData(m, 'mb-hull', !heat ? EMPTY : fc(drawn.flatMap(s => {
       const h = hull(s.lines.flat()); if (h.length < 3) return [];
       return [{ type: 'Feature' as const, properties: { code: s.code }, geometry: { type: 'LineString' as const, coordinates: [...h, h[0]] } }];
+    })));
+    setData(m, 'mb-area', level !== 2 ? EMPTY : fc(drawn.flatMap(s => {
+      const ring = routeArea(s.lines); if (!ring) return [];
+      return [{ type: 'Feature' as const, properties: { code: s.code }, geometry: { type: 'Polygon' as const, coordinates: [ring] } }];
     })));
     const streets: StreetHeat[] = level === 3 ? (rv.data?.streets || []) : (av.data?.streets || []);
     setData(m, 'mb-heat', !heat ? EMPTY : fc(streets.filter(s => s.line).map(s => ({
@@ -184,8 +196,9 @@ export const MasterBookings: React.FC = () => {
     return [{ id: route || '', route_code: route || '', route_color: list[0]?.color || '#6b7280', route_number: list[0]?.number || 0,
       segments: lines.map((coordinates, i) => ({ osmId: i, name: '', coordinates })) }];
   }, [level, shapes.data, rv.data, route]);
-  const houseItems = useMemo<MbHouse[]>(() => level !== 3 ? [] : (rv.data?.houses || []).filter(h => knockOn.has(h.st || NEVER.key)).map(h => {
-    const look = houseLook(h.st, h.f, clientOn, season.service);
+  // knock filters only take a knock's colour off a house: the house, its customer and PCL colours stay
+  const houseItems = useMemo<MbHouse[]>(() => level !== 3 ? [] : (rv.data?.houses || []).map(h => {
+    const look = houseLook(h.st && knockOn.has(h.st) ? h.st : null, h.f, clientOn, season.service);
     const marks = serviceMarks(h.f);
     const civic = h.no ?? (Number(String(h.k).match(/^\d+/)?.[0]) || 0);
     const shown = !!h.c && (h.f === 0 ? clientOn.size > 0 : !!clientLayerOf(h.f, clientOn, season.service));
@@ -428,6 +441,21 @@ const Level3: React.FC<{ view: RouteView | null; loading: boolean; sel: HouseRow
             );
           })}
         </div>
+        <div className="v2-card" style={{ padding: 8 }}>
+          <div className="v2-card-h" style={{ margin: '4px 6px 6px' }}>Bookings on {view.route} · {view.bookings.length}</div>
+          {view.bookings.length === 0
+            ? <div className="v2-mut v2-small" style={{ margin: '0 6px 6px' }}>No bookings on this route in the app yet.</div>
+            : view.bookings.map(b => (
+              <div key={b.id} className="v2-mb-booking">
+                <div className="v2-row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+                  <b>{b.address || 'No address'}</b><span className="v2-spacer" />
+                  {b.price && <span className="v2-mb-price">{/^[0-9.]+$/.test(b.price) ? `$${b.price}` : b.price}</span>}
+                </div>
+                <div className="v2-mut v2-small">{[b.name, b.type, b.prepaid ? 'prepaid' : null, b.phone].filter(Boolean).join(' · ')}</div>
+                {b.notes && <div className="v2-small">“{b.notes}”</div>}
+              </div>
+            ))}
+        </div>
       </>
     );
   };
@@ -493,7 +521,7 @@ const Filters: React.FC<{
   const flip = <T,>(s: Set<T>, k: T) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; };
   const layers = [...CLIENT_LAYERS].sort((a, b) => (a.service === season.service ? 0 : 1) - (b.service === season.service ? 0 : 1) || b.bit - a.bit);
   const knocksHidden = level === 2 && heat;
-  const knockKeys = [...KNOCKS.map(k => k.key), NEVER.key];
+  const knockKeys = KNOCKS.map(k => k.key);
   // a group's master switch: on while anything in it is on; switching it sets the whole group
   const Group: React.FC<{ label: string; note?: React.ReactNode; on: boolean; set: (v: boolean) => void }> = ({ label, note, on, set }) => (
     <div className="v2-mb-fgroup v2-mb-ghead"><span>{label}{note}</span><Toggle on={on} onChange={set} label={`All ${label.toLowerCase()}`} /></div>
@@ -507,9 +535,9 @@ const Filters: React.FC<{
       {heat && <div className="v2-mb-scale"><span>10% or less</span><i /><span>70% or more</span></div>}
       <Group label="Knocks this round" note={knocksHidden && <small> · off in heat map</small>} on={knockKeys.some(k => knockOn.has(k))}
         set={v => setKnockOn(new Set(v ? knockKeys : []))} />
-      {[...KNOCKS, ...(level === 3 ? [NEVER] : [])].map(k => (
+      {KNOCKS.map(k => (
         <button key={k.key} type="button" className={`v2-crm-leg${knockOn.has(k.key) ? '' : ' off'}${knocksHidden ? ' dim' : ''}`} onClick={() => setKnockOn(flip(knockOn, k.key))} aria-pressed={knockOn.has(k.key)}>
-          <i style={{ background: k.color, boxShadow: k.key === NEVER.key ? 'inset 0 0 0 1.5px #111827' : undefined }} /><span>{k.label}</span><b>{(counts.knocks[k.key] || 0).toLocaleString()}</b>
+          <i style={{ background: k.color }} /><span>{k.label}</span><b>{(counts.knocks[k.key] || 0).toLocaleString()}</b>
         </button>
       ))}
       <Group label="Customers" on={clientOn.size > 0} set={v => setClientOn(new Set(v ? CLIENT_LAYERS.map(l => l.key) : []))} />

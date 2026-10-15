@@ -15,8 +15,8 @@ import {
 } from '../../../lib/mapBuildings';
 
 export const MB_HOUSE_ZOOM = 14.5;
-/** A customer's name on the house: the RM map's name size (0.62 of the number) and 20% bigger. */
-export const NAME_SCALE = 0.62 * 1.2;
+/** A customer's name on the house: the RM map's name size (0.62 of the number), 20% bigger, then 10% more. */
+export const NAME_SCALE = 0.62 * 1.2 * 1.1;
 const P = 'mbh';
 const SRC_FP = `${P}-fp-src`, SRC_PT = `${P}-pt-src`, SRC_HIT = `${P}-hit-src`, SRC_NAME = `${P}-name-src`;
 const L_FILL = `${P}-fp-fill`, L_LINE = `${P}-fp-line`, L_NUM = `${P}-num`, L_HIT = `${P}-hit`, L_NAME = `${P}-name`;
@@ -119,7 +119,8 @@ export function useMbHouses({ map, ready, items, routeMaps, onPick }: {
     // the leaf / drop under a customer's label
     if (!map.getLayer(L_NAME)) map.addLayer({ id: L_NAME, type: 'symbol', source: SRC_NAME, minzoom: MB_HOUSE_ZOOM, layout: {
       'icon-image': ['get', 'icon'], 'icon-anchor': 'top',
-      'icon-offset': ['interpolate', ['linear'], ['zoom'], MB_HOUSE_ZOOM, ['literal', [0, 30]], 17, ['literal', [0, 32]], 19, ['literal', [0, 34]]],
+      // just under the two-line label (offset is in icon pixels, so it scales with icon-size like the text does)
+      'icon-offset': ['literal', [0, 26]],
       'icon-size': ['interpolate', ['linear'], ['zoom'], MB_HOUSE_ZOOM, 0.45, 17, 0.6, 19, 0.75],
       'icon-allow-overlap': true, 'icon-ignore-placement': true } });
 

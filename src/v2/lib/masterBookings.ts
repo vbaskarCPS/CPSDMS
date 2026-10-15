@@ -114,11 +114,18 @@ export interface RouteView {
   route: string; area: string; round: number | null; open: boolean; started: string | null; ended: string | null; done_pct: number;
   doors: number; knocked: number; flagged: boolean; done: boolean; days: string[];
   line: { coordinates: [number, number][] }[] | null; houses: HouseRow[]; streets: StreetHeat[];
+  /** the route's pending bookings (RUN_28; empty before it's run) */
+  bookings: RouteBooking[];
+}
+export interface RouteBooking {
+  id: string; name?: string; address?: string; phone?: string; type?: string; price?: string; prepaid?: boolean; notes?: string;
+  services?: Record<string, unknown> | null; day?: string;
 }
 export async function routeView(route: string, s: Season, round: RoundPick): Promise<RouteView> {
   const r = must(await db.rpc('app_mb_route', { p_route: route, p_service: s.service, p_season: s.season, p_round: roundParam(round) })) as Raw;
   const streets = parseAreaView({ streets: r.streets }).streets;
-  return { ...(r as unknown as RouteView), houses: (r.houses as HouseRow[]) || [], streets, days: (r.days as string[]) || [] };
+  return { ...(r as unknown as RouteView), houses: (r.houses as HouseRow[]) || [], streets, days: (r.days as string[]) || [],
+    bookings: Array.isArray(r.bookings) ? (r.bookings as RouteBooking[]) : [] };
 }
 
 export interface HouseVisit { day: string; at?: string; status: string; note?: string; first_name?: string; worker_id?: string; worker?: string; rounds?: { service: Service; season: number; no: number }[] }
