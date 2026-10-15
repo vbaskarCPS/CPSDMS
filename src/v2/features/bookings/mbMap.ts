@@ -13,7 +13,7 @@ export const BLANK_STYLE: mapboxgl.StyleSpecification = {
 };
 export const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
-export const SOURCES = ['mb-outline', 'mb-outline-labels', 'mb-routes', 'mb-hull', 'mb-heat', 'mb-nums', 'mb-clients', 'mb-knocks', 'mb-houses', 'mb-sel'] as const;
+export const SOURCES = ['mb-outline', 'mb-outline-labels', 'mb-routes', 'mb-hull', 'mb-heat', 'mb-nums', 'mb-clients', 'mb-knocks', 'mb-sel'] as const;
 export type SourceId = typeof SOURCES[number];
 
 export function createMap(box: HTMLDivElement, onReady: (m: mapboxgl.Map) => void, onFail: (msg: string) => void): mapboxgl.Map | null {
@@ -65,10 +65,6 @@ function addLayers(m: mapboxgl.Map): void {
     'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 2, 17, 5], 'circle-color': ['get', 'color'],
     'circle-opacity': ['case', ['==', ['get', 'fast'], 1], 0.45, 0.9],
     'circle-stroke-color': ['case', ['==', ['get', 'fast'], 1], '#facc15', '#111827'], 'circle-stroke-width': ['case', ['==', ['get', 'fast'], 1], 1.5, 0.4] } });
-  // houses (level 3)
-  m.addLayer({ id: 'mb-houses', type: 'circle', source: 'mb-houses', paint: {
-    'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 4, 18, 10], 'circle-color': ['get', 'color'],
-    'circle-stroke-color': ['get', 'ring'], 'circle-stroke-width': ['get', 'ringW'] } });
   m.addLayer({ id: 'mb-sel', type: 'circle', source: 'mb-sel', paint: {
     'circle-radius': 15, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#111827', 'circle-stroke-width': 2.5 } });
   m.addLayer({ id: 'mb-nums', type: 'symbol', source: 'mb-nums', layout: {

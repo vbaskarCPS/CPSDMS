@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  clientLayerOf, daysLabel, heatColor, parseAreaView, parseRound, parseSeason, pctOf, seasonKey, shownRound, startingSeason,
+  clientLayerOf, houseLook, RM_HOUSE, serviceMarks, daysLabel, heatColor, parseAreaView, parseRound, parseSeason, pctOf, seasonKey, shownRound, startingSeason,
   type ClientLayer, type MapCard,
 } from './masterBookings';
 
@@ -84,5 +84,27 @@ describe('level 2 data', () => {
     expect(v.clients[0]).toMatchObject({ id: 'id1', flags: 3, address: '1 Elm Rd', name: null });
     expect(v.done_pct).toBe(60);
     expect(parseAreaView({}).routes).toEqual([]);
+  });
+});
+
+describe('route level houses (RM map colours)', () => {
+  const all = new Set<ClientLayer>(['prev_aeration', 'prev_sealing', 'done_aeration', 'done_sealing']);
+  it('this season’s job wins, then knocks, then past clients', () => {
+    expect(houseLook('no', 8, all, 'sealing')).toEqual({ color: RM_HOUSE.done, strong: true });
+    expect(houseLook('no', 2, all, 'sealing').color).toBe(RM_HOUSE.no);
+    expect(houseLook('not_home', 2, all, 'sealing').color).toBe(RM_HOUSE.pclNotHome);
+    expect(houseLook(null, 2, all, 'sealing')).toEqual({ color: RM_HOUSE.pcl, strong: false });
+    expect(houseLook(null, 1, all, 'sealing').color).toBe(RM_HOUSE.other.aeration.pcl);
+    expect(houseLook('not_home', 1, all, 'sealing').color).toBe(RM_HOUSE.other.aeration.notHome);
+    expect(houseLook(null, 0, all, 'sealing')).toEqual({ color: RM_HOUSE.none, strong: false });
+  });
+  it('a customer layer switched off doesn’t colour the house', () => {
+    expect(houseLook(null, 2, new Set<ClientLayer>(['prev_aeration']), 'sealing').color).toBe(RM_HOUSE.none);
+  });
+  it('leaf for aeration customers, drop for sealing, both when both', () => {
+    expect(serviceMarks(1)).toEqual({ leaf: true, drop: false });
+    expect(serviceMarks(8)).toEqual({ leaf: false, drop: true });
+    expect(serviceMarks(2 | 4)).toEqual({ leaf: true, drop: true });
+    expect(serviceMarks(0)).toEqual({ leaf: false, drop: false });
   });
 });
