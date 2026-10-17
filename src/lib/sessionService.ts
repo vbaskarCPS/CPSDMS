@@ -2278,6 +2278,27 @@ class SessionService {
             .eq('id', destination.targetSessionId)
             .eq('command_center_id', ccId);
         }
+
+        // Joining a cart means joining its manager's team. A floater sees several managers' carts,
+        // so the cart can belong to someone else: take the manager of the people already on it.
+        const mate = existingTargetIds.find(id => id !== workerId);
+        if (mate) {
+          const { data: rows } = await supabase
+            .from('users')
+            .select('user_id, metadata')
+            .in('user_id', [mate, workerId])
+            .eq('command_center_id', ccId);
+          const mateMgr = (rows || []).find((r: any) => r.user_id === mate)?.metadata?.assignedManagerId;
+          const me = (rows || []).find((r: any) => r.user_id === workerId);
+          if (mateMgr && me && me.metadata?.assignedManagerId !== mateMgr) {
+            const { error: mgrErr } = await supabase
+              .from('users')
+              .update({ metadata: { ...(me.metadata || {}), assignedManagerId: mateMgr } })
+              .eq('user_id', workerId)
+              .eq('command_center_id', ccId);
+            if (mgrErr) throw mgrErr;
+          }
+        }
   
       } else if (destination.type === 'new_solo') {
         const { error } = await supabase.from('logsheet_sessions').insert({
