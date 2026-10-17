@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cleanFilters, DEFAULT_FILTERS,
   clientLayerOf, houseLook, RM_HOUSE, serviceMarks, shortName, daysLabel, heatColor, parseAreaView, parseRound, parseSeason, pctOf, seasonKey, shownRound, startingSeason,
   type ClientLayer, type MapCard,
 } from './masterBookings';
@@ -116,5 +117,14 @@ describe('names on houses', () => {
     expect(shortName('Cher')).toBe('Cher');
     expect(shortName('')).toBeNull();
     expect(shortName(null)).toBeNull();
+  });
+});
+
+describe('remembered filters', () => {
+  it('keeps what was saved and fills the rest from the defaults', () => {
+    expect(cleanFilters({ heat: false, knocks: ['no', 'bogus'], clients: ['prev_sealing'], bookings: [], open: true }))
+      .toEqual({ heat: false, knocks: ['no'], clients: ['prev_sealing'], bookings: [], open: true });
+    expect(cleanFilters(null)).toEqual(DEFAULT_FILTERS);
+    expect(cleanFilters({ heat: 'yes' }).heat).toBe(true);
   });
 });

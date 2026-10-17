@@ -1,6 +1,7 @@
 // src/v2/lib/territory.ts — approved digital-map areas and which command center each belongs to.
 import { db, must } from './client';
 import { checkPrefix, mapsLabel, ownedNumbers, runsLabel, type Drawn } from '../../lib/areaNumbers';
+import type { Outlines } from '../../lib/mapOutlines';
 
 export interface RouteRow { area_name: string; route_number: number; route_code: string }
 export interface Area { name: string; prefix: string; routes: RouteRow[]; first: number; last: number; centerId: string | null }
@@ -290,4 +291,12 @@ export async function pclDots(areaName: string): Promise<PclDot[]> {
     if (typeof c.lat === 'number' && typeof c.lng === 'number') out.push({ code: r.route_code, lat: c.lat, lng: c.lng });
   }
   return out;
+}
+
+// ───────────── outlines of every master map (the All maps viewer and the map builder) ─────────────
+export { outlineFeatures, REGION_COLOR, type Outlines, type OutlineInfo } from '../../lib/mapOutlines';
+
+/** Every map's outline (the hull of its approved routes), kept by the database between visits. */
+export async function territoryOutlines(): Promise<Outlines> {
+  return (must(await db.rpc('app_territory_outlines')) || {}) as Outlines;
 }
