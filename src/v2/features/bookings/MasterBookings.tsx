@@ -23,7 +23,7 @@ import { routeShapes, type RouteShape } from '../../lib/territory';
 import {
   areaView, CLIENT_LAYERS, clientLayerOf, daysLabel, getSettings, heatColor, house as loadHouse, KNOCKS, knockOf, NEVER, NO_DOORS,
   outlines as loadOutlines, overview as loadOverview, parseRound, parseSeason, pctOf, roundName, routeView, seasonKey, seasonLabel,
-  houseLook, serviceMarks, shortDay, shortName, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
+  cachedFilters, DEFAULT_FILTERS, houseLook, loadFilters, saveFilters, serviceMarks, type MbFilters, shortDay, shortName, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
   type RouteView, type Season, type StreetHeat,
 } from '../../lib/masterBookings';
 import { fmtDay, VISIT } from '../../lib/customers';
@@ -37,7 +37,7 @@ import type { SavedRouteMap } from '../../../lib/mapLogsheetService';
 const splitMaps = (v: string | null) => (v ? v.split('|').map(s => s.trim()).filter(Boolean) : []);
 
 export const MasterBookings: React.FC = () => {
-  const { center, can } = useAuth();
+  const { center, can, profile } = useAuth();
   const [params, setParams] = useSearchParams();
   const allowed = can('bookings');
   const year = new Date().getFullYear();
@@ -75,13 +75,31 @@ export const MasterBookings: React.FC = () => {
   const openPicked = () => { const list = (ov.data?.maps || []).map(m => m.area).filter(a => picked.has(a)); if (list.length) go({ maps: list.join('|'), route: null }); };
 
   // ── filters ──
-  const [heat, setHeat] = useState(true);
-  const [knockOn, setKnockOn] = useState<Set<string>>(new Set(KNOCKS.map(k => k.key)));
-  const [clientOn, setClientOn] = useState<Set<ClientLayer>>(new Set());
-  const [bookingOn, setBookingOn] = useState<Set<string>>(new Set(['aeration', 'sealing']));
+  // filters: remembered for each person (this device's copy at once, then their account's copy)
+  const start = useMemo(() => cachedFilters(profile?.id) || DEFAULT_FILTERS, [profile?.id]);
+  const [heat, setHeat] = useState(start.heat);
+  const [knockOn, setKnockOn] = useState<Set<string>>(new Set(start.knocks));
+  const [clientOn, setClientOn] = useState<Set<ClientLayer>>(new Set(start.clients));
+  const [bookingOn, setBookingOn] = useState<Set<string>>(new Set(start.bookings));
   // every customer layer on to start: aeration and sealing customers both show (leaf / drop on the route level)
-  useEffect(() => { setClientOn(new Set(CLIENT_LAYERS.map(l => l.key))); }, [season.service]);
-  const [filtersOpen, setFiltersOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth > 860);
+  const [filtersOpen, setFiltersOpen] = useState(() => start.open ?? (typeof window !== 'undefined' && window.innerWidth > 860));
+  const filtersReady = useRef(false);
+  useEffect(() => {
+    if (!profile?.id) return;
+    let live = true;
+    loadFilters(profile.id).then(f => {
+      if (!live) return;
+      if (f) { setHeat(f.heat); setKnockOn(new Set(f.knocks)); setClientOn(new Set(f.clients)); setBookingOn(new Set(f.bookings)); if (f.open !== null) setFiltersOpen(f.open); }
+      filtersReady.current = true;
+    }).catch(() => { filtersReady.current = true; });
+    return () => { live = false; };
+  }, [profile?.id]);
+  useEffect(() => {
+    if (!profile?.id || !filtersReady.current) return;
+    const f: MbFilters = { heat, knocks: [...knockOn], clients: [...clientOn], bookings: [...bookingOn] as MbFilters['bookings'], open: filtersOpen };
+    const t = setTimeout(() => { saveFilters(profile.id, f).catch(() => { /* kept on this device */ }); }, 700);
+    return () => clearTimeout(t);
+  }, [profile?.id, heat, knockOn, clientOn, bookingOn, filtersOpen]);
   const [selHouse, setSelHouse] = useState<HouseRow | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
   useEffect(() => { setSelHouse(null); }, [route, mapsKey]);
