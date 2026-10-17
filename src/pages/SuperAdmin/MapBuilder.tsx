@@ -13,6 +13,8 @@ import { googleAuthService } from '../../lib/googleAuthService';
 import { loadAndCacheMapPCL, getMapPCLCounts, recalibrateMapPCL } from '../../lib/pclCacheService';
 import { firstFree, ownedNumbers, runsLabel, takenNumbers, type Drawn } from '../../lib/areaNumbers';
 import { RouteDeleteModal } from './RouteDeleteModal';
+import { readBuilderView, saveBuilderView } from '../../lib/builderView';
+import { outlineFeatures, type OutlineInfo, type Outlines } from '../../lib/mapOutlines';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -245,8 +247,10 @@ function regionStyle(region: Region) {
  * embedArea: opened from the new app's Territory list straight into one area's builder (no area
  * cards, no PCL loading — clients come in through Client lists); onExit goes back to that list.
  * Without them it shows the old area cards and PCL loading (no longer routed: /super-admin/maps now goes to Territory).
+ * otherMaps: every master map's outline, drawn faintly behind the roads so a new map can be placed
+ * next to the ones already there (the map being built is left out).
  */
-const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ embedArea, onExit }) => {
+const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?: { outlines: Outlines; info: Map<string, OutlineInfo> } | null }> = ({ embedArea, onExit, otherMaps }) => {
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -296,6 +300,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
   const [addStreetInput, setAddStreetInput] = useState('');
   const [hoveredWayName, setHoveredWayName] = useState<string | null>(null);
   const [showGhostRoutes, setShowGhostRoutes] = useState(true);
+  const [showOtherMaps, setShowOtherMaps] = useState(true);
   const [wayOverrides, setWayOverrides] = useState<Map<number, OsmWay[]>>(new Map());
   const [splitUndoStack, setSplitUndoStack] = useState<SplitUndoEntry[]>([]);
   const [xKeyHeld, setXKeyHeld] = useState(false);
@@ -731,16 +736,26 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
+    // open where the builder was last left (any map), not in Hamilton
+    const last = readBuilderView();
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: [-79.870, 43.320],
-      zoom: 13,
+      center: last?.center || [-79.870, 43.320],
+      zoom: last?.zoom || 13,
     });
     map.boxZoom.disable();
     map.addControl(new mapboxgl.NavigationControl(), 'top-right');
     map.on('load', () => {
       map.resize();
+      // every other master map's outline, under the roads
+      map.addSource('other-maps', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addSource('other-maps-labels', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({ id: 'other-maps-fill', type: 'fill', source: 'other-maps', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.08 } });
+      map.addLayer({ id: 'other-maps-line', type: 'line', source: 'other-maps', paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.85, 'line-dasharray': [3, 2] } });
+      map.addLayer({ id: 'other-maps-label', type: 'symbol', source: 'other-maps-labels', layout: {
+        'text-field': ['get', 'label'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 12, 'text-allow-overlap': false },
+        paint: { 'text-color': '#e5e7eb', 'text-halo-color': '#111827', 'text-halo-width': 1.5 } });
       map.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addSource('roads-ghost', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addLayer({ id: 'roads-ghost-layer', type: 'line', source: 'roads-ghost', paint: { 'line-color': ['get', 'color'], 'line-width': 4, 'line-opacity': 0 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
@@ -764,11 +779,31 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
         if (!xKeyHeldRef.current) map.getCanvas().style.cursor = '';
       };
       ALL_ROAD_LAYERS.forEach(layer => { map.on('mousemove', layer, handleHover); map.on('mouseleave', layer, handleLeave); });
+      // remember where the builder is looking, so the next new map opens here
+      map.on('moveend', () => {
+        if (!openAreaRef.current) return;
+        const c = map.getCenter();
+        saveBuilderView({ center: [c.lng, c.lat], zoom: map.getZoom() });
+      });
       setMapLoaded(true);
     });
     mapRef.current = map;
     return () => { map.remove(); mapRef.current = null; setMapLoaded(false); };
   }, []);
+
+  // the other maps' outlines (the one being built is left out)
+  const openAreaRef = useRef<string | null>(null);
+  openAreaRef.current = view === 'map' && currentArea ? currentArea.area_name : null;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const f = outlineFeatures(otherMaps?.outlines || {}, otherMaps?.info || new Map(), currentArea?.area_name);
+    (map.getSource('other-maps') as mapboxgl.GeoJSONSource | undefined)?.setData(f.shapes);
+    (map.getSource('other-maps-labels') as mapboxgl.GeoJSONSource | undefined)?.setData(f.labels);
+    for (const id of ['other-maps-fill', 'other-maps-line', 'other-maps-label']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', showOtherMaps ? 'visible' : 'none');
+    }
+  }, [mapLoaded, otherMaps, currentArea, showOtherMaps]);
 
   useEffect(() => {
     const canvas = mapRef.current?.getCanvas();
@@ -955,6 +990,16 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
         });
         const latPad = Math.max((n - s) * 0.1, 0.003), lngPad = Math.max((e - w) * 0.1, 0.004);
         bbox = `${s - latPad},${w - lngPad},${n + latPad},${e + lngPad}`;
+      } else if (readBuilderView()) {
+        // a new map opens where the builder was last left (usually next to the map just finished)
+        const last = readBuilderView()!;
+        await new Promise<void>(resolve => {
+          const map = mapRef.current;
+          if (!map) { resolve(); return; }
+          const timer = setTimeout(resolve, 3000);
+          map.once('moveend', () => { clearTimeout(timer); resolve(); });
+          map.jumpTo({ center: last.center, zoom: Math.max(last.zoom, 14) });
+        });
       } else {
         const fullName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
         const city = (area.city || '').trim();
@@ -1516,6 +1561,11 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ emb
               <button onClick={() => setShowGhostRoutes(v => !v)} className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm border transition-colors ${showGhostRoutes ? 'bg-indigo-900/40 border-indigo-500 text-indigo-300' : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'}`}>
                 {showGhostRoutes ? <Eye size={14} /> : <EyeOff size={14} />}
                 {showGhostRoutes ? 'Routes On' : 'Routes Off'}
+              </button>
+              <button onClick={() => setShowOtherMaps(v => !v)} disabled={!otherMaps} title="The outlines of every other master map"
+                className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm border transition-colors disabled:opacity-50 ${showOtherMaps ? 'bg-amber-900/30 border-amber-600 text-amber-300' : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'}`}>
+                {showOtherMaps ? <Eye size={14} /> : <EyeOff size={14} />}
+                {otherMaps ? (showOtherMaps ? 'Other maps On' : 'Other maps Off') : 'Other maps…'}
               </button>
               <button onClick={handleApprove} disabled={!activeRoute || activeRoute.selectedWayIds.size === 0} className="bg-green-800/50 hover:bg-green-700/50 disabled:opacity-50 text-green-400 border border-green-700/50 px-3 py-1.5 rounded text-sm flex items-center gap-2"><Check size={14} />Approve</button>
               <button onClick={handleFlag} className="bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-800/50 px-3 py-1.5 rounded text-sm flex items-center gap-2"><X size={14} />Flag</button>
