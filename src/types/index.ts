@@ -176,6 +176,8 @@ export interface ManagementUser {
   // This manager's own on/off choices for the RM map's layers, so the map opens
   // the way they left it on any device. Stored in users.metadata.mapFilters.
   mapFilters?: ManagerMapFilters;
+  /** Signed in without a row on today's session, to see only what other managers shared with them. */
+  noSeat?: boolean;
 }
 
 /** An RM's layer switches on the RM map (absent = the defaults). */
