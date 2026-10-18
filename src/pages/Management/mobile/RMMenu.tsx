@@ -103,6 +103,8 @@ export interface ShareRow {
 export interface SeenRow { id: string; name: string; kind: 'access' | 'position'; shown: boolean }
 export interface OthersLayers {
   share: ShareRow[];
+  /** False when I have no row on today's session (floater view, or no workers or routes today). */
+  canShare?: boolean;
   seen: SeenRow[];
   /** True while a sharing change is being saved. */
   saving: boolean;
@@ -138,8 +140,11 @@ const OthersSection: React.FC<{ o: OthersLayers }> = ({ o }) => (
       </button>
     ))}
     <div className="pt-3 pb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-gray-500 font-bold"><Share2 size={12} />Share with</div>
+    {o.canShare === false ? (
+      <div className="text-[11px] text-gray-500 px-1 pb-1">Only a manager with workers or routes on today’s session can share their map, and you have none today.</div>
+    ) : <>
     <div className="text-[11px] text-gray-500 px-1 pb-1">Full access gives that manager everything a floater gets for you. Nothing is shared until you choose.</div>
-    {o.share.length === 0 && <div className="text-[11px] text-gray-500 px-1">No other managers today.</div>}
+    {o.share.length === 0 && <div className="text-[11px] text-gray-500 px-1">No other managers at this center.</div>}
     {o.share.map(r => (
       <div key={r.id} className="w-full rounded-xl px-4 py-2.5 flex items-center gap-2 bg-gray-800">
         <span className="flex-1 min-w-0">
@@ -152,6 +157,7 @@ const OthersSection: React.FC<{ o: OthersLayers }> = ({ o }) => (
         <Pill label="Position" title={`Position for ${r.name}`} on={r.position || r.floats} disabled={o.saving || r.access || r.floats} onClick={() => o.onShare(r.id, 'position')} />
       </div>
     ))}
+    </>}
   </>
 );
 

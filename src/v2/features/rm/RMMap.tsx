@@ -1,11 +1,12 @@
 // src/v2/features/rm/RMMap.tsx — Route Manager › Map: the RM map (desktop and phone), unchanged,
 // opened from the new app. The signed-in manager sees their own map for the live session;
-// someone with Workerbook can open any of today's managers' maps.
+// someone with Workerbook can open any of today's managers' maps. A manager with nobody today still
+// gets in when another manager has shared their map with them.
 import React, { Suspense, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
-import { actAsLegacyRouteManager, legacyLiveSession, legacyRouteManagers } from '../../lib/legacy';
+import { actAsLegacyRouteManager, actAsSharedViewer, legacyLiveSession, legacyRouteManagers, legacySharedWith } from '../../lib/legacy';
 import { legacyManagerId } from '../../lib/startSession';
 import { Btn, ErrorBox, Loading } from '../../ui';
 
@@ -24,6 +25,14 @@ export const RMMap: React.FC = () => {
     if (!live) return { kind: 'nosession' as const, managers: [] };
     const ok = await actAsLegacyRouteManager(centerId, who);
     if (ok) return { kind: 'ok' as const };
+    // No workers or routes of my own today: if another manager has shared their map with me, open it.
+    if (who === own && profile) {
+      const shared = await legacySharedWith(centerId, own);
+      if (shared.access.length || shared.position.length) {
+        await actAsSharedViewer(centerId, { userId: own, username: profile.username, full_name: profile.full_name }, shared.access);
+        return { kind: 'ok' as const };
+      }
+    }
     return { kind: 'notmanager' as const, managers: can('workerbook') || profile?.is_super_admin ? await legacyRouteManagers(centerId) : [] };
   }, [centerId, who]);
 
@@ -39,7 +48,7 @@ export const RMMap: React.FC = () => {
         {s?.kind === 'nocenter' && <>Your account isn’t linked to a command center yet. Ask the Super Admin to set your RM center in User Management.</>}
         {s?.kind === 'nosession' && <>No session is live at {center?.display_name || 'your center'} yet. Your map opens here once today’s session has been started.</>}
         {s?.kind === 'notmanager' && <>
-          <div style={{ marginBottom: 12 }}>You aren’t a route manager on today’s session{center ? ` at ${center.display_name}` : ''}.</div>
+          <div style={{ marginBottom: 12 }}>You aren’t a route manager on today’s session{center ? ` at ${center.display_name}` : ''}, and no manager has shared their map with you. Once one does (RM map › Layers › Share with), it opens here.</div>
           {s.managers.length > 0 && <>
             <div className="v2-card-h">Open a manager’s map</div>
             <div className="v2-row">{s.managers.map(m => <Btn key={m.user_id} kind="o" onClick={() => setViewing(m.user_id)}>{m.name}</Btn>)}</div>

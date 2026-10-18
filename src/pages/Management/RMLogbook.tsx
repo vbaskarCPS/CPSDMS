@@ -425,7 +425,8 @@ const RMLogbook: React.FC = () => {
       // A FLOATER also gets the map: on a non-mapping CC they can only float
       // for managers with a Digital Map, and usually have none of their own.
       const isFloater = Array.isArray(user.floatingFor) && user.floatingFor.length > 0;
-      const hasMapping = commandCenterService.currentHasDigitalMapping() || !!user.digitalMapping || isFloater;
+      // A manager with nobody today, here only for what others shared with them: the map is all there is.
+      const hasMapping = commandCenterService.currentHasDigitalMapping() || !!user.digitalMapping || isFloater || !!user.noSeat;
       setDigitalMappingEnabled(hasMapping);
 
       if (hasMapping) {
@@ -456,7 +457,9 @@ const RMLogbook: React.FC = () => {
   }, []);
   useEffect(() => {
     if (!dailyData || !currentUser) return;
-    const me = dailyData.managers.find(m => m.userId === currentUser.userId);
+    // No row today (shared-with viewer): grants are all they have, so work them out the same way.
+    const me = dailyData.managers.find(m => m.userId === currentUser.userId)
+      || (currentUser.noSeat ? { userId: currentUser.userId, floatingFor: [] as string[] } : null);
     if (!me) return;
     const hidden = getStorageItem<string[]>(`rm_hidden_access:${me.userId}`, []);
     const granted = dailyData.managers

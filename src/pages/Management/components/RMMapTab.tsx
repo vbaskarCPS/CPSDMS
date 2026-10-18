@@ -19,6 +19,7 @@ import {
   commandCenterService,
   EQ_DIVISOR,
 } from '../../../lib/commandCenterService';
+import { shareTargets } from '../../../lib/mapShareTargets';
 import { getStorageItem, setStorageItem } from '../../../lib/localStorage';
 import {
   RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser,
@@ -2552,16 +2553,32 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, [hiddenKey]);
 
+  // Every manager of the center can be shared with, not only today's (a manager with no workers or
+  // routes today has no row on the session). Their accounts are read with the new app's sign-in; on
+  // the old sign-in they can't be read and the list is today's managers, as before.
+  const [centerAccounts, setCenterAccounts] = useState<{ full_name: string }[]>([]);
+  useEffect(() => {
+    const ccId = commandCenterService.getCurrentCommandCenterId();
+    if (!ccId) return;
+    let live = true;
+    import('../../../v2/lib/client')
+      .then(({ db }) => db.from('app_users').select('full_name').eq('rm_center_id', ccId).eq('is_active', true))
+      .then(({ data }) => { if (live && data) setCenterAccounts(data as { full_name: string }[]); })
+      .catch(e => console.warn('[MapSharing] center managers not loaded:', e?.message || e));
+    return () => { live = false; };
+  }, []);
+
   const othersLayers: OthersLayers = {
-    share: allManagers
-      .filter(m => m.userId !== managerId && m.role === 'RouteManager')
-      .sort((x, y) => x.name.localeCompare(y.name))
-      .map(m => ({
-        id: m.userId, name: m.name,
-        access: mySharing.access.includes(m.userId),
-        position: mySharing.access.includes(m.userId) || mySharing.position.includes(m.userId),
-        floats: adminFloatersForMe.has(m.userId),
+    share: shareTargets(allManagers, centerAccounts, managerId)
+      .map(t => ({
+        id: t.id, name: t.name,
+        access: mySharing.access.includes(t.id),
+        position: mySharing.access.includes(t.id) || mySharing.position.includes(t.id),
+        floats: adminFloatersForMe.has(t.id),
       })),
+    // Sharing is saved on my own row of today's session; without one (floater view, or a manager
+    // with nobody today) there's nothing of mine to share.
+    canShare: !!myManagerRow,
     seen: grantsToMe
       .filter(g => !(myManagerRow?.floatingFor || []).includes(g.m.userId))
       .map(g => ({ id: g.m.userId, name: g.m.name, kind: g.access ? 'access' as const : 'position' as const, shown: !hiddenGranters.includes(g.m.userId) })),

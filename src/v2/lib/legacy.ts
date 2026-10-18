@@ -56,6 +56,31 @@ export async function actAsLegacyRouteManager(centerId: string, userId: string):
   return true;
 }
 
+/**
+ * A center manager with no workers or routes today has no row on the live session, but other managers
+ * can still share their maps with them (RM map › Layers). Returns who has, by full access and position.
+ */
+export async function legacySharedWith(centerId: string, userId: string): Promise<{ access: string[]; position: string[] }> {
+  await pointLegacyAt(centerId);
+  const [{ supabase }, { sharedWithMe }] = await Promise.all([import('../../lib/supabase'), import('../../lib/mapShareTargets')]);
+  const { data, error } = await supabase.from('users').select('user_id, metadata').eq('role', 'RouteManager').eq('command_center_id', centerId);
+  if (error) throw new Error(error.message);
+  return sharedWithMe((data || []).map(r => ({ userId: r.user_id as string, mapSharing: (r.metadata as { mapSharing?: { access?: string[]; position?: string[] } } | null)?.mapSharing })), userId);
+}
+
+/**
+ * Opens the old RM map for that manager without a row of their own: they see the managers who gave
+ * them full access (like a floater) and the positions shared with them. Nothing of theirs is on the map.
+ */
+export async function actAsSharedViewer(centerId: string, viewer: { userId: string; username: string; full_name: string }, access: string[]): Promise<void> {
+  await pointLegacyAt(centerId);
+  const { setStorageItem } = await import('../../lib/localStorage');
+  setStorageItem('current_user', {
+    userId: viewer.userId, name: viewer.full_name, username: viewer.username, phone: '',
+    role: 'RouteManager', commandCenterId: centerId, floatingFor: [...access], digitalMappings: [], noSeat: true,
+  });
+}
+
 /** True when this manager has a seat on the live session at the center (their RM map is ready). */
 export async function hasLiveRouteManagerSeat(centerId: string, userId: string): Promise<boolean> {
   const { supabase } = await import('../../lib/supabase');
