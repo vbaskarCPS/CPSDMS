@@ -17,7 +17,8 @@ returns boolean language sql stable security definer set search_path = public as
                  where up.user_id = auth.uid() and up.permission = p and u.is_active)
 $$;
 
--- Saving a user: a Super Admin's User Management permission is kept whatever the boxes say.
+-- Saving a user: a Super Admin's User Management permission is kept whatever the boxes say, and
+-- their Route Manager center can be any center (they see them all).
 create or replace function public.app_admin_update_user(
   p_user uuid, p_full_name text, p_phone text, p_email text,
   p_permissions text[], p_centers uuid[], p_rm_center uuid, p_active boolean)
@@ -35,7 +36,9 @@ begin
   if (select is_super_admin from app_users where id = p_user) and not ('sa_users' = any(v_perms)) then
     v_perms := array_append(v_perms, 'sa_users');
   end if;
-  if p_rm_center is not null and not (p_rm_center = any(p_centers)) then
+  -- the Super Admin sees every center, so any of them can be their Route Manager center
+  if p_rm_center is not null and not (p_rm_center = any(p_centers))
+     and not (select is_super_admin from app_users where id = p_user) then
     raise exception 'The RM center must be one of the user''s centers';
   end if;
   update app_users set full_name = trim(p_full_name), phone = p_phone, email = p_email,
