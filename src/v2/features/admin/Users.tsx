@@ -186,11 +186,11 @@ const UserEditor: React.FC<{ user: UserRow | null; centers: Center[]; isSuperAdm
             {user?.is_super_admin ? <div className="v2-note">Super Admin sees every center.</div> : centers.filter(c => c.is_active || form.center_ids.includes(c.id)).map(c => (
               <label key={c.id} className="v2-check"><input type="checkbox" checked={form.center_ids.includes(c.id)} onChange={() => toggleCenter(c.id)} />{c.display_name}</label>
             ))}
-            {form.permissions.includes('route_manager') && !user?.is_super_admin && (
+            {form.permissions.includes('route_manager') && (
               <Field label="Route Manager center (one at a time)">
                 <select className="v2-sel" value={form.rm_center_id || ''} onChange={e => set('rm_center_id', e.target.value || null)}>
                   <option value="">— none —</option>
-                  {centers.filter(c => form.center_ids.includes(c.id)).map(c => <option key={c.id} value={c.id}>{c.display_name}</option>)}
+                  {centers.filter(c => user?.is_super_admin ? (c.is_active || c.id === form.rm_center_id) : form.center_ids.includes(c.id)).map(c => <option key={c.id} value={c.id}>{c.display_name}</option>)}
                 </select>
               </Field>
             )}
