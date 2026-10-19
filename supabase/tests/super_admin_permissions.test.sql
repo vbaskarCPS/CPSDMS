@@ -16,6 +16,10 @@ do $$ begin
   if not app_has_perm('sa_users') then raise exception 'User Management lost'; end if;
   if not app_has_perm('bookings') then raise exception 'kept permission lost'; end if;
   if not exists (select 1 from user_permissions where user_id = 'a0000000-0000-0000-0000-0000000000f9' and permission = 'sa_users') then raise exception 'sa_users row gone'; end if;
+  -- a Route Manager center without being linked to it (the Super Admin sees every center)
+  perform app_admin_update_user('a0000000-0000-0000-0000-0000000000f9', 'Test Super', null, null,
+    array['route_manager','sa_users'], '{}', (select id from command_centers limit 1), true);
+  if (select rm_center_id from app_users where id = 'a0000000-0000-0000-0000-0000000000f9') is null then raise exception 'RM center not set'; end if;
   raise notice 'super admin permissions: ok';
 end $$;
 rollback;
