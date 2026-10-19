@@ -91,7 +91,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loading, session, profile, permissions, centers,
     center: centers.find(c => c.id === centerId) || null,
     setCenterId,
-    can: (p: Permission) => !!profile && (profile.is_super_admin || permissions.has(p)),
+    // The Super Admin's permissions are set like anyone else's; User Management is always theirs.
+    can: (p: Permission) => !!profile && (permissions.has(p) || (profile.is_super_admin && p === 'sa_users')),
     signIn: async (username, password) => {
       setLoading(true);
       const { error } = await db.auth.signInWithPassword({ email: loginAddress(username), password });

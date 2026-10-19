@@ -46,7 +46,7 @@ export const Users: React.FC = () => {
                   <td><code>{u.username}</code></td>
                   <td>{u.is_super_admin ? 'All' : u.center_ids.map(centerName).join(', ') || '—'}</td>
                   <td>{u.rm_center_id ? centerName(u.rm_center_id) : '—'}</td>
-                  {PERMISSIONS.map(p => <td key={p.key} style={{ textAlign: 'center' }}>{(u.is_super_admin || u.permissions.includes(p.key)) ? '✓' : ''}</td>)}
+                  {PERMISSIONS.map(p => <td key={p.key} style={{ textAlign: 'center' }}>{(u.permissions.includes(p.key) || (u.is_super_admin && p.key === 'sa_users')) ? '✓' : ''}</td>)}
                   <td>{u.is_active ? <Tag tone="g">Active</Tag> : <Tag>Disabled</Tag>}{u.must_change_password && u.is_active && <> <SetupTag s={setups.data?.get(u.id)} /></>}</td>
                 </tr>
               ))}
@@ -78,7 +78,8 @@ const SetupTag: React.FC<{ s?: SetupStatus }> = ({ s }) => {
 const UserEditor: React.FC<{ user: UserRow | null; centers: Center[]; isSuperAdmin: boolean; setup?: SetupStatus; onClose: () => void; onSaved: (msg: string) => void }> =
   ({ user, centers, isSuperAdmin, setup, onClose, onSaved }) => {
     const [form, setForm] = useState<UserInput>(() => user ? {
-      full_name: user.full_name, phone: user.phone || '', email: user.email || '', permissions: user.permissions,
+      full_name: user.full_name, phone: user.phone || '', email: user.email || '',
+      permissions: user.is_super_admin && !user.permissions.includes('sa_users') ? [...user.permissions, 'sa_users'] : user.permissions,
       center_ids: user.center_ids, rm_center_id: user.rm_center_id, is_active: user.is_active,
     } : blank());
     const [password, setPassword] = useState('');
@@ -170,11 +171,13 @@ const UserEditor: React.FC<{ user: UserRow | null; centers: Center[]; isSuperAdm
           </div>
           <div>
             <div className="v2-label">Permissions</div>
-            {user?.is_super_admin ? <div className="v2-note">Super Admin has every permission.</div> : PERMISSIONS.map(p => {
+            {user?.is_super_admin && <div className="v2-note" style={{ marginBottom: 6 }}>Super Admin always has User Management; the rest are set here like anyone else’s.</div>}
+            {PERMISSIONS.map(p => {
               const saOnly = SUPER_ADMIN_PERMISSIONS.includes(p.key as Permission) && !isSuperAdmin;
+              const fixed = !!user?.is_super_admin && p.key === 'sa_users';
               return (
-                <label key={p.key} className="v2-check" title={p.unlocks} style={{ ...(saOnly ? { opacity: .5 } : {}), ...(p.key === 'rm_floater' ? { marginLeft: 22 } : {}) }}>
-                  <input type="checkbox" checked={form.permissions.includes(p.key)} disabled={saOnly} onChange={() => togglePerm(p.key)} />
+                <label key={p.key} className="v2-check" title={fixed ? 'The Super Admin always has User Management' : p.unlocks} style={{ ...(saOnly ? { opacity: .5 } : {}), ...(p.key === 'rm_floater' ? { marginLeft: 22 } : {}) }}>
+                  <input type="checkbox" checked={fixed || form.permissions.includes(p.key)} disabled={saOnly || fixed} onChange={() => togglePerm(p.key)} />
                   <span><b style={{ fontWeight: 600 }}>{p.label}</b><br /><span className="v2-mut v2-small">{p.unlocks}</span></span>
                 </label>
               );
