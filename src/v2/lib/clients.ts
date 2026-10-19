@@ -247,15 +247,27 @@ export async function previewImport(id: string, total: number, onProgress?: (don
   }
   return out;
 }
-/** Save the held rows (picks up where it stopped if it was interrupted), then finish the import. */
-export async function saveImport(id: string, counts: Record<string, unknown>, onProgress?: (remaining: number) => void): Promise<{ inserted: number; merged: number }> {
+/** Save the held rows (picks up where it stopped if it was interrupted), finish the import, then refresh its maps. */
+export async function saveImport(id: string, counts: Record<string, unknown>, onProgress?: (remaining: number) => void, onRefresh?: (remaining: number) => void): Promise<{ inserted: number; merged: number }> {
   for (let guard = 0; guard < 10000; guard++) {
     const r = must(await db.rpc('app_client_import_apply', { p_import: id, p_count: 300 })) as { remaining: number };
     onProgress?.(Number(r.remaining));
     if (!Number(r.remaining)) break;
   }
   const res = must(await db.rpc('app_client_import_complete', { p_import: id, p_counts: counts })) as { inserted: number; merged: number };
+  await refreshImportMaps(id, onRefresh);
   return { inserted: Number(res.inserted || 0), merged: Number(res.merged || 0) };
+}
+/**
+ * Refresh the map lists of the routes an import touched, 20 at a time (a big file touches hundreds,
+ * too many for one call). Safe to call again for an import that was cut off part-way.
+ */
+export async function refreshImportMaps(id: string, onProgress?: (remaining: number) => void): Promise<void> {
+  for (let guard = 0; guard < 1000; guard++) {
+    const r = must(await db.rpc('app_client_import_refresh', { p_import: id, p_count: 20 })) as { done: number; remaining: number };
+    onProgress?.(Number(r.remaining));
+    if (!Number(r.remaining)) break;
+  }
 }
 export async function cancelImport(id: string): Promise<void> {
   must(await db.rpc('app_client_import_cancel', { p_import: id }));

@@ -107,9 +107,9 @@ export const ClientLists: React.FC = () => {
   /** Forget a previewed import (its held rows are cleared on the server). */
   const dropPending = () => setPending(p => { if (p) void cancelImport(p.id).catch(() => undefined); return null; });
 
-  const run = async (label: string, fn: () => Promise<void>) => {
+  const run = async (label: string, fn: (say: (label: string) => void) => Promise<void>) => {
     setBusy(label); setError(null);
-    try { await fn(); } catch (e) { setError(e); } finally { setBusy(null); }
+    try { await fn(setBusy); } catch (e) { setError(e); } finally { setBusy(null); }
   };
 
   /** Use a saved recipe for this layout if there is one, otherwise ask The Benny. */
@@ -424,7 +424,9 @@ export const ClientLists: React.FC = () => {
   });
 
   const save = () => pending && run('Saving…', async () => {
-    const res = await saveImport(pending.id, pending.counts, left => setBusy(`Saving… ${Math.max(0, pending.rows - left).toLocaleString()} of ${pending.rows.toLocaleString()}`));
+    const res = await saveImport(pending.id, pending.counts,
+      left => setBusy(`Saving… ${Math.max(0, pending.rows - left).toLocaleString()} of ${pending.rows.toLocaleString()}`),
+      left => setBusy(`Saved. Refreshing the maps… ${left.toLocaleString()} route${left === 1 ? '' : 's'} to go`));
     setResult({ id: pending.id, ...res }); setPending(null); setStep('done'); imports.reload(); recipes.reload();
   });
   const dontSave = () => pending && run('Cancelling…', async () => { await cancelImport(pending.id); setPending(null); imports.reload(); });
@@ -700,7 +702,7 @@ const Review: React.FC<{
 
 interface Loaded<T> { data: T | null; loading: boolean; reload: () => void }
 const History: React.FC<{ imports: Loaded<ImportRecord[]>; recipes: Loaded<Recipe[]>;
-  run: (label: string, fn: () => Promise<void>) => void; busy: boolean }> = ({ imports, recipes, run, busy }) => {
+  run: (label: string, fn: (say: (label: string) => void) => Promise<void>) => void; busy: boolean }> = ({ imports, recipes, run, busy }) => {
   const [confirm, setConfirm] = useState<string | null>(null);
   return (
     <div className="v2-grid2" style={{ alignItems: 'start' }}>
@@ -718,7 +720,7 @@ const History: React.FC<{ imports: Loaded<ImportRecord[]>; recipes: Loaded<Recip
                       <Btn size="sm" kind="o" disabled={busy} onClick={() => run('Cancelling…', async () => { await cancelImport(i.id); imports.reload(); })}>Clear</Btn></span>
                   ) : i.status === 'running' ? (
                     <span className="v2-row" style={{ justifyContent: 'flex-end', gap: 6 }}><Tag tone="a">Interrupted</Tag>
-                      <Btn size="sm" kind="o" disabled={busy} onClick={() => run('Finishing the save…', async () => { await saveImport(i.id, i.counts || {}); imports.reload(); })}>Finish saving</Btn>
+                      <Btn size="sm" kind="o" disabled={busy} onClick={() => run('Finishing the save…', async say => { await saveImport(i.id, i.counts || {}, undefined, left => say(`Refreshing the maps… ${left.toLocaleString()} to go`)); imports.reload(); })}>Finish saving</Btn>
                       <Btn size="sm" kind="r" disabled={busy} onClick={() => run('Undoing…', async () => { await undoImport(i.id); imports.reload(); })}>Undo</Btn></span>
                   ) : confirm === i.id ? (
                     <span className="v2-row" style={{ justifyContent: 'flex-end', gap: 6 }}>
