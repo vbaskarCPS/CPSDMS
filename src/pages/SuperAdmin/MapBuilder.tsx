@@ -14,6 +14,7 @@ import { loadAndCacheMapPCL, getMapPCLCounts, recalibrateMapPCL } from '../../li
 import { firstFree, ownedNumbers, runsLabel, takenNumbers, type Drawn } from '../../lib/areaNumbers';
 import { RouteDeleteModal } from './RouteDeleteModal';
 import { readBuilderView, saveBuilderView } from '../../lib/builderView';
+import { placeSearches, roadBox } from '../../lib/roadBox';
 import { outlineFeatures, type OutlineInfo, type Outlines } from '../../lib/mapOutlines';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -289,6 +290,14 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
   const [activeRouteNum, setActiveRouteNum] = useState(1);
   const [allWays, setAllWays] = useState<OsmWay[]>([]);
   const [loadingRoads, setLoadingRoads] = useState(false);
+  const [roadsSeconds, setRoadsSeconds] = useState(0);
+  const [roadsCapped, setRoadsCapped] = useState(false);
+  useEffect(() => {
+    if (!loadingRoads) { setRoadsSeconds(0); return; }
+    const t0 = Date.now();
+    const t = setInterval(() => setRoadsSeconds(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [loadingRoads]);
   // the area whose road load has finished (even if it failed) and the area whose saved routes are on
   // the map: the saved routes are drawn from their own saved shapes when the roads don't come
   const [roadsTriedFor, setRoadsTriedFor] = useState<string | null>(null);
@@ -1001,16 +1010,10 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
           map.jumpTo({ center: last.center, zoom: Math.max(last.zoom, 14) });
         });
       } else {
-        const fullName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
-        const city = (area.city || '').trim();
         let center: [number, number] = [-79.870, 43.270];
-        const searchCandidates = [
-          ...(city ? [`${fullName}, ${city}`, city] : []),
-          fullName, fullName.split(' ')[0], fullName.split(' ').slice(0, 2).join(' '),
-        ].filter((v, i, a) => v && a.indexOf(v) === i);
-        for (const candidate of searchCandidates) {
+        for (const candidate of placeSearches(area.area_name, area.city)) {
           try {
-            const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate + ', Ontario, Canada')}&format=json&limit=1`, { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } });
+            const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate)}&format=json&limit=1`, { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } });
             const data = await resp.json();
             if (data.length > 0) { center = [parseFloat(data[0].lon), parseFloat(data[0].lat)]; break; }
           } catch { /* try next */ }
@@ -1025,13 +1028,13 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       }
       const map = mapRef.current;
       if (!map) throw new Error('Map not available');
+      let capped = false;
       if (!bbox) {
         const b = map.getBounds();
         if (!b) throw new Error('Map not available');
-        const latPad = (b.getNorth() - b.getSouth()) * 0.1;
-        const lngPad = (b.getEast() - b.getWest()) * 0.1;
-        bbox = `${b.getSouth() - latPad},${b.getWest() - lngPad},${b.getNorth() + latPad},${b.getEast() + lngPad}`;
+        ({ bbox, capped } = roadBox({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() }));
       }
+      setRoadsCapped(capped);
       const ways = await fetchOverpass(bbox);
       setAllWays(ways);
       if (!ways.length) setError('No roads came back for this area — your saved routes are shown from their saved shapes. Click "Load More Roads" to try again.');
@@ -1094,9 +1097,9 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
     setLoadingRoads(true); setError(null);
     try {
       const b = map.getBounds();
-      const latPad = (b.getNorth() - b.getSouth()) * 0.1;
-      const lngPad = (b.getEast() - b.getWest()) * 0.1;
-      const bbox = `${b.getSouth() - latPad},${b.getWest() - lngPad},${b.getNorth() + latPad},${b.getEast() + lngPad}`;
+      if (!b) throw new Error('Map not available');
+      const { bbox, capped } = roadBox({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
+      setRoadsCapped(capped);
       const newWays = await fetchOverpass(bbox);
       setAllWays(prev => { const existingIds = new Set(prev.map(w => w.id)); return [...prev, ...newWays.filter(w => !existingIds.has(w.id))]; });
     } catch { setError('All Overpass mirrors are unavailable — please try again in a moment.'); }
@@ -1528,8 +1531,16 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
             {loadingRoads && (
               <div className="absolute inset-0 bg-gray-900/60 flex items-center justify-center z-10">
                 <div className="bg-gray-800 rounded-lg px-4 py-3 flex items-center gap-3 text-sm border border-gray-700">
-                  <Loader size={16} className="animate-spin text-blue-400" />Loading roads…
+                  <Loader size={16} className="animate-spin text-blue-400" />
+                  <span>Loading roads…{roadsSeconds >= 3 && <span className="text-gray-400"> {roadsSeconds}s</span>}
+                    {roadsSeconds >= 20 && <div className="text-xs text-gray-400 mt-1">The road server is slow right now; it keeps trying for up to about two minutes.</div>}</span>
                 </div>
+              </div>
+            )}
+            {roadsCapped && !loadingRoads && currentArea && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-amber-900/90 border border-amber-700 text-amber-100 rounded px-3 py-1.5 text-xs z-10 flex items-center gap-3">
+                <span>Roads loaded for the middle of the view only (the view is too wide for one request). Zoom in and click Load More Roads for the rest.</span>
+                <button onClick={() => setRoadsCapped(false)} className="text-amber-300 hover:text-white" aria-label="Dismiss">✕</button>
               </div>
             )}
             {hoveredWayName && currentArea && (
