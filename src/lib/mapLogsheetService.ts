@@ -86,29 +86,14 @@ export async function removeMapCcAccess(commandCenterId: string): Promise<void> 
   if (error) throw error;
 }
 
-/** Is this worker allowed the map logsheet? Yes when their contractor id is on
- *  the contractor list, OR the command centre they're logged into is on the
- *  command-centre list. Never throws — a read failure counts as no. */
+/** Every command centre has the map logsheet. A worker lands on it whenever they have a contractor
+ *  id; the map page itself sends them to the ordinary logsheet when their manager has no digital
+ *  map that day. (The old per-contractor and per-centre access lists no longer gate anything.) */
 export async function isMapWorker(
   worker: { contractorId?: string } | null | undefined,
-  commandCenterId: string | null = commandCenterService.getCurrentCommandCenterId(),
+  _commandCenterId: string | null = commandCenterService.getCurrentCommandCenterId(),
 ): Promise<boolean> {
-  const id = (worker?.contractorId || '').trim().toUpperCase();
-  if (!id) return false;
-  try {
-    const [byWorker, byCc] = await Promise.all([
-      supabase.from('map_logsheet_access').select('contractor_id').eq('contractor_id', id).maybeSingle(),
-      commandCenterId
-        ? supabase.from('map_logsheet_cc_access').select('command_center_id').eq('command_center_id', commandCenterId).maybeSingle()
-        : Promise.resolve({ data: null, error: null } as { data: any; error: any }),
-    ]);
-    if (byWorker.error) console.warn('[MapLogsheet] contractor access check failed', byWorker.error.message);
-    if (byCc.error) console.warn('[MapLogsheet] command centre access check failed', byCc.error.message);
-    return (!byWorker.error && !!byWorker.data) || (!byCc.error && !!byCc.data);
-  } catch (err) {
-    console.warn('[MapLogsheet] access check failed', err);
-    return false;
-  }
+  return !!(worker?.contractorId || '').trim();
 }
 
 /** Where a freshly authenticated worker should land. Approved → the map page
