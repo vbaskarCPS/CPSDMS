@@ -1,12 +1,12 @@
 // Someone turned up after the session started: put them on the live map under a manager, on a
 // cart of their own for the day (so they show on that manager's team and payouts at once). Lists today's roster people who
 // aren't on the live map yet; anyone not on today's list is booked first ("Book someone").
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Search, UserPlus } from 'lucide-react';
 import { useLoad } from '../../../lib/data';
 import { legacyLiveSession } from '../../../lib/legacy';
 import { fullName, updateRoster, type RosterRow } from '../../../lib/workerbook';
-import { addLateArrival, type PlanManager } from '../../../lib/startSession';
+import { addLateArrival, legacyManagerId, type PlanManager } from '../../../lib/startSession';
 import { Btn, ErrorBox, Loading, Modal } from '../../../ui';
 import { dayContext } from '../../../lib/dayContext';
 import { appShowedDates, countBefore } from '../../../lib/payoutEngine';
@@ -17,9 +17,15 @@ export const LateArrivals: React.FC<{
 }> = ({ centerId, region, date, rows, managers, onClose, onBook, onAdded }) => {
   const live = useLoad(() => legacyLiveSession(centerId), [centerId]);
   const onMap = useMemo(() => new Set((live.data?.data.workers || []).map(w => w.contractorId.toUpperCase())), [live.data]);
+  // Only managers who are on the live session: a late arrival put under anyone else is on nobody's map.
+  const liveMgrs = useMemo(() => {
+    const onSession = new Set((live.data?.data.managers || []).map(m => m.userId));
+    return managers.filter(m => onSession.has(legacyManagerId(m.full_name)));
+  }, [live.data, managers]);
   const [q, setQ] = useState('');
   const [pick, setPick] = useState<RosterRow | null>(null);
-  const [mgr, setMgr] = useState(managers[0]?.id || '');
+  const [mgr, setMgr] = useState('');
+  useEffect(() => { if (!liveMgrs.some(m => m.id === mgr)) setMgr(liveMgrs[0]?.id || ''); }, [liveMgrs, mgr]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const t = q.trim().toLowerCase();
@@ -28,7 +34,7 @@ export const LateArrivals: React.FC<{
     .sort((a, b) => fullName(a.hire.person).localeCompare(fullName(b.hire.person)));
 
   const add = async () => {
-    const m = managers.find(x => x.id === mgr);
+    const m = liveMgrs.find(x => x.id === mgr);
     if (!pick || !m) return;
     setBusy(true); setError(null);
     try {
@@ -53,7 +59,7 @@ export const LateArrivals: React.FC<{
         <div className="v2-confirm-list" style={{ maxHeight: 280, border: '1px solid var(--line)', borderRadius: 10, padding: 4 }}>
           {off.map(r => (
             <label key={r.id} className={`v2-confirm${pick?.id === r.id ? ' on' : ''}`} style={{ cursor: 'pointer' }}>
-              <input type="radio" name="late" checked={pick?.id === r.id} onChange={() => { setPick(r); if (r.manager_id) setMgr(r.manager_id); }} />
+              <input type="radio" name="late" checked={pick?.id === r.id} onChange={() => { setPick(r); if (r.manager_id && liveMgrs.some(m => m.id === r.manager_id)) setMgr(r.manager_id); }} />
               <span><b>{fullName(r.hire.person)}</b> <span className="v2-small v2-mut">{r.hire.cn}</span></span>
             </label>
           ))}
@@ -63,8 +69,9 @@ export const LateArrivals: React.FC<{
       )}
       <label className="v2-label" htmlFor="late-mgr" style={{ marginTop: 12 }}>Manager</label>
       <select id="late-mgr" className="v2-sel" value={mgr} onChange={e => setMgr(e.target.value)}>
-        {managers.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
+        {liveMgrs.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
       </select>
+      {!live.loading && liveMgrs.length === 0 && <div className="v2-err" style={{ marginTop: 6 }}>No manager is on today’s live session yet.</div>}
       <ErrorBox error={error || live.error} />
     </Modal>
   );
