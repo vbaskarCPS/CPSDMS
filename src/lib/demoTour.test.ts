@@ -24,3 +24,9 @@ describe('the demo tour', () => {
     for (const s of STEPS) { expect(s.why.length).toBeGreaterThan(10); if (s.action) expect(s.check).toBeDefined(); }
   });
 });
+
+describe('what the coach flashes', () => {
+  it('every step the visitor does by hand points at something', () => {
+    for (const s of STEPS) if (s.check && !s.action) expect(s.targets?.length, s.title).toBeGreaterThan(0);
+  });
+});
