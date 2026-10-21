@@ -11,6 +11,8 @@ import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 // on-screen (readable on a tablet) instead of a black screen.
 import ErrorBoundary from './components/ErrorBoundary';
 import WorkerLocationTracker from './components/WorkerLocationTracker';
+import { DemoCoach } from './pages/Demo/DemoCoach';
+const DemoPage = React.lazy(() => import('./pages/Demo/DemoPage'));
 
 // Admin pages - regular imports for reliability (avoid chunk loading issues)
 import EmailTemplates from './pages/Admin/EmailTemplates';
@@ -58,6 +60,7 @@ function App() {
     <React.Suspense fallback={<LoadingFallback />}>
       {/* Sends a logged-in worker's location every 2 min from any screen. */}
       <WorkerLocationTracker />
+      <DemoCoach />
       <Routes>
         {/* Public Routes */}
         {/* The new app is the home page; its sign-in also takes every old login (workers, command
@@ -73,6 +76,9 @@ function App() {
             catch-all below: React Router ranks a static segment above a dynamic
             one, so /digimaps resolves here rather than being read as a slug. */}
         <Route path="/digimaps" element={<DigiMaps />} />
+
+        {/* The public guided tour (a private demo centre per visitor; static segment ranks above /:slug). */}
+        <Route path="/demo" element={<DemoPage />} />
 
         {/* New app — everything under /app/* (static segment ranks above /:slug). */}
         <Route path="/app/*" element={<V2App />} />
