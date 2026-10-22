@@ -36,12 +36,40 @@ const inOverlay = (el: Element) => {
 const textOf = (el: Element) => ((el as HTMLElement).innerText || el.getAttribute('aria-label') || '').trim();
 const onScreen = (t: string) => document.body.innerText.toLowerCase().includes(t.toLowerCase());
 
-export function findTarget(targets: Target[] | undefined): { el: Element; t: Target } | null {
+/** A form field by its label: the label's own input / drop-down / text box, or the row of choice buttons after it. */
+export function findField(label: string): { control: Element; kind: 'value' | 'choice' } | null {
+  const want = label.toLowerCase();
+  const labels = Array.from(document.querySelectorAll('label')).filter(l => !inCoach(l)
+    && ((l as HTMLElement).innerText || '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/^\W+/, '').startsWith(want));
+  for (const l of labels) {
+    const box = l.parentElement;
+    if (!box) continue;
+    const ctl = box.querySelector('input:not([type=hidden]), select, textarea');
+    if (ctl && visible(ctl)) return { control: ctl, kind: 'value' };
+    const next = l.nextElementSibling;
+    if (next && next.querySelector('button') && visible(next)) return { control: next, kind: 'choice' };
+  }
+  return null;
+}
+const hasValue = (el: Element) => String((el as HTMLInputElement).value ?? '').trim() !== '';
+// while someone is typing in a field, it isn't finished: wait until they leave it or pause
+const lastTyped = new WeakMap<Element, number>();
+if (typeof document !== 'undefined') document.addEventListener('input', e => { if (e.target instanceof Element) lastTyped.set(e.target, Date.now()); }, true);
+const filledIn = (el: Element) => hasValue(el) && (document.activeElement !== el || Date.now() - (lastTyped.get(el) || 0) > 1800);
+
+export function findTarget(targets: Target[] | undefined, tapped?: Set<string>): { el: Element; t: Target } | null {
   for (const t of targets || []) {
     if (t.when && !onScreen(t.when)) continue;
+    // a form field: flash it until it's filled in (or, for a row of choices, tapped), then move on
+    if (t.field) {
+      const f = findField(t.field);
+      if (!f) continue;
+      if (f.kind === 'value' ? filledIn(f.control) : tapped?.has(t.field)) continue;
+      return { el: f.control, t };
+    }
     let found: Element | null = null;
     const ok = (e: Element) => !inCoach(e) && visible(e) && (!t.overlay || inOverlay(e));
-    if (t.sel) found = Array.from(document.querySelectorAll(t.sel)).find(ok) || null;
+    if (t.sel) found = Array.from(document.querySelectorAll(t.sel)).find(e => ok(e) && !(t.input && filledIn(e))) || null;
     else if (t.text) {
       const want = t.text.toLowerCase();
       const all = Array.from(document.querySelectorAll(CLICKABLE)).filter(ok);
@@ -70,6 +98,8 @@ export const DemoCoach: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [ring, setRing] = useState<{ x: number; y: number; w: number; h: number; hint: string; big: boolean } | null>(null);
   const checking = useRef(false);
+  // rows of choice buttons the visitor has tapped during this step (they count as filled in)
+  const tapped = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const sync = () => setState(readDemo());
@@ -82,7 +112,20 @@ export const DemoCoach: React.FC = () => {
   const last = !!state && state.step === STEPS.length - 1;
 
   // a new step opens with its explanation
-  useEffect(() => { setExplain(true); setError(null); }, [state?.step]);
+  useEffect(() => { setExplain(true); setError(null); tapped.current = new Set(); }, [state?.step]);
+  // a tap inside a row of choices fills that field in
+  useEffect(() => {
+    const onTap = (e: Event) => {
+      const st = state && STEPS[state.step];
+      for (const t of st?.targets || []) {
+        if (!t.field) continue;
+        const f = findField(t.field);
+        if (f?.kind === 'choice' && e.target instanceof Node && f.control.contains(e.target)) tapped.current.add(t.field);
+      }
+    };
+    document.addEventListener('click', onTap, true);
+    return () => document.removeEventListener('click', onTap, true);
+  }, [state?.step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // follow the thing to flash as the screen changes (menus opening, sheets sliding up)
   useLayoutEffect(() => {
@@ -91,7 +134,7 @@ export const DemoCoach: React.FC = () => {
     const targets = withExits(step.targets).map(t => ({ ...t, hint: fill(t.hint, state.sandbox), when: t.when && fill(t.when, state.sandbox) }));
     let raf = 0; let lastEl: Element | null = null;
     const tick = () => {
-      const f = findTarget(targets);
+      const f = findTarget(targets, tapped.current);
       if (!f) setRing(null);
       else {
         const r = f.el.getBoundingClientRect();

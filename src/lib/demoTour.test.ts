@@ -38,3 +38,14 @@ describe('what the coach flashes', () => {
     expect(fill('route {r2}', { routes: ['DXA01', 'DXA07', 'DXA03'] } as DemoSandbox)).toBe('route 7');
   });
 });
+
+describe('the sale steps walk through every field', () => {
+  it('fields come before the button that saves them', () => {
+    for (const title of ['A yes: save it as pending', 'Do the job and complete it']) {
+      const t = STEPS.find(s => s.title === title)!.targets!;
+      const lastField = Math.max(...t.map((x, i) => (x.field || x.input ? i : -1)));
+      const save = t.findIndex(x => x.text === 'Save Pending' || x.text === 'Save & Complete');
+      expect(lastField, title).toBeGreaterThan(-1); expect(save, title).toBeGreaterThan(lastField);
+    }
+  });
+});
