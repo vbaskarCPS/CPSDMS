@@ -49,6 +49,14 @@ export interface Target {
   hint: string;
   /** Only when it sits in something laid over the screen (a sheet, a pop-up): its way out. */
   overlay?: boolean;
+  /**
+   * A form field to fill, found by its label ("First Name", "Payment Method"). It flashes until it has
+   * a value (a text box, a drop-down) or until it's been tapped (a row of choice buttons), then the
+   * flash moves on to the next field. Fields already filled in are passed over.
+   */
+  field?: string;
+  /** With `sel`: the control is an input that counts as done once it has a value. */
+  input?: boolean;
 }
 const MAP: Target = { sel: '.mapboxgl-canvas', hint: 'On the map' };
 const MENU: Target = { sel: '[aria-label="Menu"]', hint: 'Open the menu' };
@@ -178,18 +186,40 @@ export const STEPS: DemoStep[] = [
   },
   {
     act: 'Worker', role: 'worker', title: 'A yes: save it as pending',
-    what: 'Make a sale: tap a house › Sale, price the driveway, and Save Pending. The house turns yellow.',
+    what: 'Make a sale: tap a house › Sale, then fill in every field as it lights up (name, price, property type, a note) and Save Pending. The house turns yellow.',
     why: 'Pending means sold but not done yet. Your manager sees it straight away, and it holds the house for you.',
     check: async sb => (await count('pending_sales', q => q.eq('command_center_id', sb.center_id).eq('worker_id', sb.worker))) > 0
       || (await count('transactions', q => q.eq('command_center_id', sb.center_id).eq('worker_id', sb.worker))) > 0,
-    targets: [{ text: 'Save Pending', hint: 'Save Pending' }, { text: 'Sale', exact: true, hint: 'Tap Sale' }, { ...MAP, hint: 'Tap a house' }],
+    targets: [
+      { field: 'First Name', hint: 'Customer’s first name (any name)' },
+      { field: 'Last Name', hint: 'Customer’s last name' },
+      { field: 'Driveway Price', hint: 'The price you agreed, e.g. 250' },
+      { field: 'Price', hint: 'The price you agreed, e.g. 250' },
+      { field: 'Property Type', hint: 'Tap the property type' },
+      { sel: 'textarea[placeholder^="Any extra info"]', input: true, hint: 'A note, e.g. “back after 5”' },
+      { text: 'Save Pending', hint: 'Save Pending' }, { text: 'Sale', exact: true, hint: 'Tap Sale' }, { ...MAP, hint: 'Tap a house' },
+    ],
   },
   {
     act: 'Worker', role: 'worker', title: 'Do the job and complete it',
-    what: 'Open the yellow house and complete it: choose how they paid (nothing is charged in the demo) and Save & Complete. The house turns green.',
+    what: 'Open the yellow house and complete it: fill in every field as it lights up (phone, email, price, how they paid; choose Cash, nothing is charged) and Save & Complete. The house turns green.',
     why: 'Green is money in: the job goes on your logsheet, into your stats and onto the office’s books in one tap.',
     check: async sb => (await count('transactions', q => q.eq('command_center_id', sb.center_id).eq('worker_id', sb.worker))) > 0,
-    targets: [{ text: 'Save & Complete', hint: 'Save & Complete' }, { text: 'Payment Method', hint: 'Choose how they paid' }, { text: 'Proceed to Complete', hint: 'Proceed to Complete' }, { text: 'Complete pending sale', hint: 'Complete the sale' }, { ...MAP, hint: 'Tap the yellow house' }],
+    targets: [
+      { field: 'First Name', hint: 'Customer’s first name' },
+      { field: 'Last Name', hint: 'Customer’s last name' },
+      { field: 'House #', hint: 'House number' },
+      { field: 'Street Name', hint: 'Street' },
+      { field: 'Phone', hint: 'Customer’s phone (any 10 digits)' },
+      { field: 'Email', hint: 'Customer’s email (any address)' },
+      { field: 'Total Amount', hint: 'The price, e.g. 250' },
+      { field: 'Driveway Amount', hint: 'The price, e.g. 250' },
+      { field: 'Property Type', hint: 'Tap the property type' },
+      { field: 'Payment Method', hint: 'How they paid: choose Cash for the demo' },
+      { field: 'Bank Email', hint: 'The e-transfer email (any address)' },
+      { text: 'Save & Complete', hint: 'Save & Complete' },
+      { text: 'Proceed to Complete', hint: 'Proceed to Complete' }, { text: 'Complete pending sale', hint: 'Complete the sale' }, { ...MAP, hint: 'Tap the yellow house' },
+    ],
   },
   {
     act: 'Worker', role: 'worker', title: 'Your stats',
