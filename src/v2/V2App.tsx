@@ -21,6 +21,7 @@ import { Payouts, PayoutsLive, PayoutWorker } from './features/workerbook/Payout
 import { Territory } from './features/admin/Territory';
 import { MapBuilderPage } from './features/admin/MapBuilderPage';
 import { AllMapsPage } from './features/admin/AllMapsPage';
+import { BuildHousesPage } from './features/admin/BuildHousesPage';
 import { MapViewerPage } from './features/admin/MapViewerPage';
 import { RMMap } from './features/rm/RMMap';
 import { FloaterMap, FloaterPicker } from './features/rm/Floater';
@@ -92,6 +93,7 @@ const V2Routes: React.FC = () => (
     <Route path="rm/floater/map" element={<BareGuard perm="rm_floater"><FloaterMap /></BareGuard>} />
     <Route path="admin/territory/clients" element={<Guard perm="sa_territory"><ClientLists /></Guard>} />
     <Route path="admin/territory/all-maps" element={<Guard perm="sa_territory"><AllMapsPage /></Guard>} />
+    <Route path="admin/territory/build-houses" element={<Guard perm="sa_territory"><BuildHousesPage /></Guard>} />
     <Route path="admin/territory/builder/:area" element={<BareGuard perm="sa_territory"><MapBuilderPage /></BareGuard>} />
     <Route path="admin/territory/view" element={<BareGuard perm="sa_territory"><MapViewerPage /></BareGuard>} />
     <Route path="clients" element={<Guard><CustomerMap /></Guard>} />

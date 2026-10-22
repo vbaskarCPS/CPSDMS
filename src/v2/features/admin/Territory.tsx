@@ -19,11 +19,12 @@ export const RegionTag: React.FC<{ r: Region | null }> = ({ r }) => r ? <Tag ton
 type Show = 'all' | 'unassigned' | string;
 
 /** The two halves of Territory & Client Data. */
-export const TerritoryTabs: React.FC<{ on: 'maps' | 'all' | 'clients' }> = ({ on }) => (
+export const TerritoryTabs: React.FC<{ on: 'maps' | 'all' | 'clients' | 'build' }> = ({ on }) => (
   <div className="v2-tabs" role="tablist">
     <Link role="tab" aria-selected={on === 'maps'} className={on === 'maps' ? 'on' : ''} to="/app/admin/territory">Map assignments</Link>
     <Link role="tab" aria-selected={on === 'all'} className={on === 'all' ? 'on' : ''} to="/app/admin/territory/all-maps">All maps</Link>
     <Link role="tab" aria-selected={on === 'clients'} className={on === 'clients' ? 'on' : ''} to="/app/admin/territory/clients">Client lists</Link>
+    <Link role="tab" aria-selected={on === 'build'} className={on === 'build' ? 'on' : ''} to="/app/admin/territory/build-houses">Build houses</Link>
   </div>
 );
 

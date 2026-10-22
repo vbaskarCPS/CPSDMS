@@ -1153,11 +1153,15 @@ async function mapboxBatch(body: any[], onBusy?: (secondsLeft: number) => void):
  * Find and fill this route's empty streets (see above). Returns the route's
  * fresh house list when anything was added, otherwise null. Never throws.
  */
-export async function fillRouteGaps(rm: SavedRouteMap, houses?: RouteHouse[], onProgress?: HouseBuildProgress): Promise<RouteHouse[] | null> {
+export async function fillRouteGaps(
+  rm: SavedRouteMap, houses?: RouteHouse[], onProgress?: HouseBuildProgress,
+  /** fromScratch: a route OpenStreetMap had nothing for — find every house with Mapbox (Territory › Build houses). */
+  opts?: { fromScratch?: boolean; maxLookups?: number },
+): Promise<RouteHouse[] | null> {
   const rc = rm.route_code;
   try {
     let current = houses ? houses.filter(h => h.routeCode === rc) : await fetchRouteHouses([rc]);
-    if (!current.length) return null;                 // route not built yet — the builder handles it
+    if (!current.length && !opts?.fromScratch) return null;   // route not built yet — the builder handles it
     const checked = new Set((await fetchStreetChecks([rc])).map(c => c.streetNorm));
     let todo = routeStreetGaps(rm, current).filter(g => !checked.has(g.norm));
     if (!todo.length) return null;
@@ -1178,7 +1182,7 @@ export async function fillRouteGaps(rm: SavedRouteMap, houses?: RouteHouse[], on
     todo = routeStreetGaps(rm, current).filter(g => !checked.has(g.norm));
 
     // 2. Paid, once per street: Mapbox addresses along the street.
-    let budget = GAP_MAX_LOOKUPS_PER_LOAD;
+    let budget = opts?.maxLookups ?? GAP_MAX_LOOKUPS_PER_LOAD;
     for (const g of todo) {
       const pts = sampleStreet(g.lines, GAP_STEP_M, GAP_OFFSET_M);
       if (!pts.length) continue;
