@@ -490,6 +490,7 @@ class CommandCenterService {
     const { data, error } = await supabase
       .from('command_centers')
       .select(CENTER_COLS)
+      .eq('is_demo', false)   // the /demo tour's sandboxes are not centres
       .order('created_at', { ascending: true });
 
     if (error || !data) return [];
