@@ -799,10 +799,12 @@ function routeBbox(rm: SavedRouteMap, padDeg = 0.0009): { s: number; w: number; 
 // ---------------------------------------------------------------------------
 // OPENSTREETMAP (Overpass) — fallback only, where the register has nothing
 // ---------------------------------------------------------------------------
+// OpenStreetMap's address servers, tried in turn, each with a time limit (a server that doesn't
+// answer used to leave the map waiting for minutes). overpass.osm.ch is not used: it only has Switzerland.
 const OVERPASS_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.osm.ch/api/interpreter',
+  { url: 'https://overpass-api.de/api/interpreter', ms: 45000 },
+  { url: 'https://overpass.private.coffee/api/interpreter', ms: 30000 },
+  { url: 'https://overpass.kumi.systems/api/interpreter', ms: 30000 },
 ];
 
 interface OsmElement {
@@ -823,18 +825,23 @@ async function fetchOverpass(bbox: { s: number; w: number; n: number; e: number 
 );
 out body geom;`;
   let lastErr: unknown = null;
-  for (const endpoint of OVERPASS_ENDPOINTS) {
+  for (const { url, ms } of OVERPASS_ENDPOINTS) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
     try {
-      const res = await fetch(endpoint, {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'data=' + encodeURIComponent(query),
+        signal: ctrl.signal,
       });
       if (!res.ok) throw new Error(`Overpass ${res.status}`);
       const json = await res.json();
       return (json.elements || []) as OsmElement[];
     } catch (e) {
       lastErr = e;
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error('All Overpass mirrors failed');
