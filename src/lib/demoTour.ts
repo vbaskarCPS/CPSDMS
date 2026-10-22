@@ -47,20 +47,35 @@ export interface Target {
   when?: string;
   /** What to say in the pill while this is the thing flashing. */
   hint: string;
+  /** Only when it sits in something laid over the screen (a sheet, a pop-up): its way out. */
+  overlay?: boolean;
 }
 const MAP: Target = { sel: '.mapboxgl-canvas', hint: 'On the map' };
 const MENU: Target = { sel: '[aria-label="Menu"]', hint: 'Open the menu' };
-/** Leaving a route for the map: always shown before the map itself, so it lights up whenever a route is open. */
-export const BACK: Target[] = [
+/**
+ * The ways out, tried after a step's own controls and before the map: the back button out of a
+ * route (top left), then the close / cancel of whatever sheet or pop-up is open. So when the
+ * visitor wanders off, the tour points them back instead of at the map behind what they opened.
+ */
+export const OFF_TRACK = 'Off the tour: tap to go back';
+export const EXITS: Target[] = [
   { sel: '[aria-label="Back to map"]', hint: 'Back to the map (top left)' },
   { sel: '[aria-label="Back to all routes"]', hint: 'Back to the map (top left)' },
+  { sel: 'button:has(svg.lucide-x)', overlay: true, hint: OFF_TRACK },
+  { sel: 'button:has(svg.lucide-arrow-left), button:has(svg.lucide-chevron-left)', overlay: true, hint: OFF_TRACK },
+  { text: 'Cancel', exact: true, overlay: true, hint: OFF_TRACK },
+  { text: 'Close', exact: true, overlay: true, hint: OFF_TRACK },
 ];
-/** A step's targets with the way back to the map put in before the map. */
-export function withBack(targets: Target[] | undefined): Target[] {
+/** A step's own controls, then the ways out, then the map. */
+export function withExits(targets: Target[] | undefined): Target[] {
   const t = targets || [];
-  const i = t.findIndex(x => x.sel === MAP.sel);
-  return i < 0 ? [...t, ...BACK] : [...t.slice(0, i), ...BACK, ...t.slice(i)];
+  const own = t.filter(x => x.sel !== MAP.sel), map = t.filter(x => x.sel === MAP.sel);
+  return [...own, ...EXITS, ...map];
 }
+
+/** A key shown in a step's box: what a mark on the map means. */
+export interface LegendRow { mark: 'line' | 'worker' | 'dot' | 'x'; fill?: string; rim?: string; dashed?: boolean; label: string }
+
 export interface DemoStep {
   act: Act;
   role: 'manager' | 'worker';
@@ -79,6 +94,8 @@ export interface DemoStep {
   handoff?: 'worker' | 'manager';
   /** What to flash, most specific first. */
   targets?: Target[];
+  /** A key to the marks on the map, shown in the step's box. */
+  legend?: LegendRow[];
 }
 
 const count = async (table: string, build: (q: any) => any): Promise<number> => {
@@ -89,15 +106,26 @@ const count = async (table: string, build: (q: any) => any): Promise<number> => 
 export const STEPS: DemoStep[] = [
   // ── Act 1: the Route Manager ────────────────────────────────────────────────
   {
-    act: 'Route Manager', role: 'manager', title: 'Your day at a glance',
-    what: 'This is the whole Bridlewood map. Each coloured line is a route; the circles with initials are your workers, two to a cart.',
-    why: 'Everything a manager does during the day starts here: who is where, what is sold, what is left.',
+    act: 'Route Manager', role: 'manager', title: 'Your map: what the marks mean',
+    what: 'This is the whole Bridlewood map. Here’s what you’re looking at:',
+    why: 'Everything a manager does during the day starts here: who is where, who already knows us, what is sold and what is left.',
+    legend: [
+      { mark: 'line', fill: '#e11d48', label: 'A route; each one has its own colour' },
+      { mark: 'worker', label: 'Your workers, two to a cart' },
+      { mark: 'dot', fill: '#6b7280', rim: '#374151', label: 'Callbook client (PCL): has bought sealing from us before' },
+      { mark: 'dot', fill: '#86efac', rim: '#3f6212', label: 'Aeration client: a customer of our other service' },
+      { mark: 'x', label: 'Previously done: a past job on this map' },
+      { mark: 'dot', fill: '#60a5fa', rim: '#000000', label: 'An office booking for today' },
+      { mark: 'dot', fill: '#60a5fa', rim: '#000000', dashed: true, label: 'Sold today, not done yet' },
+      { mark: 'dot', fill: '#60a5fa', rim: '#22c55e', label: 'A booking done today' },
+      { mark: 'dot', fill: '#60a5fa', rim: '#eab308', label: 'A new sale done today' },
+    ],
     targets: [MAP],
   },
   {
     act: 'Route Manager', role: 'manager', title: 'Layers and sharing',
-    what: 'Open Layers. Turn on Previously done and Callbook clients (PCL) to see past customers and callbook clients on the map. Then, under Share with, give Sam Lee Full access.',
-    why: 'Layers show who already knows us. Sharing lets another manager cover for you and see exactly what you see.',
+    what: 'Open Layers. Each kind of mark has a switch, so you can hide what you don’t need. Then, under Share with, give Sam Lee Full access.',
+    why: 'Fewer marks makes a busy map easier to read. Sharing lets another manager cover for you and see exactly what you see.',
     check: async sb => {
       const { data } = await supabase.from('users').select('metadata').eq('user_id', sb.manager).eq('command_center_id', sb.center_id).maybeSingle();
       return !!(data?.metadata?.mapSharing?.access || []).includes(sb.other_manager);

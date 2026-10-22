@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACK, STEPS, actIndex, fill, stepsOfAct, withBack, type DemoSandbox } from './demoTour';
+import { EXITS, OFF_TRACK, STEPS, actIndex, fill, stepsOfAct, withExits, type DemoSandbox } from './demoTour';
 
 describe('the demo tour', () => {
   it('goes manager → worker → manager, with a hand-off at each change of role', () => {
@@ -11,7 +11,7 @@ describe('the demo tour', () => {
     });
   });
   it('Act 1 is the glance, layers and sharing, a cart, then assigning a route', () => {
-    expect(stepsOfAct('Route Manager').map(s => s.title)).toEqual(['Your day at a glance', 'Layers and sharing', 'Open a cart', 'Assign a route']);
+    expect(stepsOfAct('Route Manager').map(s => s.title)).toEqual(['Your map: what the marks mean', 'Layers and sharing', 'Open a cart', 'Assign a route']);
     expect(stepsOfAct('Worker').length).toBe(6);
     expect(actIndex(STEPS.length - 1)).toBe(2);
   });
@@ -21,11 +21,16 @@ describe('the demo tour', () => {
 });
 
 describe('what the coach flashes', () => {
-  it('always offers the way back to the map, ahead of the map itself', () => {
-    const t = withBack(STEPS.find(s => s.title === 'Assign a route')!.targets);
-    const back = t.findIndex(x => x.sel === BACK[0].sel), map = t.findIndex(x => x.sel === '.mapboxgl-canvas');
-    expect(back).toBeGreaterThan(-1); expect(back).toBeLessThan(map);
-    expect(withBack(undefined).map(x => x.sel)).toEqual(BACK.map(x => x.sel));
+  it('offers the ways out (back, then close) after a step’s own controls and before the map', () => {
+    const t = withExits(STEPS.find(s => s.title === 'Assign a route')!.targets);
+    const own = t.findIndex(x => x.text === 'Amara'), back = t.findIndex(x => x.sel === '[aria-label="Back to map"]');
+    const close = t.findIndex(x => x.hint === OFF_TRACK), map = t.findIndex(x => x.sel === '.mapboxgl-canvas');
+    expect(own).toBeLessThan(back); expect(back).toBeLessThan(close); expect(close).toBeLessThan(map);
+    expect(withExits(undefined)).toEqual(EXITS);
+    expect(EXITS.filter(x => x.hint === OFF_TRACK).every(x => x.overlay)).toBe(true);
+  });
+  it('the first step explains the marks on the map', () => {
+    expect(STEPS[0].legend?.length).toBeGreaterThanOrEqual(8);
   });
   it('fills in the sandbox’s route numbers and codes', () => {
     const sb = { routes: ['DXKQM10', 'DXKQM08', 'DXKQM21'], route_nums: [10, 8, 21] } as DemoSandbox;

@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircle2, HelpCircle, Loader, X } from 'lucide-react';
-import { STEPS, actIndex, demoExpired, fill, readDemo, withBack, writeDemo, type DemoState, type Target } from '../../lib/demoTour';
+import { OFF_TRACK, STEPS, actIndex, demoExpired, fill, readDemo, withExits, writeDemo, type DemoState, type LegendRow, type Target } from '../../lib/demoTour';
 import { becomeManager, becomeWorker } from './demoRoles';
 
 const ACTS = ['Route Manager', 'Worker', 'Route Manager again'];
@@ -20,9 +20,18 @@ const inCoach = (el: Element) => !!el.closest('[data-demo-coach]');
 const visible = (el: Element) => {
   const r = el.getBoundingClientRect();
   if (r.width < 4 || r.height < 4) return false;
-  if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) return false;
+  // off to the side of the screen is gone; above or below can be scrolled to
+  if (r.right < 0 || r.left > window.innerWidth) return false;
   const cs = getComputedStyle(el);
   return cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0.05;
+};
+/** In something laid over the screen (a sheet, a pop-up, a modal). */
+const inOverlay = (el: Element) => {
+  for (let e: Element | null = el.parentElement; e && e !== document.body; e = e.parentElement) {
+    const cs = getComputedStyle(e);
+    if (cs.position === 'fixed' && e.getBoundingClientRect().height > 80) return true;
+  }
+  return false;
 };
 const textOf = (el: Element) => ((el as HTMLElement).innerText || el.getAttribute('aria-label') || '').trim();
 const onScreen = (t: string) => document.body.innerText.toLowerCase().includes(t.toLowerCase());
@@ -31,10 +40,11 @@ export function findTarget(targets: Target[] | undefined): { el: Element; t: Tar
   for (const t of targets || []) {
     if (t.when && !onScreen(t.when)) continue;
     let found: Element | null = null;
-    if (t.sel) found = Array.from(document.querySelectorAll(t.sel)).find(e => !inCoach(e) && visible(e)) || null;
+    const ok = (e: Element) => !inCoach(e) && visible(e) && (!t.overlay || inOverlay(e));
+    if (t.sel) found = Array.from(document.querySelectorAll(t.sel)).find(ok) || null;
     else if (t.text) {
       const want = t.text.toLowerCase();
-      const all = Array.from(document.querySelectorAll(CLICKABLE)).filter(e => !inCoach(e) && visible(e));
+      const all = Array.from(document.querySelectorAll(CLICKABLE)).filter(ok);
       const hits = all.filter(e => {
         const tx = textOf(e).toLowerCase();
         return t.exact ? tx === want || tx.split('\n')[0].trim() === want : tx.includes(want);
@@ -78,7 +88,7 @@ export const DemoCoach: React.FC = () => {
   useLayoutEffect(() => {
     if (!step || !state) { setRing(null); return; }
     // the way back to the map is always in the list, ahead of the map itself
-    const targets = withBack(step.targets).map(t => ({ ...t, hint: fill(t.hint, state.sandbox), when: t.when && fill(t.when, state.sandbox) }));
+    const targets = withExits(step.targets).map(t => ({ ...t, hint: fill(t.hint, state.sandbox), when: t.when && fill(t.when, state.sandbox) }));
     let raf = 0; let lastEl: Element | null = null;
     const tick = () => {
       const f = findTarget(targets);
@@ -88,7 +98,7 @@ export const DemoCoach: React.FC = () => {
         const big = r.width * r.height > window.innerWidth * window.innerHeight * 0.4;   // the whole map
         setRing(prev => (prev && prev.x === r.left && prev.y === r.top && prev.w === r.width && prev.h === r.height && prev.hint === f.t.hint) ? prev
           : { x: r.left, y: r.top, w: r.width, h: r.height, hint: f.t.hint, big });
-        if (f.el !== lastEl && !big) { lastEl = f.el; (f.el as HTMLElement).scrollIntoView?.({ block: 'nearest', inline: 'nearest' }); }
+        if (f.el !== lastEl && !big) { lastEl = f.el; (f.el as HTMLElement).scrollIntoView?.({ block: 'center', inline: 'nearest' }); }
       }
       raf = window.setTimeout(tick, 350) as unknown as number;
     };
@@ -178,7 +188,9 @@ export const DemoCoach: React.FC = () => {
           <div className="text-white font-bold text-lg leading-snug mt-1">{fill(step.title, state.sandbox)}</div>
           <p className="text-[15px] text-gray-100 mt-1.5 leading-snug">{fill(step.what, state.sandbox)}</p>
           <p className="text-[13px] text-gray-400 mt-1.5 leading-snug"><span className="text-gray-300 font-semibold">Why: </span>{fill(step.why, state.sandbox)}</p>
-          {ring && !ring.big && <p className="text-[13px] text-amber-200 mt-1.5">The flashing button is where to start.</p>}
+          {step.legend && <Legend rows={step.legend} />}
+          {ring && !ring.big && ring.hint !== OFF_TRACK && <p className="text-[13px] text-amber-200 mt-1.5">The flashing button is where to start.</p>}
+          {ring && ring.hint === OFF_TRACK && <p className="text-[13px] text-amber-200 mt-1.5">You’ve opened something off the tour: the flashing button takes you back.</p>}
           <Row>
             {handoffNow ? (
               <Primary disabled={!!busy} onClick={() => go(state.step + 1)}>{busy ? <><Loader size={14} className="animate-spin" /> {busy}</> : step.handoff === 'worker' ? 'Switch to the worker’s phone' : 'Back to the manager'}</Primary>
@@ -226,7 +238,9 @@ const Flash: React.FC<{ ring: { x: number; y: number; w: number; h: number; big:
   }
   const pad = 8;
   const below = ring.y + ring.h / 2 < window.innerHeight / 2;
-  const cx = Math.min(Math.max(ring.x + ring.w / 2, 90), window.innerWidth - 90);
+  // keep the whole label on screen: estimate its half-width from its length
+  const half = Math.min(ring.hint.length * 4.2 + 22, window.innerWidth / 2 - 8);
+  const cx = Math.min(Math.max(ring.x + ring.w / 2, half + 8), window.innerWidth - half - 8);
   return (
     <>
       {/* everything else dimmed, the control lit with a thick pulsing ring */}
@@ -269,6 +283,21 @@ const Pill: React.FC<{ label: string; stepNo: number; done: boolean; onHelp: () 
     </button>
     {onNext && <button type="button" onClick={onNext} aria-label="Next step" className="px-3 py-1.5 rounded-full bg-emerald-600 text-white text-xs font-bold">Next</button>}
   </div>
+);
+const Legend: React.FC<{ rows: LegendRow[] }> = ({ rows }) => (
+  <ul className="mt-2 space-y-1.5" aria-label="What the marks mean">
+    {rows.map((r, i) => (
+      <li key={i} className="flex items-center gap-2.5 text-[13px] text-gray-100 leading-tight">
+        <span className="w-7 flex-shrink-0 flex items-center justify-center" aria-hidden>
+          {r.mark === 'line' && <span style={{ display: 'block', width: 26, height: 4, borderRadius: 2, background: r.fill }} />}
+          {r.mark === 'worker' && <span style={{ width: 22, height: 22, borderRadius: 11, background: '#1f2937', border: '2px solid #fff', color: '#fff', fontSize: 9, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>JR</span>}
+          {r.mark === 'dot' && <span style={{ width: 16, height: 16, borderRadius: 8, boxSizing: 'border-box', background: r.fill, border: `${r.dashed ? 2 : 3}px ${r.dashed ? 'dashed' : 'solid'} ${r.rim || 'transparent'}` }} />}
+          {r.mark === 'x' && <span style={{ color: '#000', background: '#e5e7eb', borderRadius: 4, width: 16, height: 16, fontSize: 13, fontWeight: 900, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</span>}
+        </span>
+        <span>{r.label}</span>
+      </li>
+    ))}
+  </ul>
 );
 const Row: React.FC<{ children: React.ReactNode }> = ({ children }) => <div className="mt-3 flex flex-wrap items-center gap-2">{children}</div>;
 const Primary: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = p => (
