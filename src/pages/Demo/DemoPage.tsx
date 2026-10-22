@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { Loader, Map, Smartphone, Users } from 'lucide-react';
 import { STEPS, demoExpired, readDemo, writeDemo } from '../../lib/demoTour';
 import { becomeManager, becomeWorker, startDemo } from './demoRoles';
+import { prepareDemoMap } from './prepareMap';
 
 const DemoPage: React.FC = () => {
   const nav = useNavigate();
@@ -17,6 +18,9 @@ const DemoPage: React.FC = () => {
   const start = async () => {
     setBusy('Setting up your demo…'); setError(null);
     try {
+      // the first Start builds any Bridlewood route not built yet; after that this is a quick check
+      await prepareDemoMap(msg => setBusy(msg)).catch(e => console.warn('[demo] map preparation skipped:', e));
+      setBusy('Setting up your demo…');
       await startDemo();
       window.dispatchEvent(new Event('cpsdms:demo'));
       nav('/rm-logbook');
@@ -61,7 +65,7 @@ const DemoPage: React.FC = () => {
           <li>Back as the manager: see the sale land, check the crew’s knocking.</li>
         </ul>
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <button type="button" onClick={start} disabled={!!busy} className="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-bold flex items-center gap-2">
+          <button type="button" onClick={start} disabled={!!busy} className="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-bold flex items-center gap-2 text-left max-w-full">
             {busy ? <><Loader size={16} className="animate-spin" /> {busy}</> : 'Start the tour'}
           </button>
           {existing && !busy && (
