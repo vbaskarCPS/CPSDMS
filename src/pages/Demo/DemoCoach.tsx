@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircle2, HelpCircle, Loader, X } from 'lucide-react';
-import { STEPS, actIndex, demoExpired, readDemo, writeDemo, type DemoState, type Target } from '../../lib/demoTour';
+import { STEPS, actIndex, demoExpired, fill, readDemo, withBack, writeDemo, type DemoState, type Target } from '../../lib/demoTour';
 import { becomeManager, becomeWorker } from './demoRoles';
 
 const ACTS = ['Route Manager', 'Worker', 'Route Manager again'];
@@ -76,10 +76,12 @@ export const DemoCoach: React.FC = () => {
 
   // follow the thing to flash as the screen changes (menus opening, sheets sliding up)
   useLayoutEffect(() => {
-    if (!step?.targets?.length) { setRing(null); return; }
+    if (!step || !state) { setRing(null); return; }
+    // the way back to the map is always in the list, ahead of the map itself
+    const targets = withBack(step.targets).map(t => ({ ...t, hint: fill(t.hint, state.sandbox), when: t.when && fill(t.when, state.sandbox) }));
     let raf = 0; let lastEl: Element | null = null;
     const tick = () => {
-      const f = findTarget(step.targets);
+      const f = findTarget(targets);
       if (!f) setRing(null);
       else {
         const r = f.el.getBoundingClientRect();
@@ -92,7 +94,7 @@ export const DemoCoach: React.FC = () => {
     };
     tick();
     return () => clearTimeout(raf);
-  }, [step, loc.pathname]);
+  }, [step, loc.pathname, state?.sandbox.code]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // watch the data for the current step; when it's done, move on and explain the next one
   useEffect(() => {
@@ -173,9 +175,9 @@ export const DemoCoach: React.FC = () => {
               onClick={() => { if (window.confirm('End the tour? Your demo stays open for three hours if you want to keep exploring.')) save(null); }}><X size={16} /></button>
           </div>
           {justDone && <div className="mt-1 text-emerald-300 text-sm font-bold flex items-center gap-1.5"><CheckCircle2 size={16} /> Nice — done.</div>}
-          <div className="text-white font-bold text-lg leading-snug mt-1">{step.title}</div>
-          <p className="text-[15px] text-gray-100 mt-1.5 leading-snug">{step.what}</p>
-          <p className="text-[13px] text-gray-400 mt-1.5 leading-snug"><span className="text-gray-300 font-semibold">Why: </span>{step.why}</p>
+          <div className="text-white font-bold text-lg leading-snug mt-1">{fill(step.title, state.sandbox)}</div>
+          <p className="text-[15px] text-gray-100 mt-1.5 leading-snug">{fill(step.what, state.sandbox)}</p>
+          <p className="text-[13px] text-gray-400 mt-1.5 leading-snug"><span className="text-gray-300 font-semibold">Why: </span>{fill(step.why, state.sandbox)}</p>
           {ring && !ring.big && <p className="text-[13px] text-amber-200 mt-1.5">The flashing button is where to start.</p>}
           <Row>
             {handoffNow ? (
@@ -198,7 +200,7 @@ export const DemoCoach: React.FC = () => {
         </Card>
       ) : (
         <Pill
-          label={ok && step.check ? 'Done' : (ring?.hint || step.title)}
+          label={ok && step.check ? 'Done' : (ring?.hint || fill(step.title, state.sandbox))}
           stepNo={state.step + 1}
           done={ok}
           onHelp={() => setExplain(true)}
@@ -212,23 +214,40 @@ export const DemoCoach: React.FC = () => {
 // ── pieces ───────────────────────────────────────────────────────────────────
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-const Flash: React.FC<{ ring: { x: number; y: number; w: number; h: number; big: boolean } }> = ({ ring }) => {
+const Flash: React.FC<{ ring: { x: number; y: number; w: number; h: number; big: boolean; hint: string } }> = ({ ring }) => {
   if (ring.big) {
-    // the whole map: a glowing edge rather than a ring round the screen
-    return <div aria-hidden className="demo-flash-edge" style={{ position: 'fixed', left: ring.x, top: ring.y, width: ring.w, height: ring.h, pointerEvents: 'none', zIndex: 999, borderRadius: 4 }} />;
+    // the whole map: a thick glowing edge and a label in the middle, no dimming
+    return (
+      <>
+        <div aria-hidden className="demo-flash-edge" style={{ position: 'fixed', left: ring.x, top: ring.y, width: ring.w, height: ring.h, pointerEvents: 'none', zIndex: 999 }} />
+        <div aria-hidden className="demo-bubble" style={{ position: 'fixed', left: ring.x + ring.w / 2, top: ring.y + ring.h * 0.42, transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 1000 }}>{ring.hint}</div>
+      </>
+    );
   }
-  const pad = 6;
+  const pad = 8;
+  const below = ring.y + ring.h / 2 < window.innerHeight / 2;
+  const cx = Math.min(Math.max(ring.x + ring.w / 2, 90), window.innerWidth - 90);
   return (
     <>
-      <div aria-hidden className="demo-flash" style={{ position: 'fixed', left: ring.x - pad, top: ring.y - pad, width: ring.w + pad * 2, height: ring.h + pad * 2, pointerEvents: 'none', zIndex: 999, borderRadius: 12 }} />
+      {/* everything else dimmed, the control lit with a thick pulsing ring */}
+      <div aria-hidden className="demo-spot" style={{ position: 'fixed', left: ring.x - pad, top: ring.y - pad, width: ring.w + pad * 2, height: ring.h + pad * 2, pointerEvents: 'none', zIndex: 999, borderRadius: 14 }} />
+      <div aria-hidden className="demo-flash" style={{ position: 'fixed', left: ring.x - pad, top: ring.y - pad, width: ring.w + pad * 2, height: ring.h + pad * 2, pointerEvents: 'none', zIndex: 999, borderRadius: 14 }} />
+      <div aria-hidden className={`demo-bubble ${below ? 'demo-bubble-down' : 'demo-bubble-up'}`}
+        style={{ position: 'fixed', left: cx, top: below ? ring.y + ring.h + pad + 12 : ring.y - pad - 12, transform: below ? 'translateX(-50%)' : 'translate(-50%, -100%)', pointerEvents: 'none', zIndex: 1000 }}>
+        {below ? '☝ ' : '👇 '}{ring.hint}
+      </div>
     </>
   );
 };
 const FLASH_CSS = `
-@keyframes demoFlash { 0%,100% { box-shadow: 0 0 0 3px rgba(250,204,21,.95), 0 0 0 0 rgba(250,204,21,.6); } 50% { box-shadow: 0 0 0 3px rgba(250,204,21,.95), 0 0 0 14px rgba(250,204,21,0); } }
-@keyframes demoEdge { 0%,100% { box-shadow: inset 0 0 0 3px rgba(250,204,21,.85); } 50% { box-shadow: inset 0 0 0 3px rgba(250,204,21,.15); } }
-.demo-flash { animation: demoFlash 1.1s ease-in-out infinite; }
-.demo-flash-edge { animation: demoEdge 1.4s ease-in-out infinite; }
+@keyframes demoFlash { 0%,100% { box-shadow: 0 0 0 5px #facc15, 0 0 18px 6px rgba(250,204,21,.9); } 50% { box-shadow: 0 0 0 5px #facc15, 0 0 0 22px rgba(250,204,21,0); } }
+@keyframes demoEdge { 0%,100% { box-shadow: inset 0 0 0 7px rgba(250,204,21,1), inset 0 0 40px rgba(250,204,21,.45); } 50% { box-shadow: inset 0 0 0 7px rgba(250,204,21,.35), inset 0 0 10px rgba(250,204,21,.1); } }
+@keyframes demoBob { 0%,100% { margin-top: 0; } 50% { margin-top: 6px; } }
+.demo-spot { box-shadow: 0 0 0 9999px rgba(0,0,0,.6); }
+.demo-flash { animation: demoFlash 0.9s ease-in-out infinite; }
+.demo-flash-edge { animation: demoEdge 1.1s ease-in-out infinite; }
+.demo-bubble { background: #facc15; color: #111; font: 700 14px/1.2 system-ui, sans-serif; padding: 8px 12px; border-radius: 999px; white-space: nowrap; max-width: 80vw; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
+.demo-bubble-down, .demo-bubble-up { animation: demoBob 0.9s ease-in-out infinite; }
 `;
 
 const Card: React.FC<{ children: React.ReactNode; top?: boolean }> = ({ children, top }) => (

@@ -103,6 +103,7 @@ export async function completeSetup(code: string, password: string): Promise<str
 export async function listCenters(): Promise<Center[]> {
   return must(await db.from('command_centers')
     .select('id, display_name, region, services, cn_prefix, local_number, review_link, tax_name, tax_rate, is_active')
+    .eq('is_demo', false)   // the /demo tour's sandboxes are not centres
     .order('display_name')) as Center[];
 }
 

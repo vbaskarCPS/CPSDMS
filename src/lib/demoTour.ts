@@ -11,7 +11,16 @@ export const DEMO_KEY = 'cps.demo';
 export interface DemoSandbox {
   code: string; center_id: string; date: string;
   manager: string; other_manager: string; worker: string; partner: string; mover: string; late: string;
+  /** The tour's three routes: cart 1's (the visitor's), cart 2's, and the one to assign. */
   routes: string[]; carts: string[]; booking: string;
+  /** Their route numbers, for the words on screen ("route 21"). */
+  route_nums?: number[];
+}
+
+/** Fill a step's words in for this sandbox: {r1} {r2} {r3} are the tour's route numbers, {c1} {c2} {c3} their codes. */
+export function fill(text: string, sb: DemoSandbox): string {
+  const num = (i: number) => String(sb.route_nums?.[i] ?? Number((sb.routes[i] || '').slice(-2)));
+  return text.replace(/\{r([123])\}/g, (_, i) => num(Number(i) - 1)).replace(/\{c([123])\}/g, (_, i) => sb.routes[Number(i) - 1] || '');
 }
 export interface DemoState { sandbox: DemoSandbox; step: number; role: 'manager' | 'worker'; startedAt: number; done: number[] }
 
@@ -41,6 +50,17 @@ export interface Target {
 }
 const MAP: Target = { sel: '.mapboxgl-canvas', hint: 'On the map' };
 const MENU: Target = { sel: '[aria-label="Menu"]', hint: 'Open the menu' };
+/** Leaving a route for the map: always shown before the map itself, so it lights up whenever a route is open. */
+export const BACK: Target[] = [
+  { sel: '[aria-label="Back to map"]', hint: 'Back to the map (top left)' },
+  { sel: '[aria-label="Back to all routes"]', hint: 'Back to the map (top left)' },
+];
+/** A step's targets with the way back to the map put in before the map. */
+export function withBack(targets: Target[] | undefined): Target[] {
+  const t = targets || [];
+  const i = t.findIndex(x => x.sel === MAP.sel);
+  return i < 0 ? [...t, ...BACK] : [...t.slice(0, i), ...BACK, ...t.slice(i)];
+}
 export interface DemoStep {
   act: Act;
   role: 'manager' | 'worker';
@@ -67,41 +87,17 @@ const count = async (table: string, build: (q: any) => any): Promise<number> => 
 };
 
 export const STEPS: DemoStep[] = [
+  // ── Act 1: the Route Manager ────────────────────────────────────────────────
   {
     act: 'Route Manager', role: 'manager', title: 'Your day at a glance',
-    what: 'Look around the map. Each colour is a route; the circles with initials are your workers, two to a cart.',
-    where: 'This is the Route Manager map. On a phone, the menu button opens Team, Pins, Layers and more.',
+    what: 'This is the whole Bridlewood map. Each coloured line is a route; the circles with initials are your workers, two to a cart.',
     why: 'Everything a manager does during the day starts here: who is where, what is sold, what is left.',
     targets: [MAP],
   },
   {
-    act: 'Route Manager', role: 'manager', title: 'Assign a route',
-    what: 'Cart 3 (Amara and Liam) has no route yet. Tap the uncoloured route 03 on the map, choose Assign Route, and pick cart 3.',
-    where: 'Tap the route’s outline on the map; the route card has the Assign button.',
-    why: 'A worker only sees houses on routes assigned to them, so an unassigned cart can’t knock.',
-    check: async sb => (await count('routes', q => q.eq('route_code', sb.routes[2]).eq('command_center_id', sb.center_id).not('assigned_worker_ids', 'eq', '{}'))) > 0,
-    targets: [{ when: 'Assign Route', text: 'Amara', hint: 'Pick cart 3: Amara & Liam' }, { text: 'Assign', exact: true, hint: 'Tap Assign on route 03' }, { sel: '[aria-label="Assign route"]', hint: 'Tap Assign' }, { ...MAP, hint: 'Tap route 03 on the map' }],
-  },
-  {
-    act: 'Route Manager', role: 'manager', title: 'Open a cart',
-    what: 'Tap cart 1 (Jordan and Priya). You’ll see who’s on it, its route, and the numbers so far: steps, equiv, gross.',
-    where: 'Carts are the circles on the map and the cards in Team.',
-    why: 'This is the live scoreboard for each pair; the same numbers feed their payslip at the end of the day.',
-    targets: [{ text: 'Jordan', hint: 'Tap cart 1: Jordan & Priya' }, MAP],
-  },
-  {
-    act: 'Route Manager', role: 'manager', title: 'Manage Team: move a worker',
-    what: 'Vidal is on cart 2 but should be with Jordan. Open Team, choose Vidal, and move him to cart 1.',
-    where: 'Menu › Team › tap Vidal › Move to an existing cart.',
-    why: 'Pairs change through the day (no-shows, late arrivals). Moving someone here moves their route, their map and their pay split with them.',
-    check: async sb => (await count('logsheet_sessions', q => q.eq('id', sb.carts[0]).contains('team_worker_ids', [sb.mover]))) > 0,
-    targets: [{ when: 'Move Vidal', text: 'Jordan', hint: 'Move him to Jordan’s cart' }, { when: 'Pick a worker to move', text: 'Vidal', hint: 'Pick Vidal' }, { sel: '[title="Manage Team"]', hint: 'Open Manage Team' }, { text: 'Team', exact: true, hint: 'Tap Team' }, MENU],
-  },
-  {
     act: 'Route Manager', role: 'manager', title: 'Layers and sharing',
-    what: 'Open Layers. Turn on Previously done and Callbook clients (PCL). Then, under Share with, give Sam Lee Full access.',
-    where: 'Menu › Layers. Sharing is at the bottom of the Layers panel.',
-    why: 'Layers show past customers and callbook clients on your map. Sharing lets another manager cover for you and see exactly what you see.',
+    what: 'Open Layers. Turn on Previously done and Callbook clients (PCL) to see past customers and callbook clients on the map. Then, under Share with, give Sam Lee Full access.',
+    why: 'Layers show who already knows us. Sharing lets another manager cover for you and see exactly what you see.',
     check: async sb => {
       const { data } = await supabase.from('users').select('metadata').eq('user_id', sb.manager).eq('command_center_id', sb.center_id).maybeSingle();
       return !!(data?.metadata?.mapSharing?.access || []).includes(sb.other_manager);
@@ -109,88 +105,87 @@ export const STEPS: DemoStep[] = [
     targets: [{ sel: '[aria-label="Full access for Sam Lee"]', hint: 'Give Sam Lee full access' }, { text: 'Layers', exact: true, hint: 'Tap Layers' }, MENU],
   },
   {
-    act: 'Route Manager', role: 'manager', title: 'A late arrival',
-    what: 'Chris Martine just turned up. In the real app the office adds him in Workerbook › Day › Late arrival; press the button to do that here, then find him on the map on a cart of his own.',
-    why: 'Late arrivals go straight onto the live map so they can start knocking, and the manager pairs them up from Team.',
-    action: { label: 'Add Chris as a late arrival', run: async sb => { const { error } = await supabase.rpc('app_demo_late_arrival', { p_code: sb.code }); if (error) throw new Error(error.message); } },
-    check: async sb => (await count('users', q => q.eq('user_id', sb.late).eq('command_center_id', sb.center_id))) > 0,
-    handoff: 'worker',
-    targets: [MAP],
+    act: 'Route Manager', role: 'manager', title: 'Open a cart',
+    what: 'Tap cart 1 (Jordan and Priya) on route {r1}. You’ll see who’s on it, its houses, and the numbers so far: steps, equiv, gross. Then come back to the map.',
+    why: 'This is the live scoreboard for each pair; the same numbers feed their payslip at the end of the day.',
+    targets: [{ text: 'Jordan', hint: 'Tap cart 1: Jordan & Priya' }, { ...MAP, hint: 'Tap cart 1 on the map' }],
   },
   {
+    act: 'Route Manager', role: 'manager', title: 'Assign a route',
+    what: 'Cart 3 (Amara and Liam) has no route yet. Tap route {r3} on the map, tap Assign, and pick cart 3.',
+    why: 'A worker only sees houses on routes assigned to them, so an unassigned cart can’t knock.',
+    check: async sb => (await count('routes', q => q.eq('route_code', sb.routes[2]).eq('command_center_id', sb.center_id).not('assigned_worker_ids', 'eq', '{}'))) > 0,
+    targets: [
+      { when: 'Assign Route', text: 'Amara', hint: 'Pick cart 3: Amara & Liam' },
+      { when: '{c3}', sel: '[aria-label="Assign route"]', hint: 'Tap Assign' },
+      { when: '{c3}', text: 'Assign', exact: true, hint: 'Tap Assign' },
+      { ...MAP, hint: 'Tap route {r3} on the map' },
+    ],
+    handoff: 'worker',
+  },
+  // ── Act 2: the worker ───────────────────────────────────────────────────────
+  {
     act: 'Worker', role: 'worker', title: 'Your route, and what the colours mean',
-    what: 'You’re Jordan now, on route 01. Before you knock, read the colours: purple = a past customer of ours; blue = a callbook (PCL) client; lime = a client of our other service (aeration). Grey, red and orange are your partner Priya’s knocks: not home, no, go back. Pink is invalid.',
-    where: 'Tap any coloured house to see its history.',
+    what: 'You’re Jordan now, on route {r1}. Before you knock, read the colours: purple = a past customer of ours; blue = a callbook (PCL) client; lime = a client of our other service (aeration). Grey, red and orange are your partner Priya’s knocks: not home, no, go back. Pink is invalid.',
     why: 'Past customers and callbook clients already know us: knock them first and lead with the history.',
     targets: [MAP],
   },
   {
     act: 'Worker', role: 'worker', title: 'Knock three doors',
-    what: 'Tap a grey-free house and mark it Not home. Mark another No. Mark a third Go back with a note (“back after 5”).',
-    where: 'Tap a house › the buttons at the bottom of its card.',
+    what: 'Tap a black house and mark it Not home. Mark another No. Mark a third Go back.',
     why: 'Every knock is shared live: your partner, your manager and tomorrow’s crew all see it, so nobody re-knocks a no.',
     check: async sb => {
       const { data } = await supabase.from('house_dispositions').select('status').eq('route_code', sb.routes[0]).eq('worker_id', sb.worker);
       const s = new Set((data || []).map((r: any) => r.status));
       return s.has('not_home') && s.has('no') && s.has('go_back');
     },
-    targets: [{ text: 'Not home', exact: true, hint: 'Not home, then No and Go back on other houses' }, { ...MAP, hint: 'Tap a house' }],
+    targets: [{ text: 'Not home', exact: true, hint: 'Not home here, then No and Go back on two others' }, { ...MAP, hint: 'Tap a house' }],
   },
   {
     act: 'Worker', role: 'worker', title: 'Mark an invalid',
-    what: 'Find a house you couldn’t do: a fresh seal from another company, a concrete driveway, or one that can’t be done today (cars on it, gravel). Mark it Invalid and say why.',
-    where: 'Tap the house › Invalid.',
-    why: 'Invalid takes the house off everyone’s list for the season, so no one on the team wastes a knock on it.',
+    what: 'A house you can’t do: freshly sealed by another company, a concrete driveway, or one that can’t be done today (cars on it). Mark it Invalid and say why.',
+    why: 'Invalid takes the house off everyone’s list, so no one on the team wastes a knock on it.',
     check: async sb => (await count('house_dispositions', q => q.eq('route_code', sb.routes[0]).eq('worker_id', sb.worker).eq('status', 'invalid'))) > 0,
     targets: [{ text: 'Invalid', exact: true, hint: 'Tap Invalid and say why' }, { ...MAP, hint: 'Tap a house you can’t do' }],
   },
   {
     act: 'Worker', role: 'worker', title: 'A yes: save it as pending',
-    what: 'Pick a house and make the sale: tap the house › Sale, price the driveway, and save it as pending. Watch the house turn yellow.',
-    where: 'Tap the house › Sale (the yellow button).',
-    why: 'Pending means sold but not done yet. Your manager sees it on the map straight away, and it holds the house for you.',
+    what: 'Make a sale: tap a house › Sale, price the driveway, and Save Pending. The house turns yellow.',
+    why: 'Pending means sold but not done yet. Your manager sees it straight away, and it holds the house for you.',
     check: async sb => (await count('pending_sales', q => q.eq('command_center_id', sb.center_id).eq('worker_id', sb.worker))) > 0
       || (await count('transactions', q => q.eq('command_center_id', sb.center_id).eq('worker_id', sb.worker))) > 0,
     targets: [{ text: 'Save Pending', hint: 'Save Pending' }, { text: 'Sale', exact: true, hint: 'Tap Sale' }, { ...MAP, hint: 'Tap a house' }],
   },
   {
     act: 'Worker', role: 'worker', title: 'Do the job and complete it',
-    what: 'Open the yellow house and complete the job: take the payment (cash, e-transfer or card — nothing is charged in the demo) and log it. The house turns green.',
-    where: 'Tap the yellow house › Complete.',
-    why: 'Green is money in: the job goes on your logsheet, into your stats and onto the office’s books, all from one tap.',
+    what: 'Open the yellow house and complete it: choose how they paid (nothing is charged in the demo) and Save & Complete. The house turns green.',
+    why: 'Green is money in: the job goes on your logsheet, into your stats and onto the office’s books in one tap.',
     check: async sb => (await count('transactions', q => q.eq('command_center_id', sb.center_id).eq('worker_id', sb.worker))) > 0,
     targets: [{ text: 'Save & Complete', hint: 'Save & Complete' }, { text: 'Payment Method', hint: 'Choose how they paid' }, { text: 'Proceed to Complete', hint: 'Proceed to Complete' }, { text: 'Complete pending sale', hint: 'Complete the sale' }, { ...MAP, hint: 'Tap the yellow house' }],
   },
   {
     act: 'Worker', role: 'worker', title: 'Your stats',
-    what: 'Open your stats: steps, equiv and gross for the day, and the pending booking the office sent you (Grace Whitfield, yellow on the map) that you’d do next.',
-    where: 'The stats bar at the top, or Menu › Stats.',
-    why: 'Workers are paid on equiv, so they can see their day add up as they go.',
-    handoff: 'manager',
+    what: 'Open Today’s Stats: steps, equiv and gross for the day.',
+    why: 'Workers are paid on equiv, so they watch their day add up as they go.',
     targets: [{ text: 'Today’s Stats', hint: 'Open Today’s Stats' }, { text: "Today's Stats", hint: 'Open Today’s Stats' }, MENU],
+    handoff: 'manager',
   },
+  // ── Act 3: back to the Route Manager ───────────────────────────────────────
   {
     act: 'Route Manager again', role: 'manager', title: 'The sale on your map',
-    what: 'You’re Alex again. Find the green house on route 01 and open cart 1: the job you just logged is in its numbers.',
-    where: 'Menu › Team › cart 1, or tap the cart on the map.',
+    what: 'You’re Alex again. The green house on route {r1} is the job you just logged; open cart 1 and it’s in their numbers.',
     why: 'Managers never have to ask “how are you doing?”: every sale lands on the map and in the cart’s totals the moment it’s logged.',
     targets: [{ text: 'Jordan', hint: 'Open cart 1' }, MAP],
   },
   {
     act: 'Route Manager again', role: 'manager', title: 'Check a worker’s knocking',
-    what: 'Open cart 1 and look at today’s knocks: how many doors, nos, go-backs, invalids, and how much of the route is covered.',
-    where: 'The cart card › Today.',
+    what: 'In cart 1, look at today’s knocks: doors, nos, go-backs, invalids, and how much of the route is covered.',
     why: 'This is how a manager spots a crew that is coasting, or one that needs a fresh route, without driving over.',
     targets: [{ text: 'Today', exact: true, hint: 'Today’s knocks' }, { text: 'Jordan', hint: 'Open cart 1' }, MAP],
   },
   {
-    act: 'Route Manager again', role: 'manager', title: 'Day’s end',
-    what: 'At the end of the day the office closes the day in Workerbook: every cart’s sales become payout lines and payslips, exactly as the carts show them now. In this demo the day stays open.',
-    why: 'Nothing is re-keyed: what the workers logged is what gets paid.',
-  },
-  {
     act: 'Route Manager again', role: 'manager', title: 'That’s the tour',
-    what: 'You’ve assigned a route, moved a worker, shared a map, added a late arrival, knocked doors, logged a sale and checked the numbers. Keep exploring this demo (it lasts three hours), or start a fresh one.',
+    what: 'You’ve read the map, shared it, assigned a route, knocked doors, logged a sale and watched it land. At day’s end the office closes the day and these carts become payslips, exactly as they show now. Keep exploring this demo (it lasts three hours), or start a fresh one.',
     why: 'One app, from the knock to the payslip.',
   },
 ];

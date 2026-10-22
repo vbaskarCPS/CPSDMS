@@ -87,7 +87,7 @@ export async function adminStats(opts: { users: boolean; territory: boolean }): 
     opts.users && (async () => {
       const [u, c, m] = await Promise.all([
         db.from('app_users').select('id', { count: 'exact', head: true }).eq('is_active', true),
-        db.from('command_centers').select('id', { count: 'exact', head: true }).eq('is_active', true),
+        db.from('command_centers').select('id', { count: 'exact', head: true }).eq('is_active', true).eq('is_demo', false),
         db.from('user_permissions').select('user_id', { count: 'exact', head: true }).eq('permission', 'route_manager'),
       ]);
       out.users = { active: count(u), centers: count(c), managers: count(m) };

@@ -56,7 +56,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const cols = 'id, display_name, region, services, cn_prefix, local_number, review_link, tax_name, tax_rate, is_active';
       let list: Center[];
       if (prof.is_super_admin) {
-        list = must(await db.from('command_centers').select(cols).order('display_name')) as Center[];
+        list = must(await db.from('command_centers').select(cols).eq('is_demo', false).order('display_name')) as Center[];
       } else {
         const links = must(await db.from('user_centers').select('center_id').eq('user_id', uid)) as { center_id: string }[];
         const ids = links.map(l => l.center_id);
