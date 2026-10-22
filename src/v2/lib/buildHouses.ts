@@ -31,6 +31,15 @@ export async function mapRoutesStatus(area: string): Promise<RouteBuildRow[]> {
   return out;
 }
 
+/** One route's row, re-read (after it has been built). */
+export async function routeStatus(rc: string): Promise<RouteBuildRow | null> {
+  const { data: m } = await supabase.from('route_maps').select('route_code, route_number').eq('route_code', rc).eq('status', 'approved').maybeSingle();
+  if (!m) return null;
+  const { data: b } = await supabase.from('route_house_builds').select('geocoded_at, geocode_note').eq('route_code', rc).maybeSingle();
+  const n = await houseCount(rc);
+  return { route_code: rc, route_number: m.route_number as number, houses: n, state: buildState(n, (b as { geocoded_at: string | null } | null) || null), note: (b as { geocode_note: string | null } | null)?.geocode_note || null };
+}
+
 const houseCount = async (rc: string) =>
   (await supabase.from('route_houses').select('id', { count: 'exact', head: true }).eq('route_code', rc)).count || 0;
 

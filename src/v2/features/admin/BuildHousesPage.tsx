@@ -5,7 +5,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Hammer, Loader, Square } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { listAreaPrefixes } from '../../lib/territory';
-import { buildRoute, mapRoutesStatus, type RouteBuildRow } from '../../lib/buildHouses';
+import { buildRoute, mapRoutesStatus, routeStatus, type RouteBuildRow } from '../../lib/buildHouses';
 import { Btn, Card, ErrorBox, Loading, Tag } from '../../ui';
 import { TerritoryTabs } from './Territory';
 
@@ -22,10 +22,12 @@ export const BuildHousesPage: React.FC = () => {
   const [running, setRunning] = useState<string | null>(null);
   const [progress, setProgress] = useState('');
   const [results, setResults] = useState<Record<string, string>>({});
+  // rows re-read as each route finishes, so the table keeps up while a run is going
+  const [fresh, setFresh] = useState<Record<string, RouteBuildRow>>({});
   const [error, setError] = useState<unknown>(null);
   const stop = useRef(false);
 
-  const rows = status.data || [];
+  const rows = (status.data || []).map(r => fresh[r.route_code] || r);
   const todo = useMemo(() => rows.filter(r => r.state !== 'ready'), [rows]);
   const counts = { ready: rows.filter(r => r.state === 'ready').length, houses: rows.reduce((t, r) => t + r.houses, 0) };
 
@@ -39,9 +41,11 @@ export const BuildHousesPage: React.FC = () => {
         setProgress(`${head}: starting…`);
         const line = await buildRoute(rc, m => setProgress(`${head}: ${m}`));
         setResults(r => ({ ...r, [rc]: line }));
+        const row = await routeStatus(rc).catch(() => null);
+        if (row) setFresh(f => ({ ...f, [rc]: row }));
       }
     } catch (e) { setError(e); }
-    finally { setRunning(null); setProgress(''); status.reload(); }
+    finally { setRunning(null); setProgress(''); setFresh({}); status.reload(); }
   };
 
   return (
@@ -51,7 +55,7 @@ export const BuildHousesPage: React.FC = () => {
       <Card>
         <div className="v2-row" style={{ alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <label className="v2-label" htmlFor="bh-area" style={{ margin: 0 }}>Map</label>
-          <select id="bh-area" className="v2-sel" style={{ maxWidth: 320 }} value={area} disabled={!!running} onChange={e => { setArea(e.target.value); setResults({}); }}>
+          <select id="bh-area" className="v2-sel" style={{ maxWidth: 320 }} value={area} disabled={!!running} onChange={e => { setArea(e.target.value); setResults({}); setFresh({}); }}>
             {(prefixes.data || []).filter(p => !p.area_name.startsWith('DEMO ')).map(p => <option key={p.area_name} value={p.area_name}>{p.area_name}</option>)}
           </select>
           <span className="v2-spacer" />
