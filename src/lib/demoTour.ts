@@ -168,21 +168,30 @@ export const STEPS: DemoStep[] = [
   },
   {
     act: 'Worker', role: 'worker', title: 'Knock three doors',
-    what: 'Tap a black house and mark it Not home. Mark another No. Mark a third Go back.',
+    what: 'Tap any three houses and mark each one: Not home, No, or Go back. Any house on your route will do, even one your partner already knocked.',
     why: 'Every knock is shared live: your partner, your manager and tomorrow’s crew all see it, so nobody re-knocks a no.',
+    // any three houses, any of the three answers, anywhere on the visitor's routes
     check: async sb => {
-      const { data } = await supabase.from('house_dispositions').select('status').eq('route_code', sb.routes[0]).eq('worker_id', sb.worker);
-      const s = new Set((data || []).map((r: any) => r.status));
-      return s.has('not_home') && s.has('no') && s.has('go_back');
+      const { data } = await supabase.from('house_dispositions').select('house_key, route_code, status')
+        .eq('command_center_id', sb.center_id).eq('worker_id', sb.worker).in('status', ['not_home', 'no', 'go_back']);
+      return new Set((data || []).map((r: any) => `${r.route_code}|${r.house_key}`)).size >= 3;
     },
-    targets: [{ text: 'Not home', exact: true, hint: 'Not home here, then No and Go back on two others' }, { ...MAP, hint: 'Tap a house' }],
+    targets: [
+      { text: 'Not home', exact: true, hint: 'Not home, No or Go back' },
+      { text: 'Change', exact: true, hint: 'Already marked: tap Change to mark it, or close it and tap another house' },
+      { ...MAP, hint: 'Tap any house' },
+    ],
   },
   {
     act: 'Worker', role: 'worker', title: 'Mark an invalid',
-    what: 'A house you can’t do: freshly sealed by another company, a concrete driveway, or one that can’t be done today (cars on it). Mark it Invalid and say why.',
+    what: 'Pick any house you can’t do: freshly sealed by another company, a concrete driveway, or one that can’t be done today (cars on it). Mark it Invalid and say why.',
     why: 'Invalid takes the house off everyone’s list, so no one on the team wastes a knock on it.',
-    check: async sb => (await count('house_dispositions', q => q.eq('route_code', sb.routes[0]).eq('worker_id', sb.worker).eq('status', 'invalid'))) > 0,
-    targets: [{ text: 'Invalid', exact: true, hint: 'Tap Invalid and say why' }, { ...MAP, hint: 'Tap a house you can’t do' }],
+    check: async sb => (await count('house_dispositions', q => q.eq('command_center_id', sb.center_id).eq('worker_id', sb.worker).eq('status', 'invalid'))) > 0,
+    targets: [
+      { text: 'Invalid', exact: true, hint: 'Tap Invalid and say why' },
+      { text: 'Change', exact: true, hint: 'Already marked: tap Change, then Invalid' },
+      { ...MAP, hint: 'Tap any house you can’t do' },
+    ],
   },
   {
     act: 'Worker', role: 'worker', title: 'A yes: save it as pending',
@@ -197,7 +206,7 @@ export const STEPS: DemoStep[] = [
       { field: 'Price', hint: 'The price you agreed, e.g. 250' },
       { field: 'Property Type', hint: 'Tap the property type' },
       { sel: 'textarea[placeholder^="Any extra info"]', input: true, hint: 'A note, e.g. “back after 5”' },
-      { text: 'Save Pending', hint: 'Save Pending' }, { text: 'Sale', exact: true, hint: 'Tap Sale' }, { ...MAP, hint: 'Tap a house' },
+      { text: 'Save Pending', hint: 'Save Pending' }, { text: 'Sale', exact: true, hint: 'Tap Sale' }, { ...MAP, hint: 'Tap any house' },
     ],
   },
   {
