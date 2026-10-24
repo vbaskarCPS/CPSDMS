@@ -31,6 +31,9 @@ import { CustomerMap } from './features/clients/CustomerMap';
 import { Customer } from './features/clients/Customer';
 import { MasterBookings } from './features/bookings/MasterBookings';
 import { MyAccount } from './features/account/MyAccount';
+import { Zones } from './features/mainstreet/Zones';
+import { Campaigns } from './features/mainstreet/Campaigns';
+import { Reps, Dashboard as MsDashboard } from './features/mainstreet/Reps';
 import { WorkerHome } from './features/worker/WorkerHome';
 import { Loading } from './ui';
 
@@ -101,6 +104,11 @@ const V2Routes: React.FC = () => (
     <Route path="bookings/maps" element={<Guard perm="bookings"><MasterBookings /></Guard>} />
     <Route path="clients/list" element={<Guard><Clients /></Guard>} />
     <Route path="clients/c/:id" element={<Guard><Customer /></Guard>} />
+    <Route path="mainstreet" element={<Navigate to="/app/mainstreet/zones" replace />} />
+    <Route path="mainstreet/zones" element={<Guard perm="mainstreet_admin"><Zones /></Guard>} />
+    <Route path="mainstreet/campaigns" element={<Guard perm="mainstreet_admin"><Campaigns /></Guard>} />
+    <Route path="mainstreet/reps" element={<Guard perm="mainstreet_admin"><Reps /></Guard>} />
+    <Route path="mainstreet/dashboard" element={<Guard perm="mainstreet_admin"><MsDashboard /></Guard>} />
     <Route path="account" element={<Guard><MyAccount /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />
   </Routes>

@@ -8,6 +8,8 @@ export const PERMISSIONS = [
   { key: 'sa_users', label: 'SA · User Management', unlocks: 'Users, command centers, seasons, availability' },
   { key: 'sa_territory', label: 'SA · Territory & Client Data', unlocks: 'Digital maps, assignments, client imports' },
   { key: 'sa_reporting', label: 'SA · Reporting', unlocks: 'Reporting (Super Admin)' },
+  { key: 'mainstreet_admin', label: 'MainstreetAI Admin', unlocks: 'MainstreetAI: zones, campaigns, reps and the dashboard' },
+  { key: 'mainstreet_rep', label: 'MainstreetAI Rep', unlocks: 'Works assigned MainstreetAI zones in the field (reps are added from MainstreetAI › Reps)' },
 ] as const;
 
 export type Permission = typeof PERMISSIONS[number]['key'];

@@ -2,7 +2,7 @@
 // which only switches between components (each opens at its home).
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutGrid, ChevronRight, LogOut, UserRound, Home } from 'lucide-react';
+import { LayoutGrid, ChevronRight, LogOut, UserRound, Home, Store } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { useCurrentSeason } from '../lib/data';
 import { serviceLabel } from '../lib/permissions';
@@ -30,6 +30,8 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
   }, [open]);
 
   const tabs = hereComp?.tabs ? hereComp.subs.filter(s => s.ready) : [];
+  // MainstreetAI has its own name in the bar and nothing Property Stars (no center, no season)
+  const brand = hereComp?.brand || null;
 
   return (
     <div className="v2">
@@ -37,7 +39,9 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
         <button type="button" className={`v2-gbtn${open ? ' on' : ''}`} onClick={() => setOpen(o => !o)} aria-label="Menu" aria-expanded={open}>
           <LayoutGrid size={18} />
         </button>
-        <Link to="/app" className="v2-brand"><img src="/icon-192.png" alt="" className="v2-logo" /><span className="v2-hide-sm">Property Stars</span></Link>
+        {brand
+          ? <Link to={homeOf(hereComp!)} className="v2-brand"><span className="v2-ms-mark" aria-hidden="true"><Store size={16} /></span><span>{brand}</span></Link>
+          : <Link to="/app" className="v2-brand"><img src="/icon-192.png" alt="" className="v2-logo" /><span className="v2-hide-sm">Property Stars</span></Link>}
         <span className="v2-crumb">
           {here ? <>
             <Link to={homeOf(hereComp || here.comp)}><b>{here.comp.label}</b></Link>
@@ -45,12 +49,12 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
           </> : <b>Home</b>}
         </span>
         <span className="v2-spacer" />
-        {centers.length > 1 ? (
+        {brand ? null : centers.length > 1 ? (
           <select className="v2-select-pill" value={center?.id || ''} onChange={e => setCenterId(e.target.value)} aria-label="Command center">
             {centers.map(c => <option key={c.id} value={c.id}>{c.display_name}</option>)}
           </select>
         ) : center ? <span className="v2-pill v2-hide-sm">{center.display_name}</span> : null}
-        {season && <span className="v2-pill season v2-hide-sm">{serviceLabel(season.service)} {season.year}</span>}
+        {!brand && season && <span className="v2-pill season v2-hide-sm">{serviceLabel(season.service)} {season.year}</span>}
         <Link to="/app/account" className="v2-pill v2-acct" title={`${profile?.full_name} · My account`} aria-label="My account">
           <UserRound size={14} /><span className="v2-hide-sm">{profile?.username}</span>
         </Link>
