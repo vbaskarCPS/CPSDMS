@@ -360,3 +360,12 @@ begin
 end $$;
 revoke all on function public.app_admin_issue_setup(uuid) from public, anon;
 grant execute on function public.app_admin_issue_setup(uuid) to authenticated;
+
+-- ───────────── grants (advisor finding) ─────────────
+-- The helpers are for signed-in users; the trigger functions are called by nobody but their triggers.
+revoke all on function public.ms_is_admin() from public, anon;
+grant execute on function public.ms_is_admin() to authenticated;
+revoke all on function public.ms_is_rep(uuid) from public, anon;
+grant execute on function public.ms_is_rep(uuid) to authenticated;
+revoke all on function public.ms_zone_prepare() from public, anon, authenticated;
+revoke all on function public.ms_zone_campaign_check() from public, anon, authenticated;
