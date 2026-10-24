@@ -109,51 +109,69 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
   const decision = useRef<((yes: boolean) => void) | null>(null);
   const set = (key: string, state: StepState, note?: string) => setSteps(ss => ss.map(s => s.key === key ? { ...s, state, note: note ?? s.note } : s));
 
+  // what's already done stays done: Start after a failure carries on from the failed step
+  const stepsRef = useRef(steps); stepsRef.current = steps;
+  const boundary = useRef<Awaited<ReturnType<typeof fetchBoundary>>>(null);
+  const isDone = (k: string) => stepsRef.current.find(s => s.key === k)?.state === 'done';
+  const tileNote = (k: string) => (d: number, of: number) => set(k, 'running', `OpenStreetMap · tile ${d} of ${of}`);
+
   const run = async () => {
     setRunning(true); setError(null); setDone(null);
     const ctrl = new AbortController(); abort.current = ctrl;
     const key = googleKey();
     try {
       await setCityStatus(city.id, 'building');
-      set('boundary', 'running');
-      const b = await fetchBoundary(city.name, PROVINCE_NAME[city.province] || city.province);
-      if (!b) throw new Error(`OpenStreetMap has no boundary for “${city.name}, ${city.province}”. Check the spelling.`);
-      await saveCity(city.name, city.province, b.osm_id, b.geometry);
-      set('boundary', 'done', b.name);
+      if (!boundary.current) {
+        set('boundary', 'running');
+        const b = await fetchBoundary(city.name, PROVINCE_NAME[city.province] || city.province);
+        if (!b) throw new Error(`OpenStreetMap has no boundary for “${city.name}, ${city.province}”. Check the spelling.`);
+        await saveCity(city.name, city.province, b.osm_id, b.geometry);
+        boundary.current = b;
+        set('boundary', 'done', b.name);
+      }
+      const b = boundary.current!;
 
-      set('lines', 'running');
-      const lines = await fetchLines(b.bbox, ctrl.signal);
-      const nl = await replaceLines(city.id, lines);
-      set('lines', 'done', `${nl} street segments`);
-
-      set('blocks', 'running');
-      const nb = await makeBlocks(city.id);
-      set('blocks', 'done', `${nb} blocks`);
-
-      set('plazas', 'running');
-      const plazas = await fetchPlazas(b.bbox, ctrl.signal);
-      const np = await replacePlazas(city.id, plazas);
-      set('plazas', 'done', `${np} plazas / parks`);
-
-      set('osm', 'running');
-      const osm = await fetchOsmBusinesses(b.bbox, ctrl.signal);
-      const inside = osm.filter(r => inPolygon([r.lng, r.lat], b.geometry));
-      const no = await upsertBusinesses(city.id, inside);
-      set('osm', 'done', `${no} businesses`);
+      if (!isDone('lines')) {
+        set('lines', 'running');
+        const lines = await fetchLines(b.bbox, ctrl.signal, tileNote('lines'));
+        const nl = await replaceLines(city.id, lines);
+        set('lines', 'done', `${nl} street segments`);
+      }
+      if (!isDone('blocks')) {
+        set('blocks', 'running');
+        const nb = await makeBlocks(city.id);
+        set('blocks', 'done', `${nb} blocks`);
+      }
+      if (!isDone('plazas')) {
+        set('plazas', 'running');
+        const plazas = await fetchPlazas(b.bbox, ctrl.signal, tileNote('plazas'));
+        const np = await replacePlazas(city.id, plazas);
+        set('plazas', 'done', `${np} plazas / parks`);
+      }
+      if (!isDone('osm')) {
+        set('osm', 'running');
+        const osm = await fetchOsmBusinesses(b.bbox, ctrl.signal, tileNote('osm'));
+        const inside = osm.filter(r => inPolygon([r.lng, r.lat], b.geometry));
+        const no = await upsertBusinesses(city.id, inside);
+        set('osm', 'done', `${no} businesses`);
+      }
 
       // Google: estimate, ask, sweep
-      if (!key) { set('google', 'skipped', 'No Google key on this build (VITE_GOOGLE_PLACES_API_KEY)'); }
-      else {
-        const cells = gridCells(b.bbox, b.geometry, 1000);
-        const est = estimateCalls(cells.length);
-        setGoogle({ cells: cells.length, estimate: est, ask: true, decided: null, calls: 0, pending: cells.length, found: 0 });
-        const yes = await new Promise<boolean>(resolve => { decision.current = resolve; });
-        setGoogle(g => g && { ...g, ask: false, decided: yes ? 'yes' : 'no' });
-        if (!yes) set('google', 'skipped', 'Skipped');
+      if (!isDone('google') && stepsRef.current.find(s => s.key === 'google')?.state !== 'skipped') {
+        if (!key) { set('google', 'skipped', 'No Google key on this build (VITE_GOOGLE_PLACES_API_KEY)'); }
         else {
-          set('google', 'running');
-          const r = await googleSweep(cells, key, cap, p => setGoogle(g => g && { ...g, ...p }), rows => upsertBusinesses(city.id, rows.filter(r => inPolygon([r.lng, r.lat], b.geometry))).then(() => undefined), ctrl.signal);
-          set('google', 'done', `${r.found} places in ${r.calls} calls (~$${(r.calls * GOOGLE_COST_PER_CALL).toFixed(0)})${r.stopped ? ' · stopped before the end' : ''}`);
+          const cells = gridCells(b.bbox, b.geometry, 1000);
+          const est = estimateCalls(cells.length);
+          setGoogle({ cells: cells.length, estimate: est, ask: true, decided: null, calls: 0, pending: cells.length, found: 0 });
+          const yes = await new Promise<boolean>(resolve => { decision.current = resolve; });
+          setGoogle(g => g && { ...g, ask: false, decided: yes ? 'yes' : 'no' });
+          if (ctrl.signal.aborted) throw new Error('Stopped');
+          if (!yes) set('google', 'skipped', 'Skipped');
+          else {
+            set('google', 'running');
+            const r = await googleSweep(cells, key, cap, p => setGoogle(g => g && { ...g, ...p }), rows => upsertBusinesses(city.id, rows.filter(r => inPolygon([r.lng, r.lat], b.geometry))).then(() => undefined), ctrl.signal);
+            set('google', 'done', `${r.found} places in ${r.calls} calls (~$${(r.calls * GOOGLE_COST_PER_CALL).toFixed(0)})${r.stopped ? ' · stopped before the end' : ''}`);
+          }
         }
       }
 
@@ -162,9 +180,10 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
       set('finish', 'done', `${f.businesses} businesses · ${f.chains} chains · ${Object.entries(f.by_kind).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, n]) => `${kindLabel(k)} ${n}`).join(', ')}`);
       setDone(`${city.name} is built.`);
     } catch (e) {
-      setError(e);
-      setSteps(ss => ss.map(s => s.state === 'running' ? { ...s, state: 'failed' } : s));
-      await setCityStatus(city.id, 'failed', e instanceof Error ? e.message : String(e)).catch(() => undefined);
+      const stopped = e instanceof Error && e.message === 'Stopped';
+      setError(stopped ? new Error('Stopped. Press Start to carry on from where it was.') : e);
+      setSteps(ss => ss.map(s => s.state === 'running' ? { ...s, state: stopped ? 'todo' : 'failed' } : s));
+      if (!stopped) await setCityStatus(city.id, 'failed', e instanceof Error ? e.message : String(e)).catch(() => undefined);
     } finally { setRunning(false); abort.current = null; }
   };
   useEffect(() => () => abort.current?.abort(), []);
@@ -173,7 +192,7 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
     <Modal title={`Build ${city.name}`} onClose={running ? () => undefined : onClose}
       footer={<>
         {running ? <Btn kind="r" icon={Square} onClick={() => { abort.current?.abort(); decision.current?.(false); }}>Stop</Btn> : <Btn kind="o" onClick={onClose}>Close</Btn>}
-        {!running && !done && <Btn onClick={run}>{city.status === 'built' ? 'Rebuild' : 'Start'}</Btn>}
+        {!running && !done && <Btn onClick={run}>{steps.some(s => s.state === 'done' || s.state === 'failed') ? 'Carry on' : city.status === 'built' ? 'Rebuild' : 'Start'}</Btn>}
       </>}>
       {city.status === 'built' && !running && !done && <div className="v2-note" style={{ marginBottom: 10 }}>Rebuilding reloads streets, blocks, plazas and businesses. Businesses already in zones keep their zone.</div>}
       <div style={{ display: 'grid', gap: 6 }}>

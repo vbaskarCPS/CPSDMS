@@ -108,7 +108,7 @@ export function isOsmBusiness(tags: Record<string, string> | undefined): boolean
 
 // ───────────── OpenStreetMap ─────────────
 const OVERPASS_ENDPOINTS = [
-  { url: 'https://overpass-api.de/api/interpreter', ms: 90000 },
+  { url: 'https://overpass-api.de/api/interpreter', ms: 75000 },
   { url: 'https://overpass.private.coffee/api/interpreter', ms: 60000 },
   { url: 'https://overpass.kumi.systems/api/interpreter', ms: 60000 },
 ];
@@ -124,10 +124,29 @@ export async function overpass(query: string, signal?: AbortSignal): Promise<Osm
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query), signal: ctrl.signal });
       if (!res.ok) throw new Error(`Overpass ${res.status}`);
       return ((await res.json()).elements || []) as OsmElement[];
-    } catch (e) { if (signal?.aborted) throw new Error('Stopped'); lastErr = e; }
+    } catch (e) {
+      if (signal?.aborted) throw new Error('Stopped');
+      lastErr = ctrl.signal.aborted ? new Error(`${new URL(url).host} didn’t answer within ${Math.round(ms / 1000)} s`) : e;
+    }
     finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
   }
-  throw lastErr instanceof Error ? lastErr : new Error('All OpenStreetMap mirrors failed');
+  throw new Error(`OpenStreetMap didn’t answer (${lastErr instanceof Error ? lastErr.message : 'all mirrors failed'}). Wait a minute and press Start again: it carries on from this step.`);
+}
+/** The bbox cut into n × n tiles, so each OpenStreetMap request stays small and quick. */
+export function tiles(b: BBox, n: number): BBox[] {
+  const out: BBox[] = []; const dLat = (b.n - b.s) / n, dLng = (b.e - b.w) / n;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) out.push({ s: b.s + i * dLat, n: b.s + (i + 1) * dLat, w: b.w + j * dLng, e: b.w + (j + 1) * dLng });
+  return out;
+}
+/** Runs an Overpass query per tile and merges the elements by id. */
+async function overpassTiled(bbox: BBox, query: (b: string) => string, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<OsmElement[]> {
+  const parts = tiles(bbox, 3); const seen = new Map<string, OsmElement>();
+  for (let i = 0; i < parts.length; i++) {
+    const els = await overpass(query(bb(parts[i])), signal);
+    for (const e of els) seen.set(`${e.type}${e.id}`, e);
+    onTile?.(i + 1, parts.length);
+  }
+  return [...seen.values()];
 }
 const bb = (b: BBox) => `${b.s},${b.w},${b.n},${b.e}`;
 
@@ -152,24 +171,24 @@ export function lineKind(tags: Record<string, string>): LineKind | null {
   if (tags.waterway && /^(river|canal)$/.test(tags.waterway)) return 'water';
   return null;
 }
-export async function fetchLines(bbox: BBox, signal?: AbortSignal): Promise<LineRow[]> {
-  const els = await overpass(`[out:json][timeout:120];(
-  way["highway"~"^(motorway|trunk|primary|secondary|tertiary|motorway_link|trunk_link|primary_link|secondary_link)$"](${bb(bbox)});
-  way["railway"="rail"](${bb(bbox)});
-  way["waterway"~"^(river|canal)$"](${bb(bbox)});
-); out body geom;`, signal);
+export async function fetchLines(bbox: BBox, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<LineRow[]> {
+  const els = await overpassTiled(bbox, b => `[out:json][timeout:60];(
+  way["highway"~"^(motorway|trunk|primary|secondary|tertiary|motorway_link|trunk_link|primary_link|secondary_link)$"](${b});
+  way["railway"="rail"](${b});
+  way["waterway"~"^(river|canal)$"](${b});
+); out body geom;`, signal, onTile);
   return els.flatMap(w => {
     const kind = w.tags ? lineKind(w.tags) : null;
     if (!kind || !w.geometry || w.geometry.length < 2) return [];
     return [{ osm_id: w.id, kind, name: w.tags?.name || null, coordinates: w.geometry.map(p => [p.lon, p.lat] as [number, number]) }];
   });
 }
-export async function fetchPlazas(bbox: BBox, signal?: AbortSignal): Promise<PlazaRow[]> {
-  const els = await overpass(`[out:json][timeout:120];(
-  way["landuse"~"^(retail|commercial|industrial)$"](${bb(bbox)});
-  way["building"~"^(retail|commercial|industrial|warehouse|supermarket|mall)$"](${bb(bbox)});
-  way["shop"="mall"](${bb(bbox)});
-); out body geom;`, signal);
+export async function fetchPlazas(bbox: BBox, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<PlazaRow[]> {
+  const els = await overpassTiled(bbox, b => `[out:json][timeout:60];(
+  way["landuse"~"^(retail|commercial|industrial)$"](${b});
+  way["building"~"^(retail|commercial|industrial|warehouse|supermarket|mall)$"](${b});
+  way["shop"="mall"](${b});
+); out body geom;`, signal, onTile);
   return els.flatMap(w => {
     if (!w.geometry || w.geometry.length < 4) return [];
     const t = w.tags || {};
@@ -179,11 +198,11 @@ export async function fetchPlazas(bbox: BBox, signal?: AbortSignal): Promise<Pla
     return [{ osm_id: w.id, name: t.name || null, kind, coordinates: w.geometry.map(p => [p.lon, p.lat] as [number, number]) }] as PlazaRow[];
   });
 }
-export async function fetchOsmBusinesses(bbox: BBox, signal?: AbortSignal): Promise<BusinessRow[]> {
-  const els = await overpass(`[out:json][timeout:180];(
-  nwr["shop"]["name"](${bb(bbox)}); nwr["craft"]["name"](${bb(bbox)}); nwr["office"]["name"](${bb(bbox)}); nwr["healthcare"]["name"](${bb(bbox)});
-  nwr["amenity"]["name"](${bb(bbox)}); nwr["leisure"]["name"](${bb(bbox)}); nwr["industrial"]["name"](${bb(bbox)});
-); out center tags;`, signal);
+export async function fetchOsmBusinesses(bbox: BBox, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<BusinessRow[]> {
+  const els = await overpassTiled(bbox, b => `[out:json][timeout:60];(
+  nwr["shop"]["name"](${b}); nwr["craft"]["name"](${b}); nwr["office"]["name"](${b}); nwr["healthcare"]["name"](${b});
+  nwr["amenity"]["name"](${b}); nwr["leisure"]["name"](${b}); nwr["industrial"]["name"](${b});
+); out center tags;`, signal, onTile);
   return els.flatMap(e => {
     if (!isOsmBusiness(e.tags)) return [];
     const lat = e.lat ?? e.center?.lat, lng = e.lon ?? e.center?.lon;

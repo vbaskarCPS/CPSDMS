@@ -77,3 +77,13 @@ describe('msCity · sweep grid', () => {
     expect(inPolygon([-79.9, 43.45], square)).toBe(false);
   });
 });
+
+describe('msCity · tiles', () => {
+  it('cuts a bbox into n×n tiles that cover it', async () => {
+    const { tiles } = await import('./msCity');
+    const t = tiles({ s: 0, w: 0, n: 3, e: 6 }, 3);
+    expect(t).toHaveLength(9);
+    expect(t[0]).toEqual({ s: 0, n: 1, w: 0, e: 2 });
+    expect(t[8]).toEqual({ s: 2, n: 3, w: 4, e: 6 });
+  });
+});
