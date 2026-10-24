@@ -530,3 +530,5 @@
 .v2-ms-camp { border: 1px solid var(--line); border-left: 4px solid var(--teal); border-radius: 8px; padding: 8px 10px; }
 .v2 .v2-ms .v2-select-pill { height: 32px; }
 @media (max-width: 1000px) { .v2-ms-map { height: 360px; } }
+.v2-spin { animation: v2spin 1s linear infinite; }
+@keyframes v2spin { to { transform: rotate(360deg); } }
