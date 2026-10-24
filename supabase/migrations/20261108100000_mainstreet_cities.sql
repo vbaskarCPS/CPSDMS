@@ -703,3 +703,7 @@ begin
   if p_status = 'retired' then update ms_businesses set zone_id = null where zone_id = p_id;
   else update ms_businesses b set zone_id = p_id where b.zone_id is null and b.block_id in (select block_id from ms_zone_blocks where zone_id = p_id); end if;
 end $$;
+
+-- ───────────── search_path on the helpers (advisor finding) ─────────────
+alter function public.ms_business_kinds() set search_path = public;
+alter function public.ms_name_norm(text) set search_path = public;
