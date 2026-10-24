@@ -4,7 +4,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Map, BookOpen, CalendarCheck, Phone, Shield, Calendar, FileText, SlidersHorizontal, UserPlus, Contact, AlertCircle,
-  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble,
+  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck,
 } from 'lucide-react';
 import type { ColorName } from '../ui';
 import type { Permission } from '../lib/permissions';
@@ -16,6 +16,8 @@ export interface Component {
   home?: string;
   /** show the component's ready screens as tabs under the bar */
   tabs?: boolean;
+  /** a component with its own name in the bar (and no center / season pills): MainstreetAI */
+  brand?: string;
   blurb: string;
 }
 
@@ -49,6 +51,13 @@ export const COMPONENTS: Component[] = [
     { key: 'dialer', label: 'Dialer', icon: Phone, color: 'green', path: '/app/clients/dialer', ready: false },
     { key: 'followups', label: 'Follow-ups', icon: Clock, color: 'amber', path: '/app/clients/follow-ups', ready: false },
     { key: 'kpis', label: 'KPIs', icon: BarChart3, color: 'blue', path: '/app/clients/kpis', ready: false },
+  ] },
+  { key: 'ms', label: 'MainstreetAI', icon: Store, color: 'teal', perm: 'mainstreet_admin', home: '/app/mainstreet/zones', tabs: true, brand: 'MainstreetAI',
+    blurb: 'Business door-knocking: zones, campaigns, reps and the dashboard', subs: [
+    { key: 'zones', label: 'Zones', icon: Hexagon, color: 'teal', path: '/app/mainstreet/zones', ready: true },
+    { key: 'campaigns', label: 'Campaigns', icon: Megaphone, color: 'rose', path: '/app/mainstreet/campaigns', ready: true },
+    { key: 'reps', label: 'Reps', icon: UserCheck, color: 'blue', path: '/app/mainstreet/reps', ready: true },
+    { key: 'dashboard', label: 'Dashboard', icon: BarChart3, color: 'violet', path: '/app/mainstreet/dashboard', ready: true },
   ] },
   { key: 'sa', label: 'Super Admin', icon: Shield, color: 'rose', perm: 'super_admin_any', tabs: true, blurb: 'Users, centers, availability and territory', subs: [
     { key: 'users', label: 'Users', icon: Users, color: 'rose', path: '/app/admin/users', ready: true },
