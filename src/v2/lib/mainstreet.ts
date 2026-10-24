@@ -6,8 +6,15 @@ import { db, must } from './client';
 export interface Campaign { id: string; name: string; color: string; is_active: boolean; notes: string | null; created_at: string; updated_at: string }
 export interface ZoneCampaign { campaign_id: string; name: string; color: string; is_active: boolean; rep_id: string | null; rep_name: string | null; assigned_at: string | null }
 export interface Zone {
-  id: string; name: string; polygon: GeoJSON.Polygon; center_lat: number | null; center_lng: number | null;
+  id: string; name: string; polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon; center_lat: number | null; center_lng: number | null;
   city: string | null; area: string | null; status: 'active' | 'retired'; created_at: string; updated_at: string; campaigns: ZoneCampaign[];
+  /** generated zones (RUN_51) */
+  city_id?: string | null; frozen_at?: string | null; business_count?: number | null;
+}
+export interface ProposedZone { key: number; name: string; half: string; polygon: GeoJSON.MultiPolygon; blocks: number[]; count: number; plazas: number }
+export interface ZoneRun {
+  id: string; campaign_id: string; campaign_name: string; target: number; status: 'proposed' | 'accepted' | 'discarded';
+  proposal: ProposedZone[]; stats: { eligible?: number; share?: number; zones?: number; free_blocks?: number }; created_at: string; accepted_at: string | null;
 }
 export interface Rep {
   id: string; username: string; full_name: string; email: string | null; phone: string | null; is_active: boolean; must_change_password: boolean;
@@ -47,6 +54,32 @@ export async function setZoneCampaigns(zoneId: string, campaignIds: string[]): P
 }
 export async function assignRep(zoneId: string, campaignId: string, repId: string | null): Promise<void> {
   must(await db.rpc('ms_assign_rep', { p_zone: zoneId, p_campaign: campaignId, p_rep: repId }));
+}
+
+// ───────────── generated zones ─────────────
+export async function generateZones(cityId: string, campaignId: string, target: number): Promise<string> {
+  return must(await db.rpc('ms_generate_zones', { p_city: cityId, p_campaign: campaignId, p_target: target })) as string;
+}
+export async function listRuns(cityId: string): Promise<ZoneRun[]> { return must(await db.rpc('ms_runs_list', { p_city: cityId })) as ZoneRun[]; }
+export async function mergeProposed(runId: string, a: number, b: number): Promise<void> { must(await db.rpc('ms_run_merge', { p_run: runId, p_a: a, p_b: b })); }
+export async function acceptRun(runId: string): Promise<number> { return must(await db.rpc('ms_run_accept', { p_run: runId })) as number; }
+export async function discardRun(runId: string): Promise<void> { must(await db.rpc('ms_run_discard', { p_run: runId })); }
+
+/** Mapbox features for a proposal: hatched candidates with their counts as labels. */
+export function proposalFeatures(p: ProposedZone[], color: string, picked: number[]): { shapes: GeoJSON.FeatureCollection; labels: GeoJSON.FeatureCollection } {
+  return {
+    shapes: { type: 'FeatureCollection', features: p.map(z => ({ type: 'Feature', geometry: z.polygon, properties: { key: z.key, color, sel: picked.includes(z.key) ? 1 : 0 } })) },
+    labels: { type: 'FeatureCollection', features: p.map(z => {
+      const pts = coordsOfAny(z.polygon); const lng = pts.reduce((s, c) => s + c[0], 0) / pts.length, lat = pts.reduce((s, c) => s + c[1], 0) / pts.length;
+      return { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] }, properties: { key: z.key, label: `${z.name} · ${z.count}` } };
+    }) },
+  };
+}
+function coordsOfAny(g: GeoJSON.Geometry): [number, number][] {
+  const out: [number, number][] = [];
+  const walk = (x: unknown): void => { if (Array.isArray(x) && typeof x[0] === 'number') out.push([x[0] as number, x[1] as number]); else if (Array.isArray(x)) x.forEach(walk); };
+  walk((g as { coordinates: unknown }).coordinates);
+  return out;
 }
 
 // ───────────── reps ─────────────

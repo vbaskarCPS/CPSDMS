@@ -4,13 +4,16 @@ import React, { useState } from 'react';
 import { Pencil, Plus } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { CAMPAIGN_COLORS, listCampaigns, listZones, saveCampaign, setCampaignActive, type Campaign } from '../../lib/mainstreet';
+import { BUSINESS_KINDS, kindLabel, listCampaignCategories, setCampaignCategories, TAXIFI_KINDS } from '../../lib/msCity';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag, Toggle } from '../../ui';
 
-type Editing = { id: string | null; name: string; color: string; notes: string } | null;
+type Editing = { id: string | null; name: string; color: string; notes: string; kinds: string[] } | null;
 
 export const Campaigns: React.FC = () => {
   const campaigns = useLoad(listCampaigns, []);
   const zones = useLoad(listZones, []);
+  const cats = useLoad(listCampaignCategories, []);
+  const kindsOf = (id: string) => (cats.data || []).filter(c => c.campaign_id === id).map(c => c.category);
   const [editing, setEditing] = useState<Editing>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -20,7 +23,11 @@ export const Campaigns: React.FC = () => {
   const save = async () => {
     if (!editing) return;
     setBusy(true); setError(null);
-    try { await saveCampaign(editing); setEditing(null); campaigns.reload(); } catch (e) { setError(e); } finally { setBusy(false); }
+    try {
+      const id = await saveCampaign(editing);
+      await setCampaignCategories(id, editing.kinds);
+      setEditing(null); campaigns.reload(); cats.reload();
+    } catch (e) { setError(e); } finally { setBusy(false); }
   };
   const flip = async (c: Campaign) => {
     setBusy(true); setError(null);
@@ -32,7 +39,7 @@ export const Campaigns: React.FC = () => {
       <div className="v2-head">
         <span className="v2-h1">Campaigns</span>
         <span className="v2-spacer" />
-        <Btn icon={Plus} onClick={() => setEditing({ id: null, name: '', color: CAMPAIGN_COLORS[0], notes: '' })}>New campaign</Btn>
+        <Btn icon={Plus} onClick={() => setEditing({ id: null, name: '', color: CAMPAIGN_COLORS[0], notes: '', kinds: [...TAXIFI_KINDS] })}>New campaign</Btn>
       </div>
       <ErrorBox error={error || campaigns.error} />
       <div className="v2-card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -40,7 +47,7 @@ export const Campaigns: React.FC = () => {
           <div className="v2-note" style={{ padding: 16 }}>No campaigns yet. The first one is what your reps will be selling, e.g. Taxifi.</div>
         ) : (
           <div className="v2-table-wrap"><table className="v2-table">
-            <thead><tr><th>Campaign</th><th>Zones</th><th>Reps</th><th>Notes</th><th>On</th><th /></tr></thead>
+            <thead><tr><th>Campaign</th><th>Zones</th><th>Reps</th><th>Business categories</th><th>Notes</th><th>On</th><th /></tr></thead>
             <tbody>
               {campaigns.data.map(c => (
                 <tr key={c.id}>
@@ -49,10 +56,11 @@ export const Campaigns: React.FC = () => {
                     {!c.is_active && <Tag>Off</Tag>}</span></td>
                   <td>{zonesOf(c.id).length}</td>
                   <td>{repsOf(c.id)}</td>
-                  <td className="v2-mut v2-small" style={{ maxWidth: 280, whiteSpace: 'pre-wrap' }}>{c.notes || '—'}</td>
+                  <td className="v2-small" style={{ maxWidth: 260 }}>{kindsOf(c.id).length ? kindsOf(c.id).map(kindLabel).join(', ') : <span style={{ color: 'var(--rose)' }}>None yet</span>}</td>
+                  <td className="v2-mut v2-small" style={{ maxWidth: 220, whiteSpace: 'pre-wrap' }}>{c.notes || '—'}</td>
                   <td><Toggle on={c.is_active} disabled={busy} onChange={() => flip(c)} label={`${c.name} on`} /></td>
                   <td style={{ textAlign: 'right' }}>
-                    <Btn kind="o" size="sm" icon={Pencil} onClick={() => setEditing({ id: c.id, name: c.name, color: c.color, notes: c.notes || '' })}>Edit</Btn>
+                    <Btn kind="o" size="sm" icon={Pencil} onClick={() => setEditing({ id: c.id, name: c.name, color: c.color, notes: c.notes || '', kinds: kindsOf(c.id) })}>Edit</Btn>
                   </td>
                 </tr>
               ))}
@@ -72,6 +80,15 @@ export const Campaigns: React.FC = () => {
                 <button key={col} type="button" aria-label={col} onClick={() => setEditing({ ...editing, color: col })}
                   style={{ width: 28, height: 28, borderRadius: 8, background: col, border: editing.color === col ? '3px solid #111827' : '3px solid transparent' }} />
               ))}
+            </div>
+          </Field>
+          <Field label="Business categories that count" hint="Zones for this campaign are sized by these. Chains and closed places never count.">
+            <div className="v2-row" style={{ gap: 6 }}>
+              {BUSINESS_KINDS.map(k => {
+                const on = editing.kinds.includes(k.key);
+                return <button key={k.key} type="button" className={`v2-chip sm${on ? ' on' : ''}`}
+                  onClick={() => setEditing({ ...editing, kinds: on ? editing.kinds.filter(x => x !== k.key) : [...editing.kinds, k.key] })}>{k.label}</button>;
+              })}
             </div>
           </Field>
           <Field label="Notes (optional)"><textarea className="v2-input" rows={3} value={editing.notes} onChange={e => setEditing({ ...editing, notes: e.target.value })} placeholder="What it is, who it's for" /></Field>

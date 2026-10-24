@@ -55,6 +55,7 @@ export const COMPONENTS: Component[] = [
   { key: 'ms', label: 'MainstreetAI', icon: Store, color: 'teal', perm: 'mainstreet_admin', home: '/app/mainstreet/zones', tabs: true, brand: 'MainstreetAI',
     blurb: 'Business door-knocking: zones, campaigns, reps and the dashboard', subs: [
     { key: 'zones', label: 'Zones', icon: Hexagon, color: 'teal', path: '/app/mainstreet/zones', ready: true },
+    { key: 'cities', label: 'Cities', icon: Building2, color: 'sky', path: '/app/mainstreet/cities', ready: true },
     { key: 'campaigns', label: 'Campaigns', icon: Megaphone, color: 'rose', path: '/app/mainstreet/campaigns', ready: true },
     { key: 'reps', label: 'Reps', icon: UserCheck, color: 'blue', path: '/app/mainstreet/reps', ready: true },
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3, color: 'violet', path: '/app/mainstreet/dashboard', ready: true },

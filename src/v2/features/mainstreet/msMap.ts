@@ -17,7 +17,7 @@ export function createZonesMap(box: HTMLDivElement, onReady: (m: mapboxgl.Map) =
     let loaded = false;
     m.on('load', () => {
       loaded = true; tidyRmBaseMap(m);
-      for (const id of ['ms-zones', 'ms-labels', 'ms-draw', 'ms-draw-pts']) m.addSource(id, { type: 'geojson', data: EMPTY });
+      for (const id of ['ms-zones', 'ms-labels', 'ms-draw', 'ms-draw-pts', 'ms-prop', 'ms-prop-labels']) m.addSource(id, { type: 'geojson', data: EMPTY });
       m.addLayer({ id: 'ms-zone-fill', type: 'fill', source: 'ms-zones', paint: {
         'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'sel'], 1], 0.38, ['==', ['get', 'retired'], 1], 0.06, 0.16] } });
       m.addLayer({ id: 'ms-zone-line', type: 'line', source: 'ms-zones', paint: {
@@ -25,6 +25,13 @@ export function createZonesMap(box: HTMLDivElement, onReady: (m: mapboxgl.Map) =
         'line-dasharray': ['case', ['==', ['get', 'retired'], 1], ['literal', [2, 2]], ['literal', [1, 0]]] } });
       m.addLayer({ id: 'ms-zone-label', type: 'symbol', source: 'ms-labels', layout: {
         'text-field': ['get', 'label'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 12.5, 'text-allow-overlap': false },
+        paint: { 'text-color': '#111827', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
+      // a proposal under review: candidates, lit up when picked for a merge
+      m.addLayer({ id: 'ms-prop-fill', type: 'fill', source: 'ms-prop', paint: {
+        'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'sel'], 1], 0.45, 0.2] } });
+      m.addLayer({ id: 'ms-prop-line', type: 'line', source: 'ms-prop', paint: { 'line-color': '#111827', 'line-width': ['case', ['==', ['get', 'sel'], 1], 3.5, 2], 'line-dasharray': [1.5, 1] } });
+      m.addLayer({ id: 'ms-prop-label', type: 'symbol', source: 'ms-prop-labels', layout: {
+        'text-field': ['get', 'label'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 13, 'text-allow-overlap': true },
         paint: { 'text-color': '#111827', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
       // drawing: the shape so far, and a dot on each corner
       m.addLayer({ id: 'ms-draw-fill', type: 'fill', source: 'ms-draw', paint: { 'fill-color': '#0d9488', 'fill-opacity': 0.22 } });
