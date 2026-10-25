@@ -7,7 +7,7 @@ import { Building2, Check, Loader2, Plus, RefreshCw, Square } from 'lucide-react
 import { useLoad } from '../../lib/data';
 import {
   cityBusinesses, estimateCalls, fetchBoundary, fetchLines, fetchOsmBusinesses, fetchPlazas, finishCity, googleKey, googleSweep, gridCells, GOOGLE_COST_PER_CALL,
-  GOOGLE_MAX_CALLS, inPolygon, kindLabel, listCities, makeBlocks, replaceLines, replacePlazas, saveCity, setCityStatus, upsertBusinesses, type City,
+  GOOGLE_MAX_CALLS, inPolygon, kindLabel, listCities, pinBusinesses, makeBlocks, replaceLines, replacePlazas, saveCity, setCityStatus, upsertBusinesses, type City,
 } from '../../lib/msCity';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 
@@ -196,6 +196,10 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
       }
 
       set('finish', 'running');
+      for (let left = await pinBusinesses(city.id); left > 0; left = await pinBusinesses(city.id)) {
+        if (ctrl.signal.aborted) throw new Error('Stopped');
+        set('finish', 'running', `Placing businesses on blocks · ${left} to go`);
+      }
       const f = await finishCity(city.id);
       set('finish', 'done', `${f.businesses} businesses · ${f.chains} chains · ${Object.entries(f.by_kind).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, n]) => `${kindLabel(k)} ${n}`).join(', ')}`);
       setDone(`${city.name} is built.`);

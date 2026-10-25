@@ -52,6 +52,10 @@ export async function upsertBusinesses(cityId: string, rows: BusinessRow[]): Pro
   for (let i = 0; i < rows.length; i += 400) added += must(await db.rpc('ms_city_upsert_businesses', { p_city: cityId, p_rows: rows.slice(i, i + 400) })) as number;
   return added;
 }
+/** Gives businesses without a block their plaza and block, a batch at a time; returns how many still wait. */
+export async function pinBusinesses(cityId: string, batch = 1000): Promise<number> {
+  return must(await db.rpc('ms_city_pin_businesses', { p_city: cityId, p_batch: batch })) as number;
+}
 export async function finishCity(cityId: string): Promise<{ businesses: number; blocks: number; plazas: number; chains: number; by_kind: Record<string, number> }> {
   return must(await db.rpc('ms_city_finish', { p_city: cityId })) as { businesses: number; blocks: number; plazas: number; chains: number; by_kind: Record<string, number> };
 }

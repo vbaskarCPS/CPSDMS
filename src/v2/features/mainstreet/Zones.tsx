@@ -8,7 +8,7 @@ import { Archive, ArchiveRestore, Check, Pencil, Plus, Search, Sparkles, Trash2,
 import { Link } from 'react-router-dom';
 import { useLoad } from '../../lib/data';
 import {
-  acceptRun, assignRep, closeRing, deleteZone, discardRun, filterZones, generateZones, listCampaigns, listReps, listRuns, listZones, mergeProposed, placeAt, placeLabel,
+  acceptRun, assignRep, closeRing, runToReady, stepLabel, type StepState, deleteZone, discardRun, filterZones, generateZones, listCampaigns, listReps, listRuns, listZones, mergeProposed, placeAt, placeLabel,
   polygonProblem, proposalFeatures, saveZone, setZoneCampaigns, setZoneStatus, zoneColor, zoneFeatures, type Zone, type ZoneFilter, type ZoneRun,
 } from '../../lib/mainstreet';
 import { listCampaignCategories, listCities, type City } from '../../lib/msCity';
@@ -33,6 +33,7 @@ export const Zones: React.FC = () => {
   const cities = useLoad(listCities, []);
   const [genOpen, setGenOpen] = useState(false);
   const [review, setReview] = useState<{ city: City; run: ZoneRun; picked: number[] } | null>(null);
+  const [progress, setProgress] = useState<StepState | null>(null);
 
   const all = zones.data || [];
   const shown = useMemo(() => filterZones(all, filter, showRetired, q), [all, filter, showRetired, q]);
@@ -157,10 +158,12 @@ export const Zones: React.FC = () => {
     setBusy(true); setError(null);
     try {
       await discardRun(review.run.id);
+      setProgress(null);
       const id = await generateZones(review.city.id, review.run.campaign_id, target);
+      await runToReady(id, setProgress);
       const runs = await listRuns(review.city.id); const run = runs.find(x => x.id === id);
       if (run) setReview({ city: review.city, run, picked: [] });
-    } catch (e) { setError(e); } finally { setBusy(false); }
+    } catch (e) { setError(e); } finally { setBusy(false); setProgress(null); }
   };
 
   // ── the selected zone ──
@@ -216,7 +219,7 @@ export const Zones: React.FC = () => {
 
         <div>
           {review ? (
-            <ReviewPanel review={review} busy={busy} onMerge={doMerge} onAccept={doAccept} onDiscard={doDiscard} onRegenerate={regenerate}
+            <ReviewPanel review={review} busy={busy} progress={busy && progress ? stepLabel(progress) : null} onMerge={doMerge} onAccept={doAccept} onDiscard={doDiscard} onRegenerate={regenerate}
               onPick={k => pickPropRef.current(k)} />
           ) : selected ? (
             <div className="v2-card">
@@ -315,6 +318,7 @@ const GenerateModal: React.FC<{ cities: City[]; campaigns: { id: string; name: s
     const [target, setTarget] = useState(6);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<unknown>(null);
+    const [step, setStep] = useState<StepState | null>(null);
     const cats = useLoad(listCampaignCategories, []);
     const hasCats = !!(cats.data || []).some(c => c.campaign_id === campaignId);
     const city = built.find(c => c.id === cityId);
@@ -322,7 +326,9 @@ const GenerateModal: React.FC<{ cities: City[]; campaigns: { id: string; name: s
       if (!city) return;
       setBusy(true); setError(null);
       try {
+        setStep(null);
         const id = await generateZones(city.id, campaignId, target);
+        await runToReady(id, setStep);
         const run = (await listRuns(city.id)).find(r => r.id === id);
         if (!run) throw new Error('Generated, but the proposal didn’t come back');
         onGenerated(city, run);
@@ -340,14 +346,15 @@ const GenerateModal: React.FC<{ cities: City[]; campaigns: { id: string; name: s
           <Field label="How many zones" hint="Each zone gets an equal share of the eligible businesses, built from whole blocks between real streets; plazas are never split. You can merge or regenerate before accepting.">
             <input className="v2-input" type="number" min={1} max={60} value={target} onChange={e => setTarget(Math.max(1, Math.min(60, +e.target.value || 1)))} style={{ width: 120 }} />
           </Field>
+          {busy && <div className="v2-note">{stepLabel(step)}</div>}
           <ErrorBox error={error} />
         </>}
       </Modal>
     );
   };
 
-const ReviewPanel: React.FC<{ review: { city: City; run: ZoneRun; picked: number[] }; busy: boolean; onMerge: () => void; onAccept: () => void; onDiscard: () => void;
-  onRegenerate: (n: number) => void; onPick: (k: number) => void }> = ({ review, busy, onMerge, onAccept, onDiscard, onRegenerate, onPick }) => {
+const ReviewPanel: React.FC<{ review: { city: City; run: ZoneRun; picked: number[] }; busy: boolean; progress: string | null; onMerge: () => void; onAccept: () => void; onDiscard: () => void;
+  onRegenerate: (n: number) => void; onPick: (k: number) => void }> = ({ review, busy, progress, onMerge, onAccept, onDiscard, onRegenerate, onPick }) => {
   const { run, picked } = review;
   const [n, setN] = useState(run.target);
   return (
@@ -365,7 +372,8 @@ const ReviewPanel: React.FC<{ review: { city: City; run: ZoneRun; picked: number
           ))}
         </tbody>
       </table></div>
-      <div className="v2-note" style={{ marginBottom: 10 }}>Tap two zones that touch, then Merge. Nothing is saved until you accept.</div>
+      {progress ? <div className="v2-note" style={{ marginBottom: 10 }}>{progress}</div>
+        : <div className="v2-note" style={{ marginBottom: 10 }}>Tap two zones that touch, then Merge. Nothing is saved until you accept.</div>}
       <div className="v2-row" style={{ gap: 6 }}>
         <Btn kind="o" size="sm" disabled={busy || picked.length !== 2} onClick={onMerge}>Merge the two picked</Btn>
         <span className="v2-spacer" />
