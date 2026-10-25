@@ -9,7 +9,8 @@
 --                               diagonal, whichever is less), service roads excepted. Creeks
 --                               and collector roads no longer cut. Slivers under 2 ha (between the two sides
 --                               of a divided road) are dropped; thin or small blocks (under 10 ha, or long
---                               and skinny) join the neighbour they share the longest edge with. Plazas are re-pinned to the new blocks;
+--                               and skinny) join the neighbour they share the longest edge with; ones lying
+--                               on highway ground (within 150 m of a highway) are dropped instead. Plazas are re-pinned to the new blocks;
 --                               businesses are re-pinned by ms_city_pin_businesses (their block links clear
 --                               when the old blocks go). Clears the block neighbour list (rebuilt on demand).
 --   ms_run_step                 growing: a zone takes the neighbouring block that keeps its outline most
@@ -61,6 +62,13 @@ begin
                               union all select (ST_Dump(ST_Boundary(cg))).geom) l) nd) p
     ) x
    where ST_Area(g::geography) >= 20000;
+  -- highway ground (the lanes, ramps and median between a highway's two sides): a thin or small block lying
+  -- mostly within 150 m of a highway isn't a place to knock; drop it so the highway itself is the zone edge
+  delete from ms_blocks k
+   where k.city_id = p_city
+     and (k.area_m2 < 100000 or 4 * pi() * ST_Area(k.geom) / nullif(ST_Perimeter(k.geom) ^ 2, 0) < 0.12)
+     and ST_Area(ST_Intersection(k.geom, (select ST_Buffer(ST_Union(l.geom)::geography, 150)::geometry from ms_city_lines l
+                                         where l.city_id = p_city and l.kind = 'highway'))::geography) >= 0.8 * k.area_m2;
   -- slivers (the strips between a highway's two sides and its ramps, or tiny leftovers) join the neighbour
   -- they share the longest edge with, so no zone can snake along a highway
   loop
@@ -131,3 +139,54 @@ create trigger audit_edit after update on public.ms_businesses for each row
   when ((old.name, old.address, old.kind, old.status, old.is_chain, old.phone, old.website, old.google_place_id, old.osm_id, old.lat, old.lng)
         is distinct from (new.name, new.address, new.kind, new.status, new.is_chain, new.phone, new.website, new.google_place_id, new.osm_id, new.lat, new.lng))
   execute function public.audit_row();
+
+-- ───────────── names: which half of the city, cut along the highway ─────────────
+-- The closest-point test went wrong where the highway bends (near Oakville's 403 interchange). Now the city is
+-- cut in two along the highway; a zone is North (or East) if most of its ground is in the northern (eastern)
+-- half. If the highway doesn't cross the whole city, the closest-point test is the fallback.
+create or replace function public.ms_run_name_zones(p_run uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare run ms_zone_runs; c ms_cities; div geometry; v_out jsonb; v_ns boolean := true; v_top geometry; v_n int;
+begin
+  if not ms_is_admin() then raise exception 'Not allowed'; end if;
+  select * into run from ms_zone_runs where id = p_run for update;
+  if run.id is null then raise exception 'No such run'; end if;
+  select * into c from ms_cities where id = run.city_id;
+  div := ms_city_divider(run.city_id);
+  if div is not null then
+    v_ns := 2 * ST_Distance(ST_SetSRID(ST_MakePoint(ST_XMin(div), ST_YMin(div)), 4326)::geography, ST_SetSRID(ST_MakePoint(ST_XMax(div), ST_YMin(div)), 4326)::geography)
+         >= ST_Distance(ST_SetSRID(ST_MakePoint(ST_XMin(div), ST_YMin(div)), 4326)::geography, ST_SetSRID(ST_MakePoint(ST_XMin(div), ST_YMax(div)), 4326)::geography);
+    -- the two big pieces either side of the highway; the "top" one is the more northern (or eastern)
+    with pieces as (
+      select (ST_Dump(ST_Difference(c.geom, ST_Buffer(div::geography, 30)::geometry))).geom g
+    ), big as (
+      select g from pieces where ST_Area(g::geography) >= 0.1 * ST_Area(c.geom::geography) order by ST_Area(g::geography) desc limit 2
+    )
+    select count(*), (array_agg(g order by case when v_ns then ST_Y(ST_Centroid(g)) else ST_X(ST_Centroid(g)) end desc))[1]
+      into v_n, v_top from big;
+    if v_n < 2 then v_top := null; end if;
+  end if;
+  with z as (
+    select e.z,
+           (select coalesce(sum(case when (case when div is null then ST_Y(k.center) >= c.center_lat
+                                                when v_top is not null then ST_Intersects(v_top, k.center)
+                                                when v_ns then ST_Y(k.center) >= ST_Y(ST_ClosestPoint(div, k.center))
+                                                else ST_X(k.center) >= ST_X(ST_ClosestPoint(div, k.center)) end)
+                                     then k.area_m2 else -k.area_m2 end), 0)
+              from ms_blocks k where k.id in (select (b)::bigint from jsonb_array_elements_text(e.z->'blocks') b)) lean,
+           case when v_ns then ST_X(ST_Centroid(ST_GeomFromGeoJSON((e.z->'polygon')::text)))
+                else -ST_Y(ST_Centroid(ST_GeomFromGeoJSON((e.z->'polygon')::text))) end lng
+      from jsonb_array_elements(run.proposal) e(z)
+  ), s as (
+    select z, case when v_ns then (case when lean >= 0 then 'North' else 'South' end)
+                   else (case when lean >= 0 then 'East' else 'West' end) end half, lng from z
+  ), n as (
+    select z, half, row_number() over (partition by half order by lng) rn from s
+  )
+  select coalesce(jsonb_agg(z || jsonb_build_object('half', half, 'name', c.name || ' ' || half || ' ' || rn) order by half, rn), '[]'::jsonb)
+    into v_out from n;
+  update ms_zone_runs set proposal = v_out where id = p_run;
+  return v_out;
+end $$;
+revoke all on function public.ms_run_name_zones(uuid) from public, anon;
+grant execute on function public.ms_run_name_zones(uuid) to authenticated;
