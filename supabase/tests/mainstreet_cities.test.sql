@@ -102,7 +102,9 @@ begin
   if zones <> 4 then raise exception 'proposed zones: % %', zones, r.stats; end if;
   if (select sum((z->>'count')::int) from jsonb_array_elements(r.proposal) z) <> 57 then raise exception 'counts don’t add up'; end if;
   if (select count(*) from jsonb_array_elements(r.proposal) z cross join jsonb_array_elements(z->'blocks') b) <> 16 then raise exception 'every block must be in exactly one zone'; end if;
-  if (select count(*) from jsonb_array_elements(r.proposal) z where z->>'name' like 'Testville North %' or z->>'name' like 'Testville South %') <> 4 then raise exception 'names: %', (select jsonb_agg(z->>'name') from jsonb_array_elements(r.proposal) z); end if;
+  -- Testville's highway runs north–south, so the halves are East / West of it
+  if (select count(*) from jsonb_array_elements(r.proposal) z where z->>'name' ~ '^Testville (East|West) [1-9]$') <> 4 then raise exception 'names: %', (select jsonb_agg(z->>'name') from jsonb_array_elements(r.proposal) z); end if;
+  if (select count(distinct z->>'half') from jsonb_array_elements(r.proposal) z) <> 2 then raise exception 'one side only: %', (select jsonb_agg(z->>'name') from jsonb_array_elements(r.proposal) z); end if;
   -- the plaza's 10 salons are in one zone
   if (select count(*) from jsonb_array_elements(r.proposal) z where (z->>'plazas')::int > 0) <> 1 then raise exception 'plaza split across zones'; end if;
   -- the dense SW block is its own zone: 30 trades + its clinic (31 ≥ share 15)
