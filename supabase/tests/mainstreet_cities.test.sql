@@ -87,6 +87,15 @@ begin
 
   -- generate 4 zones: 30 trades + 16 clinic + 10 salon + 1 open non-chain restaurant (jp4) = 57 eligible
   run := ms_generate_zones(vcity, camp, 4);
+  -- the generator works in steps; a run can't be accepted until it's ready
+  if (select stage from ms_zone_runs where id = run) <> 'ready' then
+    begin perform ms_run_accept(run); raise exception 'accepted an unfinished run';
+    exception when others then if sqlerrm <> 'This proposal is still being worked out' then raise; end if; end;
+  end if;
+  for i in 1..50 loop exit when ms_run_step(run)->>'stage' = 'ready'; end loop;
+  if (select stage from ms_zone_runs where id = run) <> 'ready' then raise exception 'run never got ready'; end if;
+  if (select count(*) from ms_zone_run_blocks where run_id = run) <> 16 then raise exception 'working map'; end if;
+  if (select count(*) from ms_block_adj where city_id = vcity) = 0 then raise exception 'no neighbours'; end if;
   select * into r from ms_zone_runs where id = run;
   if (r.stats->>'eligible')::int <> 57 then raise exception 'eligible: %', r.stats; end if;
   zones := jsonb_array_length(r.proposal);
@@ -116,6 +125,7 @@ begin
   if (select count(*) from ms_zone_campaigns zc join ms_zones z on z.id = zc.zone_id where z.city_id = vcity and zc.campaign_id = camp) <> 3 then raise exception 'campaign not on zones'; end if;
   if (select count(*) from ms_businesses where city_id = vcity and zone_id is null) <> 0 then raise exception 'businesses left unattached'; end if;
   if (select status from ms_zone_runs where id = run) <> 'accepted' then raise exception 'run status'; end if;
+  if exists (select 1 from ms_zone_run_blocks where run_id = run) then raise exception 'working map kept after accept'; end if;
   begin perform ms_run_accept(run); raise exception 'accepted twice';
   exception when others then if sqlerrm <> 'This proposal is closed' then raise; end if; end;
   select * into r from ms_zones_list() l where l.city_id = vcity order by l.name limit 1;
@@ -131,6 +141,7 @@ begin
   perform ms_set_zone_status(r.id, 'retired');
   if (select count(*) from ms_businesses where city_id = vcity and zone_id is null) = 0 then raise exception 'retire did not free businesses'; end if;
   run := ms_generate_zones(vcity, camp, 1);
+  for i in 1..50 loop exit when ms_run_step(run)->>'stage' = 'ready'; end loop;
   select * into r from ms_zone_runs where id = run;
   if (r.stats->>'free_blocks')::int >= 16 then raise exception 'frozen blocks were regenerated'; end if;
   perform ms_run_discard(run);
