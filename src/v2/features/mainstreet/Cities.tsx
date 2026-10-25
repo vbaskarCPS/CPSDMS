@@ -95,11 +95,30 @@ const AddCity: React.FC<{ onClose: () => void; onAdded: (c: City) => void }> = (
   );
 };
 
+/** Steps whose results are already saved for the city. */
+function savedSteps(c: City): Step[] {
+  const done: Record<string, string | null> = {
+    boundary: c.boundary ? `${c.name} (saved)` : null,
+    lines: c.blocks > 0 ? 'Saved earlier' : null,
+    blocks: c.blocks > 0 ? `${c.blocks} blocks (saved)` : null,
+    plazas: c.plazas > 0 ? `${c.plazas} plazas / parks (saved)` : null,
+    osm: c.businesses > 0 || c.eligible_open > 0 ? `${Math.max(c.businesses, c.eligible_open)} businesses (saved)` : null,
+  };
+  return STEPS.map(s => done[s.key] ? { ...s, state: 'done', note: done[s.key]! } : { ...s, state: 'todo' });
+}
+function bboxOf(g: GeoJSON.Polygon | GeoJSON.MultiPolygon): { s: number; w: number; n: number; e: number } {
+  const rings = g.type === 'Polygon' ? g.coordinates : g.coordinates.flat();
+  let s = 90, n = -90, w = 180, e = -180;
+  for (const r of rings) for (const [x, y] of r) { if (y < s) s = y; if (y > n) n = y; if (x < w) w = x; if (x > e) e = x; }
+  return { s, w, n, e };
+}
+
 const PROVINCE_NAME: Record<string, string> = { ON: 'Ontario', BC: 'British Columbia', AB: 'Alberta', QC: 'Quebec', MB: 'Manitoba', SK: 'Saskatchewan', NS: 'Nova Scotia', NB: 'New Brunswick', NL: 'Newfoundland and Labrador', PE: 'Prince Edward Island' };
 
 /** Runs the build step by step, with the Google step gated on an OK. */
 const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose }) => {
-  const [steps, setSteps] = useState<Step[]>(STEPS.map(s => ({ ...s, state: 'todo' })));
+  // what's already saved for this city counts as done, so reopening (or a page refresh) carries on
+  const [steps, setSteps] = useState<Step[]>(() => savedSteps(city));
   const [error, setError] = useState<unknown>(null);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState<string | null>(null);
@@ -111,7 +130,8 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
 
   // what's already done stays done: Start after a failure carries on from the failed step
   const stepsRef = useRef(steps); stepsRef.current = steps;
-  const boundary = useRef<Awaited<ReturnType<typeof fetchBoundary>>>(null);
+  const boundary = useRef<Awaited<ReturnType<typeof fetchBoundary>>>(city.boundary ? { osm_id: 0, name: city.name, geometry: city.boundary, bbox: bboxOf(city.boundary) } : null);
+  const startOver = () => { boundary.current = null; setSteps(STEPS.map(s => ({ ...s, state: 'todo' }))); setError(null); setDone(null); setGoogle(null); };
   const isDone = (k: string) => stepsRef.current.find(s => s.key === k)?.state === 'done';
   const tileNote = (k: string) => (d: number, of: number) => set(k, 'running', `OpenStreetMap · tile ${d} of ${of}`);
 
@@ -192,6 +212,7 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
     <Modal title={`Build ${city.name}`} onClose={running ? () => undefined : onClose}
       footer={<>
         {running ? <Btn kind="r" icon={Square} onClick={() => { abort.current?.abort(); decision.current?.(false); }}>Stop</Btn> : <Btn kind="o" onClick={onClose}>Close</Btn>}
+        {!running && !done && steps.some(s => s.state === 'done') && <Btn kind="o" onClick={startOver}>Start over</Btn>}
         {!running && !done && <Btn onClick={run}>{steps.some(s => s.state === 'done' || s.state === 'failed') ? 'Carry on' : city.status === 'built' ? 'Rebuild' : 'Start'}</Btn>}
       </>}>
       {city.status === 'built' && !running && !done && <div className="v2-note" style={{ marginBottom: 10 }}>Rebuilding reloads streets, blocks, plazas and businesses. Businesses already in zones keep their zone.</div>}
