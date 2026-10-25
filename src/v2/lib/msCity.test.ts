@@ -54,6 +54,7 @@ describe('msCity · classification', () => {
     expect(r).toMatchObject({ kind: 'trades', source: 'google', google_place_id: 'p1', status: 'open', phone: '(905) 555-0100' });
     expect(googleRow({ id: 'p2', displayName: { text: 'Closed' }, location: { latitude: 1, longitude: 1 }, businessStatus: 'CLOSED_PERMANENTLY' })?.status).toBe('closed');
     expect(googleRow({ id: 'p3' })).toBeNull();
+    expect(googleRow({ id: 'p4', displayName: { text: 'St Mary' }, location: { latitude: 1, longitude: 1 }, primaryType: 'church' })).toBeNull();
   });
 });
 
