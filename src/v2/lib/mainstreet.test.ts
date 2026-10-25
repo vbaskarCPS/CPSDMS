@@ -47,3 +47,13 @@ describe('mainstreet · list', () => {
     expect(f.labels.features[0].properties?.label).toBe('Plaza North');
   });
 });
+
+describe('mainstreet · generation steps', () => {
+  it('labels each stage', async () => {
+    const { stepLabel } = await import('./mainstreet');
+    expect(stepLabel(null)).toBe('Setting up…');
+    expect(stepLabel({ stage: 'growing', zone: 2, zones: 6, moves: 0 })).toMatch(/6 zones/);
+    expect(stepLabel({ stage: 'balancing', zone: 6, zones: 6, moves: 18 })).toMatch(/18 blocks moved/);
+    expect(stepLabel({ stage: 'ready', zone: 6, zones: 6, moves: 23 })).toBe('Ready');
+  });
+});

@@ -14,6 +14,7 @@ export interface Zone {
 export interface ProposedZone { key: number; name: string; half: string; polygon: GeoJSON.MultiPolygon; blocks: number[]; count: number; plazas: number }
 export interface ZoneRun {
   id: string; campaign_id: string; campaign_name: string; target: number; status: 'proposed' | 'accepted' | 'discarded';
+  stage: RunStage;
   proposal: ProposedZone[]; stats: { eligible?: number; share?: number; zones?: number; free_blocks?: number }; created_at: string; accepted_at: string | null;
 }
 export interface Rep {
@@ -57,8 +58,30 @@ export async function assignRep(zoneId: string, campaignId: string, repId: strin
 }
 
 // ───────────── generated zones ─────────────
+export type RunStage = 'growing' | 'leftovers' | 'balancing' | 'shaping' | 'ready';
+export interface StepState { stage: RunStage; zone: number; zones: number; moves: number }
+/** Starts a run (the database sets up its starting blocks); call runToReady to work it out. */
 export async function generateZones(cityId: string, campaignId: string, target: number): Promise<string> {
   return must(await db.rpc('ms_generate_zones', { p_city: cityId, p_campaign: campaignId, p_target: target })) as string;
+}
+export async function runStep(runId: string): Promise<StepState> { return must(await db.rpc('ms_run_step', { p_run: runId })) as StepState; }
+/** Steps a run (a few seconds each, so no call hits the database time limit) until it's ready. */
+export async function runToReady(runId: string, onStep: (s: StepState) => void, maxSteps = 120): Promise<StepState> {
+  for (let i = 0; i < maxSteps; i++) {
+    const s = await runStep(runId);
+    onStep(s);
+    if (s.stage === 'ready') return s;
+  }
+  throw new Error('Working out the zones is taking too long. Try fewer zones, or ask for help.');
+}
+/** One line for the progress note. */
+export function stepLabel(s: StepState | null): string {
+  if (!s) return 'Setting up…';
+  if (s.stage === 'growing') return `Growing ${s.zones} zones from where the businesses are…`;
+  if (s.stage === 'leftovers') return 'Placing the last blocks…';
+  if (s.stage === 'balancing') return `Evening out the zones (${s.moves} blocks moved)…`;
+  if (s.stage === 'shaping') return 'Drawing the outlines…';
+  return 'Ready';
 }
 export async function listRuns(cityId: string): Promise<ZoneRun[]> { return must(await db.rpc('ms_runs_list', { p_city: cityId })) as ZoneRun[]; }
 export async function mergeProposed(runId: string, a: number, b: number): Promise<void> { must(await db.rpc('ms_run_merge', { p_run: runId, p_a: a, p_b: b })); }
