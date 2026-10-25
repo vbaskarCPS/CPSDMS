@@ -269,7 +269,7 @@ const BusinessList: React.FC<{ city: City; onClose: () => void }> = ({ city, onC
       <div className="v2-table-wrap" style={{ maxHeight: '60vh', overflowY: 'auto' }}><table className="v2-table">
         <thead><tr><th>Business</th><th>Category</th><th>Address</th><th>Status</th><th>Source</th><th>Zone</th></tr></thead>
         <tbody>
-          {shown.slice(0, 500).map(b => (
+          {shown.slice(0, 1000).map(b => (
             <tr key={b.id}>
               <td><b>{b.name}</b>{b.is_chain && <> <Tag tone="a">Chain</Tag></>}{b.chain_note && b.is_chain && <div className="v2-mut v2-small">{b.chain_note}</div>}</td>
               <td>{kindLabel(b.kind)}</td>
@@ -281,7 +281,7 @@ const BusinessList: React.FC<{ city: City; onClose: () => void }> = ({ city, onC
           ))}
         </tbody>
       </table></div>
-      {shown.length > 500 && <div className="v2-note">Showing 500 of {shown.length}. Narrow it down with the filters.</div>}
+      {shown.length > 1000 && <div className="v2-note">Showing the first 1,000 of {shown.length}. Search or pick a category to see the rest.</div>}
     </Modal>
   );
 };
