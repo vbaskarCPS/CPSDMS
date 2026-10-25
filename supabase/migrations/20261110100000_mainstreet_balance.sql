@@ -189,7 +189,7 @@ begin
        order by p.w * (select min((g.x - p.x)^2 + ((g.y - p.y) * 1.4)^2) from gz_ctr g) desc, p.id limit 1;
   end loop;
   for v_iter in 1..12 loop
-    update gz_pts p set c = (select g.c from gz_ctr g order by (g.x - p.x)^2 + ((g.y - p.y) * 1.4)^2 limit 1);
+    update gz_pts p set c = (select g.c from gz_ctr g order by (g.x - p.x)^2 + ((g.y - p.y) * 1.4)^2 limit 1) where true;   -- the API refuses an UPDATE without WHERE
     update gz_ctr g set x = s.x, y = s.y
       from (select c, sum(x * w) / sum(w) x, sum(y * w) / sum(w) y from gz_pts group by c) s where s.c = g.c;
   end loop;
