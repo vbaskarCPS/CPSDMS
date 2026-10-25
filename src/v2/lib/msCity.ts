@@ -37,7 +37,15 @@ export interface BBox { s: number; w: number; n: number; e: number }
 
 // ───────────── database ─────────────
 export async function listCities(): Promise<City[]> { return must(await db.rpc('ms_cities_list')) as City[]; }
-export async function cityBusinesses(cityId: string): Promise<Business[]> { return must(await db.rpc('ms_city_businesses', { p_city: cityId })) as Business[]; }
+/** Every business in the city. The API returns at most 1,000 rows a call, so this reads it in pages. */
+export async function cityBusinesses(cityId: string): Promise<Business[]> {
+  const out: Business[] = [];
+  for (let from = 0; ; from += 1000) {
+    const page = must(await db.rpc('ms_city_businesses', { p_city: cityId }).range(from, from + 999)) as Business[];
+    out.push(...page);
+    if (page.length < 1000) return out;
+  }
+}
 export async function saveCity(name: string, province: string, osmRelationId: number | null, boundary: GeoJSON.Geometry | null): Promise<string> {
   return must(await db.rpc('ms_save_city', { p_name: name, p_province: province, p_osm_relation_id: osmRelationId, p_boundary: boundary })) as string;
 }
