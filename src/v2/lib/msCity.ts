@@ -217,7 +217,8 @@ export async function fetchOsmBusinesses(bbox: BBox, signal?: AbortSignal, onTil
 // ───────────── Google Places sweep ─────────────
 export const GOOGLE_COST_PER_CALL = 0.04;   // Nearby Search (New) with contact + hours fields, upper bound
 export const GOOGLE_MAX_CALLS = 2500;
-const EXCLUDED_TYPES = ['park', 'parking', 'transit_station', 'bus_station', 'bus_stop', 'subway_station', 'train_station', 'light_rail_station', 'school', 'primary_school',
+/** Never a business to knock (filtered here: Google refuses some of these names in a request). */
+export const EXCLUDED_TYPES = ['park', 'parking', 'transit_station', 'bus_station', 'bus_stop', 'subway_station', 'train_station', 'light_rail_station', 'school', 'primary_school',
   'secondary_school', 'university', 'church', 'hindu_temple', 'mosque', 'synagogue', 'place_of_worship', 'cemetery', 'city_hall', 'courthouse', 'fire_station', 'police',
   'post_office', 'library', 'hospital', 'local_government_office', 'playground', 'hiking_area', 'apartment_complex', 'apartment_building', 'housing_complex', 'condominium_complex',
   'campground', 'rv_park', 'atm', 'electric_vehicle_charging_station', 'rest_stop', 'airport', 'dog_park', 'national_park', 'state_park', 'community_center', 'embassy', 'lodging', 'hotel', 'motel'];
@@ -270,7 +271,7 @@ async function nearby(cell: Cell, key: string, signal?: AbortSignal): Promise<GP
     headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key,
       'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.types,places.primaryType,places.businessStatus,places.websiteUri,places.nationalPhoneNumber,places.regularOpeningHours.weekdayDescriptions' },
     body: JSON.stringify({ locationRestriction: { circle: { center: { latitude: cell.lat, longitude: cell.lng }, radius: Math.min(50000, cell.radius) } },
-      maxResultCount: 20, rankPreference: 'DISTANCE', excludedPrimaryTypes: EXCLUDED_TYPES, languageCode: 'en', regionCode: 'CA' }),
+      maxResultCount: 20, rankPreference: 'DISTANCE', languageCode: 'en', regionCode: 'CA' }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as { error?: { message?: string; status?: string } };
@@ -283,6 +284,7 @@ async function nearby(cell: Cell, key: string, signal?: AbortSignal): Promise<GP
 }
 export function googleRow(p: GPlace): BusinessRow | null {
   if (!p.id || !p.displayName?.text || !p.location) return null;
+  if (p.primaryType && EXCLUDED_TYPES.includes(p.primaryType)) return null;
   return { name: p.displayName.text, address: p.formattedAddress || null, lat: p.location.latitude, lng: p.location.longitude,
     kind: classifyGoogle(p.primaryType, p.types || []), raw_types: [p.primaryType || '', ...(p.types || [])].filter(Boolean), source: 'google', google_place_id: p.id,
     phone: p.nationalPhoneNumber || null, website: p.websiteUri || null, hours: p.regularOpeningHours?.weekdayDescriptions || null,
