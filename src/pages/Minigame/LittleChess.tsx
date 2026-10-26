@@ -1,0 +1,407 @@
+// src/pages/Minigame/LittleChess.tsx — Little Chess (/minigame/chess): first chess steps for a toddler who
+// reads sight words. Every instruction is a short CAPITALS sentence; the phone's voice reads it after a
+// pause (so he can try first) and lights up each word. Tap only, no wrong-answer sounds, a sticker after
+// every lesson. Leaving and the grown-ups' corner need a 3-second hold. Lessons and move rules are in
+// src/lib/littleChess/lessons.ts; progress saves to the player's account through the hub.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  BOARD, HOW, LESSONS, WORD, canMove, isOpen, movesFrom, nextLesson, readProgress, stickerFor,
+  type ChessProgress, type Lesson, type Piece, type Round, type Sq,
+} from '../../lib/littleChess/lessons';
+import type { GameProps } from './games';
+
+// Solid chess shapes (text style, not emoji) drawn as bright white pieces.
+const GLYPH: Record<Piece, string> = { king: '♚︎', queen: '♛︎', rook: '♜︎', bishop: '♝︎', knight: '♞︎', pawn: '♟︎' };
+const BG = 'radial-gradient(120% 80% at 50% 0%, #0f766e 0%, #134e4a 55%, #042f2e 100%)';
+const LIGHT = '#f0d9b5', DARK = '#b58863';
+const FONT = "'Andika', 'Comic Sans MS', 'Trebuchet MS', system-ui, sans-serif";
+
+// ── the phone's voice ──
+function speak(text: string, on: boolean, onWord?: (i: number) => void) {
+  if (!on) return;
+  try {
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text.toLowerCase().replace(/\bl\b/g, 'L'));
+    u.rate = 0.8; u.pitch = 1.15; u.lang = 'en-US';
+    const v = synth.getVoices().find(x => /en[-_](US|CA|GB)/i.test(x.lang));
+    if (v) u.voice = v;
+    if (onWord) {
+      // light up one word at a time (boundary events aren't reliable on every tablet, so time it)
+      const words = text.split(' ').length;
+      let i = 0;
+      u.onstart = () => {
+        onWord(0);
+        const t = window.setInterval(() => { i++; if (i >= words) { window.clearInterval(t); onWord(-1); } else onWord(i); }, 520);
+      };
+    }
+    synth.speak(u);
+  } catch { /* no voice on this device */ }
+}
+const hush = () => { try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } };
+
+/** A button that only works when held for 3 seconds (so little hands can't leave by accident). */
+const HoldButton: React.FC<{ onHold: () => void; label: string; children: React.ReactNode }> = ({ onHold, label, children }) => {
+  const [holding, setHolding] = useState(false);
+  const t = useRef<number | null>(null);
+  const start = () => { setHolding(true); t.current = window.setTimeout(() => { setHolding(false); onHold(); }, 3000); };
+  const stop = () => { setHolding(false); if (t.current) window.clearTimeout(t.current); };
+  return (
+    <button type="button" aria-label={label} onPointerDown={start} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop}
+      onContextMenu={e => e.preventDefault()}
+      className="relative w-14 h-14 rounded-full bg-white/10 flex items-center justify-center text-2xl text-white/70 touch-none">
+      {children}
+      <svg className="absolute inset-0 -rotate-90 pointer-events-none" viewBox="0 0 56 56">
+        <circle cx="28" cy="28" r="26" fill="none" stroke="#fde047" strokeWidth="4" strokeDasharray="163.4"
+          style={{ strokeDashoffset: holding ? 0 : 163.4, transition: holding ? 'stroke-dashoffset 3s linear' : 'none' }} />
+      </svg>
+    </button>
+  );
+};
+
+const PieceShape: React.FC<{ piece: Piece; size: number; className?: string; style?: React.CSSProperties }> = ({ piece, size, className, style }) => (
+  <span className={className} style={{
+    fontSize: size, lineHeight: 1, color: '#fffbeb', fontFamily: "'Segoe UI Symbol', 'Noto Sans Symbols2', 'DejaVu Sans', serif",
+    textShadow: '0 0 2px #1f2937, 0 0 2px #1f2937, 0 3px 0 #1f2937, 0 6px 14px rgba(0,0,0,.45)', display: 'inline-block', ...style,
+  }}>{GLYPH[piece]}</span>
+);
+
+/** The sentence at the top, in big capitals, one word lit at a time while it's read. */
+const Sentence: React.FC<{ text: string; lit: number; flash?: string | null }> = ({ text, lit, flash }) => (
+  <div className="text-center font-black tracking-wide px-4" style={{ fontSize: 'clamp(34px, 6.5vw, 64px)', fontFamily: FONT, minHeight: '1.3em' }}>
+    {flash ? <span className="text-yellow-300">{flash}</span> : text.split(' ').map((w, i) => (
+      <React.Fragment key={i}>{i > 0 && ' '}
+        <span className="inline-block mx-[0.1em] transition-transform" style={{ color: i === lit ? '#fde047' : '#fff', transform: i === lit ? 'scale(1.12)' : 'none' }}>{w}</span>
+      </React.Fragment>
+    ))}
+  </div>
+);
+
+const CHEERS = (name: string) => ['YES!', 'GREAT JOB!', `${name.toUpperCase()} DID IT!`, 'WOW!', 'SUPER!'];
+
+const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit, player }) => {
+  useEffect(() => { const was = document.title; document.title = 'Little Chess'; return () => { document.title = was; hush(); }; }, []);
+  const [p, setP] = useState<ChessProgress>(() => readProgress(progress));
+  const [playing, setPlaying] = useState<Lesson | null>(null);
+  const [sticker, setSticker] = useState<string | null>(null);
+  const [grownups, setGrownups] = useState(false);
+  const update = useCallback((next: ChessProgress) => { setP(next); save(next); }, [save]);
+
+  const finish = (lesson: Lesson) => {
+    const got = stickerFor(p);
+    update({ ...p, done: p.done.includes(lesson.id) ? p.done : [...p.done, lesson.id], stickers: [...p.stickers, got] });
+    setPlaying(null); setSticker(got);
+    speak(`${player} got a sticker!`, p.voice);
+  };
+
+  return (
+    <div className="min-h-screen w-full text-white select-none overflow-hidden" style={{ background: BG, fontFamily: FONT, WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>
+      <style>{`
+        @keyframes lc-bounce { 0%,100% { transform: translateY(0) } 40% { transform: translateY(-18%) scale(1.06) } 70% { transform: translateY(2%) } }
+        @keyframes lc-wiggle { 0%,100% { transform: rotate(0) } 20% { transform: rotate(-9deg) } 40% { transform: rotate(8deg) } 60% { transform: rotate(-6deg) } 80% { transform: rotate(4deg) } }
+        @keyframes lc-glow { 0%,100% { box-shadow: inset 0 0 0 6px rgba(253,224,71,.95), 0 0 18px rgba(253,224,71,.6) } 50% { box-shadow: inset 0 0 0 10px rgba(253,224,71,.55), 0 0 6px rgba(253,224,71,.2) } }
+        @keyframes lc-pop { 0% { transform: scale(.3); opacity: 0 } 60% { transform: scale(1.15); opacity: 1 } 100% { transform: scale(1) } }
+        @keyframes lc-gone { 0% { transform: scale(1); opacity: 1 } 100% { transform: scale(1.8); opacity: 0 } }
+        @keyframes lc-float { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-6px) } }
+      `}</style>
+      {playing
+        ? <Play key={playing.id} lesson={playing} name={player} voice={p.voice} onDone={() => finish(playing)} onQuit={() => { hush(); setPlaying(null); }} />
+        : <Home p={p} name={player} onPlay={l => setPlaying(l)} onExit={() => { hush(); exit(); }} onGrownups={() => setGrownups(true)} />}
+
+      {sticker && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={() => setSticker(null)}>
+          <div className="rounded-[40px] bg-teal-950/95 border-4 border-yellow-300 px-10 py-8 text-center shadow-2xl" style={{ animation: 'lc-pop .5s ease-out' }}>
+            <div style={{ fontSize: 'clamp(110px, 22vw, 200px)', lineHeight: 1, animation: 'lc-float 2s ease-in-out infinite' }}>{sticker}</div>
+            <div className="font-black mt-4" style={{ fontSize: 'clamp(30px, 5vw, 52px)' }}>{player.toUpperCase()} GOT A STICKER!</div>
+            <button type="button" onClick={() => setSticker(null)} className="mt-6 px-10 py-4 rounded-full bg-yellow-300 text-teal-950 font-black text-3xl">YAY!</button>
+          </div>
+        </div>
+      )}
+      {grownups && <Grownups p={p} onChange={update} onClose={() => setGrownups(false)} />}
+    </div>
+  );
+};
+
+// ── home: the big PLAY button, the sticker book, and the path of lessons ──
+const LAYERS: { layer: Lesson['layer'][]; label: string }[] = [
+  { layer: ['names', 'review'], label: 'NAMES' }, { layer: ['moves'], label: 'MOVES' }, { layer: ['eat'], label: 'EAT' },
+];
+
+const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => void; onExit: () => void; onGrownups: () => void }> = ({ p, name, onPlay, onExit, onGrownups }) => {
+  const next = nextLesson(p);
+  return (
+    <div className="max-w-4xl mx-auto px-4 pb-10" style={{ paddingTop: 'max(16px, env(safe-area-inset-top))' }}>
+      <div className="flex items-center justify-between">
+        <HoldButton onHold={onExit} label="Hold to leave">‹</HoldButton>
+        <div className="font-black text-3xl tracking-wide">LITTLE CHESS</div>
+        <HoldButton onHold={onGrownups} label="Hold for grown-ups">⚙</HoldButton>
+      </div>
+
+      <button type="button" disabled={!next} onClick={() => next && onPlay(next)}
+        className="mt-6 w-full rounded-[36px] bg-yellow-300 text-teal-950 py-6 px-6 flex items-center justify-center gap-6 shadow-xl active:scale-[.98] transition disabled:opacity-60"
+        style={{ animation: next ? 'lc-float 2.4s ease-in-out infinite' : undefined }}>
+        {next?.piece && <span style={{ fontSize: 'clamp(70px, 12vw, 110px)', lineHeight: 1, color: '#134e4a' }}>{GLYPH[next.piece]}</span>}
+        <span className="text-left">
+          <span className="block font-black" style={{ fontSize: 'clamp(48px, 9vw, 84px)', lineHeight: 1 }}>{next ? 'PLAY' : 'ALL DONE!'}</span>
+          <span className="block font-bold text-xl mt-1">{next ? `${LAYERS.find(x => x.layer.includes(next.layer))?.label} · ${next.title}` : `${name.toUpperCase()} DID EVERYTHING!`}</span>
+        </span>
+      </button>
+
+      <div className="mt-8">
+        <div className="font-black text-xl text-teal-100">STICKERS</div>
+        <div className="mt-2 flex flex-wrap gap-2 rounded-3xl bg-white/10 p-3 min-h-[76px]">
+          {p.stickers.length ? p.stickers.map((s, i) => <span key={i} className="text-5xl leading-none">{s}</span>)
+            : <span className="text-teal-100/70 text-lg self-center px-2">Finish a game to get a sticker!</span>}
+        </div>
+      </div>
+
+      {LAYERS.map(({ layer, label }) => (
+        <div key={label} className="mt-6">
+          <div className="font-black text-xl text-teal-100">{label}</div>
+          <div className="mt-2 flex flex-wrap gap-3">
+            {LESSONS.filter(l => layer.includes(l.layer)).map(l => {
+              const open = isOpen(p, l.id), done = p.done.includes(l.id);
+              return (
+                <button key={l.id} type="button" disabled={!open} onClick={() => onPlay(l)} aria-label={`${label} ${l.title}`}
+                  className={`relative w-20 h-20 rounded-3xl flex items-center justify-center ${done ? 'bg-emerald-500/80' : open ? 'bg-yellow-300/90' : 'bg-white/10'} disabled:opacity-50`}>
+                  {l.piece ? <PieceShape piece={l.piece} size={46} /> : <span className="text-3xl">⭐</span>}
+                  {done && <span className="absolute -top-2 -right-2 w-8 h-8 rounded-full text-emerald-600 font-black flex items-center justify-center" style={{ background: '#fff' }}>✓</span>}
+                  {!open && <span className="absolute -bottom-1 -right-1 text-xl">🔒</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/** Grown-ups' corner: voice, unlock everything, start over. */
+const Grownups: React.FC<{ p: ChessProgress; onChange: (p: ChessProgress) => void; onClose: () => void }> = ({ p, onChange, onClose }) => {
+  const [sure, setSure] = useState(false);
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" style={{ fontFamily: 'system-ui, sans-serif' }}>
+      <div className="w-full max-w-sm rounded-3xl p-6 shadow-2xl" style={{ background: '#fff', color: '#111827' }}>
+        <div className="text-xl font-bold">Grown-ups</div>
+        <label className="flex items-center justify-between mt-5 text-base">Read instructions out loud
+          <input type="checkbox" className="w-6 h-6" checked={p.voice} onChange={e => onChange({ ...p, voice: e.target.checked })} />
+        </label>
+        <label className="flex items-center justify-between mt-4 text-base">Open every lesson
+          <input type="checkbox" className="w-6 h-6" checked={p.unlockAll} onChange={e => onChange({ ...p, unlockAll: e.target.checked })} />
+        </label>
+        <div className="text-xs text-gray-500 mt-1">Lessons open one at a time as each is finished. Turn this on to pick any lesson.</div>
+        <div className="mt-5 border-t pt-4">
+          {!sure
+            ? <button type="button" onClick={() => setSure(true)} className="text-sm text-red-600 underline">Start over (keeps stickers)</button>
+            : <div className="text-sm">Start every lesson again?
+                <button type="button" onClick={() => { onChange({ ...p, done: [] }); setSure(false); }} className="ml-3 px-3 py-1 rounded-lg bg-red-600 text-white">Yes</button>
+                <button type="button" onClick={() => setSure(false)} className="ml-2 px-3 py-1 rounded-lg bg-gray-200">No</button></div>}
+        </div>
+        <button type="button" onClick={onClose} className="mt-6 w-full py-3 rounded-2xl bg-teal-700 text-white font-semibold">Done</button>
+      </div>
+    </div>
+  );
+};
+
+// ── playing one lesson ──
+const sentenceFor = (r: Round): string => {
+  if (r.kind === 'hello') return `THIS IS ${WORD[r.piece]}.`;
+  if (r.kind === 'find') return `FIND THE ${WORD[r.piece]}.`;
+  if (r.kind === 'word') return 'WHICH WORD?';
+  if (r.kind === 'show') return HOW[r.piece];
+  const many = r.targets.length > 1;
+  return r.mode === 'star' ? (many ? 'GET THE STARS.' : 'GET THE STAR.') : (many ? 'EAT THE APPLES.' : 'EAT THE APPLE.');
+};
+
+const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () => void; onQuit: () => void }> = ({ lesson, name, voice, onDone, onQuit }) => {
+  const [i, setI] = useState(0);
+  const [lit, setLit] = useState(-1);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [hint, setHint] = useState(false);
+  const [cheer, setCheer] = useState<string | null>(null);
+  const round = lesson.rounds[i];
+  const text = sentenceFor(round);
+  const idle = useRef<number | null>(null);
+
+  // read the sentence after a pause (so he can read it first); if nothing happens, hint and read again
+  const nudge = useCallback(() => {
+    if (idle.current) window.clearTimeout(idle.current);
+    idle.current = window.setTimeout(() => { setHint(true); speak(text, voice, setLit); }, 7000);
+  }, [text, voice]);
+  useEffect(() => {
+    setHint(false); setLit(-1);
+    const t = window.setTimeout(() => speak(text, voice, setLit), 2500);
+    nudge();
+    return () => { window.clearTimeout(t); if (idle.current) window.clearTimeout(idle.current); };
+  }, [i]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const oops = () => { setFlash('TRY AGAIN.'); window.setTimeout(() => setFlash(null), 1100); nudge(); };
+  const won = () => {
+    if (idle.current) window.clearTimeout(idle.current);
+    const c = CHEERS(name)[Math.floor(Math.random() * 5)];
+    setCheer(c); speak(c, voice);
+    try { navigator.vibrate?.(40); } catch { /* ignore */ }
+    window.setTimeout(() => { setCheer(null); if (i + 1 < lesson.rounds.length) setI(i + 1); else onDone(); }, 1500);
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col" style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
+      <div className="flex items-center justify-between px-4">
+        <HoldButton onHold={onQuit} label="Hold to stop">‹</HoldButton>
+        <div className="flex gap-2">{lesson.rounds.map((_, k) => <span key={k} className={`w-4 h-4 rounded-full ${k < i ? 'bg-yellow-300' : k === i ? '' : 'bg-white/25'}`} style={k === i ? { background: '#fff' } : undefined} />)}</div>
+        <div className="w-14" />
+      </div>
+      <div className="mt-4"><Sentence text={text} lit={lit} flash={flash} /></div>
+      <div className="flex-1 flex items-center justify-center p-4" onPointerDown={() => nudge()}>
+        {round.kind === 'hello' && <Hello key={i} round={round} onDone={won} speakIt={() => speak(text, voice, setLit)} />}
+        {round.kind === 'find' && <Find key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
+        {round.kind === 'word' && <Word key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
+        {(round.kind === 'board' || round.kind === 'show') && <BoardRound key={i} round={round} hint={hint} onDone={won} onWrong={oops} />}
+      </div>
+      {cheer && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center pointer-events-none">
+          <div className="font-black text-yellow-300 text-center" style={{ fontSize: 'clamp(56px, 12vw, 130px)', textShadow: '0 6px 0 #134e4a, 0 0 30px rgba(0,0,0,.4)', animation: 'lc-pop .4s ease-out' }}>
+            {cheer}<div className="text-[0.6em]">✨⭐✨</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Hello: React.FC<{ round: Extract<Round, { kind: 'hello' }>; onDone: () => void; speakIt: () => void }> = ({ round, onDone, speakIt }) => {
+  const [tapped, setTapped] = useState(false);
+  return (
+    <div className="flex flex-col items-center">
+      <button type="button" aria-label={WORD[round.piece]} onClick={() => { if (tapped) return; setTapped(true); speakIt(); window.setTimeout(onDone, 1600); }}
+        className="rounded-[48px] bg-white/10 px-12 py-6" style={{ animation: tapped ? 'lc-bounce .7s ease-out 2' : 'lc-float 2s ease-in-out infinite' }}>
+        <PieceShape piece={round.piece} size={Math.min(260, window.innerHeight * 0.32)} />
+      </button>
+      <WordCard word={WORD[round.piece]} big />
+      {!tapped && <div className="mt-4 text-2xl font-black text-teal-100">TAP IT!</div>}
+    </div>
+  );
+};
+
+const WordCard: React.FC<{ word: string; big?: boolean; glow?: boolean; wiggle?: boolean; onClick?: () => void }> = ({ word, big, glow, wiggle, onClick }) => {
+  const El = onClick ? 'button' : 'div';
+  return (
+    <El {...(onClick ? { type: 'button' as const, onClick } : {})}
+      className="mt-4 rounded-3xl text-teal-950 font-black tracking-wider px-8 py-3"
+      style={{ background: '#fff', fontSize: big ? 'clamp(44px, 8vw, 80px)' : 'clamp(36px, 6vw, 60px)', animation: wiggle ? 'lc-wiggle .5s' : glow ? 'lc-glow 1.1s ease-in-out infinite' : undefined }}>
+      {word}
+    </El>
+  );
+};
+
+function useWrong() {
+  const [wrong, setWrong] = useState<number | null>(null);
+  const flag = (k: number) => { setWrong(k); window.setTimeout(() => setWrong(null), 520); };
+  return [wrong, flag] as const;
+}
+
+const Find: React.FC<{ round: Extract<Round, { kind: 'find' }>; hint: boolean; onRight: () => void; onWrong: () => void }> = ({ round, hint, onRight, onWrong }) => {
+  const [wrong, flag] = useWrong();
+  const [got, setGot] = useState(false);
+  const size = Math.min(170, window.innerWidth / (round.options.length + 1));
+  return (
+    <div className="flex flex-wrap justify-center gap-5">
+      {round.options.map((piece, k) => {
+        const right = piece === round.piece;
+        return (
+          <button key={k} type="button" aria-label={`Piece ${k + 1}`} onClick={() => { if (got) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(); } }}
+            className="rounded-[36px] bg-white/10 p-5"
+            style={{ animation: wrong === k ? 'lc-wiggle .5s' : got && right ? 'lc-bounce .7s ease-out 2' : hint && right ? 'lc-glow 1.1s ease-in-out infinite' : undefined }}>
+            <PieceShape piece={piece} size={size} />
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
+const Word: React.FC<{ round: Extract<Round, { kind: 'word' }>; hint: boolean; onRight: () => void; onWrong: () => void }> = ({ round, hint, onRight, onWrong }) => {
+  const [wrong, flag] = useWrong();
+  const [got, setGot] = useState(false);
+  return (
+    <div className="flex flex-col items-center">
+      <div className="rounded-[48px] bg-white/10 px-10 py-4"><PieceShape piece={round.piece} size={Math.min(220, window.innerHeight * 0.26)} /></div>
+      <div className="flex flex-wrap justify-center gap-4 mt-4">
+        {round.options.map((piece, k) => {
+          const right = piece === round.piece;
+          return <WordCard key={k} word={WORD[piece]} wiggle={wrong === k} glow={(hint || got) && right}
+            onClick={() => { if (got) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(); } }} />;
+        })}
+      </div>
+    </div>
+  );
+};
+
+const same = (a: Sq, b: Sq) => a[0] === b[0] && a[1] === b[1];
+
+/** A small board: the piece's squares glow; tap one to move. Stars to get, apples to eat, or (show) just practise. */
+const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; hint: boolean; onDone: () => void; onWrong: () => void }> = ({ round, hint, onDone, onWrong }) => {
+  const [at, setAt] = useState<Sq>(round.start);
+  const [left, setLeft] = useState<Sq[]>(round.kind === 'board' ? round.targets : []);
+  const [gone, setGone] = useState<Sq | null>(null);
+  const [taps, setTaps] = useState(0);
+  const [wiggle, setWiggle] = useState(false);
+  const [finished, setFinished] = useState(false);
+  const piece = round.piece;
+  const glowOn = round.kind === 'show' || round.glow || hint;
+  const legal = useMemo(() => movesFrom(piece, at), [piece, at]);
+  const cell = Math.floor(Math.min(window.innerWidth * 0.86, window.innerHeight * 0.58, 600) / BOARD);
+  const myColour = (round.start[0] + round.start[1]) % 2;
+  const icon = round.kind === 'board' && round.mode === 'apple' ? '🍎' : '⭐';
+
+  const tap = (sq: Sq) => {
+    if (finished || same(sq, at)) return;
+    if (!canMove(piece, at, sq)) { setWiggle(true); window.setTimeout(() => setWiggle(false), 520); onWrong(); return; }
+    setAt(sq);
+    if (round.kind === 'show') {
+      const n = taps + 1; setTaps(n);
+      if (n >= round.taps) { setFinished(true); window.setTimeout(onDone, 450); }
+      return;
+    }
+    const hit = left.find(t => same(t, sq));
+    if (hit) {
+      const rest = left.filter(t => !same(t, sq));
+      window.setTimeout(() => { setGone(hit); setLeft(rest); }, 300);
+      window.setTimeout(() => setGone(null), 900);
+      if (!rest.length) { setFinished(true); window.setTimeout(onDone, 750); }
+    }
+  };
+
+  return (
+    <div className="relative rounded-2xl overflow-hidden shadow-2xl" style={{ width: cell * BOARD, height: cell * BOARD, border: '6px solid #78350f' }}>
+      {Array.from({ length: BOARD * BOARD }, (_, k) => {
+        const sq: Sq = [Math.floor(k / BOARD), k % BOARD];
+        const dark = (sq[0] + sq[1]) % 2 === 1;
+        const glow = glowOn && legal.some(s => same(s, sq));
+        const offColour = piece === 'bishop' && glowOn && (sq[0] + sq[1]) % 2 !== myColour;   // the bishop never leaves its colour
+        return (
+          <button key={k} type="button" aria-label={`Square ${sq[0] + 1}-${sq[1] + 1}`} onClick={() => tap(sq)}
+            className="absolute"
+            style={{ left: sq[1] * cell, top: sq[0] * cell, width: cell, height: cell, background: dark ? DARK : LIGHT, opacity: offColour ? 0.35 : 1, transition: 'opacity .3s',
+              animation: glow ? 'lc-glow 1.1s ease-in-out infinite' : undefined }} />
+        );
+      })}
+      {left.map(t => (
+        <div key={t.join(',')} className="absolute flex items-center justify-center pointer-events-none"
+          style={{ left: t[1] * cell, top: t[0] * cell, width: cell, height: cell, fontSize: cell * 0.6, animation: 'lc-float 1.6s ease-in-out infinite' }}>{icon}</div>
+      ))}
+      {gone && (
+        <div className="absolute flex items-center justify-center pointer-events-none"
+          style={{ left: gone[1] * cell, top: gone[0] * cell, width: cell, height: cell, fontSize: cell * 0.6, animation: 'lc-gone .6s ease-out forwards' }}>{icon === '🍎' ? '😋' : '✨'}</div>
+      )}
+      <div className="absolute flex items-center justify-center pointer-events-none"
+        style={{ left: at[1] * cell, top: at[0] * cell, width: cell, height: cell, transition: 'left .35s ease-in-out, top .35s ease-in-out', zIndex: 5 }}>
+        <PieceShape piece={piece} size={cell * 0.8} style={{ animation: wiggle ? 'lc-wiggle .5s' : finished ? 'lc-bounce .7s ease-out 2' : undefined }} />
+      </div>
+    </div>
+  );
+};
+
+export default LittleChess;
