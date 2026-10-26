@@ -11,6 +11,8 @@ export type GameProps<T> = {
   save: (data: T) => void;
   /** Back to the game list. */
   exit: () => void;
+  /** The signed-in player's name (e.g. for "KIAAN DID IT!"). */
+  player: string;
 };
 
 export type GameInfo = {
@@ -47,7 +49,9 @@ export const GAMES: GameInfo[] = [
     },
   },
   {
-    id: 'chess', name: 'Little Chess', icon: '♞', colour: '#0f766e', comingSoon: true,
+    id: 'chess', name: 'Little Chess', icon: '♞', colour: '#0f766e',
     blurb: 'First steps in chess, made for little hands.',
+    component: React.lazy(() => import('./LittleChess')),
+    summary: p => { const n = Array.isArray(p?.stickers) ? p!.stickers.length : 0; return n ? `${n} sticker${n === 1 ? '' : 's'}` : null; },
   },
 ];

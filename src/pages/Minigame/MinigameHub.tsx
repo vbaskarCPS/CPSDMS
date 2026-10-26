@@ -104,7 +104,7 @@ const MinigameHub: React.FC = () => {
     const Game = game.component!;
     return (
       <React.Suspense fallback={shell(<div className="min-h-screen flex items-center justify-center text-indigo-200 animate-pulse">Loading…</div>)}>
-        <Game key={`${player.id}.${game.id}`} progress={progress[game.id] || null} save={d => save(game.id, d)} exit={() => nav('/minigame')} />
+        <Game key={`${player.id}.${game.id}`} progress={progress[game.id] || null} save={d => save(game.id, d)} exit={() => nav('/minigame')} player={player.name} />
         {note && <div className="fixed bottom-24 inset-x-0 flex justify-center pointer-events-none z-50"><div className="px-4 py-2 rounded-xl bg-black/60 text-white text-sm">{note}</div></div>}
       </React.Suspense>
     );
