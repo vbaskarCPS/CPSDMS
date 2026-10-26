@@ -130,8 +130,8 @@ export function allLessons(): Lesson[] {
 export const LESSONS = allLessons();
 
 /** Saved in the player's account under "chess". */
-export type ChessProgress = { done: string[]; stickers: string[]; voice: boolean; unlockAll: boolean; voiceName: string | null };
-export const freshProgress = (): ChessProgress => ({ done: [], stickers: [], voice: true, unlockAll: false, voiceName: null });
+export type ChessProgress = { done: string[]; stickers: string[]; voice: boolean; unlockAll: boolean; voiceName: string | null; recorded: boolean };
+export const freshProgress = (): ChessProgress => ({ done: [], stickers: [], voice: true, unlockAll: false, voiceName: null, recorded: true });
 
 export function readProgress(p: Partial<ChessProgress> | null): ChessProgress {
   const f = freshProgress();
@@ -141,6 +141,7 @@ export function readProgress(p: Partial<ChessProgress> | null): ChessProgress {
     voice: typeof p?.voice === 'boolean' ? p.voice : f.voice,
     unlockAll: !!p?.unlockAll,
     voiceName: typeof p?.voiceName === 'string' && p.voiceName ? p.voiceName : null,   // a voice a grown-up picked on this tablet
+    recorded: typeof p?.recorded === 'boolean' ? p.recorded : f.recorded,              // use the recorded clips when there are some
   };
 }
 
@@ -157,3 +158,41 @@ export const STICKERS = ['🦁', '🐘', '🦒', '🐢', '🦊', '🐼', '🐸',
 
 /** The sticker for finishing a lesson: the next one in the book (the book loops when full). */
 export const stickerFor = (p: ChessProgress) => STICKERS[p.stickers.length % STICKERS.length];
+
+// ── what gets said out loud, and by whom (for the recorded voice clips) ──
+
+/** Who says a line: the narrator reads instructions; each character says its own hello and cheers. */
+export type Speaker = 'narrator' | Piece;
+export const SPEAKERS: Speaker[] = ['narrator', ...NAME_ORDER];
+
+/** The sentence shown (and read) for a round. */
+export function sentenceFor(r: Round): string {
+  if (r.kind === 'hello') return `THIS IS ${WORD[r.piece]}.`;
+  if (r.kind === 'find') return `FIND THE ${WORD[r.piece]}.`;
+  if (r.kind === 'word') return 'WHICH WORD?';
+  if (r.kind === 'show') return HOW[r.piece];
+  const many = r.targets.length > 1;
+  return r.mode === 'star' ? (many ? 'GET THE STARS.' : 'GET THE STAR.') : (many ? 'EAT THE APPLES.' : 'EAT THE APPLE.');
+}
+
+/** Who reads a round's sentence: the piece introduces itself; the narrator reads the rest. */
+export const speakerFor = (r: Round): Speaker => (r.kind === 'hello' ? r.piece : 'narrator');
+
+export const cheers = (name: string) => ['YES!', 'GREAT JOB!', `${name.toUpperCase()} DID IT!`, 'WOW!', 'SUPER!'];
+export const stickerLine = (name: string) => `${name.toUpperCase()} GOT A STICKER!`;
+
+/** The file name for a recorded line, e.g. "king--this-is-king". */
+export const clipId = (speaker: Speaker, text: string) =>
+  `${speaker}--${text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
+
+/** Every line the game can say, for these players' names (no duplicates). */
+export function voiceLines(names: string[]): { speaker: Speaker; text: string; id: string }[] {
+  const out = new Map<string, { speaker: Speaker; text: string; id: string }>();
+  const add = (speaker: Speaker, text: string) => { const id = clipId(speaker, text); out.set(id, { speaker, text, id }); };
+  for (const l of LESSONS) for (const r of l.rounds) add(speakerFor(r), sentenceFor(r));
+  for (const name of names) {
+    add('narrator', stickerLine(name));
+    for (const p of NAME_ORDER) for (const c of cheers(name)) add(p, c);
+  }
+  return [...out.values()];
+}

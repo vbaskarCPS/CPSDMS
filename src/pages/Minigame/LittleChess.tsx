@@ -5,20 +5,22 @@
 // src/lib/littleChess/lessons.ts; progress saves to the player's account through the hub.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BOARD, HOW, LESSONS, WORD, canMove, isOpen, movesFrom, nextLesson, readProgress, stickerFor,
-  type ChessProgress, type Lesson, type Piece, type Round, type Sq,
+  BOARD, LESSONS, WORD, canMove, cheers, clipId, isOpen, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, stickerFor, stickerLine,
+  type ChessProgress, type Lesson, type Piece, type Round, type Speaker, type Sq,
 } from '../../lib/littleChess/lessons';
 import type { GameProps } from './games';
 import { CHARACTER_CSS, Character, type Mood } from './chessCharacters';
-import { englishVoices, hush, onVoicesReady, say, type VoiceInfo } from './voice';
+import { clipCount, englishVoices, hush, loadClips, onVoicesReady, say, type VoiceInfo } from './voice';
 
 const BG = 'radial-gradient(120% 80% at 50% 0%, #0f766e 0%, #134e4a 55%, #042f2e 100%)';
 const LIGHT = '#f0d9b5', DARK = '#b58863';
 const FONT = "'Andika', 'Comic Sans MS', 'Trebuchet MS', system-ui, sans-serif";
 
 // ── the voice: the tablet's most natural one, or the one a grown-up picked ──
-let chosenVoice: string | null = null;
-const speak = (text: string, on: boolean, onWord?: (i: number) => void) => say(text, { on, voice: chosenVoice, onWord });
+let chosenVoice: string | null = null, useRecorded = true;
+/** Say a line as `who` (the recorded clip if there is one, else the tablet's voice). */
+const speak = (text: string, on: boolean, onWord?: (i: number) => void, who: Speaker = 'narrator') =>
+  say(text, { on, voice: chosenVoice, onWord, clip: clipId(who, text), recorded: useRecorded });
 
 /** A button that only works when held for 3 seconds (so little hands can't leave by accident). */
 const HoldButton: React.FC<{ onHold: () => void; label: string; children: React.ReactNode }> = ({ onHold, label, children }) => {
@@ -54,7 +56,6 @@ const Sentence: React.FC<{ text: string; lit: number; flash?: string | null }> =
   </div>
 );
 
-const CHEERS = (name: string) => ['YES!', 'GREAT JOB!', `${name.toUpperCase()} DID IT!`, 'WOW!', 'SUPER!'];
 
 const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit, player }) => {
   useEffect(() => { const was = document.title; document.title = 'Little Chess'; return () => { document.title = was; hush(); }; }, []);
@@ -63,13 +64,14 @@ const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit,
   const [sticker, setSticker] = useState<string | null>(null);
   const [grownups, setGrownups] = useState(false);
   const update = useCallback((next: ChessProgress) => { setP(next); save(next); }, [save]);
-  chosenVoice = p.voiceName;
+  chosenVoice = p.voiceName; useRecorded = p.recorded;
+  useEffect(() => { loadClips(); }, []);
 
   const finish = (lesson: Lesson) => {
     const got = stickerFor(p);
     update({ ...p, done: p.done.includes(lesson.id) ? p.done : [...p.done, lesson.id], stickers: [...p.stickers, got] });
     setPlaying(null); setSticker(got);
-    speak(`${player} got a sticker!`, p.voice);
+    speak(stickerLine(player), p.voice);
   };
 
   return (
@@ -169,9 +171,14 @@ const Grownups: React.FC<{ p: ChessProgress; onChange: (p: ChessProgress) => voi
         <label className="flex items-center justify-between mt-5 text-base">Read instructions out loud
           <input type="checkbox" className="w-6 h-6" checked={p.voice} onChange={e => onChange({ ...p, voice: e.target.checked })} />
         </label>
+        {p.voice && clipCount() > 0 && (
+          <label className="flex items-center justify-between mt-4 text-base">Use the recorded voices ({clipCount()} clips)
+            <input type="checkbox" className="w-6 h-6" checked={p.recorded} onChange={e => onChange({ ...p, recorded: e.target.checked })} />
+          </label>
+        )}
         {p.voice && (
           <div className="mt-3">
-            <div className="text-sm">Voice</div>
+            <div className="text-sm">{clipCount() > 0 && p.recorded ? 'Tablet voice (for anything not recorded)' : 'Voice'}</div>
             <div className="flex gap-2 mt-1">
               <select value={p.voiceName || ''} onChange={e => { const v = e.target.value || null; onChange({ ...p, voiceName: v }); test(v); }}
                 className="flex-1 min-w-0 rounded-lg border border-gray-300 px-2 py-2 text-sm" style={{ background: '#fff', color: '#111827' }}>
@@ -201,15 +208,6 @@ const Grownups: React.FC<{ p: ChessProgress; onChange: (p: ChessProgress) => voi
 };
 
 // ── playing one lesson ──
-const sentenceFor = (r: Round): string => {
-  if (r.kind === 'hello') return `THIS IS ${WORD[r.piece]}.`;
-  if (r.kind === 'find') return `FIND THE ${WORD[r.piece]}.`;
-  if (r.kind === 'word') return 'WHICH WORD?';
-  if (r.kind === 'show') return HOW[r.piece];
-  const many = r.targets.length > 1;
-  return r.mode === 'star' ? (many ? 'GET THE STARS.' : 'GET THE STAR.') : (many ? 'EAT THE APPLES.' : 'EAT THE APPLE.');
-};
-
 const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () => void; onQuit: () => void }> = ({ lesson, name, voice, onDone, onQuit }) => {
   const [i, setI] = useState(0);
   const [lit, setLit] = useState(-1);
@@ -218,16 +216,17 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
   const [cheer, setCheer] = useState<string | null>(null);
   const round = lesson.rounds[i];
   const text = sentenceFor(round);
+  const who = speakerFor(round);
   const idle = useRef<number | null>(null);
 
   // read the sentence after a pause (so he can read it first); if nothing happens, hint and read again
   const nudge = useCallback(() => {
     if (idle.current) window.clearTimeout(idle.current);
-    idle.current = window.setTimeout(() => { setHint(true); speak(text, voice, setLit); }, 7000);
-  }, [text, voice]);
+    idle.current = window.setTimeout(() => { setHint(true); speak(text, voice, setLit, who); }, 7000);
+  }, [text, voice, who]);
   useEffect(() => {
     setHint(false); setLit(-1);
-    const t = window.setTimeout(() => speak(text, voice, setLit), 2500);
+    const t = window.setTimeout(() => speak(text, voice, setLit, who), 2500);
     nudge();
     return () => { window.clearTimeout(t); if (idle.current) window.clearTimeout(idle.current); };
   }, [i]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -235,8 +234,8 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
   const oops = () => { setFlash('TRY AGAIN.'); window.setTimeout(() => setFlash(null), 1100); nudge(); };
   const won = () => {
     if (idle.current) window.clearTimeout(idle.current);
-    const c = CHEERS(name)[Math.floor(Math.random() * 5)];
-    setCheer(c); speak(c, voice);
+    const c = cheers(name)[Math.floor(Math.random() * 5)];
+    setCheer(c); speak(c, voice, undefined, round.piece);   // the round's character cheers in its own voice
     try { navigator.vibrate?.(40); } catch { /* ignore */ }
     window.setTimeout(() => { setCheer(null); if (i + 1 < lesson.rounds.length) setI(i + 1); else onDone(); }, 1500);
   };
@@ -250,7 +249,7 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
       </div>
       <div className="mt-4"><Sentence text={text} lit={lit} flash={flash} /></div>
       <div className="flex-1 flex items-center justify-center p-4" onPointerDown={() => nudge()}>
-        {round.kind === 'hello' && <Hello key={i} round={round} onDone={won} speakIt={() => speak(text, voice, setLit)} />}
+        {round.kind === 'hello' && <Hello key={i} round={round} onDone={won} speakIt={() => speak(text, voice, setLit, who)} />}
         {round.kind === 'find' && <Find key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
         {round.kind === 'word' && <Word key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
         {(round.kind === 'board' || round.kind === 'show') && <BoardRound key={i} round={round} hint={hint} onDone={won} onWrong={oops} />}

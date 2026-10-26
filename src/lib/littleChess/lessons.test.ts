@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOARD, EAT_ORDER, HOW, LESSONS, MOVE_ORDER, NAME_ORDER, canMove, freshProgress, isOpen, movesFrom, nextLesson, readProgress, stickerFor, type Round } from './lessons';
+import { BOARD, EAT_ORDER, HOW, LESSONS, MOVE_ORDER, NAME_ORDER, canMove, cheers, clipId, freshProgress, isOpen, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, stickerFor, stickerLine, voiceLines, type Round } from './lessons';
 
 const key = (s: [number, number]) => s.join(',');
 
@@ -72,5 +72,29 @@ describe('progress', () => {
     expect(p.done).toEqual(['names-rook']);
     expect(p.voice).toBe(false);
     expect(stickerFor(p)).toBe('🐘');
+  });
+});
+
+describe('voice lines', () => {
+  it('cover every sentence and cheer the game can say, each with one clip name', () => {
+    const lines = voiceLines(['Kiaan']);
+    const ids = new Set(lines.map(l => l.id));
+    expect(ids.size).toBe(lines.length);
+    for (const l of LESSONS) for (const r of l.rounds) expect(ids.has(clipId(speakerFor(r), sentenceFor(r)))).toBe(true);
+    for (const p of NAME_ORDER) for (const c of cheers('Kiaan')) expect(ids.has(clipId(p, c))).toBe(true);
+    expect(ids.has(clipId('narrator', stickerLine('Kiaan')))).toBe(true);
+    expect(clipId('king', 'THIS IS KING.')).toBe('king--this-is-king');
+    expect(clipId('rook', 'KIAAN DID IT!')).toBe('rook--kiaan-did-it');
+    expect(lines.length).toBeLessThan(80);
+  });
+});
+
+describe('the voice script', () => {
+  it("has the same lines as the game (re-copy them into scripts/make-little-chess-voices.mjs if this fails)", async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync('scripts/make-little-chess-voices.mjs', 'utf8');
+    const block = src.slice(src.indexOf('// LINES-START'), src.indexOf('// LINES-END'));
+    const lines = JSON.parse(block.slice(block.indexOf('['), block.lastIndexOf(']') + 1));
+    expect(lines).toEqual(voiceLines(['Kiaan']).map(l => [l.speaker, l.text]));
   });
 });
