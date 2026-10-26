@@ -30,7 +30,7 @@ const READ_AFTER = 1200;      // the sentence is read this long after a round st
 const LISTEN_QUIET = 3000;    // with the voice off, the answers wake up after this long
 const THINK = 2500;           // after a wrong tap, everything waits at least this long (and until the oops is said)
 const SLOW = 4000;            // the "SLOW DOWN" pause
-const QUICK_MISS = 4000;      // two misses this close together count as mashing
+const QUICK_MISS = 1500;      // missing again this soon after the answers wake up (after a miss) counts as mashing
 const VOICE_MAX = 9000;       // never wait longer than this for the voice to finish
 
 /** A button that only works when held for 3 seconds (so little hands can't leave by accident). */
@@ -246,6 +246,7 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
   const seq = useRef(0);                            // bumps whenever a wait starts, so stale timers do nothing
   const timers = useRef<number[]>([]);
   const misses = useRef<number[]>([]);             // when he missed, this round
+  const woke = useRef(0);                          // when the answers last woke up after a miss
   const later = (fn: () => void, ms: number) => { timers.current.push(window.setTimeout(fn, ms)); };
   const setLock = (l: Lock) => { lockRef.current = l; setLockState(l); };
 
@@ -264,6 +265,7 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
     let said = !line || !voice, waited = false;
     const wake = () => {
       if (seq.current !== id || !said || !waited) return;
+      if (kind !== 'listen') woke.current = Date.now();
       setLock(null); setFlash(null); nudge();
     };
     later(() => { waited = true; wake(); }, ms);
@@ -275,7 +277,7 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
 
   // a new round: read the sentence after a moment; the answers wait until it's been read (listen first)
   useEffect(() => {
-    setHint(false); setLit(-1); setFlash(null); misses.current = [];
+    setHint(false); setLit(-1); setFlash(null); misses.current = []; woke.current = 0;
     if (round.kind === 'hello') {
       setLock(null);
       later(() => speak(text, voice, setLit, who), READ_AFTER);
@@ -285,10 +287,10 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
   }, [i]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** A wrong tap: name what he tapped (or the piece's rule on a board), then wait while he thinks.
-   *  Two misses close together get the calm SLOW DOWN pause; two misses in a round light up the answer. */
+   *  Missing again straight after the wait gets the calm SLOW DOWN pause; two misses in a round light up the answer. */
   const oops = (tapped?: Piece) => {
     const now = Date.now();
-    const quick = misses.current.length > 0 && now - misses.current[misses.current.length - 1] < QUICK_MISS;
+    const quick = misses.current.length > 0 && now - woke.current < QUICK_MISS;   // tapped wrong again straight away, without looking
     misses.current.push(now);
     if (misses.current.length >= 2) setHint(true);
     try { navigator.vibrate?.([30, 60, 30]); } catch { /* ignore */ }

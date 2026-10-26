@@ -98,7 +98,11 @@ try {
   const workers = Array.from({ length: 4 }, async () => {
     while (todo.length) {
       const l = todo.shift();
-      clips[l.id] = await synth(l.who, l.spoken);
+      // Google now and then answers OK with no audio: ask again (a few times) rather than keep a gap
+      let audio = null;
+      for (let t = 1; t <= 4 && !audio; t++) audio = await synth(l.who, l.spoken);
+      if (!audio) throw new Error(`Google sent no audio for "${l.spoken.slice(0, 40)}..." Run this again; it carries on where it stopped.`);
+      clips[l.id] = audio;
       n++; show();
       writeFileSync(PART, JSON.stringify({ voices: VOICES, clips }));
     }
