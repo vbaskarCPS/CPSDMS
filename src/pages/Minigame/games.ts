@@ -13,6 +13,8 @@ export type GameProps<T> = {
   exit: () => void;
   /** The signed-in player's name (e.g. for "KIAAN DID IT!"). */
   player: string;
+  /** The signed-in player's id (for head-to-head games). */
+  playerId?: string;
 };
 
 export type GameInfo = {

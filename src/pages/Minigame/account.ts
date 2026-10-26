@@ -1,6 +1,7 @@
 // src/pages/Minigame/account.ts — minigame players and saved progress (supabase minigame_* functions).
 // The phone keeps only a pass token; the PIN is never stored on the phone.
 import { supabase } from '../../lib/supabase';
+import type { Match } from '../../lib/pour/pvp';
 
 export type Player = { id: string; name: string; has_pin?: boolean };
 export type Progress = Record<string, Record<string, unknown>>;
@@ -45,3 +46,19 @@ export const loadProgress = () => rpc<Progress>('minigame_progress_all', { p_tok
 
 export const saveProgress = (game: string, data: Record<string, unknown>) =>
   rpc<string>('minigame_save', { p_token: readToken(), p_game: game, p_data: data });
+
+// ── head-to-head matches (minigame_match_* functions; see src/lib/pour/pvp.ts) ──
+const tok = () => readToken();
+export const matchCreate = (game = 'pour') => rpc<Match>('minigame_match_create', { p_token: tok(), p_game: game });
+export const matchJoin = (code: string) =>
+  rpc<{ ok: true; match: Match } | { ok: false; reason: 'no_match' | 'own_match' }>('minigame_match_join', { p_token: tok(), p_code: code });
+export const matchState = (id: string) => rpc<Match>('minigame_match_state', { p_token: tok(), p_match: id });
+export const matchReport = (id: string, r: { round: number; sorted: number; total: number; moves: number; penalty: number; finished: boolean; gaveUp: boolean }) =>
+  rpc<Match>('minigame_match_report', {
+    p_token: tok(), p_match: id, p_round: r.round, p_sorted: r.sorted, p_total: r.total, p_moves: r.moves,
+    p_penalty_ms: r.penalty, p_finished: r.finished, p_gave_up: r.gaveUp,
+  });
+export const matchLeave = (id: string) => rpc<null>('minigame_match_leave', { p_token: tok(), p_match: id });
+export const matchRematch = (id: string) =>
+  rpc<{ ok: true; match: Match } | { ok: false; reason: string }>('minigame_match_rematch', { p_token: tok(), p_match: id });
+export const matchHistory = (game = 'pour') => rpc<Match[]>('minigame_match_history', { p_token: tok(), p_game: game });

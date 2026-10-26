@@ -127,9 +127,15 @@ export function hint(bottles: Bottle[]): Move | null {
 /** Build level N: shuffle CAP layers of each colour into full bottles, add the empties, and keep
  *  the first deal that isn't already partly sorted and that the solver can finish. */
 export function makeLevel(level: number): Bottle[] {
+  return makeDeal(level, level * 7919 + 17);
+}
+
+/** A puzzle the size of level N, dealt from `seed` (head-to-head rounds use a fresh seed, so both
+ *  players get the same puzzle but not one they've seen in their own game). */
+export function makeDeal(level: number, seed: number): Bottle[] {
   const { colours, empties } = levelSize(level);
   for (let attempt = 0; attempt < 500; attempt++) {
-    const rand = rng(level * 7919 + attempt * 104729 + 17);
+    const rand = rng(seed + attempt * 104729);
     const layers: number[] = [];
     for (let c = 0; c < colours; c++) for (let i = 0; i < CAP; i++) layers.push(c);
     for (let i = layers.length - 1; i > 0; i--) {
@@ -142,5 +148,5 @@ export function makeLevel(level: number): Bottle[] {
     for (let e = 0; e < empties; e++) bottles.push([]);
     if (solve(bottles)) return bottles;
   }
-  throw new Error(`Could not build level ${level}`);
+  throw new Error(`Could not build level ${level} (deal ${seed})`);
 }
