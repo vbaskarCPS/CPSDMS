@@ -1,12 +1,12 @@
-// src/pages/Minigame/PourGame.tsx — propertystars.app/minigame: a water-sort puzzle for crew
-// downtime. Stand-alone on purpose: no sign-in, no company branding, no database. Progress lives in
-// this phone's local storage. The rules, levels and solver are in src/lib/pour/engine.ts.
+// src/pages/Minigame/PourGame.tsx — the Pour water-sort puzzle (minigame hub, /minigame/pour).
+// Progress (level, best, sound) is saved to the player's account through the hub's save().
+// The rules, levels and solver are in src/lib/pour/engine.ts.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CAP, canPour, hint as findHint, isDone, isWon, makeLevel, pour, topRun, type Bottle, type Move } from '../../lib/pour/engine';
+import type { GameProps } from './games';
 
 const HINTS_PER_LEVEL = 3;
 const EXTRA_PER_LEVEL = 1;
-const STORE = 'pour.v1';
 
 // Twelve colours that stay apart on a phone screen, each with a symbol for colour-blind players.
 const COLOURS: { fill: string; mark: string }[] = [
@@ -16,15 +16,11 @@ const COLOURS: { fill: string; mark: string }[] = [
   { fill: '#ec4899', mark: '✦' }, { fill: '#92400e', mark: '⬟' }, { fill: '#e5e7eb', mark: '◐' },
 ];
 
-type Saved = { level: number; best: number; sound: boolean };
-function load(): Saved {
-  try {
-    const s = JSON.parse(localStorage.getItem(STORE) || 'null');
-    if (s && Number.isInteger(s.level) && s.level > 0) return { level: s.level, best: Math.max(s.best || 1, s.level), sound: !!s.sound };
-  } catch { /* storage blocked: start fresh */ }
-  return { level: 1, best: 1, sound: false };
+export type PourProgress = { level: number; best: number; sound: boolean };
+function fromSaved(p: Partial<PourProgress> | null): PourProgress {
+  const level = Number.isInteger(p?.level) && (p!.level as number) > 0 ? (p!.level as number) : 1;
+  return { level, best: Math.max(Number(p?.best) || 1, level), sound: !!p?.sound };
 }
-function save(s: Saved) { try { localStorage.setItem(STORE, JSON.stringify(s)); } catch { /* ignore */ } }
 
 // Tiny sounds made in the browser — no files to download.
 let audio: AudioContext | null = null;
@@ -42,27 +38,10 @@ function beep(freqs: number[], len = 0.09) {
 }
 const buzz = (ms: number) => { try { navigator.vibrate?.(ms); } catch { /* ignore */ } };
 
-const BOTTLE_ICON = "data:image/svg+xml," + encodeURIComponent(
-  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='#312e81'/>" +
-  "<rect x='12' y='3' width='8' height='4' rx='1' fill='#c8a26b'/><path d='M11 8h10v19a3 3 0 0 1-3 3h-4a3 3 0 0 1-3-3z' fill='#e0e7ff' opacity='.35'/>" +
-  "<rect x='11' y='22' width='10' height='5' fill='#ec4899'/><rect x='11' y='17' width='10' height='5' fill='#facc15'/><rect x='11' y='12' width='10' height='5' fill='#3b82f6'/></svg>");
-
-/** Swap the browser tab's title, icon and bar colour for the game's while it's open. */
-function useOwnTab() {
-  useEffect(() => {
-    const was = { title: document.title, icons: [] as { el: HTMLLinkElement; href: string }[], theme: '' };
-    document.title = 'Pour';
-    document.querySelectorAll<HTMLLinkElement>("link[rel='icon'], link[rel='apple-touch-icon']").forEach(el => { was.icons.push({ el, href: el.href }); el.href = BOTTLE_ICON; });
-    const meta = document.querySelector<HTMLMetaElement>("meta[name='theme-color']");
-    if (meta) { was.theme = meta.content; meta.content = '#1e1b4b'; }
-    return () => { document.title = was.title; was.icons.forEach(i => { i.el.href = i.href; }); if (meta) meta.content = was.theme; };
-  }, []);
-}
-
-const PourGame: React.FC = () => {
-  useOwnTab();
-  const [saved, setSaved] = useState<Saved>(load);
-  const [bottles, setBottles] = useState<Bottle[]>(() => makeLevel(load().level));
+const PourGame: React.FC<GameProps<PourProgress>> = ({ progress, save, exit }) => {
+  useEffect(() => { const was = document.title; document.title = 'Pour'; return () => { document.title = was; }; }, []);
+  const [saved, setSaved] = useState<PourProgress>(() => fromSaved(progress));
+  const [bottles, setBottles] = useState<Bottle[]>(() => makeLevel(fromSaved(progress).level));
   const [history, setHistory] = useState<Bottle[][]>([]);
   const [picked, setPicked] = useState<number | null>(null);
   const [extraLeft, setExtraLeft] = useState(EXTRA_PER_LEVEL);
@@ -79,7 +58,11 @@ const PourGame: React.FC = () => {
   const won = isWon(bottles);
   const stuck = !won && !pouring && !bottles.some((_, f) => bottles.some((__, t) => canPour(bottles, f, t)));
 
-  const update = useCallback((s: Partial<Saved>) => setSaved(prev => { const next = { ...prev, ...s }; save(next); return next; }), []);
+  const update = useCallback((s: Partial<PourProgress>) => {
+    const next = { ...saved, ...s };
+    setSaved(next);
+    save(next);
+  }, [saved, save]);
 
   const startLevel = useCallback((n: number) => {
     setBottles(makeLevel(n)); setHistory([]); setPicked(null); setExtraLeft(EXTRA_PER_LEVEL);
@@ -166,9 +149,13 @@ const PourGame: React.FC = () => {
       `}</style>
 
       <header className="flex items-center justify-between px-4 pt-4" style={{ paddingTop: 'max(16px, env(safe-area-inset-top))' }}>
-        <div>
+        <div className="flex items-center gap-2">
+          <button type="button" aria-label="Back to games" onClick={exit}
+            className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xl">‹</button>
+          <div>
           <div className="text-2xl font-extrabold tracking-tight">Pour</div>
           <div className="text-xs text-indigo-200">Best: level {saved.best}</div>
+          </div>
         </div>
         <div className="text-right">
           <div className="text-xs uppercase tracking-widest text-indigo-200">Level</div>
