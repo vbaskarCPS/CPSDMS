@@ -225,6 +225,14 @@ export const speakerFor = (r: Round): Speaker => (r.kind === 'hello' ? r.piece :
 export const cheers = (name: string) => ['YES!', 'GREAT JOB!', `${name.toUpperCase()} DID IT!`, 'WOW!', 'SUPER!'];
 export const stickerLine = (name: string) => `${name.toUpperCase()} GOT A STICKER!`;
 
+// ── when he gets it wrong: say what he tapped (so even a wrong tap teaches), or the piece's rule ──
+/** Tapped the wrong piece or word: name what he picked. */
+export const oopsLine = (tapped: Piece) => `THAT IS ${WORD[tapped]}.`;
+/** Tapped a square the piece can't reach: remind him how it moves. */
+export const notThereLine = (piece: Piece) => `NOT THERE! ${HOW[piece]}`;
+/** Tapping too fast (two misses close together): a calm pause. */
+export const slowLine = (name: string) => `SLOW DOWN, ${name.toUpperCase()}.`;
+
 /** The file name for a recorded line, e.g. "king--this-is-king". */
 export const clipId = (speaker: Speaker, text: string) =>
   `${speaker}--${text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
@@ -247,6 +255,10 @@ const HOW_SAID: Record<Piece, string> = {
   knight: 'The Knight jumps in an L shape: two steps, then a turn. He can even hop over things! Tap a glowing square to try it!',
   pawn: 'The Pawn steps up, one little step forward at a time. Tap the glowing square to try it!',
 };
+const RULE_SAID: Record<Piece, string> = {
+  rook: 'the Rook goes straight', bishop: 'the Bishop climbs the stairs, corner to corner', queen: 'the Queen goes straight, or up the stairs',
+  king: 'the King takes just one little step', knight: 'the Knight jumps in an L shape', pawn: 'the Pawn steps straight up, one step',
+};
 const CHEER_SAID: Record<string, string> = {
   'YES!': 'Yes! You got it!', 'GREAT JOB!': "Great job! You're so clever!", 'WOW!': 'Wow! That was amazing!', 'SUPER!': 'Super! Give me a high five!',
 };
@@ -259,6 +271,10 @@ export function spokenFor(_speaker: Speaker, text: string, name = 'Kiaan'): stri
   if (found) return `Can you find the ${cap(found)}? Tap the ${cap(found)}!`;
   const how = NAME_ORDER.find(p => text === HOW[p]);
   if (how) return HOW_SAID[how];
+  const oops = NAME_ORDER.find(p => text === oopsLine(p));
+  if (oops) return `Oops! That one is the ${cap(oops)}. Look carefully and try again.`;
+  const there = NAME_ORDER.find(p => text === notThereLine(p));
+  if (there) return `Oops! The ${cap(there)} can't go there. Remember, ${RULE_SAID[there]}.`;
   const N = name.toUpperCase();
   const fixed: Record<string, string> = {
     'WHICH WORD?': 'Which word is this piece? Tap the right word!',
@@ -270,6 +286,7 @@ export function spokenFor(_speaker: Speaker, text: string, name = 'Kiaan'): stri
     'EAT THE APPLES.': 'Snack time! Eat all the apples, one at a time!',
     [`${N} DID IT!`]: `${name} did it! Hooray!`,
     [`${N} GOT A STICKER!`]: `Hooray! ${name} got a sticker! Great job!`,
+    [`SLOW DOWN, ${N}.`]: `Whoa, slow down ${name}! Take a big breath, and think about it.`,
   };
   return fixed[text] || CHEER_SAID[text] || text.charAt(0) + text.slice(1).toLowerCase();
 }
@@ -282,9 +299,11 @@ export function voiceLines(names: string[]): { speaker: Speaker; text: string; i
   let who = names[0] || 'Kiaan';
   const add = (speaker: Speaker, text: string) => { const id = clipId(speaker, text); out.set(id, { speaker, text, id, spoken: spokenFor(speaker, text, who) }); };
   for (const l of LESSONS) for (const r of l.rounds) add(speakerFor(r), sentenceFor(r));
+  for (const p of NAME_ORDER) { add('narrator', oopsLine(p)); add('narrator', notThereLine(p)); }
   for (const name of names) {
     who = name;
     add('narrator', stickerLine(name));
+    add('narrator', slowLine(name));
     for (const p of NAME_ORDER) for (const c of cheers(name)) add(p, c);
   }
   return [...out.values()];

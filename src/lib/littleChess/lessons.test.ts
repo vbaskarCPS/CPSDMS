@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LEVELS, currentLevel, levelDone, levelOpen, levelStart, lessonsOf, BOARD, EAT_ORDER, HOW, LESSONS, MOVE_ORDER, NAME_ORDER, canMove, cheers, clipId, freshProgress, isOpen, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, spokenFor, stickerFor, stickerLine, voiceLines, type Round } from './lessons';
+import { LEVELS, currentLevel, levelDone, levelOpen, levelStart, lessonsOf, BOARD, EAT_ORDER, HOW, LESSONS, MOVE_ORDER, NAME_ORDER, canMove, cheers, notThereLine, oopsLine, slowLine, clipId, freshProgress, isOpen, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, spokenFor, stickerFor, stickerLine, voiceLines, type Round } from './lessons';
 
 const key = (s: [number, number]) => s.join(',');
 
@@ -107,6 +107,19 @@ describe('voice lines', () => {
     expect(spokenFor('rook', 'THIS IS ROOK.')).toMatch(/I'm the Rook/);
     expect(spokenFor('narrator', 'FIND THE KING.')).toBe('Can you find the King? Tap the King!');
     expect(spokenFor('pawn', 'KIAAN DID IT!', 'Kiaan')).toBe('Kiaan did it! Hooray!');
+  });
+  it('have a gentle oops for every piece and square, and a slow-down line', () => {
+    const ids = new Set(voiceLines(['Kiaan']).map(l => l.id));
+    for (const p of NAME_ORDER) {
+      expect(ids.has(clipId('narrator', oopsLine(p)))).toBe(true);
+      expect(ids.has(clipId('narrator', notThereLine(p)))).toBe(true);
+    }
+    expect(ids.has(clipId('narrator', slowLine('Kiaan')))).toBe(true);
+    expect(oopsLine('bishop')).toBe('THAT IS BISHOP.');
+    expect(spokenFor('narrator', 'THAT IS BISHOP.')).toBe('Oops! That one is the Bishop. Look carefully and try again.');
+    expect(notThereLine('rook')).toBe('NOT THERE! ROOK GOES STRAIGHT.');
+    expect(spokenFor('narrator', notThereLine('rook'))).toBe("Oops! The Rook can't go there. Remember, the Rook goes straight.");
+    expect(spokenFor('narrator', slowLine('Kiaan'), 'Kiaan')).toMatch(/^Whoa, slow down Kiaan!/);
   });
 });
 

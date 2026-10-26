@@ -62,9 +62,10 @@ function wordTimer(words: number, ms: number, on: (i: number) => void) {
 }
 
 /** Say something. Plays the recorded clip `clip` if this build has it (and recorded voices are on);
- *  otherwise the tablet's voice says the text. onWord lights up one word at a time. */
-export function say(text: string, opts: { on: boolean; voice?: string | null; onWord?: (i: number) => void; clip?: string; recorded?: boolean; spoken?: string }) {
-  if (!opts.on) return;
+ *  otherwise the tablet's voice says the text. onWord lights up one word at a time; onEnd runs when
+ *  it's finished talking (or straight away if it can't talk). */
+export function say(text: string, opts: { on: boolean; voice?: string | null; onWord?: (i: number) => void; clip?: string; recorded?: boolean; spoken?: string; onEnd?: () => void }) {
+  if (!opts.on) { opts.onEnd?.(); return; }
   hush();
   if (opts.clip && opts.recorded !== false && clips?.has(opts.clip)) {
     try {
@@ -74,6 +75,7 @@ export function say(text: string, opts: { on: boolean; voice?: string | null; on
         const on = opts.onWord;
         audio.onplay = () => wordTimer(words, Math.min(900, Math.max(300, ((audio?.duration || words * 0.6) * 1000) / words)), on);   // the full sentence is longer than the words on screen
       }
+      if (opts.onEnd) { const end = opts.onEnd; audio.onended = () => end(); audio.onerror = () => end(); }
       audio.play().catch(() => sayWithTablet(text, opts));   // e.g. autoplay blocked: fall back
       return;
     } catch { /* fall through to the tablet's voice */ }
@@ -81,9 +83,9 @@ export function say(text: string, opts: { on: boolean; voice?: string | null; on
   sayWithTablet(text, opts);
 }
 
-function sayWithTablet(text: string, opts: { voice?: string | null; onWord?: (i: number) => void; spoken?: string }) {
+function sayWithTablet(text: string, opts: { voice?: string | null; onWord?: (i: number) => void; spoken?: string; onEnd?: () => void }) {
   const s = synth();
-  if (!s) return;
+  if (!s) { opts.onEnd?.(); return; }
   try {
     s.cancel();
     // the full sentence if there is one (the screen shows the short sight words)
@@ -97,8 +99,9 @@ function sayWithTablet(text: string, opts: { voice?: string | null; onWord?: (i:
       const words = text.split(' ').length, said = (opts.spoken || text).split(' ').length, on = opts.onWord;
       u.onstart = () => wordTimer(words, Math.max(400, (said * 400) / words), on);
     }
+    if (opts.onEnd) { const end = opts.onEnd; u.onend = () => end(); u.onerror = () => end(); }
     s.speak(u);
-  } catch { /* no voice on this device */ }
+  } catch { opts.onEnd?.(); /* no voice on this device */ }
 }
 
 export const hush = () => {

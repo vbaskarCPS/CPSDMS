@@ -1,11 +1,13 @@
 // src/pages/Minigame/LittleChess.tsx — Little Chess (/minigame/chess): first chess steps for a toddler who
 // reads sight words. Every instruction is a short CAPITALS sentence; the phone's voice reads it after a
-// pause (so he can try first) and lights up each word. Tap only, no wrong-answer sounds, a sticker after
-// every lesson. Leaving and the grown-ups' corner need a 3-second hold. Lessons and move rules are in
+// short pause and lights up each word; the answers wait (dimmed, with an ear) until it's been read, so he
+// listens before tapping. A wrong tap turns red with a ✗, says what he tapped ("THAT IS BISHOP.") or the
+// piece's rule, and everything waits a moment while he thinks; two quick misses get a calm "SLOW DOWN"
+// pause, and after two misses the right answer glows. Tap only, no buzzers, a sticker after every lesson. Leaving and the grown-ups' corner need a 3-second hold. Lessons and move rules are in
 // src/lib/littleChess/lessons.ts; progress saves to the player's account through the hub.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BOARD, WORD, canMove, cheers, clipId, spokenFor, movesFrom, readProgress, LEVELS, currentLevel, levelDone, levelOpen, levelStart, lessonsOf, sentenceFor, speakerFor, stickerFor, stickerLine,
+  BOARD, WORD, canMove, cheers, notThereLine, oopsLine, slowLine, clipId, spokenFor, movesFrom, readProgress, LEVELS, currentLevel, levelDone, levelOpen, levelStart, lessonsOf, sentenceFor, speakerFor, stickerFor, stickerLine,
   type ChessProgress, type Lesson, type Level, type Piece, type Round, type Speaker, type Sq,
 } from '../../lib/littleChess/lessons';
 import type { GameProps } from './games';
@@ -20,8 +22,16 @@ const FONT = "'Andika', 'Comic Sans MS', 'Trebuchet MS', system-ui, sans-serif";
 let chosenVoice: string | null = null, useRecorded = true;
 /** Say a line as `who` (the recorded clip if there is one, else the tablet's voice). */
 let playerName = 'Kiaan';
-const speak = (text: string, on: boolean, onWord?: (i: number) => void, who: Speaker = 'narrator') =>
-  say(text, { on, voice: chosenVoice, onWord, clip: clipId(who, text), recorded: useRecorded, spoken: spokenFor(who, text, playerName) });
+const speak = (text: string, on: boolean, onWord?: (i: number) => void, who: Speaker = 'narrator', onEnd?: () => void) =>
+  say(text, { on, voice: chosenVoice, onWord, clip: clipId(who, text), recorded: useRecorded, spoken: spokenFor(who, text, playerName), onEnd });
+
+// how long things wait (ms)
+const READ_AFTER = 1200;      // the sentence is read this long after a round starts
+const LISTEN_QUIET = 3000;    // with the voice off, the answers wake up after this long
+const THINK = 2500;           // after a wrong tap, everything waits at least this long (and until the oops is said)
+const SLOW = 4000;            // the "SLOW DOWN" pause
+const QUICK_MISS = 4000;      // two misses this close together count as mashing
+const VOICE_MAX = 9000;       // never wait longer than this for the voice to finish
 
 /** A button that only works when held for 3 seconds (so little hands can't leave by accident). */
 const HoldButton: React.FC<{ onHold: () => void; label: string; children: React.ReactNode }> = ({ onHold, label, children }) => {
@@ -49,7 +59,7 @@ const PieceShape: React.FC<{ piece: Piece; size: number; mood?: Mood; className?
 /** The sentence at the top, in big capitals, one word lit at a time while it's read. */
 const Sentence: React.FC<{ text: string; lit: number; flash?: string | null }> = ({ text, lit, flash }) => (
   <div className="text-center font-black tracking-wide px-4" style={{ fontSize: 'clamp(34px, 6.5vw, 64px)', fontFamily: FONT, minHeight: '1.3em' }}>
-    {flash ? <span className="text-yellow-300">{flash}</span> : text.split(' ').map((w, i) => (
+    {flash ? <span style={{ color: '#fca5a5', display: 'inline-block', animation: 'lc-pop .35s ease-out' }}>{flash}</span> : text.split(' ').map((w, i) => (
       <React.Fragment key={i}>{i > 0 && ' '}
         <span className="inline-block mx-[0.1em] transition-transform" style={{ color: i === lit ? '#fde047' : '#fff', transform: i === lit ? 'scale(1.12)' : 'none' }}>{w}</span>
       </React.Fragment>
@@ -92,6 +102,10 @@ const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit,
         @keyframes lc-pop { 0% { transform: scale(.3); opacity: 0 } 60% { transform: scale(1.15); opacity: 1 } 100% { transform: scale(1) } }
         @keyframes lc-gone { 0% { transform: scale(1); opacity: 1 } 100% { transform: scale(1.8); opacity: 0 } }
         @keyframes lc-float { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-6px) } }
+        @keyframes lc-shrink { 0% { transform: scale(1) } 30% { transform: scale(1.08) rotate(-6deg) } 100% { transform: scale(.82) } }
+        @keyframes lc-red { 0%,100% { background: rgba(239,68,68,.75) } 50% { background: rgba(239,68,68,.35) } }
+        @keyframes lc-breathe { 0%,100% { transform: scale(.75) } 50% { transform: scale(1.15) } }
+        @keyframes lc-think { 0%,100% { transform: translateY(0) rotate(-4deg) } 50% { transform: translateY(-8px) rotate(4deg) } }
         ${CHARACTER_CSS}
       `}</style>
       {playing
@@ -213,31 +227,83 @@ const Grownups: React.FC<{ p: ChessProgress; onChange: (p: ChessProgress) => voi
 };
 
 // ── playing one lesson ──
+type Lock = 'listen' | 'think' | 'slow' | null;
+const LOCK_ICON: Record<Exclude<Lock, null>, string> = { listen: '👂', think: '💭', slow: '🐢' };
+
 const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () => void; onQuit: () => void }> = ({ lesson, name, voice, onDone, onQuit }) => {
   const [i, setI] = useState(0);
   const [lit, setLit] = useState(-1);
   const [flash, setFlash] = useState<string | null>(null);
   const [hint, setHint] = useState(false);
   const [cheer, setCheer] = useState<string | null>(null);
+  const [lock, setLockState] = useState<Lock>(null);
+  const [poke, setPoke] = useState(0);              // taps on the locked answers (the icon wiggles)
   const round = lesson.rounds[i];
   const text = sentenceFor(round);
   const who = speakerFor(round);
   const idle = useRef<number | null>(null);
+  const lockRef = useRef<Lock>(null);
+  const seq = useRef(0);                            // bumps whenever a wait starts, so stale timers do nothing
+  const timers = useRef<number[]>([]);
+  const misses = useRef<number[]>([]);             // when he missed, this round
+  const later = (fn: () => void, ms: number) => { timers.current.push(window.setTimeout(fn, ms)); };
+  const setLock = (l: Lock) => { lockRef.current = l; setLockState(l); };
 
-  // read the sentence after a pause (so he can read it first); if nothing happens, hint and read again
+  // if nothing happens for a while, hint and read again (never while he's waiting)
   const nudge = useCallback(() => {
     if (idle.current) window.clearTimeout(idle.current);
+    if (lockRef.current) return;
     idle.current = window.setTimeout(() => { setHint(true); speak(text, voice, setLit, who); }, 7000);
   }, [text, voice, who]);
+
+  /** Wait (answers locked) for at least `ms`, and until `line` has been said; then wake up. */
+  const wait = (kind: Exclude<Lock, null>, ms: number, line?: { text: string; who: Speaker; words?: boolean }, delay = 0) => {
+    const id = ++seq.current;
+    if (idle.current) window.clearTimeout(idle.current);
+    setLock(kind);
+    let said = !line || !voice, waited = false;
+    const wake = () => {
+      if (seq.current !== id || !said || !waited) return;
+      setLock(null); setFlash(null); nudge();
+    };
+    later(() => { waited = true; wake(); }, ms);
+    if (line && voice) {
+      later(() => { if (seq.current === id) speak(line.text, voice, line.words ? setLit : undefined, line.who, () => { said = true; wake(); }); }, delay);
+      later(() => { said = true; wake(); }, delay + VOICE_MAX);   // the voice got stuck: don't wait forever
+    }
+  };
+
+  // a new round: read the sentence after a moment; the answers wait until it's been read (listen first)
   useEffect(() => {
-    setHint(false); setLit(-1);
-    const t = window.setTimeout(() => speak(text, voice, setLit, who), 2500);
-    nudge();
-    return () => { window.clearTimeout(t); if (idle.current) window.clearTimeout(idle.current); };
+    setHint(false); setLit(-1); setFlash(null); misses.current = [];
+    if (round.kind === 'hello') {
+      setLock(null);
+      later(() => speak(text, voice, setLit, who), READ_AFTER);
+      nudge();
+    } else wait('listen', voice ? READ_AFTER : LISTEN_QUIET, { text, who, words: true }, READ_AFTER);
+    return () => { seq.current++; timers.current.forEach(t => window.clearTimeout(t)); timers.current = []; if (idle.current) window.clearTimeout(idle.current); };
   }, [i]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const oops = () => { setFlash('TRY AGAIN.'); window.setTimeout(() => setFlash(null), 1100); nudge(); };
+  /** A wrong tap: name what he tapped (or the piece's rule on a board), then wait while he thinks.
+   *  Two misses close together get the calm SLOW DOWN pause; two misses in a round light up the answer. */
+  const oops = (tapped?: Piece) => {
+    const now = Date.now();
+    const quick = misses.current.length > 0 && now - misses.current[misses.current.length - 1] < QUICK_MISS;
+    misses.current.push(now);
+    if (misses.current.length >= 2) setHint(true);
+    try { navigator.vibrate?.([30, 60, 30]); } catch { /* ignore */ }
+    if (quick) {
+      const line = slowLine(name);
+      setFlash(line);
+      wait('slow', SLOW, { text: line, who: 'narrator' });
+      return;
+    }
+    const line = tapped ? oopsLine(tapped) : notThereLine(round.piece);
+    setFlash(line);
+    wait('think', THINK, { text: line, who: 'narrator' });
+  };
   const won = () => {
+    seq.current++; setLock(null);
     if (idle.current) window.clearTimeout(idle.current);
     setFlash(null);
     const c = cheers(name)[Math.floor(Math.random() * 5)];
@@ -254,13 +320,36 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
         <div className="w-14" />
       </div>
       <div className="mt-4"><Sentence text={text} lit={lit} flash={flash} /></div>
-      <div className="flex-1 flex items-center justify-center p-4" onPointerDown={() => nudge()}>
-        {round.kind === 'hello' && <Hello key={i} round={round} onDone={won} speakIt={() => speak(text, voice, setLit, who)} />}
-        {round.kind === 'find' && <Find key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
-        {round.kind === 'word' && <Word key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
-        {(round.kind === 'shadow' || round.kind === 'peek') && <Guess key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
-        {(round.kind === 'board' || round.kind === 'show') && <BoardRound key={i} round={round} hint={hint} onDone={won} onWrong={oops} />}
+      <div className="relative flex-1 flex items-center justify-center p-4" onPointerDown={() => nudge()}>
+        <div className="flex items-center justify-center transition-[opacity,filter] duration-300"
+          style={{ opacity: lock === 'listen' ? 0.45 : 1, filter: lock === 'listen' ? 'grayscale(.6)' : undefined }}>   {/* dim while listening; while thinking the red ✗ stays bright */}
+          {round.kind === 'hello' && <Hello key={i} round={round} onDone={won} speakIt={() => speak(text, voice, setLit, who)} />}
+          {round.kind === 'find' && <Find key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
+          {round.kind === 'word' && <Word key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
+          {(round.kind === 'shadow' || round.kind === 'peek') && <Guess key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
+          {(round.kind === 'board' || round.kind === 'show') && <BoardRound key={i} round={round} hint={hint} onDone={won} onWrong={() => oops()} />}
+        </div>
+        {/* while waiting, taps land here and do nothing (the icon just wiggles) */}
+        {lock && lock !== 'slow' && (
+          <div data-testid="lc-wait" aria-label={lock === 'listen' ? 'Listen first' : 'Think about it'} className="absolute inset-0 z-20 flex items-start justify-center pt-2"
+            onPointerDown={e => { e.stopPropagation(); setPoke(n => n + 1); }}>
+            <div key={poke} className="rounded-full px-5 py-2 font-black flex items-center gap-2" style={{ background: 'rgba(255,255,255,.92)', color: '#134e4a', fontSize: 30, animation: poke ? 'lc-wiggle .5s' : 'lc-pop .3s ease-out' }}>
+              <span style={{ fontSize: 40, display: 'inline-block', animation: 'lc-think 1.6s ease-in-out infinite' }}>{LOCK_ICON[lock]}</span>
+              {lock === 'listen' ? 'LISTEN.' : 'THINK.'}
+            </div>
+          </div>
+        )}
       </div>
+      {lock === 'slow' && (
+        <div data-testid="lc-slow" className="fixed inset-0 z-30 flex flex-col items-center justify-center" style={{ background: 'rgba(4,47,46,.82)' }}
+          onPointerDown={e => e.stopPropagation()}>
+          <div className="rounded-full flex items-center justify-center" style={{ width: 220, height: 220, background: 'radial-gradient(circle, #5eead4 0%, #0d9488 70%)', boxShadow: '0 0 60px rgba(94,234,212,.5)', animation: 'lc-breathe 4s ease-in-out infinite' }}>
+            <span style={{ fontSize: 110, lineHeight: 1 }}>🐢</span>
+          </div>
+          <div className="font-black text-center mt-8 px-4" style={{ fontSize: 'clamp(40px, 8vw, 72px)', color: '#fff' }}>{slowLine(name)}</div>
+          <div className="font-black text-teal-100 mt-2" style={{ fontSize: 'clamp(26px, 5vw, 40px)' }}>BIG BREATH.</div>
+        </div>
+      )}
       {cheer && (
         <div className="fixed inset-0 z-40 flex items-center justify-center pointer-events-none">
           <div className="font-black text-yellow-300 text-center" style={{ fontSize: 'clamp(56px, 12vw, 130px)', textShadow: '0 6px 0 #134e4a, 0 0 30px rgba(0,0,0,.4)', animation: 'lc-pop .4s ease-out' }}>
@@ -286,25 +375,45 @@ const Hello: React.FC<{ round: Extract<Round, { kind: 'hello' }>; onDone: () => 
   );
 };
 
-const WordCard: React.FC<{ word: string; big?: boolean; glow?: boolean; wiggle?: boolean; onClick?: () => void }> = ({ word, big, glow, wiggle, onClick }) => {
+const WordCard: React.FC<{ word: string; big?: boolean; glow?: boolean; wiggle?: boolean; crossed?: boolean; onClick?: () => void }> = ({ word, big, glow, wiggle, crossed, onClick }) => {
   const El = onClick ? 'button' : 'div';
   return (
     <El {...(onClick ? { type: 'button' as const, onClick } : {})}
-      className="mt-4 rounded-3xl text-teal-950 font-black tracking-wider px-8 py-3"
-      style={{ background: '#fff', fontSize: big ? 'clamp(44px, 8vw, 80px)' : 'clamp(36px, 6vw, 60px)', animation: wiggle ? 'lc-wiggle .5s' : glow ? 'lc-glow 1.1s ease-in-out infinite' : undefined }}>
+      className="relative mt-4 rounded-3xl font-black tracking-wider px-8 py-3"
+      style={{ background: crossed ? '#fecaca' : '#fff', color: crossed ? '#b91c1c' : '#042f2e', fontSize: big ? 'clamp(44px, 8vw, 80px)' : 'clamp(36px, 6vw, 60px)',
+        boxShadow: crossed ? 'inset 0 0 0 5px #ef4444' : undefined, opacity: crossed && !wiggle ? 0.6 : 1, textDecoration: crossed ? 'line-through' : undefined,
+        animation: wiggle ? 'lc-wiggle .5s' : glow ? 'lc-glow 1.1s ease-in-out infinite' : undefined }}>
       {word}
+      {crossed && <Cross />}
     </El>
   );
 };
 
+/** The red ✗ badge on a wrong pick. */
+const Cross: React.FC = () => (
+  <span className="absolute -top-3 -right-3 w-11 h-11 rounded-full flex items-center justify-center font-black text-2xl pointer-events-none"
+    style={{ background: '#ef4444', color: '#fff', boxShadow: '0 2px 6px rgba(0,0,0,.3)', animation: 'lc-pop .35s ease-out' }}>✗</span>
+);
+
+/** A piece tile he tapped by mistake: red, crossed, a little smaller, with its name underneath. */
+const wrongTile = (crossed: boolean, wiggling: boolean): React.CSSProperties => crossed
+  ? { background: 'rgba(239,68,68,.25)', boxShadow: 'inset 0 0 0 5px #ef4444', opacity: wiggling ? 1 : 0.6, animation: wiggling ? 'lc-wiggle .5s' : undefined, transform: wiggling ? undefined : 'scale(.86)', transition: 'transform .4s, opacity .4s' }
+  : {};
+const NameTag: React.FC<{ piece: Piece }> = ({ piece }) => (
+  <span className="absolute left-1/2 -bottom-4 -translate-x-1/2 rounded-full px-3 py-0.5 font-black text-lg whitespace-nowrap pointer-events-none"
+    style={{ background: '#ef4444', color: '#fff', animation: 'lc-pop .35s ease-out' }}>{WORD[piece]}</span>
+);
+
+/** Which picks were wrong this round (they stay crossed out), and which one is wiggling right now. */
 function useWrong() {
   const [wrong, setWrong] = useState<number | null>(null);
-  const flag = (k: number) => { setWrong(k); window.setTimeout(() => setWrong(null), 520); };
-  return [wrong, flag] as const;
+  const [crossed, setCrossed] = useState<number[]>([]);
+  const flag = (k: number) => { setWrong(k); setCrossed(c => (c.includes(k) ? c : [...c, k])); window.setTimeout(() => setWrong(null), 520); };
+  return [wrong, flag, crossed] as const;
 }
 
-const Find: React.FC<{ round: Extract<Round, { kind: 'find' }>; hint: boolean; onRight: () => void; onWrong: () => void }> = ({ round, hint, onRight, onWrong }) => {
-  const [wrong, flag] = useWrong();
+const Find: React.FC<{ round: Extract<Round, { kind: 'find' }>; hint: boolean; onRight: () => void; onWrong: (tapped: Piece) => void }> = ({ round, hint, onRight, onWrong }) => {
+  const [wrong, flag, crossed] = useWrong();
   const [got, setGot] = useState(false);
   const size = Math.min(200, window.innerWidth / (round.options.length + 1));
   return (
@@ -312,10 +421,11 @@ const Find: React.FC<{ round: Extract<Round, { kind: 'find' }>; hint: boolean; o
       {round.options.map((piece, k) => {
         const right = piece === round.piece;
         return (
-          <button key={k} type="button" aria-label={`Piece ${k + 1}`} onClick={() => { if (got) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(); } }}
-            className="rounded-[36px] bg-white/10 p-5"
-            style={{ animation: wrong === k ? 'lc-wiggle .5s' : got && right ? 'lc-bounce .7s ease-out 2' : hint && right ? 'lc-glow 1.1s ease-in-out infinite' : undefined }}>
+          <button key={k} type="button" aria-label={`Piece ${k + 1}`} onClick={() => { if (got || crossed.includes(k)) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(piece); } }}
+            className="relative rounded-[36px] bg-white/10 p-5"
+            style={{ animation: got && right ? 'lc-bounce .7s ease-out 2' : hint && right ? 'lc-glow 1.1s ease-in-out infinite' : undefined, ...wrongTile(crossed.includes(k), wrong === k) }}>
             <PieceShape piece={piece} size={size} mood={got && right ? 'happy' : 'idle'} />
+            {crossed.includes(k) && <><Cross /><NameTag piece={piece} /></>}
           </button>
         );
       })}
@@ -323,8 +433,8 @@ const Find: React.FC<{ round: Extract<Round, { kind: 'find' }>; hint: boolean; o
   );
 };
 
-const Word: React.FC<{ round: Extract<Round, { kind: 'word' }>; hint: boolean; onRight: () => void; onWrong: () => void }> = ({ round, hint, onRight, onWrong }) => {
-  const [wrong, flag] = useWrong();
+const Word: React.FC<{ round: Extract<Round, { kind: 'word' }>; hint: boolean; onRight: () => void; onWrong: (tapped: Piece) => void }> = ({ round, hint, onRight, onWrong }) => {
+  const [wrong, flag, crossed] = useWrong();
   const [got, setGot] = useState(false);
   return (
     <div className="flex flex-col items-center">
@@ -332,8 +442,8 @@ const Word: React.FC<{ round: Extract<Round, { kind: 'word' }>; hint: boolean; o
       <div className="flex flex-wrap justify-center gap-4 mt-4">
         {round.options.map((piece, k) => {
           const right = piece === round.piece;
-          return <WordCard key={k} word={WORD[piece]} wiggle={wrong === k} glow={(hint || got) && right}
-            onClick={() => { if (got) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(); } }} />;
+          return <WordCard key={k} word={WORD[piece]} wiggle={wrong === k} crossed={crossed.includes(k)} glow={(hint || got) && right}
+            onClick={() => { if (got || crossed.includes(k)) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(piece); } }} />;
         })}
       </div>
     </div>
@@ -342,11 +452,11 @@ const Word: React.FC<{ round: Extract<Round, { kind: 'word' }>; hint: boolean; o
 
 /** WHO IS HIDING? / WHO IS PEEKING? Only a shadow, or the top of the piece over a wall, until he guesses;
  *  then the piece pops out, smiling. He answers with the matching piece, or (harder) its word. */
-const Guess: React.FC<{ round: Extract<Round, { kind: 'shadow' | 'peek' }>; hint: boolean; onRight: () => void; onWrong: () => void }> = ({ round, hint, onRight, onWrong }) => {
-  const [wrong, flag] = useWrong();
+const Guess: React.FC<{ round: Extract<Round, { kind: 'shadow' | 'peek' }>; hint: boolean; onRight: () => void; onWrong: (tapped: Piece) => void }> = ({ round, hint, onRight, onWrong }) => {
+  const [wrong, flag, crossed] = useWrong();
   const [got, setGot] = useState(false);
   const big = Math.min(260, window.innerHeight * 0.3);
-  const tap = (k: number, right: boolean) => { if (got) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(); } };
+  const tap = (k: number, right: boolean) => { if (got || crossed.includes(k)) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(round.options[k]); } };
   const hidden = round.kind === 'shadow'
     ? <PieceShape piece={round.piece} size={big} mood={got ? 'happy' : 'idle'}
         style={{ filter: got ? 'drop-shadow(0 6px 8px rgba(0,0,0,.35))' : 'brightness(0) opacity(.8)', transition: 'filter .5s', animation: got ? 'lc-bounce .7s ease-out 2' : undefined }} />
@@ -368,11 +478,12 @@ const Guess: React.FC<{ round: Extract<Round, { kind: 'shadow' | 'peek' }>; hint
         {round.options.map((piece, k) => {
           const right = piece === round.piece;
           return round.answer === 'word'
-            ? <WordCard key={k} word={WORD[piece]} wiggle={wrong === k} glow={(hint || got) && right} onClick={() => tap(k, right)} />
+            ? <WordCard key={k} word={WORD[piece]} wiggle={wrong === k} crossed={crossed.includes(k)} glow={(hint || got) && right} onClick={() => tap(k, right)} />
             : (
-              <button key={k} type="button" aria-label={`Piece ${k + 1}`} onClick={() => tap(k, right)} className="rounded-[32px] bg-white/10 p-4"
-                style={{ animation: wrong === k ? 'lc-wiggle .5s' : hint && right && !got ? 'lc-glow 1.1s ease-in-out infinite' : undefined }}>
+              <button key={k} type="button" aria-label={`Piece ${k + 1}`} onClick={() => tap(k, right)} className="relative rounded-[32px] bg-white/10 p-4"
+                style={{ animation: hint && right && !got ? 'lc-glow 1.1s ease-in-out infinite' : undefined, ...wrongTile(crossed.includes(k), wrong === k) }}>
                 <PieceShape piece={piece} size={Math.min(130, window.innerWidth / (round.options.length + 1.5))} />
+                {crossed.includes(k) && <><Cross /><NameTag piece={piece} /></>}
               </button>
             );
         })}
@@ -392,6 +503,7 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
   const [wiggle, setWiggle] = useState(false);
   const [finished, setFinished] = useState(false);
   const [munch, setMunch] = useState(false);
+  const [bad, setBad] = useState<Sq | null>(null);   // the square he tapped by mistake (flashes red)
   const piece = round.piece;
   const glowOn = round.kind === 'show' || round.glow || hint;
   const legal = useMemo(() => movesFrom(piece, at), [piece, at]);
@@ -401,7 +513,11 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
 
   const tap = (sq: Sq) => {
     if (finished || same(sq, at)) return;
-    if (!canMove(piece, at, sq)) { setWiggle(true); window.setTimeout(() => setWiggle(false), 520); onWrong(); return; }
+    if (!canMove(piece, at, sq)) {
+      setWiggle(true); window.setTimeout(() => setWiggle(false), 520);
+      setBad(sq); window.setTimeout(() => setBad(b => (b === sq ? null : b)), 2200);
+      onWrong(); return;
+    }
     setAt(sq);
     if (round.kind === 'show') {
       const n = taps + 1; setTaps(n);
@@ -436,6 +552,10 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
         <div key={t.join(',')} className="absolute flex items-center justify-center pointer-events-none"
           style={{ left: t[1] * cell, top: t[0] * cell, width: cell, height: cell, fontSize: cell * 0.6, animation: 'lc-float 1.6s ease-in-out infinite' }}>{icon}</div>
       ))}
+      {bad && (
+        <div data-testid="lc-bad" className="absolute flex items-center justify-center pointer-events-none font-black"
+          style={{ left: bad[1] * cell, top: bad[0] * cell, width: cell, height: cell, fontSize: cell * 0.55, color: '#fff', zIndex: 4, animation: 'lc-red .6s ease-in-out 3' , background: 'rgba(239,68,68,.6)', boxShadow: 'inset 0 0 0 5px #ef4444' }}>✗</div>
+      )}
       {gone && (
         <div className="absolute flex items-center justify-center pointer-events-none"
           style={{ left: gone[1] * cell, top: gone[0] * cell, width: cell, height: cell, fontSize: cell * 0.6, animation: 'lc-gone .6s ease-out forwards' }}>{icon === '🍎' ? '😋' : '✨'}</div>
