@@ -130,8 +130,8 @@ export function allLessons(): Lesson[] {
 export const LESSONS = allLessons();
 
 /** Saved in the player's account under "chess". */
-export type ChessProgress = { done: string[]; stickers: string[]; voice: boolean; unlockAll: boolean };
-export const freshProgress = (): ChessProgress => ({ done: [], stickers: [], voice: true, unlockAll: false });
+export type ChessProgress = { done: string[]; stickers: string[]; voice: boolean; unlockAll: boolean; voiceName: string | null };
+export const freshProgress = (): ChessProgress => ({ done: [], stickers: [], voice: true, unlockAll: false, voiceName: null });
 
 export function readProgress(p: Partial<ChessProgress> | null): ChessProgress {
   const f = freshProgress();
@@ -140,6 +140,7 @@ export function readProgress(p: Partial<ChessProgress> | null): ChessProgress {
     stickers: Array.isArray(p?.stickers) ? p!.stickers.filter(s => typeof s === 'string') : f.stickers,
     voice: typeof p?.voice === 'boolean' ? p.voice : f.voice,
     unlockAll: !!p?.unlockAll,
+    voiceName: typeof p?.voiceName === 'string' && p.voiceName ? p.voiceName : null,   // a voice a grown-up picked on this tablet
   };
 }
 
