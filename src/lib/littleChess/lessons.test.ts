@@ -29,8 +29,22 @@ describe('the lessons', () => {
     expect(LESSONS.filter(l => l.layer === 'eat').map(l => l.piece)).toEqual(EAT_ORDER);
     expect(new Set(LESSONS.map(l => l.id)).size).toBe(LESSONS.length);
   });
-  it('find and word rounds always include the right answer once, among different pieces', () => {
-    for (const l of LESSONS) for (const r of l.rounds) if (r.kind === 'find' || r.kind === 'word') {
+  it('add guessing games after the review and before MOVES: mixed find, mixed word, shadow, peekaboo, two of each', () => {
+    const ids = LESSONS.map(l => l.id);
+    const guess = LESSONS.filter(l => l.layer === 'guess');
+    expect(guess.map(l => l.id)).toEqual(['mix-find-1', 'mix-find-2', 'mix-word-1', 'mix-word-2', 'shadow-1', 'shadow-2', 'peek-1', 'peek-2']);
+    expect(ids.indexOf('mix-find-1')).toBe(ids.indexOf('names-review') + 1);
+    expect(ids.indexOf('peek-2')).toBeLessThan(ids.indexOf('moves-rook'));
+    for (const l of guess) {
+      expect(l.icon).toBeTruthy();
+      expect([...l.rounds.map(r => (r as { piece: string }).piece)].sort()).toEqual([...NAME_ORDER].sort());   // every piece once
+    }
+    expect(LESSONS.find(l => l.id === 'mix-find-2')!.rounds.every(r => (r as { options: unknown[] }).options.length === 4)).toBe(true);
+    expect(LESSONS.find(l => l.id === 'shadow-2')!.rounds.every(r => r.kind === 'shadow' && r.answer === 'word')).toBe(true);
+    expect(sentenceFor(LESSONS.find(l => l.id === 'peek-1')!.rounds[0])).toBe('WHO IS PEEKING?');
+  });
+  it('find, word, shadow and peek rounds always include the right answer once, among different pieces', () => {
+    for (const l of LESSONS) for (const r of l.rounds) if (r.kind === 'find' || r.kind === 'word' || r.kind === 'shadow' || r.kind === 'peek') {
       expect(r.options.filter(p => p === r.piece).length).toBe(1);
       expect(new Set(r.options).size).toBe(r.options.length);
       expect(r.options.length).toBeGreaterThanOrEqual(2);

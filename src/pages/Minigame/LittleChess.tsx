@@ -106,7 +106,7 @@ const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit,
 
 // ── home: the big PLAY button, the sticker book, and the path of lessons ──
 const LAYERS: { layer: Lesson['layer'][]; label: string }[] = [
-  { layer: ['names', 'review'], label: 'NAMES' }, { layer: ['moves'], label: 'MOVES' }, { layer: ['eat'], label: 'EAT' },
+  { layer: ['names', 'review'], label: 'NAMES' }, { layer: ['guess'], label: 'GUESS' }, { layer: ['moves'], label: 'MOVES' }, { layer: ['eat'], label: 'EAT' },
 ];
 
 const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => void; onExit: () => void; onGrownups: () => void }> = ({ p, name, onPlay, onExit, onGrownups }) => {
@@ -123,6 +123,7 @@ const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => vo
         className="mt-6 w-full rounded-[36px] bg-yellow-300 text-teal-950 py-6 px-6 flex items-center justify-center gap-6 shadow-xl active:scale-[.98] transition disabled:opacity-60"
         style={{ animation: next ? 'lc-float 2.4s ease-in-out infinite' : undefined }}>
         {next?.piece && <PieceShape piece={next.piece} size={Math.min(130, window.innerWidth * 0.16)} mood="happy" />}
+        {next && !next.piece && <span style={{ fontSize: 'clamp(64px, 11vw, 100px)', lineHeight: 1 }}>{next.icon || '⭐'}</span>}
         <span className="text-left">
           <span className="block font-black" style={{ fontSize: 'clamp(48px, 9vw, 84px)', lineHeight: 1 }}>{next ? 'PLAY' : 'ALL DONE!'}</span>
           <span className="block font-bold text-xl mt-1">{next ? `${LAYERS.find(x => x.layer.includes(next.layer))?.label} · ${next.title}` : `${name.toUpperCase()} DID EVERYTHING!`}</span>
@@ -146,7 +147,7 @@ const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => vo
               return (
                 <button key={l.id} type="button" disabled={!open} onClick={() => onPlay(l)} aria-label={`${label} ${l.title}`}
                   className={`relative w-20 h-20 rounded-3xl flex items-center justify-center ${done ? 'bg-emerald-500/80' : open ? 'bg-yellow-300/90' : 'bg-white/10'} disabled:opacity-50`}>
-                  {l.piece ? <PieceShape piece={l.piece} size={58} /> : <span className="text-3xl">⭐</span>}
+                  {l.piece ? <PieceShape piece={l.piece} size={58} /> : <span className="text-4xl">{l.icon || '⭐'}</span>}
                   {done && <span className="absolute -top-2 -right-2 w-8 h-8 rounded-full text-emerald-600 font-black flex items-center justify-center" style={{ background: '#fff' }}>✓</span>}
                   {!open && <span className="absolute -bottom-1 -right-1 text-xl">🔒</span>}
                 </button>
@@ -235,6 +236,7 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
   const oops = () => { setFlash('TRY AGAIN.'); window.setTimeout(() => setFlash(null), 1100); nudge(); };
   const won = () => {
     if (idle.current) window.clearTimeout(idle.current);
+    setFlash(null);
     const c = cheers(name)[Math.floor(Math.random() * 5)];
     setCheer(c); speak(c, voice, undefined, round.piece);   // the round's character cheers in its own voice
     try { navigator.vibrate?.(40); } catch { /* ignore */ }
@@ -253,6 +255,7 @@ const Play: React.FC<{ lesson: Lesson; name: string; voice: boolean; onDone: () 
         {round.kind === 'hello' && <Hello key={i} round={round} onDone={won} speakIt={() => speak(text, voice, setLit, who)} />}
         {round.kind === 'find' && <Find key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
         {round.kind === 'word' && <Word key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
+        {(round.kind === 'shadow' || round.kind === 'peek') && <Guess key={i} round={round} hint={hint} onRight={won} onWrong={oops} />}
         {(round.kind === 'board' || round.kind === 'show') && <BoardRound key={i} round={round} hint={hint} onDone={won} onWrong={oops} />}
       </div>
       {cheer && (
@@ -328,6 +331,47 @@ const Word: React.FC<{ round: Extract<Round, { kind: 'word' }>; hint: boolean; o
           const right = piece === round.piece;
           return <WordCard key={k} word={WORD[piece]} wiggle={wrong === k} glow={(hint || got) && right}
             onClick={() => { if (got) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(); } }} />;
+        })}
+      </div>
+    </div>
+  );
+};
+
+/** WHO IS HIDING? / WHO IS PEEKING? Only a shadow, or the top of the piece over a wall, until he guesses;
+ *  then the piece pops out, smiling. He answers with the matching piece, or (harder) its word. */
+const Guess: React.FC<{ round: Extract<Round, { kind: 'shadow' | 'peek' }>; hint: boolean; onRight: () => void; onWrong: () => void }> = ({ round, hint, onRight, onWrong }) => {
+  const [wrong, flag] = useWrong();
+  const [got, setGot] = useState(false);
+  const big = Math.min(260, window.innerHeight * 0.3);
+  const tap = (k: number, right: boolean) => { if (got) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(); } };
+  const hidden = round.kind === 'shadow'
+    ? <PieceShape piece={round.piece} size={big} mood={got ? 'happy' : 'idle'}
+        style={{ filter: got ? 'drop-shadow(0 6px 8px rgba(0,0,0,.35))' : 'brightness(0) opacity(.8)', transition: 'filter .5s', animation: got ? 'lc-bounce .7s ease-out 2' : undefined }} />
+    : (
+      // the piece rises from behind a brick wall; only its top shows until he guesses
+      <div className="relative overflow-hidden" style={{ width: big * 0.95, height: big * 1.02 }}>
+        <div className="absolute left-0 right-0 flex justify-center" style={{ top: got ? 0 : big * 0.2, transition: 'top .5s ease-out', animation: got ? undefined : 'lc-float 1.8s ease-in-out infinite' }}>
+          <PieceShape piece={round.piece} size={big} mood={got ? 'happy' : 'idle'} />
+        </div>
+        {!got && <div className="absolute left-0 right-0 bottom-0 rounded-t-xl" style={{ height: big * 0.5, background: 'repeating-linear-gradient(0deg, #b45309 0 22px, #78350f 22px 25px), #b45309', boxShadow: 'inset 0 4px 0 rgba(255,255,255,.2)' }}>
+          <div className="absolute inset-0" style={{ background: 'repeating-linear-gradient(90deg, transparent 0 46px, #78350f 46px 49px)', opacity: .7 }} />
+        </div>}
+      </div>
+    );
+  return (
+    <div className="flex flex-col items-center">
+      <div className="rounded-[48px] bg-white/10 px-10 py-4 flex items-end justify-center">{hidden}</div>
+      <div className="flex flex-wrap justify-center gap-4 mt-5">
+        {round.options.map((piece, k) => {
+          const right = piece === round.piece;
+          return round.answer === 'word'
+            ? <WordCard key={k} word={WORD[piece]} wiggle={wrong === k} glow={(hint || got) && right} onClick={() => tap(k, right)} />
+            : (
+              <button key={k} type="button" aria-label={`Piece ${k + 1}`} onClick={() => tap(k, right)} className="rounded-[32px] bg-white/10 p-4"
+                style={{ animation: wrong === k ? 'lc-wiggle .5s' : hint && right && !got ? 'lc-glow 1.1s ease-in-out infinite' : undefined }}>
+                <PieceShape piece={piece} size={Math.min(130, window.innerWidth / (round.options.length + 1.5))} />
+              </button>
+            );
         })}
       </div>
     </div>
