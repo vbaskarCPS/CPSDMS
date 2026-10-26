@@ -72,7 +72,7 @@ export function say(text: string, opts: { on: boolean; voice?: string | null; on
       const words = text.split(' ').length;
       if (opts.onWord) {
         const on = opts.onWord;
-        audio.onplay = () => wordTimer(words, Math.max(250, ((audio?.duration || words * 0.45) * 1000) / words), on);
+        audio.onplay = () => wordTimer(words, Math.min(900, Math.max(300, ((audio?.duration || words * 0.6) * 1000) / words)), on);   // the full sentence is longer than the words on screen
       }
       audio.play().catch(() => sayWithTablet(text, opts));   // e.g. autoplay blocked: fall back
       return;
