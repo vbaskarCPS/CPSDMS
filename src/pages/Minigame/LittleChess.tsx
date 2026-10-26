@@ -9,37 +9,16 @@ import {
   type ChessProgress, type Lesson, type Piece, type Round, type Sq,
 } from '../../lib/littleChess/lessons';
 import type { GameProps } from './games';
+import { CHARACTER_CSS, Character, type Mood } from './chessCharacters';
+import { englishVoices, hush, onVoicesReady, say, type VoiceInfo } from './voice';
 
-// Solid chess shapes (text style, not emoji) drawn as bright white pieces.
-const GLYPH: Record<Piece, string> = { king: '♚︎', queen: '♛︎', rook: '♜︎', bishop: '♝︎', knight: '♞︎', pawn: '♟︎' };
 const BG = 'radial-gradient(120% 80% at 50% 0%, #0f766e 0%, #134e4a 55%, #042f2e 100%)';
 const LIGHT = '#f0d9b5', DARK = '#b58863';
 const FONT = "'Andika', 'Comic Sans MS', 'Trebuchet MS', system-ui, sans-serif";
 
-// ── the phone's voice ──
-function speak(text: string, on: boolean, onWord?: (i: number) => void) {
-  if (!on) return;
-  try {
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-    synth.cancel();
-    const u = new SpeechSynthesisUtterance(text.toLowerCase().replace(/\bl\b/g, 'L'));
-    u.rate = 0.8; u.pitch = 1.15; u.lang = 'en-US';
-    const v = synth.getVoices().find(x => /en[-_](US|CA|GB)/i.test(x.lang));
-    if (v) u.voice = v;
-    if (onWord) {
-      // light up one word at a time (boundary events aren't reliable on every tablet, so time it)
-      const words = text.split(' ').length;
-      let i = 0;
-      u.onstart = () => {
-        onWord(0);
-        const t = window.setInterval(() => { i++; if (i >= words) { window.clearInterval(t); onWord(-1); } else onWord(i); }, 520);
-      };
-    }
-    synth.speak(u);
-  } catch { /* no voice on this device */ }
-}
-const hush = () => { try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } };
+// ── the voice: the tablet's most natural one, or the one a grown-up picked ──
+let chosenVoice: string | null = null;
+const speak = (text: string, on: boolean, onWord?: (i: number) => void) => say(text, { on, voice: chosenVoice, onWord });
 
 /** A button that only works when held for 3 seconds (so little hands can't leave by accident). */
 const HoldButton: React.FC<{ onHold: () => void; label: string; children: React.ReactNode }> = ({ onHold, label, children }) => {
@@ -60,11 +39,8 @@ const HoldButton: React.FC<{ onHold: () => void; label: string; children: React.
   );
 };
 
-const PieceShape: React.FC<{ piece: Piece; size: number; className?: string; style?: React.CSSProperties }> = ({ piece, size, className, style }) => (
-  <span className={className} style={{
-    fontSize: size, lineHeight: 1, color: '#fffbeb', fontFamily: "'Segoe UI Symbol', 'Noto Sans Symbols2', 'DejaVu Sans', serif",
-    textShadow: '0 0 2px #1f2937, 0 0 2px #1f2937, 0 3px 0 #1f2937, 0 6px 14px rgba(0,0,0,.45)', display: 'inline-block', ...style,
-  }}>{GLYPH[piece]}</span>
+const PieceShape: React.FC<{ piece: Piece; size: number; mood?: Mood; className?: string; style?: React.CSSProperties }> = ({ piece, size, mood, className, style }) => (
+  <Character piece={piece} size={size} mood={mood} className={className} style={style} />
 );
 
 /** The sentence at the top, in big capitals, one word lit at a time while it's read. */
@@ -87,6 +63,7 @@ const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit,
   const [sticker, setSticker] = useState<string | null>(null);
   const [grownups, setGrownups] = useState(false);
   const update = useCallback((next: ChessProgress) => { setP(next); save(next); }, [save]);
+  chosenVoice = p.voiceName;
 
   const finish = (lesson: Lesson) => {
     const got = stickerFor(p);
@@ -104,6 +81,7 @@ const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit,
         @keyframes lc-pop { 0% { transform: scale(.3); opacity: 0 } 60% { transform: scale(1.15); opacity: 1 } 100% { transform: scale(1) } }
         @keyframes lc-gone { 0% { transform: scale(1); opacity: 1 } 100% { transform: scale(1.8); opacity: 0 } }
         @keyframes lc-float { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-6px) } }
+        ${CHARACTER_CSS}
       `}</style>
       {playing
         ? <Play key={playing.id} lesson={playing} name={player} voice={p.voice} onDone={() => finish(playing)} onQuit={() => { hush(); setPlaying(null); }} />
@@ -141,7 +119,7 @@ const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => vo
       <button type="button" disabled={!next} onClick={() => next && onPlay(next)}
         className="mt-6 w-full rounded-[36px] bg-yellow-300 text-teal-950 py-6 px-6 flex items-center justify-center gap-6 shadow-xl active:scale-[.98] transition disabled:opacity-60"
         style={{ animation: next ? 'lc-float 2.4s ease-in-out infinite' : undefined }}>
-        {next?.piece && <span style={{ fontSize: 'clamp(70px, 12vw, 110px)', lineHeight: 1, color: '#134e4a' }}>{GLYPH[next.piece]}</span>}
+        {next?.piece && <PieceShape piece={next.piece} size={Math.min(130, window.innerWidth * 0.16)} mood="happy" />}
         <span className="text-left">
           <span className="block font-black" style={{ fontSize: 'clamp(48px, 9vw, 84px)', lineHeight: 1 }}>{next ? 'PLAY' : 'ALL DONE!'}</span>
           <span className="block font-bold text-xl mt-1">{next ? `${LAYERS.find(x => x.layer.includes(next.layer))?.label} · ${next.title}` : `${name.toUpperCase()} DID EVERYTHING!`}</span>
@@ -165,7 +143,7 @@ const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => vo
               return (
                 <button key={l.id} type="button" disabled={!open} onClick={() => onPlay(l)} aria-label={`${label} ${l.title}`}
                   className={`relative w-20 h-20 rounded-3xl flex items-center justify-center ${done ? 'bg-emerald-500/80' : open ? 'bg-yellow-300/90' : 'bg-white/10'} disabled:opacity-50`}>
-                  {l.piece ? <PieceShape piece={l.piece} size={46} /> : <span className="text-3xl">⭐</span>}
+                  {l.piece ? <PieceShape piece={l.piece} size={58} /> : <span className="text-3xl">⭐</span>}
                   {done && <span className="absolute -top-2 -right-2 w-8 h-8 rounded-full text-emerald-600 font-black flex items-center justify-center" style={{ background: '#fff' }}>✓</span>}
                   {!open && <span className="absolute -bottom-1 -right-1 text-xl">🔒</span>}
                 </button>
@@ -181,6 +159,9 @@ const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => vo
 /** Grown-ups' corner: voice, unlock everything, start over. */
 const Grownups: React.FC<{ p: ChessProgress; onChange: (p: ChessProgress) => void; onClose: () => void }> = ({ p, onChange, onClose }) => {
   const [sure, setSure] = useState(false);
+  const [voices, setVoices] = useState<VoiceInfo[]>([]);
+  useEffect(() => onVoicesReady(() => setVoices(englishVoices())), []);
+  const test = (name: string | null) => say('FIND THE KING.', { on: true, voice: name });
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" style={{ fontFamily: 'system-ui, sans-serif' }}>
       <div className="w-full max-w-sm rounded-3xl p-6 shadow-2xl" style={{ background: '#fff', color: '#111827' }}>
@@ -188,6 +169,20 @@ const Grownups: React.FC<{ p: ChessProgress; onChange: (p: ChessProgress) => voi
         <label className="flex items-center justify-between mt-5 text-base">Read instructions out loud
           <input type="checkbox" className="w-6 h-6" checked={p.voice} onChange={e => onChange({ ...p, voice: e.target.checked })} />
         </label>
+        {p.voice && (
+          <div className="mt-3">
+            <div className="text-sm">Voice</div>
+            <div className="flex gap-2 mt-1">
+              <select value={p.voiceName || ''} onChange={e => { const v = e.target.value || null; onChange({ ...p, voiceName: v }); test(v); }}
+                className="flex-1 min-w-0 rounded-lg border border-gray-300 px-2 py-2 text-sm" style={{ background: '#fff', color: '#111827' }}>
+                <option value="">Best on this tablet{voices[0] ? ` (${voices[0].name})` : ''}</option>
+                {voices.map(v => <option key={v.name} value={v.name}>{v.name}</option>)}
+              </select>
+              <button type="button" onClick={() => test(p.voiceName)} className="px-3 rounded-lg text-sm font-semibold" style={{ background: '#ccfbf1', color: '#134e4a' }}>▶ Test</button>
+            </div>
+            <div className="text-xs text-gray-500 mt-1">Voices marked Natural, Neural, Enhanced or Google sound the least robotic.</div>
+          </div>
+        )}
         <label className="flex items-center justify-between mt-4 text-base">Open every lesson
           <input type="checkbox" className="w-6 h-6" checked={p.unlockAll} onChange={e => onChange({ ...p, unlockAll: e.target.checked })} />
         </label>
@@ -197,7 +192,7 @@ const Grownups: React.FC<{ p: ChessProgress; onChange: (p: ChessProgress) => voi
             ? <button type="button" onClick={() => setSure(true)} className="text-sm text-red-600 underline">Start over (keeps stickers)</button>
             : <div className="text-sm">Start every lesson again?
                 <button type="button" onClick={() => { onChange({ ...p, done: [] }); setSure(false); }} className="ml-3 px-3 py-1 rounded-lg bg-red-600 text-white">Yes</button>
-                <button type="button" onClick={() => setSure(false)} className="ml-2 px-3 py-1 rounded-lg bg-gray-200">No</button></div>}
+                <button type="button" onClick={() => setSure(false)} className="ml-2 px-3 py-1 rounded-lg" style={{ background: '#e5e7eb', color: '#111827' }}>No</button></div>}
         </div>
         <button type="button" onClick={onClose} className="mt-6 w-full py-3 rounded-2xl bg-teal-700 text-white font-semibold">Done</button>
       </div>
@@ -277,7 +272,7 @@ const Hello: React.FC<{ round: Extract<Round, { kind: 'hello' }>; onDone: () => 
     <div className="flex flex-col items-center">
       <button type="button" aria-label={WORD[round.piece]} onClick={() => { if (tapped) return; setTapped(true); speakIt(); window.setTimeout(onDone, 1600); }}
         className="rounded-[48px] bg-white/10 px-12 py-6" style={{ animation: tapped ? 'lc-bounce .7s ease-out 2' : 'lc-float 2s ease-in-out infinite' }}>
-        <PieceShape piece={round.piece} size={Math.min(260, window.innerHeight * 0.32)} />
+        <PieceShape piece={round.piece} size={Math.min(300, window.innerHeight * 0.34)} mood={tapped ? 'happy' : 'idle'} />
       </button>
       <WordCard word={WORD[round.piece]} big />
       {!tapped && <div className="mt-4 text-2xl font-black text-teal-100">TAP IT!</div>}
@@ -305,7 +300,7 @@ function useWrong() {
 const Find: React.FC<{ round: Extract<Round, { kind: 'find' }>; hint: boolean; onRight: () => void; onWrong: () => void }> = ({ round, hint, onRight, onWrong }) => {
   const [wrong, flag] = useWrong();
   const [got, setGot] = useState(false);
-  const size = Math.min(170, window.innerWidth / (round.options.length + 1));
+  const size = Math.min(200, window.innerWidth / (round.options.length + 1));
   return (
     <div className="flex flex-wrap justify-center gap-5">
       {round.options.map((piece, k) => {
@@ -314,7 +309,7 @@ const Find: React.FC<{ round: Extract<Round, { kind: 'find' }>; hint: boolean; o
           <button key={k} type="button" aria-label={`Piece ${k + 1}`} onClick={() => { if (got) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(); } }}
             className="rounded-[36px] bg-white/10 p-5"
             style={{ animation: wrong === k ? 'lc-wiggle .5s' : got && right ? 'lc-bounce .7s ease-out 2' : hint && right ? 'lc-glow 1.1s ease-in-out infinite' : undefined }}>
-            <PieceShape piece={piece} size={size} />
+            <PieceShape piece={piece} size={size} mood={got && right ? 'happy' : 'idle'} />
           </button>
         );
       })}
@@ -327,7 +322,7 @@ const Word: React.FC<{ round: Extract<Round, { kind: 'word' }>; hint: boolean; o
   const [got, setGot] = useState(false);
   return (
     <div className="flex flex-col items-center">
-      <div className="rounded-[48px] bg-white/10 px-10 py-4"><PieceShape piece={round.piece} size={Math.min(220, window.innerHeight * 0.26)} /></div>
+      <div className="rounded-[48px] bg-white/10 px-10 py-4"><PieceShape piece={round.piece} size={Math.min(250, window.innerHeight * 0.28)} mood={got ? 'happy' : 'idle'} /></div>
       <div className="flex flex-wrap justify-center gap-4 mt-4">
         {round.options.map((piece, k) => {
           const right = piece === round.piece;
@@ -349,6 +344,7 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
   const [taps, setTaps] = useState(0);
   const [wiggle, setWiggle] = useState(false);
   const [finished, setFinished] = useState(false);
+  const [munch, setMunch] = useState(false);
   const piece = round.piece;
   const glowOn = round.kind === 'show' || round.glow || hint;
   const legal = useMemo(() => movesFrom(piece, at), [piece, at]);
@@ -368,7 +364,8 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
     const hit = left.find(t => same(t, sq));
     if (hit) {
       const rest = left.filter(t => !same(t, sq));
-      window.setTimeout(() => { setGone(hit); setLeft(rest); }, 300);
+      window.setTimeout(() => { setGone(hit); setLeft(rest); setMunch(true); }, 300);
+      window.setTimeout(() => setMunch(false), 1000);
       window.setTimeout(() => setGone(null), 900);
       if (!rest.length) { setFinished(true); window.setTimeout(onDone, 750); }
     }
@@ -398,7 +395,8 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
       )}
       <div className="absolute flex items-center justify-center pointer-events-none"
         style={{ left: at[1] * cell, top: at[0] * cell, width: cell, height: cell, transition: 'left .35s ease-in-out, top .35s ease-in-out', zIndex: 5 }}>
-        <PieceShape piece={piece} size={cell * 0.8} style={{ animation: wiggle ? 'lc-wiggle .5s' : finished ? 'lc-bounce .7s ease-out 2' : undefined }} />
+        <PieceShape piece={piece} size={cell * 0.86} mood={munch ? 'munch' : finished ? 'happy' : 'idle'}
+          style={{ animation: wiggle ? 'lc-wiggle .5s' : finished ? 'lc-bounce .7s ease-out 2' : undefined }} />
       </div>
     </div>
   );
