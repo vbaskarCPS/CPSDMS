@@ -9,7 +9,7 @@
 // It makes little-chess-voices.json and hands it to your phone to download; send that file back in chat.
 // (On a computer with Node 18+ it asks for a Google API key instead; the key is never saved.)
 
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 
@@ -46,8 +46,21 @@ async function synth(who, spoken) {
     audioConfig: { audioEncoding: 'MP3', ...(withSpeed ? { speakingRate: SPEED[who] || 1 } : {}) },
   });
   const url = 'https://texttospeech.googleapis.com/v1/text:synthesize' + (auth.key ? `?key=${encodeURIComponent(auth.key)}` : '');
-  let r = await fetch(url, { method: 'POST', headers: headers(), body: body(true) });
-  if (r.status === 400) r = await fetch(url, { method: 'POST', headers: headers(), body: body(false) });
+  // Google sometimes leaves a request hanging: give each try 30 seconds, and try up to 4 times.
+  const send = async (withSpeed) => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const r = await fetch(url, { method: 'POST', headers: headers(), body: body(withSpeed), signal: AbortSignal.timeout(30000) });
+        if ((r.status === 429 || r.status >= 500) && attempt < 4) { await new Promise(ok => setTimeout(ok, 2000 * attempt)); continue; }
+        return r;
+      } catch (e) {
+        if (attempt >= 4) throw new Error(`Google didn't answer for "${spoken.slice(0, 40)}..." after 4 tries. Run this again; it carries on where it stopped.`);
+        await new Promise(ok => setTimeout(ok, 2000 * attempt));
+      }
+    }
+  };
+  let r = await send(true);
+  if (r.status === 400) r = await send(false);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     const msg = j?.error?.message || r.statusText;
@@ -72,15 +85,27 @@ try {
     }
   }
   console.log(`Making ${LINES.length} voice clips${auth.project ? ` (project ${auth.project})` : ''}...`);
-  const clips = {};
-  let n = 0;
-  for (const [who, text, spoken] of LINES) {
-    const id = `${who}--${text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
-    clips[id] = await synth(who, spoken);
-    n++;
-    process.stdout.write(`\rmade ${n} of ${LINES.length}`);
-  }
+  // carry on from an earlier run that stopped part way (same voices only)
+  const PART = 'little-chess-voices.partial.json';
+  let clips = {};
+  try { const old = JSON.parse(readFileSync(PART, 'utf8')); if (JSON.stringify(old.voices) === JSON.stringify(VOICES)) clips = old.clips || {}; } catch { /* fresh start */ }
+  const todo = LINES.map(([who, text, spoken]) => ({ who, spoken, id: `${who}--${text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}` }))
+    .filter(l => !clips[l.id]);
+  let n = LINES.length - todo.length;
+  const show = () => process.stdout.write(`\rmade ${n} of ${LINES.length}`);
+  show();
+  // four at a time
+  const workers = Array.from({ length: 4 }, async () => {
+    while (todo.length) {
+      const l = todo.shift();
+      clips[l.id] = await synth(l.who, l.spoken);
+      n++; show();
+      writeFileSync(PART, JSON.stringify({ voices: VOICES, clips }));
+    }
+  });
+  await Promise.all(workers);
   writeFileSync('little-chess-voices.json', JSON.stringify({ made: new Date().toISOString(), voices: VOICES, clips }));
+  if (existsSync(PART)) writeFileSync(PART, '{}');
   console.log('\n\nDone! Made little-chess-voices.json.');
   if (sh('which cloudshell')) { sh('cloudshell download little-chess-voices.json'); console.log('Your phone should download it now. (If not, run:  cloudshell download little-chess-voices.json)'); }
   console.log('Send the file "little-chess-voices.json" back in the chat.');
