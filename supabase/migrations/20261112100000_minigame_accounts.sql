@@ -4,7 +4,7 @@
 -- Additive only. The tables are closed to the public key (RLS on, no grants); the page reaches
 -- them only through the minigame_* functions below. The PIN is set by each player on their first
 -- sign-in and is stored only as a bcrypt hash. To reset someone's PIN, clear it and they choose a
--- new one next time:  update minigame_players set pin_hash = null where name = 'Roche';
+-- new one next time:  update minigame_players set pin_hash = null where name = 'Rosh';
 -- Players are added only here, by SQL:  insert into minigame_players (name) values ('Name');
 
 create table if not exists public.minigame_players (
@@ -121,4 +121,4 @@ grant execute on function public.minigame_players_list(), public.minigame_sign_i
   public.minigame_sign_out(text), public.minigame_progress_all(text), public.minigame_save(text, text, jsonb) to anon, authenticated;
 
 -- the first two players; each sets their own PIN on first sign-in
-insert into public.minigame_players (name) values ('Vijay'), ('Roche') on conflict (name) do nothing;
+insert into public.minigame_players (name) values ('Vijay'), ('Rosh') on conflict (name) do nothing;

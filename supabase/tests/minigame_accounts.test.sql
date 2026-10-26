@@ -8,8 +8,8 @@ do $$
 declare v uuid; r uuid; s jsonb; tok text; tok2 text; i int;
 begin
   select id into v from minigame_players where name = 'Vijay';
-  select id into r from minigame_players where name = 'Roche';
-  assert v is not null and r is not null, 'Vijay and Roche are seeded';
+  select id into r from minigame_players where name = 'Rosh';
+  assert v is not null and r is not null, 'Vijay and Rosh are seeded';
   assert (select count(*) from jsonb_array_elements(minigame_players_list()) e where (e->>'has_pin')::boolean) = 0, 'no PINs yet';
 
   -- first sign-in sets the PIN; only 4 digits are accepted
@@ -42,7 +42,7 @@ begin
   assert minigame_progress_all(tok2)->'pour'->>'level' = '20', 'the latest save wins, seen from another phone';
   assert (minigame_progress_all(tok) ? 'chess'), 'each game keeps its own row';
   tok2 := minigame_sign_in(r, '5555')->>'token';
-  assert minigame_progress_all(tok2) = '{}'::jsonb, 'Roche sees only his own progress';
+  assert minigame_progress_all(tok2) = '{}'::jsonb, 'Rosh sees only his own progress';
   tok2 := minigame_sign_in(v, '1234')->>'token';
 
   -- bad game names, non-objects and no pass are refused
@@ -60,7 +60,7 @@ begin
 
   -- a reset PIN is chosen again on the next sign-in
   update minigame_players set pin_hash = null where id = r;
-  assert minigame_sign_in(r, '7777')->>'new_pin' = 'true', 'reset lets Roche pick a new PIN';
+  assert minigame_sign_in(r, '7777')->>'new_pin' = 'true', 'reset lets Rosh pick a new PIN';
 end $$;
 
 -- the public key can't touch the tables or the internal helper, only the functions
