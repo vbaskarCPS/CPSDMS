@@ -172,6 +172,31 @@ export function isOpen(p: ChessProgress, id: string): boolean {
   return nextLesson(p)?.id === id;
 }
 
+// ── levels: what he picks. Tapping a level plays all of its lessons, one after another ──
+export type Level = { id: 'names' | 'guess' | 'moves' | 'eat'; label: string; icon: string; layers: Layer[] };
+export const LEVELS: Level[] = [
+  { id: 'names', label: 'NAMES', icon: '👋', layers: ['names', 'review'] },
+  { id: 'guess', label: 'GUESS', icon: '🎲', layers: ['guess'] },
+  { id: 'moves', label: 'MOVES', icon: '⭐', layers: ['moves'] },
+  { id: 'eat', label: 'EAT', icon: '🍎', layers: ['eat'] },
+];
+export const lessonsOf = (level: Level) => LESSONS.filter(l => level.layers.includes(l.layer));
+export const levelOfLesson = (id: string) => LEVELS.find(lv => lessonsOf(lv).some(l => l.id === id))!;
+export const levelDone = (p: ChessProgress, level: Level) => lessonsOf(level).every(l => p.done.includes(l.id));
+/** The level to play next: the first one not finished (null when everything is done). */
+export const currentLevel = (p: ChessProgress) => LEVELS.find(lv => !levelDone(p, lv)) || null;
+/** A level opens once every level before it is finished (or a grown-up opens them all). */
+export function levelOpen(p: ChessProgress, level: Level): boolean {
+  if (p.unlockAll) return true;
+  const i = LEVELS.indexOf(level);
+  return LEVELS.slice(0, i).every(lv => levelDone(p, lv));
+}
+/** Where a level starts: its first unfinished lesson, or (a finished level, played again) its first lesson. */
+export function levelStart(p: ChessProgress, level: Level): number {
+  const ls = lessonsOf(level), i = ls.findIndex(l => !p.done.includes(l.id));
+  return i < 0 ? 0 : i;
+}
+
 export const STICKERS = ['🦁', '🐘', '🦒', '🐢', '🦊', '🐼', '🐸', '🦄', '🐙', '🦖', '🐳', '🦋', '🐝', '🦉', '🐧', '🐨', '🚒', '🚀', '🚂', '🚜', '🌈', '🍓', '🍉', '⚽', '🎈', '🌻', '🐬', '🦕', '🐯', '🐰'];
 
 /** The sticker for finishing a lesson: the next one in the book (the book loops when full). */

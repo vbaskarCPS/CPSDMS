@@ -5,8 +5,8 @@
 // src/lib/littleChess/lessons.ts; progress saves to the player's account through the hub.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BOARD, LESSONS, WORD, canMove, cheers, clipId, isOpen, spokenFor, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, stickerFor, stickerLine,
-  type ChessProgress, type Lesson, type Piece, type Round, type Speaker, type Sq,
+  BOARD, WORD, canMove, cheers, clipId, spokenFor, movesFrom, readProgress, LEVELS, currentLevel, levelDone, levelOpen, levelStart, lessonsOf, sentenceFor, speakerFor, stickerFor, stickerLine,
+  type ChessProgress, type Lesson, type Level, type Piece, type Round, type Speaker, type Sq,
 } from '../../lib/littleChess/lessons';
 import type { GameProps } from './games';
 import { CHARACTER_CSS, Character, type Mood } from './chessCharacters';
@@ -61,7 +61,9 @@ const Sentence: React.FC<{ text: string; lit: number; flash?: string | null }> =
 const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit, player }) => {
   useEffect(() => { const was = document.title; document.title = 'Little Chess'; return () => { document.title = was; hush(); }; }, []);
   const [p, setP] = useState<ChessProgress>(() => readProgress(progress));
-  const [playing, setPlaying] = useState<Lesson | null>(null);
+  // the level being played, and which of its lessons; a level runs all its lessons one after another
+  const [run, setRun] = useState<{ level: Level; at: number; next: boolean } | null>(null);
+  const playing: Lesson | null = run && !run.next ? lessonsOf(run.level)[run.at] : null;
   const [sticker, setSticker] = useState<string | null>(null);
   const [grownups, setGrownups] = useState(false);
   const update = useCallback((next: ChessProgress) => { setP(next); save(next); }, [save]);
@@ -71,9 +73,15 @@ const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit,
   const finish = (lesson: Lesson) => {
     const got = stickerFor(p);
     update({ ...p, done: p.done.includes(lesson.id) ? p.done : [...p.done, lesson.id], stickers: [...p.stickers, got] });
-    setPlaying(null); setSticker(got);
+    setRun(r => (r ? { ...r, next: true } : r)); setSticker(got);
     speak(stickerLine(player), p.voice);
   };
+  // after the sticker: on to the level's next lesson, or home once the level is finished
+  const afterSticker = () => {
+    setSticker(null);
+    setRun(r => (r && r.at + 1 < lessonsOf(r.level).length ? { level: r.level, at: r.at + 1, next: false } : null));
+  };
+  const startLevel = (level: Level) => setRun({ level, at: levelStart(p, level), next: false });
 
   return (
     <div className="min-h-screen w-full text-white select-none overflow-hidden" style={{ background: BG, fontFamily: FONT, WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>
@@ -87,15 +95,15 @@ const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit,
         ${CHARACTER_CSS}
       `}</style>
       {playing
-        ? <Play key={playing.id} lesson={playing} name={player} voice={p.voice} onDone={() => finish(playing)} onQuit={() => { hush(); setPlaying(null); }} />
-        : <Home p={p} name={player} onPlay={l => setPlaying(l)} onExit={() => { hush(); exit(); }} onGrownups={() => setGrownups(true)} />}
+        ? <Play key={playing.id} lesson={playing} name={player} voice={p.voice} onDone={() => finish(playing)} onQuit={() => { hush(); setRun(null); }} />
+        : !run && <Home p={p} name={player} onPlay={startLevel} onExit={() => { hush(); exit(); }} onGrownups={() => setGrownups(true)} />}
 
       {sticker && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={() => setSticker(null)}>
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={afterSticker}>
           <div className="rounded-[40px] bg-teal-950/95 border-4 border-yellow-300 px-10 py-8 text-center shadow-2xl" style={{ animation: 'lc-pop .5s ease-out' }}>
             <div style={{ fontSize: 'clamp(110px, 22vw, 200px)', lineHeight: 1, animation: 'lc-float 2s ease-in-out infinite' }}>{sticker}</div>
             <div className="font-black mt-4" style={{ fontSize: 'clamp(30px, 5vw, 52px)' }}>{player.toUpperCase()} GOT A STICKER!</div>
-            <button type="button" onClick={() => setSticker(null)} className="mt-6 px-10 py-4 rounded-full bg-yellow-300 text-teal-950 font-black text-3xl">YAY!</button>
+            <button type="button" onClick={e => { e.stopPropagation(); afterSticker(); }} className="mt-6 px-10 py-4 rounded-full bg-yellow-300 text-teal-950 font-black text-3xl">YAY!</button>
           </div>
         </div>
       )}
@@ -104,13 +112,9 @@ const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit,
   );
 };
 
-// ── home: the big PLAY button, the sticker book, and the path of lessons ──
-const LAYERS: { layer: Lesson['layer'][]; label: string }[] = [
-  { layer: ['names', 'review'], label: 'NAMES' }, { layer: ['guess'], label: 'GUESS' }, { layer: ['moves'], label: 'MOVES' }, { layer: ['eat'], label: 'EAT' },
-];
-
-const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => void; onExit: () => void; onGrownups: () => void }> = ({ p, name, onPlay, onExit, onGrownups }) => {
-  const next = nextLesson(p);
+// ── home: the big PLAY button, the sticker book, and the four levels ──
+const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (lv: Level) => void; onExit: () => void; onGrownups: () => void }> = ({ p, name, onPlay, onExit, onGrownups }) => {
+  const now = currentLevel(p);
   return (
     <div className="max-w-4xl mx-auto px-4 pb-10" style={{ paddingTop: 'max(16px, env(safe-area-inset-top))' }}>
       <div className="flex items-center justify-between">
@@ -119,14 +123,13 @@ const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => vo
         <HoldButton onHold={onGrownups} label="Hold for grown-ups">⚙</HoldButton>
       </div>
 
-      <button type="button" disabled={!next} onClick={() => next && onPlay(next)}
+      <button type="button" disabled={!now} onClick={() => now && onPlay(now)}
         className="mt-6 w-full rounded-[36px] bg-yellow-300 text-teal-950 py-6 px-6 flex items-center justify-center gap-6 shadow-xl active:scale-[.98] transition disabled:opacity-60"
-        style={{ animation: next ? 'lc-float 2.4s ease-in-out infinite' : undefined }}>
-        {next?.piece && <PieceShape piece={next.piece} size={Math.min(130, window.innerWidth * 0.16)} mood="happy" />}
-        {next && !next.piece && <span style={{ fontSize: 'clamp(64px, 11vw, 100px)', lineHeight: 1 }}>{next.icon || '⭐'}</span>}
+        style={{ animation: now ? 'lc-float 2.4s ease-in-out infinite' : undefined }}>
+        <span style={{ fontSize: 'clamp(64px, 11vw, 100px)', lineHeight: 1 }}>{now ? now.icon : '🏆'}</span>
         <span className="text-left">
-          <span className="block font-black" style={{ fontSize: 'clamp(48px, 9vw, 84px)', lineHeight: 1 }}>{next ? 'PLAY' : 'ALL DONE!'}</span>
-          <span className="block font-bold text-xl mt-1">{next ? `${LAYERS.find(x => x.layer.includes(next.layer))?.label} · ${next.title}` : `${name.toUpperCase()} DID EVERYTHING!`}</span>
+          <span className="block font-black" style={{ fontSize: 'clamp(48px, 9vw, 84px)', lineHeight: 1 }}>{now ? 'PLAY' : 'ALL DONE!'}</span>
+          <span className="block font-bold text-xl mt-1">{now ? now.label : `${name.toUpperCase()} DID EVERYTHING!`}</span>
         </span>
       </button>
 
@@ -138,24 +141,24 @@ const Home: React.FC<{ p: ChessProgress; name: string; onPlay: (l: Lesson) => vo
         </div>
       </div>
 
-      {LAYERS.map(({ layer, label }) => (
-        <div key={label} className="mt-6">
-          <div className="font-black text-xl text-teal-100">{label}</div>
-          <div className="mt-2 flex flex-wrap gap-3">
-            {LESSONS.filter(l => layer.includes(l.layer)).map(l => {
-              const open = isOpen(p, l.id), done = p.done.includes(l.id);
-              return (
-                <button key={l.id} type="button" disabled={!open} onClick={() => onPlay(l)} aria-label={`${label} ${l.title}`}
-                  className={`relative w-20 h-20 rounded-3xl flex items-center justify-center ${done ? 'bg-emerald-500/80' : open ? 'bg-yellow-300/90' : 'bg-white/10'} disabled:opacity-50`}>
-                  {l.piece ? <PieceShape piece={l.piece} size={58} /> : <span className="text-4xl">{l.icon || '⭐'}</span>}
-                  {done && <span className="absolute -top-2 -right-2 w-8 h-8 rounded-full text-emerald-600 font-black flex items-center justify-center" style={{ background: '#fff' }}>✓</span>}
-                  {!open && <span className="absolute -bottom-1 -right-1 text-xl">🔒</span>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+      <div className="grid grid-cols-2 gap-4 mt-8">
+        {LEVELS.map(lv => {
+          const open = levelOpen(p, lv), done = levelDone(p, lv), ls = lessonsOf(lv), got = ls.filter(l => p.done.includes(l.id)).length;
+          return (
+            <button key={lv.id} type="button" disabled={!open} onClick={() => onPlay(lv)} aria-label={`Level ${lv.label}`}
+              className={`relative rounded-[32px] p-5 flex flex-col items-center gap-2 ${done ? 'bg-emerald-500/80' : open ? 'bg-yellow-300/90 text-teal-950' : 'bg-white/10'} disabled:opacity-50`}>
+              <span style={{ fontSize: 64, lineHeight: 1 }}>{lv.icon}</span>
+              <span className="font-black text-2xl tracking-wide">{lv.label}</span>
+              <span className="flex flex-wrap justify-center gap-1.5 max-w-[220px]">
+                {ls.map(l => <span key={l.id} className="w-3 h-3 rounded-full" style={{ background: p.done.includes(l.id) ? '#fff' : 'rgba(0,0,0,.2)' }} />)}
+              </span>
+              {done && <span className="absolute -top-2 -right-2 w-10 h-10 rounded-full text-emerald-600 font-black text-xl flex items-center justify-center" style={{ background: '#fff' }}>✓</span>}
+              {!open && <span className="absolute top-2 right-3 text-2xl">🔒</span>}
+              <span className="sr-only">{got} of {ls.length} done</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 };
@@ -192,14 +195,14 @@ const Grownups: React.FC<{ p: ChessProgress; onChange: (p: ChessProgress) => voi
             <div className="text-xs text-gray-500 mt-1">Voices marked Natural, Neural, Enhanced or Google sound the least robotic.</div>
           </div>
         )}
-        <label className="flex items-center justify-between mt-4 text-base">Open every lesson
+        <label className="flex items-center justify-between mt-4 text-base">Open every level
           <input type="checkbox" className="w-6 h-6" checked={p.unlockAll} onChange={e => onChange({ ...p, unlockAll: e.target.checked })} />
         </label>
-        <div className="text-xs text-gray-500 mt-1">Lessons open one at a time as each is finished. Turn this on to pick any lesson.</div>
+        <div className="text-xs text-gray-500 mt-1">Levels open one at a time as each is finished. Turn this on to let him pick any level.</div>
         <div className="mt-5 border-t pt-4">
           {!sure
             ? <button type="button" onClick={() => setSure(true)} className="text-sm text-red-600 underline">Start over (keeps stickers)</button>
-            : <div className="text-sm">Start every lesson again?
+            : <div className="text-sm">Start every level again?
                 <button type="button" onClick={() => { onChange({ ...p, done: [] }); setSure(false); }} className="ml-3 px-3 py-1 rounded-lg bg-red-600 text-white">Yes</button>
                 <button type="button" onClick={() => setSure(false)} className="ml-2 px-3 py-1 rounded-lg" style={{ background: '#e5e7eb', color: '#111827' }}>No</button></div>}
         </div>
