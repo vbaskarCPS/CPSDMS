@@ -28,10 +28,14 @@ export type Round =
   | { kind: 'find'; piece: Piece; options: Piece[] }                   // FIND THE ROOK.
   | { kind: 'word'; piece: Piece; options: Piece[] }                   // WHICH WORD?
   | { kind: 'show'; piece: Piece; start: Sq; taps: number }            // ROOK GOES STRAIGHT. (tap the glowing squares)
-  | { kind: 'board'; piece: Piece; mode: 'star' | 'apple'; start: Sq; targets: Sq[]; glow: boolean };
+  | { kind: 'board'; piece: Piece; mode: 'star' | 'apple'; start: Sq; targets: Sq[]; glow: boolean }
+  // guessing games: only a shadow shows (WHO IS HIDING?) or the top peeks over a wall (WHO IS PEEKING?);
+  // he answers by tapping the matching piece or its word, then the piece pops out
+  | { kind: 'shadow' | 'peek'; piece: Piece; options: Piece[]; answer: 'piece' | 'word' };
 
-export type Layer = 'names' | 'moves' | 'eat' | 'review';
-export type Lesson = { id: string; layer: Layer; piece?: Piece; title: string; rounds: Round[] };
+export type Layer = 'names' | 'moves' | 'eat' | 'review' | 'guess';
+/** `icon` stands in for a piece on the lesson path when a lesson mixes pieces. */
+export type Lesson = { id: string; layer: Layer; piece?: Piece; title: string; icon?: string; rounds: Round[] };
 
 const inside = (r: number, c: number, n: number) => r >= 0 && c >= 0 && r < n && c < n;
 const same = (a: Sq, b: Sq) => a[0] === b[0] && a[1] === b[1];
@@ -107,6 +111,20 @@ export function allLessons(): Lesson[] {
       k % 2 ? { kind: 'word', piece, options: shuffle(rr, [piece, ...others(piece, 2, NAME_ORDER, rr)]) }
         : { kind: 'find', piece, options: shuffle(rr, [piece, ...others(piece, 3, NAME_ORDER, rr)]) }),
   });
+  // guessing games, two of each (the second a little harder): six rounds, every piece once, mixed up
+  const guess = (id: string, title: string, icon: string, seed: number, make: (piece: Piece, rand: () => number) => Round) => {
+    const rand = rng(seed);
+    out.push({ id, layer: 'guess', title, icon, rounds: shuffle(rand, NAME_ORDER).map(piece => make(piece, rand)) });
+  };
+  const pick = (piece: Piece, n: number, rand: () => number) => shuffle(rand, [piece, ...others(piece, n - 1, NAME_ORDER, rand)]);
+  guess('mix-find-1', 'MIX', '🎲', 5001, (piece, r) => ({ kind: 'find', piece, options: pick(piece, 3, r) }));
+  guess('mix-find-2', 'MIX', '🎲', 5002, (piece, r) => ({ kind: 'find', piece, options: pick(piece, 4, r) }));
+  guess('mix-word-1', 'WORDS', '🔤', 5003, (piece, r) => ({ kind: 'word', piece, options: pick(piece, 2, r) }));
+  guess('mix-word-2', 'WORDS', '🔤', 5004, (piece, r) => ({ kind: 'word', piece, options: pick(piece, 3, r) }));
+  guess('shadow-1', 'SHADOW', '👤', 5005, (piece, r) => ({ kind: 'shadow', piece, options: pick(piece, 3, r), answer: 'piece' }));
+  guess('shadow-2', 'SHADOW', '👤', 5006, (piece, r) => ({ kind: 'shadow', piece, options: pick(piece, 3, r), answer: 'word' }));
+  guess('peek-1', 'PEEKABOO', '🙈', 5007, (piece, r) => ({ kind: 'peek', piece, options: pick(piece, 3, r), answer: 'piece' }));
+  guess('peek-2', 'PEEKABOO', '🙈', 5008, (piece, r) => ({ kind: 'peek', piece, options: pick(piece, 3, r), answer: 'word' }));
   MOVE_ORDER.forEach((piece, i) => {
     const rand = rng(3000 + i);
     const board = (count: number, glow: boolean): Round => ({ kind: 'board', piece, mode: 'star', glow, ...makeBoard(piece, count, rand) });
@@ -171,6 +189,7 @@ export function sentenceFor(r: Round): string {
   if (r.kind === 'find') return `FIND THE ${WORD[r.piece]}.`;
   if (r.kind === 'word') return 'WHICH WORD?';
   if (r.kind === 'show') return HOW[r.piece];
+  if (r.kind !== 'board') return r.kind === 'shadow' ? 'WHO IS HIDING?' : 'WHO IS PEEKING?';
   const many = r.targets.length > 1;
   return r.mode === 'star' ? (many ? 'GET THE STARS.' : 'GET THE STAR.') : (many ? 'EAT THE APPLES.' : 'EAT THE APPLE.');
 }
@@ -218,6 +237,8 @@ export function spokenFor(_speaker: Speaker, text: string, name = 'Kiaan'): stri
   const N = name.toUpperCase();
   const fixed: Record<string, string> = {
     'WHICH WORD?': 'Which word is this piece? Tap the right word!',
+    'WHO IS HIDING?': 'Someone is hiding in the shadow! Who is it? Can you guess?',
+    'WHO IS PEEKING?': 'Peekaboo! Someone is peeking over the wall. Who is it?',
     'GET THE STAR.': "Let's get the star! Tap where the piece can go.",
     'GET THE STARS.': "Let's get all the stars, one at a time!",
     'EAT THE APPLE.': 'Snack time! Can you eat the apple? Move onto it to gobble it up!',
