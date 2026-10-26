@@ -25,6 +25,27 @@ function useOwnTab() {
   }, []);
 }
 
+/** Little-hands proofing while the minigames are open: no pull-down-to-refresh, no rubber-band
+ *  scrolling past the edges, and no pinch-zoom (all put back when leaving /minigame). */
+function useToddlerProof() {
+  useEffect(() => {
+    const html = document.documentElement, body = document.body;
+    const was = { html: html.style.overscrollBehavior, body: body.style.overscrollBehavior, vp: '' };
+    html.style.overscrollBehavior = 'none';
+    body.style.overscrollBehavior = 'none';
+    const vp = document.querySelector<HTMLMetaElement>("meta[name='viewport']");
+    if (vp) { was.vp = vp.content; vp.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover'; }
+    // iPad Safari ignores user-scalable=no; stop its two-finger pinch gestures directly
+    const stopPinch = (e: Event) => e.preventDefault();
+    document.addEventListener('gesturestart', stopPinch);
+    return () => {
+      html.style.overscrollBehavior = was.html; body.style.overscrollBehavior = was.body;
+      if (vp) vp.content = was.vp;
+      document.removeEventListener('gesturestart', stopPinch);
+    };
+  }, []);
+}
+
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const askedKey = (player: string, game: string) => `minigame.asked.${player}.${game}`;
 const wasAsked = (player: string, game: string) => { try { return !!localStorage.getItem(askedKey(player, game)); } catch { return true; } };
@@ -36,6 +57,7 @@ const markClaimed = (game: string, player: string) => { try { localStorage.setIt
 
 const MinigameHub: React.FC = () => {
   useOwnTab();
+  useToddlerProof();
   const nav = useNavigate();
   const gameId = useLocation().pathname.replace(/^\/minigame\/?/, '').split('/')[0] || null;
   const [player, setPlayer] = useState<Player | null | undefined>(undefined);   // undefined = still checking

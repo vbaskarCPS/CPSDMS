@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOARD, EAT_ORDER, HOW, LESSONS, MOVE_ORDER, NAME_ORDER, canMove, cheers, clipId, freshProgress, isOpen, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, spokenFor, stickerFor, stickerLine, voiceLines, type Round } from './lessons';
+import { LEVELS, currentLevel, levelDone, levelOpen, levelStart, lessonsOf, BOARD, EAT_ORDER, HOW, LESSONS, MOVE_ORDER, NAME_ORDER, canMove, cheers, clipId, freshProgress, isOpen, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, spokenFor, stickerFor, stickerLine, voiceLines, type Round } from './lessons';
 
 const key = (s: [number, number]) => s.join(',');
 
@@ -117,5 +117,29 @@ describe('the voice script', () => {
     const block = src.slice(src.indexOf('// LINES-START'), src.indexOf('// LINES-END'));
     const lines = JSON.parse(block.slice(block.indexOf('['), block.lastIndexOf(']') + 1));
     expect(lines).toEqual(voiceLines(['Kiaan']).map(l => [l.speaker, l.text, l.spoken]));
+  });
+});
+
+describe('levels', () => {
+  it('group every lesson into NAMES, GUESS, MOVES, EAT, in order', () => {
+    expect(LEVELS.map(l => l.label)).toEqual(['NAMES', 'GUESS', 'MOVES', 'EAT']);
+    expect(LEVELS.flatMap(lessonsOf).map(l => l.id)).toEqual(LESSONS.map(l => l.id));
+    expect(lessonsOf(LEVELS[0]).slice(-1)[0].id).toBe('names-review');
+  });
+  it('open one after another, start at the first unfinished lesson, and replay from the top once done', () => {
+    const p = freshProgress();
+    expect(currentLevel(p)!.id).toBe('names');
+    expect(levelOpen(p, LEVELS[0])).toBe(true);
+    expect(levelOpen(p, LEVELS[1])).toBe(false);
+    expect(levelStart(p, LEVELS[0])).toBe(0);
+    p.done.push('names-rook', 'names-knight');
+    expect(levelStart(p, LEVELS[0])).toBe(2);
+    p.done.push(...lessonsOf(LEVELS[0]).map(l => l.id));
+    expect(levelDone(p, LEVELS[0])).toBe(true);
+    expect(levelStart(p, LEVELS[0])).toBe(0);
+    expect(currentLevel(p)!.id).toBe('guess');
+    expect(levelOpen(p, LEVELS[1])).toBe(true);
+    expect(levelOpen(p, LEVELS[2])).toBe(false);
+    expect(levelOpen({ ...p, unlockAll: true }, LEVELS[3])).toBe(true);
   });
 });
