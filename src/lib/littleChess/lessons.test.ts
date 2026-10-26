@@ -90,9 +90,9 @@ describe('voice lines', () => {
 });
 
 describe('the voice script', () => {
-  it("has the same lines as the game (re-copy them into scripts/make-little-chess-voices.mjs if this fails)", async () => {
+  it("has the same lines as the game (re-copy them into public/minigame/make-little-chess-voices.mjs if this fails)", async () => {
     const { readFileSync } = await import('node:fs');
-    const src = readFileSync('scripts/make-little-chess-voices.mjs', 'utf8');
+    const src = readFileSync('public/minigame/make-little-chess-voices.mjs', 'utf8');
     const block = src.slice(src.indexOf('// LINES-START'), src.indexOf('// LINES-END'));
     const lines = JSON.parse(block.slice(block.indexOf('['), block.lastIndexOf(']') + 1));
     expect(lines).toEqual(voiceLines(['Kiaan']).map(l => [l.speaker, l.text]));

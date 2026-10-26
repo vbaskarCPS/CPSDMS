@@ -1,5 +1,5 @@
 // src/pages/Minigame/voice.ts — recorded voice clips when we have them (natural Google voices, made once
-// by scripts/make-little-chess-voices.mjs and kept in public/minigame/chess-voice), otherwise the
+// by public/minigame/make-little-chess-voices.mjs and kept in public/minigame/chess-voice), otherwise the
 // tablet's own voice, picking the most natural-sounding one it has.
 // Phones and tablets ship several voices; the newer "natural", "neural", "enhanced" or Google network
 // voices sound far less robotic than the default. A grown-up can also pick one by name (saved in the

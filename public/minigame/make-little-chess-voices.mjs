@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Little Chess voices — makes natural voice clips with Google Cloud Text-to-Speech ("Chirp 3 HD" voices).
-// Run it on your own computer (it needs Node.js 18 or newer). Your Google API key is typed in when asked
-// and is never saved anywhere.
 //
-//   1) Listen to the sample voices first:     node make-little-chess-voices.mjs samples
-//      -> makes a folder "little-chess-samples" with one clip per voice.
-//   2) Make every clip:                       node make-little-chess-voices.mjs all
-//      -> makes "little-chess-voices.json" (all the clips in one file). Send that file back in chat.
+// Easiest from a phone: Google Cloud Shell (shell.cloud.google.com), which has Node and your Google login.
+//   gcloud services enable texttospeech.googleapis.com
+//   curl -sO https://propertystars.app/minigame/make-little-chess-voices.mjs
+//   node make-little-chess-voices.mjs samples     -> then tap Web Preview (port 8080) to listen
+//   node make-little-chess-voices.mjs all         -> downloads little-chess-voices.json; send it back in chat
+// In Cloud Shell no API key is needed (it uses your login). On a computer with Node 18+, it asks for a
+// Google API key instead (typed in, never saved).
 //
 // Don't like a voice? Swap it on the command line, e.g.:   node make-little-chess-voices.mjs samples king=Charon
 // Voices to try: Achernar, Achird, Algenib, Algieba, Alnilam, Aoede, Autonoe, Callirrhoe, Charon, Despina,
@@ -14,7 +15,9 @@
 // Sadachbia, Sadaltager, Schedar, Sulafat, Umbriel, Vindemiatrix, Zephyr, Zubenelgenubi.
 // If his name comes out wrong, say how it sounds:   node make-little-chess-voices.mjs samples name=Kee-ahn
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 
 // Who sounds like what (Google's own descriptions in brackets). Change any of these freely.
@@ -51,19 +54,29 @@ function spoken(text) {
   return t;
 }
 
+// How we sign in to Google: an API key, or (in Cloud Shell) your own login.
+let auth = null;   // { key } or { token, project }
+const sh = (cmd) => { try { return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { return ''; } };
+function headers() {
+  const h = { 'Content-Type': 'application/json' };
+  if (auth.token) { h.Authorization = `Bearer ${auth.token}`; if (auth.project) h['x-goog-user-project'] = auth.project; }
+  return h;
+}
+
 async function synth(key, who, text) {
   const body = (withSpeed) => JSON.stringify({
     input: { text: spoken(text) },
     voice: { languageCode: 'en-US', name: `en-US-Chirp3-HD-${VOICES[who]}` },
     audioConfig: { audioEncoding: 'MP3', ...(withSpeed ? { speakingRate: SPEED[who] || 1 } : {}) },
   });
-  const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${encodeURIComponent(key)}`;
-  let r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body(true) });
-  if (r.status === 400) r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body(false) });
+  const url = 'https://texttospeech.googleapis.com/v1/text:synthesize' + (auth.key ? `?key=${encodeURIComponent(auth.key)}` : '');
+  let r = await fetch(url, { method: 'POST', headers: headers(), body: body(true) });
+  if (r.status === 400) r = await fetch(url, { method: 'POST', headers: headers(), body: body(false) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     const msg = j?.error?.message || r.statusText;
-    if (/not been used|disabled/i.test(msg)) throw new Error('The Text-to-Speech API is not turned on for this Google Cloud project yet. Turn it on, wait a minute, and try again.');
+    if (/not been used|disabled|SERVICE_DISABLED/i.test(msg)) throw new Error('Text-to-Speech is not turned on for this project yet. Run:  gcloud services enable texttospeech.googleapis.com  then wait a minute and try again.');
+    if (/quota project|billing/i.test(msg)) throw new Error('Google needs a project for this. Run:  gcloud config set project YOUR-PROJECT-ID  (find it at the top of console.cloud.google.com), then try again.');
     if (/API key not valid/i.test(msg)) throw new Error('That API key was not accepted. Copy it again from Google Cloud > APIs & Services > Credentials.');
     if (/voice/i.test(msg)) throw new Error(`Google doesn't know the voice "${VOICES[who]}" (for ${who}). Pick another from the list at the top of this file.`);
     throw new Error(msg);
@@ -72,9 +85,40 @@ async function synth(key, who, text) {
 }
 
 const rl = createInterface({ input: process.stdin, output: process.stdout });
-const key = process.env.GOOGLE_TTS_KEY || (await rl.question('Paste your Google Cloud API key and press Enter: ')).trim();
-rl.close();
-if (!key) { console.log('No key, nothing done.'); process.exit(1); }
+if (process.env.GOOGLE_TTS_KEY) auth = { key: process.env.GOOGLE_TTS_KEY };
+else {
+  const token = sh('gcloud auth print-access-token');
+  if (token) {
+    auth = { token, project: sh('gcloud config get-value project') || null };
+    console.log(`Using your Google login${auth.project ? ` (project ${auth.project})` : ''}.`);
+    if (!auth.project) console.log('No project set. If Google complains, run:  gcloud config set project YOUR-PROJECT-ID');
+  } else {
+    const k = (await rl.question('Paste your Google Cloud API key and press Enter: ')).trim();
+    if (!k) { console.log('No key, nothing done.'); process.exit(1); }
+    auth = { key: k };
+  }
+}
+const key = null;   // (kept for the synth() signature)
+
+/** A little web page with every sample, for Cloud Shell's Web Preview (port 8080). Enter stops it. */
+async function serveSamples() {
+  const files = readdirSync('little-chess-samples').filter(f => f.endsWith('.mp3')).sort();
+  const page = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Little Chess voices</title><body style="font-family:system-ui;padding:16px;max-width:520px;margin:auto;background:#f0fdfa">
+<h2>Little Chess voices</h2><p>Tap play on each one. Don't like one? Back in Cloud Shell, press Enter and run samples again with a swap, e.g. <code>king=Charon</code>.</p>
+${files.map(f => `<div style="margin:14px 0;padding:12px;border-radius:12px;background:#fff"><b>${f.replace('.mp3', '')}</b><br><audio controls preload="none" style="width:100%;margin-top:6px" src="${encodeURIComponent(f)}"></audio></div>`).join('')}
+</body>`;
+  const server = createServer((req, res) => {
+    const name = decodeURIComponent((req.url || '/').split('?')[0].slice(1));
+    if (name && files.includes(name)) { res.writeHead(200, { 'Content-Type': 'audio/mpeg' }); res.end(readFileSync(`little-chess-samples/${name}`)); return; }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(page);
+  });
+  await new Promise(ok => server.listen(8080, ok)).catch(() => null);
+  console.log('\nTo listen: tap the Web Preview button (the eye/box icon at the top of Cloud Shell) > Preview on port 8080.');
+  console.log('On a computer: open http://localhost:8080');
+  await rl.question('Press Enter here when you are done listening. ');
+  server.close();
+}
 
 try {
   if (mode === 'samples') {
@@ -87,8 +131,9 @@ try {
       writeFileSync(file, Buffer.from(b64, 'base64'));
       console.log('made', file);
     }
-    console.log('\nListen to the clips in the "little-chess-samples" folder.');
-    console.log('Happy? Run:  node make-little-chess-voices.mjs all' + (sayName ? ` name=${sayName}` : '') + '   (add any voice swaps you used, e.g. king=Charon)');
+    await serveSamples();
+    const swaps = args.filter(a => a.includes('=')).join(' ');
+    console.log('\nHappy with them? Run:  node make-little-chess-voices.mjs all' + (swaps ? ' ' + swaps : ''));
   } else if (mode === 'all') {
     const clips = {};
     let n = 0;
@@ -99,11 +144,15 @@ try {
       process.stdout.write(`\rmade ${n} of ${LINES.length} clips`);
     }
     writeFileSync('little-chess-voices.json', JSON.stringify({ made: new Date().toISOString(), voices: VOICES, name: sayName, clips }));
-    console.log('\n\nDone! Send the file "little-chess-voices.json" back in the chat.');
+    console.log('\n\nDone! Made little-chess-voices.json.');
+    if (sh('which cloudshell')) { sh('cloudshell download little-chess-voices.json'); console.log('Your phone should now download it. (If not, run:  cloudshell download little-chess-voices.json)'); }
+    console.log('Send the file "little-chess-voices.json" back in the chat.');
   } else {
     console.log('Say "samples" or "all", e.g.:  node make-little-chess-voices.mjs samples');
   }
 } catch (e) {
   console.log('\nStopped: ' + e.message);
   process.exit(1);
+} finally {
+  rl.close();
 }
