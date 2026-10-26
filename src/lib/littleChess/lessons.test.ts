@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOARD, EAT_ORDER, HOW, LESSONS, MOVE_ORDER, NAME_ORDER, canMove, cheers, clipId, freshProgress, isOpen, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, stickerFor, stickerLine, voiceLines, type Round } from './lessons';
+import { BOARD, EAT_ORDER, HOW, LESSONS, MOVE_ORDER, NAME_ORDER, canMove, cheers, clipId, freshProgress, isOpen, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, spokenFor, stickerFor, stickerLine, voiceLines, type Round } from './lessons';
 
 const key = (s: [number, number]) => s.join(',');
 
@@ -87,6 +87,13 @@ describe('voice lines', () => {
     expect(clipId('rook', 'KIAAN DID IT!')).toBe('rook--kiaan-did-it');
     expect(lines.length).toBeLessThan(80);
   });
+  it('speak in full sentences, not the short screen words', () => {
+    const lines = voiceLines(['Kiaan']);
+    for (const l of lines) { expect(l.spoken).not.toBe(l.text); expect(l.spoken).not.toMatch(/^[A-Z !?.,']+$/); }
+    expect(spokenFor('rook', 'THIS IS ROOK.')).toMatch(/I'm the Rook/);
+    expect(spokenFor('narrator', 'FIND THE KING.')).toBe('Can you find the King? Tap the King!');
+    expect(spokenFor('pawn', 'KIAAN DID IT!', 'Kiaan')).toBe('Kiaan did it! Hooray!');
+  });
 });
 
 describe('the voice script', () => {
@@ -95,6 +102,6 @@ describe('the voice script', () => {
     const src = readFileSync('public/minigame/make-little-chess-voices.mjs', 'utf8');
     const block = src.slice(src.indexOf('// LINES-START'), src.indexOf('// LINES-END'));
     const lines = JSON.parse(block.slice(block.indexOf('['), block.lastIndexOf(']') + 1));
-    expect(lines).toEqual(voiceLines(['Kiaan']).map(l => [l.speaker, l.text]));
+    expect(lines).toEqual(voiceLines(['Kiaan']).map(l => [l.speaker, l.text, l.spoken]));
   });
 });

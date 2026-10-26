@@ -5,7 +5,7 @@
 // src/lib/littleChess/lessons.ts; progress saves to the player's account through the hub.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BOARD, LESSONS, WORD, canMove, cheers, clipId, isOpen, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, stickerFor, stickerLine,
+  BOARD, LESSONS, WORD, canMove, cheers, clipId, isOpen, spokenFor, movesFrom, nextLesson, readProgress, sentenceFor, speakerFor, stickerFor, stickerLine,
   type ChessProgress, type Lesson, type Piece, type Round, type Speaker, type Sq,
 } from '../../lib/littleChess/lessons';
 import type { GameProps } from './games';
@@ -19,8 +19,9 @@ const FONT = "'Andika', 'Comic Sans MS', 'Trebuchet MS', system-ui, sans-serif";
 // ── the voice: the tablet's most natural one, or the one a grown-up picked ──
 let chosenVoice: string | null = null, useRecorded = true;
 /** Say a line as `who` (the recorded clip if there is one, else the tablet's voice). */
+let playerName = 'Kiaan';
 const speak = (text: string, on: boolean, onWord?: (i: number) => void, who: Speaker = 'narrator') =>
-  say(text, { on, voice: chosenVoice, onWord, clip: clipId(who, text), recorded: useRecorded });
+  say(text, { on, voice: chosenVoice, onWord, clip: clipId(who, text), recorded: useRecorded, spoken: spokenFor(who, text, playerName) });
 
 /** A button that only works when held for 3 seconds (so little hands can't leave by accident). */
 const HoldButton: React.FC<{ onHold: () => void; label: string; children: React.ReactNode }> = ({ onHold, label, children }) => {
@@ -64,7 +65,7 @@ const LittleChess: React.FC<GameProps<ChessProgress>> = ({ progress, save, exit,
   const [sticker, setSticker] = useState<string | null>(null);
   const [grownups, setGrownups] = useState(false);
   const update = useCallback((next: ChessProgress) => { setP(next); save(next); }, [save]);
-  chosenVoice = p.voiceName; useRecorded = p.recorded;
+  chosenVoice = p.voiceName; useRecorded = p.recorded; playerName = player;
   useEffect(() => { loadClips(); }, []);
 
   const finish = (lesson: Lesson) => {

@@ -63,7 +63,7 @@ function wordTimer(words: number, ms: number, on: (i: number) => void) {
 
 /** Say something. Plays the recorded clip `clip` if this build has it (and recorded voices are on);
  *  otherwise the tablet's voice says the text. onWord lights up one word at a time. */
-export function say(text: string, opts: { on: boolean; voice?: string | null; onWord?: (i: number) => void; clip?: string; recorded?: boolean }) {
+export function say(text: string, opts: { on: boolean; voice?: string | null; onWord?: (i: number) => void; clip?: string; recorded?: boolean; spoken?: string }) {
   if (!opts.on) return;
   hush();
   if (opts.clip && opts.recorded !== false && clips?.has(opts.clip)) {
@@ -81,17 +81,22 @@ export function say(text: string, opts: { on: boolean; voice?: string | null; on
   sayWithTablet(text, opts);
 }
 
-function sayWithTablet(text: string, opts: { voice?: string | null; onWord?: (i: number) => void }) {
+function sayWithTablet(text: string, opts: { voice?: string | null; onWord?: (i: number) => void; spoken?: string }) {
   const s = synth();
   if (!s) return;
   try {
     s.cancel();
-    const u = new SpeechSynthesisUtterance(text.toLowerCase().replace(/\bl\b/g, 'L'));
+    // the full sentence if there is one (the screen shows the short sight words)
+    const u = new SpeechSynthesisUtterance(opts.spoken || text.toLowerCase().replace(/\bl\b/g, 'L'));
     const v = pickVoice(opts.voice);
     if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'en-US';
     // a little slower and only slightly brighter than normal: friendly without sounding like a chipmunk
     u.rate = 0.88; u.pitch = 1.05;
-    if (opts.onWord) { const on = opts.onWord; u.onstart = () => wordTimer(text.split(' ').length, 480, on); }
+    if (opts.onWord) {
+      // spread the lit-up words over roughly how long the full sentence takes to say
+      const words = text.split(' ').length, said = (opts.spoken || text).split(' ').length, on = opts.onWord;
+      u.onstart = () => wordTimer(words, Math.max(400, (said * 400) / words), on);
+    }
     s.speak(u);
   } catch { /* no voice on this device */ }
 }

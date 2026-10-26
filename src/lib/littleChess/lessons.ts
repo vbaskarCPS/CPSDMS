@@ -185,12 +185,59 @@ export const stickerLine = (name: string) => `${name.toUpperCase()} GOT A STICKE
 export const clipId = (speaker: Speaker, text: string) =>
   `${speaker}--${text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
 
-/** Every line the game can say, for these players' names (no duplicates). */
-export function voiceLines(names: string[]): { speaker: Speaker; text: string; id: string }[] {
-  const out = new Map<string, { speaker: Speaker; text: string; id: string }>();
-  const add = (speaker: Speaker, text: string) => { const id = clipId(speaker, text); out.set(id, { speaker, text, id }); };
+// What's actually said out loud: a full, friendly sentence for each short sight-word sentence on screen.
+// (The screen keeps the short words for Kiaan to read; the voice says it the way a grown-up would.)
+const HELLO: Record<Piece, string> = {
+  rook: "Hi there! I'm the Rook. I look like a castle tower!",
+  knight: "Neigh! I'm the Knight. I look like a horse!",
+  king: "Hello! I'm the King. My crown has a little cross on top!",
+  queen: "Hello! I'm the Queen. My crown has lots of points!",
+  bishop: "Hi! I'm the Bishop. I wear a tall pointy hat!",
+  pawn: "Hi! I'm the Pawn. I'm the littlest one!",
+};
+const HOW_SAID: Record<Piece, string> = {
+  rook: 'The Rook goes straight: up, down, left or right, as far as it likes. Tap a glowing square to try it!',
+  bishop: 'The Bishop climbs the stairs, corner to corner, and always stays on its own colour. Tap a glowing square to try it!',
+  queen: 'The Queen goes everywhere! Straight like the Rook, and up the stairs like the Bishop. Tap a glowing square to try it!',
+  king: 'The King steps once. Just one little step, any way he likes. Tap a glowing square to try it!',
+  knight: 'The Knight jumps in an L shape: two steps, then a turn. He can even hop over things! Tap a glowing square to try it!',
+  pawn: 'The Pawn steps up, one little step forward at a time. Tap the glowing square to try it!',
+};
+const CHEER_SAID: Record<string, string> = {
+  'YES!': 'Yes! You got it!', 'GREAT JOB!': "Great job! You're so clever!", 'WOW!': 'Wow! That was amazing!', 'SUPER!': 'Super! Give me a high five!',
+};
+
+/** The full sentence the voice says for a line shown on screen. */
+export function spokenFor(_speaker: Speaker, text: string, name = 'Kiaan'): string {
+  const piece = NAME_ORDER.find(p => text === `THIS IS ${WORD[p]}.`);
+  if (piece) return HELLO[piece];
+  const found = NAME_ORDER.find(p => text === `FIND THE ${WORD[p]}.`);
+  if (found) return `Can you find the ${cap(found)}? Tap the ${cap(found)}!`;
+  const how = NAME_ORDER.find(p => text === HOW[p]);
+  if (how) return HOW_SAID[how];
+  const N = name.toUpperCase();
+  const fixed: Record<string, string> = {
+    'WHICH WORD?': 'Which word is this piece? Tap the right word!',
+    'GET THE STAR.': "Let's get the star! Tap where the piece can go.",
+    'GET THE STARS.': "Let's get all the stars, one at a time!",
+    'EAT THE APPLE.': 'Snack time! Can you eat the apple? Move onto it to gobble it up!',
+    'EAT THE APPLES.': 'Snack time! Eat all the apples, one at a time!',
+    [`${N} DID IT!`]: `${name} did it! Hooray!`,
+    [`${N} GOT A STICKER!`]: `Hooray! ${name} got a sticker! Great job!`,
+  };
+  return fixed[text] || CHEER_SAID[text] || text.charAt(0) + text.slice(1).toLowerCase();
+}
+const cap = (p: Piece) => p.charAt(0).toUpperCase() + p.slice(1);
+
+/** Every line the game can say, for these players' names (no duplicates): who says it, the screen
+ *  text (which names the clip) and the full sentence that's spoken. */
+export function voiceLines(names: string[]): { speaker: Speaker; text: string; id: string; spoken: string }[] {
+  const out = new Map<string, { speaker: Speaker; text: string; id: string; spoken: string }>();
+  let who = names[0] || 'Kiaan';
+  const add = (speaker: Speaker, text: string) => { const id = clipId(speaker, text); out.set(id, { speaker, text, id, spoken: spokenFor(speaker, text, who) }); };
   for (const l of LESSONS) for (const r of l.rounds) add(speakerFor(r), sentenceFor(r));
   for (const name of names) {
+    who = name;
     add('narrator', stickerLine(name));
     for (const p of NAME_ORDER) for (const c of cheers(name)) add(p, c);
   }
