@@ -5,7 +5,7 @@ import { Check, UserPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { listRateCards, listSeasons, regionTax, todayISO, useLoad } from '../../lib/data';
 import { cardFor, defaultRateCard, type RateCardData } from '../../lib/rateCard';
-import { SERVICES, type Service } from '../../lib/permissions';
+import { centerService, SERVICES, type Service } from '../../lib/permissions';
 import { centerAreas, routeShapes, type Area } from '../../lib/territory';
 import { getDay, listRoster, fullName, type RosterRow } from '../../lib/workerbook';
 import {
@@ -55,7 +55,7 @@ export const StartSession: React.FC = () => {
   const [teams, setTeams] = useState<PlanTeam[]>([]);
   const [members, setMembers] = useState<Record<string, string>>({});
   const [showed, setShowed] = useState<Set<string>>(new Set());
-  const [service, setService] = useState<Service>('sealing');
+  const [service, setService] = useState<Service>(() => centerService(center?.services));
   const [settings, setSettings] = useState<Omit<PlanSettings, 'service'>>({ productCostPercent: 0, emailReceipts: true, liveCard: true, noTaxOnCash: false });
   const [prefilled, setPrefilled] = useState(false);
   const [showBook, setShowBook] = useState(false);
@@ -79,7 +79,7 @@ export const StartSession: React.FC = () => {
       managerId: dayRoster.data!.roster.find(r => r.team === n && r.manager_id)?.manager_id || firstMgr })));
     setMembers(Object.fromEntries(rows.filter(r => r.team).map(r => [r.hire_id, r.team as string])));
     setShowed(new Set(rows.filter(r => r.attendance === 'showed').map(r => r.hire_id)));
-    const svc = (seasonInfo.data?.season?.service || 'sealing') as Service;
+    const svc = (seasonInfo.data?.season?.service || centerService(center?.services)) as Service;
     setService(svc);
     setSettings(s => ({ ...s, productCostPercent: card.productCostPercent, noTaxOnCash: card.noTaxOnCashDefault }));
     setPrefilled(true);

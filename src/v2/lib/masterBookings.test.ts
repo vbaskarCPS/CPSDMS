@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  cleanFilters, DEFAULT_FILTERS,
+  cleanFilters, DEFAULT_FILTERS, CLIENT_LAYERS, prevCounts, seasonLabel,
   clientLayerOf, houseLook, RM_HOUSE, serviceMarks, shortName, daysLabel, heatColor, parseAreaView, parseRound, parseSeason, pctOf, seasonKey, shownRound, startingSeason,
   type ClientLayer, type MapCard,
 } from './masterBookings';
@@ -123,8 +123,39 @@ describe('names on houses', () => {
 describe('remembered filters', () => {
   it('keeps what was saved and fills the rest from the defaults', () => {
     expect(cleanFilters({ heat: false, knocks: ['no', 'bogus'], clients: ['prev_sealing'], bookings: [], open: true }))
-      .toEqual({ heat: false, knocks: ['no'], clients: ['prev_sealing'], bookings: [], open: true });
+      .toEqual({ heat: false, knocks: ['no'], clients: ['prev_sealing', 'done_rejuv', 'prev_rejuv'], bookings: [], open: true, layers: CLIENT_LAYERS.map(l => l.key) });
     expect(cleanFilters(null)).toEqual(DEFAULT_FILTERS);
     expect(cleanFilters({ heat: 'yes' }).heat).toBe(true);
+  });
+  it('layers switched off after lawn rejuv joined stay off', () => {
+    const all = CLIENT_LAYERS.map(l => l.key);
+    expect(cleanFilters({ clients: ['prev_sealing'], layers: all }).clients).toEqual(['prev_sealing']);
+  });
+});
+
+describe('lawn rejuvenation', () => {
+  const all = new Set<ClientLayer>(CLIENT_LAYERS.map(l => l.key));
+  it('reads and labels a Lawn Rejuv season', () => {
+    expect(parseSeason('lawn_rejuv-2026')).toEqual({ service: 'lawn_rejuv', season: 2026 });
+    expect(seasonLabel({ service: 'lawn_rejuv', season: 2026 })).toBe('Lawn Rejuv 2026');
+  });
+  it('a rejuve centre opens on Lawn Rejuv, not sealing', () => {
+    expect(startingSeason(null, null, ['lawn_rejuv'], 2026)).toEqual({ service: 'lawn_rejuv', season: 2026 });
+  });
+  it('rejuv customers show in their own layers, this season first', () => {
+    expect(clientLayerOf(16 | 32, all, 'lawn_rejuv')).toBe('done_rejuv');
+    expect(clientLayerOf(16 | 2, all, 'lawn_rejuv')).toBe('prev_rejuv');
+  });
+  it('houses: rejuv job this season purple, past rejuv blue, other services as before', () => {
+    expect(houseLook(null, 32, all, 'lawn_rejuv').color).toBe(RM_HOUSE.done);
+    expect(houseLook(null, 16, all, 'lawn_rejuv').color).toBe(RM_HOUSE.pcl);
+    expect(houseLook(null, 1, all, 'lawn_rejuv').color).toBe(RM_HOUSE.other.aeration.pcl);
+    expect(houseLook(null, 16, all, 'sealing').color).toBe(RM_HOUSE.other.lawn_rejuv.pcl);
+    expect(serviceMarks(16)).toEqual({ leaf: true, drop: false });
+  });
+  it('map cards count the season’s service, and others only when they have some', () => {
+    const card = { prev_aeration: 0, prev_sealing: 4, prev_rejuv: 12 } as MapCard;
+    expect(prevCounts(card, 'lawn_rejuv')).toEqual([{ service: 'lawn_rejuv', n: 12 }, { service: 'sealing', n: 4 }]);
+    expect(prevCounts({ ...card, prev_rejuv: undefined } as MapCard, 'lawn_rejuv')).toEqual([{ service: 'lawn_rejuv', n: 0 }, { service: 'sealing', n: 4 }]);
   });
 });

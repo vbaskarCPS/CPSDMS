@@ -6,14 +6,16 @@
 // (RUN_26: app_mb_*); this reads it and holds the small pure helpers the screens share.
 import { db, must } from './client';
 
-export type Service = 'aeration' | 'sealing';
-export const SERVICES: Service[] = ['aeration', 'sealing'];
-export const serviceLabel = (s: Service) => (s === 'aeration' ? 'Aeration' : 'Sealing');
+export type Service = 'aeration' | 'sealing' | 'lawn_rejuv';
+export const SERVICES: Service[] = ['aeration', 'sealing', 'lawn_rejuv'];
+const LABELS: Record<Service, string> = { aeration: 'Aeration', sealing: 'Sealing', lawn_rejuv: 'Lawn Rejuv' };
+export const serviceLabel = (s: Service | string) => LABELS[s as Service] || s;
+const isService = (s: string): s is Service => (SERVICES as string[]).includes(s);
 
 export interface Season { service: Service; season: number }
 export const seasonKey = (s: Season) => `${s.service}-${s.season}`;
 export function parseSeason(k: string | null | undefined): Season | null {
-  const m = /^(aeration|sealing)-(\d{4})$/.exec(k || '');
+  const m = /^(aeration|sealing|lawn_rejuv)-(\d{4})$/.exec(k || '');
   return m ? { service: m[1] as Service, season: Number(m[2]) } : null;
 }
 export const seasonLabel = (s: Season) => `${serviceLabel(s.service)} ${s.season}`;
@@ -43,7 +45,7 @@ export async function saveSettings(centerId: string, s: MbSettings): Promise<MbS
 export function startingSeason(fromUrl: Season | null, settings: MbSettings | null, centerServices: string[] | undefined, year: number): Season {
   if (fromUrl) return fromUrl;
   if (settings?.service && settings.season) return { service: settings.service, season: settings.season };
-  const svc = (centerServices || []).find((s): s is Service => s === 'sealing' || s === 'aeration') || 'sealing';
+  const svc = (centerServices || []).find(isService) || 'sealing';
   return { service: svc, season: year };
 }
 
@@ -56,6 +58,8 @@ export interface MapCard {
   area: string; prefix: string; start: number; count: number | null; city: string | null; region: string | null;
   routes: number; first: string | null; last: string | null;
   prev_aeration: number; prev_sealing: number; done_aeration: number; done_sealing: number; bookings: number;
+  /** lawn rejuvenation clients (RUN_57; missing before it's run) */
+  prev_rejuv?: number; done_rejuv?: number;
   rounds: RoundSummary[]; shown: number | null; current: number | null; last_day: string | null;
   suggest_new: boolean; loose: number; loose_from: string | null;
 }
@@ -68,6 +72,12 @@ export async function overview(centerId: string, s: Season, round: RoundPick): P
 
 export async function outlines(centerId: string): Promise<Record<string, GeoJSON.Geometry>> {
   return (must(await db.rpc('app_mb_outlines', { p_center: centerId })) as Record<string, GeoJSON.Geometry> | null) || {};
+}
+
+/** A card's past-client counts: the season's own service always, any other only when it has some. */
+export function prevCounts(m: MapCard, service: Service): { service: Service; n: number }[] {
+  const n: Record<Service, number> = { aeration: m.prev_aeration || 0, sealing: m.prev_sealing || 0, lawn_rejuv: m.prev_rejuv || 0 };
+  return [service, ...SERVICES.filter(s => s !== service)].filter(s => s === service || n[s] > 0).map(s => ({ service: s, n: n[s] }));
 }
 
 /** The round a card shows: the picked number, else the map's open round, else its last. */
@@ -164,14 +174,21 @@ export const KNOCKS: { key: string; label: string; color: string }[] = [
 export const NEVER = { key: 'never', label: 'Not knocked this round', color: '#ffffff' };
 export const knockOf = (s: string | null) => KNOCKS.find(k => k.key === s) || null;
 
-/** Customer layers. Bits match the database: 1 aeration before, 2 sealing before, 4/8 this season. */
-export type ClientLayer = 'prev_aeration' | 'prev_sealing' | 'done_aeration' | 'done_sealing';
+/** Customer layers. Bits match the database: 1 aeration before, 2 sealing before, 4/8 this season,
+ *  16 lawn rejuvenation before, 32 this season. */
+export type ClientLayer = 'prev_aeration' | 'prev_sealing' | 'done_aeration' | 'done_sealing' | 'prev_rejuv' | 'done_rejuv';
 export const CLIENT_LAYERS: { key: ClientLayer; bit: number; service: Service; label: (season: number) => string; color: string; hint: string }[] = [
   { key: 'done_sealing', bit: 8, service: 'sealing', label: y => `Sealing jobs ${y}`, color: '#7c3aed', hint: 'Sealing done this season (the RM map’s sales and completed)' },
   { key: 'done_aeration', bit: 4, service: 'aeration', label: y => `Aeration jobs ${y}`, color: '#15803d', hint: 'Aeration done this season' },
   { key: 'prev_sealing', bit: 2, service: 'sealing', label: () => 'Previous sealing clients', color: '#1d4ed8', hint: 'Sealing customers from earlier years (the sealing PCL)' },
   { key: 'prev_aeration', bit: 1, service: 'aeration', label: () => 'Previous aeration clients', color: '#84cc16', hint: 'Aeration customers from earlier years (the aeration PCL)' },
+  { key: 'done_rejuv', bit: 32, service: 'lawn_rejuv', label: y => `Lawn rejuv jobs ${y}`, color: '#0f766e', hint: 'Lawn rejuvenation done this season' },
+  { key: 'prev_rejuv', bit: 16, service: 'lawn_rejuv', label: () => 'Previous lawn rejuv clients', color: '#f59e0b', hint: 'Lawn rejuvenation customers from earlier years (the rejuv PCL)' },
 ];
+/** Each service's bits: earlier years, this season. */
+export const SERVICE_BITS: Record<Service, { prev: number; done: number }> = {
+  aeration: { prev: 1, done: 4 }, sealing: { prev: 2, done: 8 }, lawn_rejuv: { prev: 16, done: 32 },
+};
 /** The layer a customer shows as: this season's job first, then past clients; only switched-on layers. */
 export function clientLayerOf(flags: number, on: Set<ClientLayer>, service: Service): ClientLayer | null {
   const order = [...CLIENT_LAYERS].sort((a, b) => {
@@ -191,19 +208,19 @@ export function clientLayerOf(flags: number, on: Set<ClientLayer>, service: Serv
 export const RM_HOUSE = {
   none: '#111111', not_home: '#8b8f98', no: '#dc2626', go_back: '#f97316', invalid: '#ec4899',
   done: '#7c3aed', pcl: '#1d4ed8', pclNotHome: '#93b4f5',
-  other: { aeration: { pcl: '#84cc16', notHome: '#c3e88d' }, sealing: { pcl: '#0ea5e9', notHome: '#a5d8f5' } },
+  other: { aeration: { pcl: '#84cc16', notHome: '#c3e88d' }, sealing: { pcl: '#0ea5e9', notHome: '#a5d8f5' }, lawn_rejuv: { pcl: '#f59e0b', notHome: '#fcd98a' } },
 } as const;
 export function houseLook(st: string | null, flags: number, on: Set<ClientLayer>, service: Service): { color: string; strong: boolean } {
   const bits = CLIENT_LAYERS.filter(l => on.has(l.key)).reduce((b, l) => b | l.bit, 0);
   const f = flags & bits;
-  const mine = service === 'sealing' ? { prev: 2, done: 8 } : { prev: 1, done: 4 };
-  const otherLine: Service = service === 'sealing' ? 'aeration' : 'sealing';
-  const otherBits = service === 'sealing' ? 1 | 4 : 2 | 8;
+  const mine = SERVICE_BITS[service];
+  // a customer of another service: coloured as the first other service they had
+  const otherLine = SERVICES.find(o => o !== service && (f & (SERVICE_BITS[o].prev | SERVICE_BITS[o].done))) || null;
   if (f & mine.done) return { color: RM_HOUSE.done, strong: true };
   if (st === 'no' || st === 'go_back' || st === 'invalid') return { color: RM_HOUSE[st], strong: true };
-  const pcl = !!(f & mine.prev), other = !pcl && !!(f & otherBits);
-  if (st === 'not_home') return { color: pcl ? RM_HOUSE.pclNotHome : other ? RM_HOUSE.other[otherLine].notHome : RM_HOUSE.not_home, strong: true };
-  return { color: pcl ? RM_HOUSE.pcl : other ? RM_HOUSE.other[otherLine].pcl : RM_HOUSE.none, strong: false };
+  const pcl = !!(f & mine.prev), other = !pcl && otherLine !== null;
+  if (st === 'not_home') return { color: pcl ? RM_HOUSE.pclNotHome : other ? RM_HOUSE.other[otherLine!].notHome : RM_HOUSE.not_home, strong: true };
+  return { color: pcl ? RM_HOUSE.pcl : other ? RM_HOUSE.other[otherLine!].pcl : RM_HOUSE.none, strong: false };
 }
 /** "Jane Doe" → "Jane D."; one word stays as it is. */
 export function shortName(full: string | null | undefined): string | null {
@@ -212,24 +229,33 @@ export function shortName(full: string | null | undefined): string | null {
   if (parts.length === 1) return parts[0];
   return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`;
 }
-/** Aeration customer (any year) → leaf; sealing customer → black drop. */
-export const serviceMarks = (flags: number) => ({ leaf: !!(flags & (1 | 4)), drop: !!(flags & (2 | 8)) });
+/** Lawn customer (aeration or rejuvenation, any year) → leaf; sealing customer → black drop. */
+export const serviceMarks = (flags: number) => ({ leaf: !!(flags & (1 | 4 | 16 | 32)), drop: !!(flags & (2 | 8)) });
 
 // ───────────── each person's filters (remembered) ─────────────
-export interface MbFilters { heat: boolean; knocks: string[]; clients: ClientLayer[]; bookings: Service[]; open: boolean | null }
+export interface MbFilters { heat: boolean; knocks: string[]; clients: ClientLayer[]; bookings: Service[]; open: boolean | null;
+  /** the customer layers that existed when these were saved (newer layers start switched on) */
+  layers?: ClientLayer[] }
 export const DEFAULT_FILTERS: MbFilters = {
-  heat: true, knocks: KNOCKS.map(k => k.key), clients: CLIENT_LAYERS.map(l => l.key), bookings: ['aeration', 'sealing'], open: null,
+  heat: true, knocks: KNOCKS.map(k => k.key), clients: CLIENT_LAYERS.map(l => l.key), bookings: [...SERVICES], open: null,
+  layers: CLIENT_LAYERS.map(l => l.key),
 };
+/** The layers that existed before lawn rejuvenation joined (filters saved without a layer list). */
+const FIRST_LAYERS: ClientLayer[] = ['prev_aeration', 'prev_sealing', 'done_aeration', 'done_sealing'];
 /** Saved filters, checked: unknown keys dropped, anything missing from the defaults. */
 export function cleanFilters(raw: unknown): MbFilters {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const list = <T extends string>(v: unknown, ok: readonly T[], dflt: T[]): T[] => (Array.isArray(v) ? v.filter((x): x is T => ok.includes(x as T)) : dflt);
+  const all = CLIENT_LAYERS.map(l => l.key);
+  const known = Array.isArray(r.layers) ? list(r.layers, all, all) : FIRST_LAYERS;
+  const clients = list(r.clients, all, DEFAULT_FILTERS.clients);
   return {
     heat: typeof r.heat === 'boolean' ? r.heat : DEFAULT_FILTERS.heat,
     knocks: list(r.knocks, KNOCKS.map(k => k.key), DEFAULT_FILTERS.knocks),
-    clients: list(r.clients, CLIENT_LAYERS.map(l => l.key), DEFAULT_FILTERS.clients),
+    clients: [...clients, ...all.filter(k => !known.includes(k) && !clients.includes(k))],
     bookings: list(r.bookings, SERVICES, DEFAULT_FILTERS.bookings),
     open: typeof r.open === 'boolean' ? r.open : null,
+    layers: all,
   };
 }
 const filtersKey = (uid: string) => `v2.mb.filters.${uid}`;

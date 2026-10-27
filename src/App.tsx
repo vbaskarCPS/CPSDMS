@@ -1,6 +1,6 @@
 // src/App.tsx
 import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 
 // Pages
 import HomePage from './pages/HomePage';
@@ -13,6 +13,8 @@ import ErrorBoundary from './components/ErrorBoundary';
 import WorkerLocationTracker from './components/WorkerLocationTracker';
 import { DemoCoach } from './pages/Demo/DemoCoach';
 const DemoPage = React.lazy(() => import('./pages/Demo/DemoPage'));
+// The /minigame hub (players, saved progress, the games): stand-alone, loads only when opened.
+const MinigameHub = React.lazy(() => import('./pages/Minigame/MinigameHub'));
 
 // Admin pages - regular imports for reliability (avoid chunk loading issues)
 import EmailTemplates from './pages/Admin/EmailTemplates';
@@ -56,11 +58,13 @@ const LoadingFallback = () => (
 );
 
 function App() {
+  // The minigame stands on its own: no location tracking and no demo coach on top of it.
+  const standalone = useLocation().pathname.startsWith('/minigame');
   return (
     <React.Suspense fallback={<LoadingFallback />}>
       {/* Sends a logged-in worker's location every 2 min from any screen. */}
-      <WorkerLocationTracker />
-      <DemoCoach />
+      {!standalone && <WorkerLocationTracker />}
+      {!standalone && <DemoCoach />}
       <Routes>
         {/* Public Routes */}
         {/* The new app is the home page; its sign-in also takes every old login (workers, command
@@ -79,6 +83,9 @@ function App() {
 
         {/* The public guided tour (a private demo centre per visitor; static segment ranks above /:slug). */}
         <Route path="/demo" element={<DemoPage />} />
+
+        {/* Minigames hub: pick a player, then a game at /minigame/<game> (static segment ranks above /:slug). */}
+        <Route path="/minigame/*" element={<MinigameHub />} />
 
         {/* New app — everything under /app/* (static segment ranks above /:slug). */}
         <Route path="/app/*" element={<V2App />} />

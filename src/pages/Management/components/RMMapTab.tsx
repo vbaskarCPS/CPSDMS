@@ -55,6 +55,7 @@ import {
   houseAddressLabel,
 } from '../../../lib/mapLogsheetService';
 import { CartScope, computeCounts, computeKnockEvents, isOnDay, isCartKnock } from '../../../lib/mapLogsheetStats';
+import { placeQuery } from '../../../lib/geoProvince';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -596,7 +597,7 @@ async function geocodeAddress(
   bbox?: { minLng: number; minLat: number; maxLng: number; maxLat: number },
 ): Promise<{ lat: number; lng: number } | null> {
   const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
-  const q = encodeURIComponent([addr,'Ontario','Canada'].join(', '));
+  const q = encodeURIComponent(placeQuery([addr]));
   let url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&limit=1&country=ca&types=address`;
   if (pLat !== undefined && pLng !== undefined) url += `&proximity=${pLng},${pLat}`;
   // bbox HARD-constrains results to the route area. proximity only biases;

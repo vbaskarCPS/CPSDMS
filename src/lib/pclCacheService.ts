@@ -19,6 +19,7 @@ import {
   nearestRouteForPoint,
   geocodeAddressInBbox,
 } from './managerMappingService';
+import { placeQuery } from './geoProvince';
 
 // Re-declared here rather than imported so the map loader below doesn't depend
 // on the Session Command Center path continuing to exist.
@@ -825,7 +826,7 @@ async function geocodeWithBackoff(
 ): Promise<GeoPos | null> {
   const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
   if (!token || !addr) return null;
-  const q = encodeURIComponent([addr, 'Ontario', 'Canada'].join(', '));
+  const q = encodeURIComponent(placeQuery([addr]));
   let url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&limit=1&country=ca&types=address`;
   if (bbox) url += `&bbox=${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}`;
   for (let attempt = 0; attempt < 4; attempt++) {

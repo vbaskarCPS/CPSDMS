@@ -15,6 +15,7 @@ import { firstFree, ownedNumbers, runsLabel, takenNumbers, type Drawn } from '..
 import { RouteDeleteModal } from './RouteDeleteModal';
 import { readBuilderView, saveBuilderView } from '../../lib/builderView';
 import { placeSearches, roadBox } from '../../lib/roadBox';
+import { fetchRoadsCached } from '../../lib/roadCache';
 import { outlineFeatures, type OutlineInfo, type Outlines } from '../../lib/mapOutlines';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -199,43 +200,71 @@ const OVERPASS_ENDPOINTS: { url: string; ms: number }[] = [
   { url: 'https://overpass.kumi.systems/api/interpreter', ms: 30000 },
 ];
 
+/** The first of these to succeed (Promise.any, which this build's TypeScript target doesn't have). */
+function firstToSucceed<T>(ps: Promise<T>[]): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let left = ps.length;
+    if (!left) reject(new Error('none'));
+    ps.forEach(p => p.then(resolve, () => { if (--left === 0) reject(new Error('all failed')); }));
+  });
+}
+
 async function fetchOverpass(bbox: string): Promise<OsmWay[]> {
   const query = `data=${encodeURIComponent(
     `[out:json][timeout:60];(way["highway"]["name"](${bbox});way["highway"]["highway"~"residential|service|unclassified|living_street"][!"name"](${bbox}););out geom;`
   )}`;
 
-  const tryEndpoint = (url: string, ms: number): Promise<Response> => {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), ms);
-    return fetch(url, {
-      method: 'POST',
-      body: query,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      signal: ctrl.signal,
-    }).finally(() => clearTimeout(t));
-  };
-
+  // Ask every server at once and take the first that sends roads; the others are cancelled.
+  // (One at a time, a busy day meant waiting out each server's timeout in turn: almost two minutes.)
+  const ctrls = OVERPASS_ENDPOINTS.map(() => new AbortController());
   let answeredEmpty = false;
-  for (const { url, ms } of OVERPASS_ENDPOINTS) {
+  const attempts = OVERPASS_ENDPOINTS.map(async ({ url, ms }, i): Promise<OsmWay[]> => {
+    const t = setTimeout(() => ctrls[i].abort(), ms);
     try {
-      const r = await tryEndpoint(url, ms);
-      if (r.ok) {
-        const data = await r.json();
-        const ways: OsmWay[] = (data.elements || [])
-          .filter((el: any) => el.type === 'way' && el.geometry)
-          .map((el: any) => ({
-            id: el.id,
-            name: el.tags?.name || '',
-            unnamed: !el.tags?.name,
-            geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]),
-          }));
-        if (ways.length) return ways;
-        answeredEmpty = true;   // a server without this part of the world: try the next one
-      }
-    } catch { /* try next mirror */ }
+      const r = await fetch(url, {
+        method: 'POST', body: query,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        signal: ctrls[i].signal,
+      });
+      if (!r.ok) throw new Error(`Overpass ${r.status}`);
+      const data = await r.json();
+      const ways: OsmWay[] = (data.elements || [])
+        .filter((el: any) => el.type === 'way' && el.geometry)
+        .map((el: any) => ({
+          id: el.id,
+          name: el.tags?.name || '',
+          unnamed: !el.tags?.name,
+          geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]),
+        }));
+      if (!ways.length) { answeredEmpty = true; throw new Error('empty'); }   // a server without this part of the world
+      return ways;
+    } finally { clearTimeout(t); }
+  });
+  try {
+    const ways = await firstToSucceed(attempts);
+    ctrls.forEach(c => c.abort());
+    return ways;
+  } catch {
+    if (answeredEmpty) return [];
+    throw new Error('All Overpass mirrors failed');
   }
-  if (answeredEmpty) return [];
-  throw new Error('All Overpass mirrors failed');
+}
+
+// Roads for a box: from our saved copy where somebody already loaded that ground, Overpass for the rest.
+function fetchRoads(bbox: string): Promise<OsmWay[]> {
+  return fetchRoadsCached(bbox, {
+    overpass: fetchOverpass,
+    get: async (cells, b) => {
+      const { data, error } = await supabase.rpc('road_cache_get', { p_cells: cells, p_s: b.s, p_w: b.w, p_n: b.n, p_e: b.e });
+      if (error) throw error;
+      return data;
+    },
+    put: async (cells, ways) => {
+      const { error } = await supabase.rpc('road_cache_put', { p_cells: cells, p_ways: ways });
+      if (error) throw error;
+    },
+    onSaveError: e => console.warn('[Map Builder] saving roads failed:', e),
+  });
 }
 
 function regionStyle(region: Region) {
@@ -1035,7 +1064,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
         ({ bbox, capped } = roadBox({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() }));
       }
       setRoadsCapped(capped);
-      const ways = await fetchOverpass(bbox);
+      const ways = await fetchRoads(bbox);
       setAllWays(ways);
       if (!ways.length) setError('No roads came back for this area — your saved routes are shown from their saved shapes. Click "Load More Roads" to try again.');
     } catch { setError('Roads didn\'t load (the road server is busy) — your saved routes are shown from their saved shapes. Click "Load More Roads" to retry.'); }
@@ -1100,7 +1129,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       if (!b) throw new Error('Map not available');
       const { bbox, capped } = roadBox({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
       setRoadsCapped(capped);
-      const newWays = await fetchOverpass(bbox);
+      const newWays = await fetchRoads(bbox);
       setAllWays(prev => { const existingIds = new Set(prev.map(w => w.id)); return [...prev, ...newWays.filter(w => !existingIds.has(w.id))]; });
     } catch { setError('All Overpass mirrors are unavailable — please try again in a moment.'); }
     finally { setLoadingRoads(false); }
