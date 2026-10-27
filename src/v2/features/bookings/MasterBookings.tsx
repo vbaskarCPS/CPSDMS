@@ -24,7 +24,7 @@ import {
   areaView, CLIENT_LAYERS, clientLayerOf, daysLabel, getSettings, heatColor, house as loadHouse, KNOCKS, knockOf, NEVER, NO_DOORS,
   outlines as loadOutlines, overview as loadOverview, parseRound, parseSeason, pctOf, roundName, routeView, seasonKey, seasonLabel,
   cachedFilters, DEFAULT_FILTERS, houseLook, loadFilters, saveFilters, serviceMarks, type MbFilters, shortDay, shortName, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
-  type RouteView, type Season, type StreetHeat,
+  type RouteView, type Season, type StreetHeat, prevCounts, RM_HOUSE, serviceLabel, SERVICES, type Service,
 } from '../../lib/masterBookings';
 import { fmtDay, VISIT } from '../../lib/customers';
 import { Btn, ErrorBox, Loading, Modal, Tag, Toggle } from '../../ui';
@@ -96,7 +96,7 @@ export const MasterBookings: React.FC = () => {
   }, [profile?.id]);
   useEffect(() => {
     if (!profile?.id || !filtersReady.current) return;
-    const f: MbFilters = { heat, knocks: [...knockOn], clients: [...clientOn], bookings: [...bookingOn] as MbFilters['bookings'], open: filtersOpen };
+    const f: MbFilters = { heat, knocks: [...knockOn], clients: [...clientOn], bookings: [...bookingOn] as MbFilters['bookings'], open: filtersOpen, layers: CLIENT_LAYERS.map(l => l.key) };
     const t = setTimeout(() => { saveFilters(profile.id, f).catch(() => { /* kept on this device */ }); }, 700);
     return () => clearTimeout(t);
   }, [profile?.id, heat, knockOn, clientOn, bookingOn, filtersOpen]);
@@ -278,7 +278,7 @@ export const MasterBookings: React.FC = () => {
 
         <div className="v2-crm-stats">
           {level === 1 && <Level1 cards={cards} loading={ov.loading && !ov.data} picked={picked} onPick={flipPick} onOpen={openPicked}
-            onAll={() => setPicked(new Set(picked.size === cards.length ? [] : cards.map(c => c.area)))} centerName={center.display_name} />}
+            onAll={() => setPicked(new Set(picked.size === cards.length ? [] : cards.map(c => c.area)))} centerName={center.display_name} service={season.service} />}
           {level === 2 && <Level2 cards={cards.filter(c => maps.includes(c.area))} view={av.data} loading={av.loading && !av.data} season={season} year={year}
             onRoute={c => go({ route: c })} onStart={setStarting} />}
           {level === 3 && <Level3 view={rv.data} loading={rv.loading && !rv.data} sel={selHouse} onClose={() => setSelHouse(null)} season={season}
@@ -329,8 +329,8 @@ const Crumbs: React.FC<{ level: number; maps: string[]; route: string | null; on
 };
 
 // ───────────── level 1 ─────────────
-const Level1: React.FC<{ cards: MapCard[]; loading: boolean; picked: Set<string>; onPick: (a: string) => void; onOpen: () => void; onAll: () => void; centerName: string }> =
-  ({ cards, loading, picked, onPick, onOpen, onAll, centerName }) => {
+const Level1: React.FC<{ cards: MapCard[]; loading: boolean; picked: Set<string>; onPick: (a: string) => void; onOpen: () => void; onAll: () => void; centerName: string; service: Service }> =
+  ({ cards, loading, picked, onPick, onOpen, onAll, centerName, service }) => {
     if (loading) return <Loading label="Finding your master maps…" />;
     if (!cards.length) return <div className="v2-card v2-mut">No master maps are assigned to {centerName} yet. A Super Admin assigns them under Territory.</div>;
     return (
@@ -341,7 +341,7 @@ const Level1: React.FC<{ cards: MapCard[]; loading: boolean; picked: Set<string>
           <button type="button" className="v2-link" onClick={onAll}>{picked.size === cards.length ? 'Clear' : 'Pick all'}</button>
         </div>
         <div className="v2-mb-cards">
-          {cards.map(c => <Card key={c.area} card={c} on={picked.has(c.area)} onClick={() => onPick(c.area)} />)}
+          {cards.map(c => <Card key={c.area} card={c} service={service} on={picked.has(c.area)} onClick={() => onPick(c.area)} />)}
         </div>
         <div className="v2-mb-open">
           <Btn onClick={onOpen} disabled={!picked.size} icon={ChevronRight}>{picked.size ? `Open ${picked.size} map${picked.size === 1 ? '' : 's'}` : 'Pick a map to open'}</Btn>
@@ -350,7 +350,7 @@ const Level1: React.FC<{ cards: MapCard[]; loading: boolean; picked: Set<string>
     );
   };
 
-const Card: React.FC<{ card: MapCard; on: boolean; onClick: () => void }> = ({ card: c, on, onClick }) => {
+const Card: React.FC<{ card: MapCard; service: Service; on: boolean; onClick: () => void }> = ({ card: c, service, on, onClick }) => {
   const shown = shownRound(c);
   return (
     <button type="button" className={`v2-card v2-mb-card${on ? ' on' : ''}`} onClick={onClick} aria-pressed={on}>
@@ -362,8 +362,7 @@ const Card: React.FC<{ card: MapCard; on: boolean; onClick: () => void }> = ({ c
       </div>
       <div className="v2-mb-nums">
         <span><b>{c.bookings}</b> bookings</span>
-        <span><b>{c.prev_aeration.toLocaleString()}</b> prev aeration</span>
-        <span><b>{c.prev_sealing.toLocaleString()}</b> prev sealing</span>
+        {prevCounts(c, service).map(p => <span key={p.service}><b>{p.n.toLocaleString()}</b> prev {serviceLabel(p.service).toLowerCase()}</span>)}
       </div>
       {c.rounds.length === 0
         ? <div className="v2-mut v2-small">{c.loose ? `${c.loose} knocks since ${shortDay(c.loose_from || '')}, not in a round yet` : 'No rounds yet this season'}</div>
@@ -516,14 +515,14 @@ const HousePanel: React.FC<{ route: string; row: HouseRow; onClose: () => void; 
               return (
                 <li key={i} className={`visit ${s.tone || ''}`}>
                   <span className="when">{fmtDay(v.day)}</span>
-                  <span><b>{s.label}</b>{v.rounds?.length ? <span className="v2-mut"> · {v.rounds.map(r => `${r.service === 'aeration' ? 'Aeration' : 'Sealing'} ${r.season} R${r.no}`).join(', ')}</span> : null}
+                  <span><b>{s.label}</b>{v.rounds?.length ? <span className="v2-mut"> · {v.rounds.map(r => `${serviceLabel(r.service)} ${r.season} R${r.no}`).join(', ')}</span> : null}
                     <span className="v2-mut v2-small" style={{ display: 'block' }}>{[v.worker || v.worker_id, v.first_name && `spoke to ${v.first_name}`, v.note && `“${v.note}”`].filter(Boolean).join(' · ')}</span></span>
                 </li>
               );
             })}
           </ul>
         )}
-        {h.data.carried.length > 0 && <div className="v2-note">Kept invalid into {h.data.carried.map(r => `${r.service === 'aeration' ? 'Aeration' : 'Sealing'} ${r.season} Round ${r.no}`).join(', ')}.</div>}
+        {h.data.carried.length > 0 && <div className="v2-note">Kept invalid into {h.data.carried.map(r => `${serviceLabel(r.service)} ${r.season} Round ${r.no}`).join(', ')}.</div>}
       </>}
     </div>
   );
@@ -564,10 +563,10 @@ const Filters: React.FC<{
           <i style={{ background: l.color }} /><span>{l.label(season.season)}</span><b>{(counts.clients[l.key] || 0).toLocaleString()}</b>
         </button>
       ))}
-      <Group label="Bookings" on={bookingOn.size > 0} set={v => setBookingOn(new Set(v ? ['aeration', 'sealing'] : []))} />
-      {(['aeration', 'sealing'] as const).map(s => (
+      <Group label="Bookings" on={bookingOn.size > 0} set={v => setBookingOn(new Set(v ? SERVICES : []))} />
+      {SERVICES.map(s => (
         <button key={s} type="button" className={`v2-crm-leg${bookingOn.has(s) ? '' : ' off'}`} onClick={() => setBookingOn(flip(bookingOn, s))} aria-pressed={bookingOn.has(s)} title="Bookings aren’t kept in the app yet">
-          <i style={{ background: s === 'aeration' ? '#84cc16' : '#0ea5e9' }} /><span>{s === 'aeration' ? 'Aeration' : 'Sealing'} bookings</span><b>{counts.bookings ? '' : '0'}</b>
+          <i style={{ background: RM_HOUSE.other[s].pcl }} /><span>{serviceLabel(s)} bookings</span><b>{counts.bookings ? '' : '0'}</b>
         </button>
       ))}
       <div className="v2-note" style={{ margin: '4px 6px 0' }}>Bookings show here once they’re kept in the app.</div>
