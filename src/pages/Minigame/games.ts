@@ -2,6 +2,7 @@
 // under src/pages/Minigame, then add one entry here. Each game stores whatever it likes as its
 // progress (a small JSON object); no database change is needed for a new game.
 import React from 'react';
+import { currentTheme } from '../../lib/memory/themes';
 
 /** What every game gets from the hub. */
 export type GameProps<T> = {
@@ -49,6 +50,12 @@ export const GAMES: GameInfo[] = [
         return { data: { level: s.level, best: Math.max(num(s.best), s.level), sound: !!s.sound }, rank: s.level, label: `level ${s.level}` };
       } catch { return null; }
     },
+  },
+  {
+    // dresses up for the next big holiday: Spooky Match for Halloween, Jingle Match for Christmas, …
+    id: 'match', name: currentTheme().title, icon: currentTheme().icon, colour: '#6d28d9',
+    blurb: 'Memory cards for two, turn by turn. Find the pairs!',
+    component: React.lazy(() => import('./MatchGame')),
   },
   {
     id: 'chess', name: 'Little Chess', icon: '♞', colour: '#0f766e',

@@ -2,6 +2,7 @@
 // The phone keeps only a pass token; the PIN is never stored on the phone.
 import { supabase } from '../../lib/supabase';
 import type { Match } from '../../lib/pour/pvp';
+import type { MemHistory, MemMatch } from '../../lib/memory/match';
 
 export type Player = { id: string; name: string; has_pin?: boolean };
 export type Progress = Record<string, Record<string, unknown>>;
@@ -62,3 +63,14 @@ export const matchLeave = (id: string) => rpc<null>('minigame_match_leave', { p_
 export const matchRematch = (id: string) =>
   rpc<{ ok: true; match: Match } | { ok: false; reason: string }>('minigame_match_rematch', { p_token: tok(), p_match: id });
 export const matchHistory = (game = 'pour') => rpc<Match[]>('minigame_match_history', { p_token: tok(), p_game: game });
+
+// ── Match (memory cards, turn by turn; minigame_memory_* functions; see src/lib/memory/match.ts) ──
+export const memCreate = () => rpc<MemMatch>('minigame_memory_create', { p_token: tok() });
+export const memJoin = (code: string) =>
+  rpc<{ ok: true; match: MemMatch } | { ok: false; reason: 'no_match' | 'own_match' }>('minigame_memory_join', { p_token: tok(), p_code: code });
+export const memState = (id: string) => rpc<MemMatch>('minigame_memory_state', { p_token: tok(), p_match: id });
+export const memFlip = (id: string, card: number) => rpc<MemMatch>('minigame_memory_flip', { p_token: tok(), p_match: id, p_card: card });
+export const memLeave = (id: string) => rpc<null>('minigame_memory_leave', { p_token: tok(), p_match: id });
+export const memRematch = (id: string) =>
+  rpc<{ ok: true; match: MemMatch } | { ok: false; reason: string }>('minigame_memory_rematch', { p_token: tok(), p_match: id });
+export const memHistory = () => rpc<MemHistory>('minigame_memory_history', { p_token: tok() });
