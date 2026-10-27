@@ -15,7 +15,7 @@ import {
   daysBetween, defaultSettings, downloadRunPdf, generatePayslips, lineGaps, lineToDay, linesFromSavedDay, listLines, listRuns,
   markPaid, mmmdd, saveLines, toWorkerData, updatePayslip, voidPayslip, type PayoutLine, type Payslip, type PayslipRun, type SlipSettings,
 } from '../../lib/payslips';
-import { payslipTotals, type HiddenFields, type PayslipSeason } from '../../../lib/payslipExport';
+import { defaultPayslipType, payslipTotals, type HiddenFields, type PayslipSeason } from '../../../lib/payslipExport';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 import { ContractorLink } from './ContractorCard';
 import { DayBreakdown } from '../worker/DayBreakdown';
@@ -197,7 +197,7 @@ const Generator: React.FC<{ centerId: string; centerName: string; services: stri
     const today = todayISO();
     const [start, setStart] = useState(shift(today, -6));
     const [end, setEnd] = useState(today);
-    const [season, setSeason] = useState<PayslipSeason>(services.includes('sealing') ? 'sealing' : services.includes('cleaning') && !services.includes('aeration') ? 'cleaning' : 'aeration');
+    const [season, setSeason] = useState<PayslipSeason>(defaultPayslipType(services));
     const [hidden, setHidden] = useState<HiddenFields>({ hotels: false, advances: false, travelPkg: false });
     const [batches, setBatches] = useState<string[]>(['Batch 1']);
     const [settings, setSettings] = useState<Map<string, SlipSettings & { batch: string }>>(new Map());
@@ -257,7 +257,7 @@ const Generator: React.FC<{ centerId: string; centerName: string; services: stri
             <Field label="To"><input className="v2-input" type="date" value={end} min={start} onChange={e => setEnd(e.target.value)} /></Field>
             <Field label="Payslip type">
               <select className="v2-sel" value={season} onChange={e => setSeason(e.target.value as PayslipSeason)}>
-                <option value="sealing">Sealing</option><option value="aeration">Aeration</option><option value="cleaning">Window cleaning</option>
+                <option value="sealing">Sealing</option><option value="aeration">Aeration</option><option value="lawn_rejuv">Lawn rejuv</option><option value="cleaning">Window cleaning</option>
               </select>
             </Field>
             <div className="v2-small v2-mut" style={{ paddingBottom: 10 }}>

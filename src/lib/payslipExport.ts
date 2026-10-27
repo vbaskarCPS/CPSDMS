@@ -3,7 +3,7 @@ import jsPDF from 'jspdf';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type PayslipSeason = 'aeration' | 'cleaning' | 'sealing';
+export type PayslipSeason = 'aeration' | 'cleaning' | 'sealing' | 'lawn_rejuv';
 
 export interface PayslipDayRow {
   date: string;
@@ -177,6 +177,15 @@ export interface PayslipTotals {
   hotels: number; advances: number; travelPkg: number; crackfillDed: number;
   extraDeductions: number; additions: number; finalPay: number;
 }
+/** The payslip type a centre's generator opens on: its own service (sealing first, then lawn rejuv,
+ *  window cleaning when that's all it does, else aeration). */
+export function defaultPayslipType(services: string[]): PayslipSeason {
+  if (services.includes('sealing')) return 'sealing';
+  if (services.includes('lawn_rejuv') && !services.includes('aeration')) return 'lawn_rejuv';
+  if (services.includes('cleaning') && !services.includes('aeration')) return 'cleaning';
+  return 'aeration';
+}
+
 export function payslipTotals(w: WorkerPayslipData, hiddenFields: HiddenFields, season: PayslipSeason): PayslipTotals {
   const earnedComm   = r2(w.days.reduce((s, d) => s + d.totalPayout, 0));
   const daysWorked   = w.days.length;
@@ -226,7 +235,10 @@ function buildCols(season: PayslipSeason): ColDef[] {
   const stepsLabel =
     season === 'sealing'  ? 'SE\nSTEPS' :
     season === 'cleaning' ? 'CL\nSTEPS' :
+    season === 'lawn_rejuv' ? 'RJ\nSTEPS' :
                             'AER\nSTEPS';
+  // lawn rejuvenation prints on the aeration layout (as BC's payslips always have); the product
+  // cost is already taken out of the commission
 
   if (season === 'sealing') {
     // 11 cols — TOTAL PREPAY + LABOR COST dropped, SEALANT + CRACKFILL added.
@@ -246,7 +258,8 @@ function buildCols(season: PayslipSeason): ColDef[] {
     ];
   }
 
-  // Aeration + Cleaning — original 11 cols; only the steps header changes.
+  // Aeration + Cleaning + Lawn Rejuv — original 11 cols; only the steps and commission headers change.
+  const commLabel = season === 'lawn_rejuv' ? 'RJ\nCOMM' : 'AER\nCOMM';
   return [
     { label: 'DATE',           w: 45,  color: '#CC0000', align: 'left'   },
     { label: 'ROUTE\nMANAGER', w: 75,  color: '#CC0000', align: 'center' },
@@ -254,7 +267,7 @@ function buildCols(season: PayslipSeason): ColDef[] {
     { label: 'EQUIV',          w: 45,  color: '#666666', align: 'right'  },
     { label: 'TOTAL\nPREPAY',  w: 55,  color: '#666666', align: 'center' },
     { label: 'PAYOUT\nRATE',   w: 45,  color: '#666666', align: 'center' },
-    { label: 'AER\nCOMM',      w: 45,  color: '#666666', align: 'right'  },
+    { label: commLabel,         w: 45,  color: '#666666', align: 'right'  },
     { label: 'MACH\nRENT',     w: 50,  color: '#CC0000', align: 'right'  },
     { label: 'LABOR\nCOST',    w: 45,  color: '#CC0000', align: 'right'  },
     { label: 'DAILY\nBONUS',   w: 45,  color: '#CC0000', align: 'right'  },
