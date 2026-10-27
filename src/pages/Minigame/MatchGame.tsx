@@ -4,68 +4,31 @@
 // The server (minigame_memory_* functions) holds the cards and only shows a picture once it's
 // flipped; this phone checks in about twice a second to show the other player's flips.
 // It dresses up for the next big holiday (src/lib/memory/themes.ts); a grown-up can pick another.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { columnsFor, memRecord, mine, pairsNow, standing, TURN_SECONDS, type MemCard, type MemMatch, type MemPlayer } from '../../lib/memory/match';
-import { currentTheme, THEMES, type Theme, type ThemeId } from '../../lib/memory/themes';
+import type { Theme, ThemeId } from '../../lib/memory/themes';
 import { memCreate, memFlip, memHistory, memJoin, memLeave, memRematch, memState } from './account';
 import type { GameProps } from './games';
+import { Big, Card, Lobby, matchMemory, ME_COLOUR, msg, Notice, Ring, Shell as HolidayShell, THEM_COLOUR, themeOf, Waiting, buzz } from './holidayUi';
 
 const POLL_MS = 500;
-const KEEP = 'match.current';
-const keep = (id: string | null) => { try { if (id) sessionStorage.setItem(KEEP, id); else sessionStorage.removeItem(KEEP); } catch { /* ignore */ } };
-const kept = () => { try { return sessionStorage.getItem(KEEP); } catch { return null; } };
-const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const buzz = (ms: number | number[]) => { try { navigator.vibrate?.(ms); } catch { /* ignore */ } };
-const ME_COLOUR = '#38bdf8', THEM_COLOUR = '#fb923c';
+const { keep, kept } = matchMemory('match.current');
 
 type MatchProgress = { theme?: ThemeId | 'auto' };
 
+// the cards flip over in 3D
 const CSS = `
-  @keyframes mg-float { 0% { transform: translateY(110vh) translateX(0) rotate(0) } 50% { transform: translateY(50vh) translateX(30px) rotate(12deg) } 100% { transform: translateY(-15vh) translateX(-10px) rotate(-8deg) } }
-  @keyframes mg-pop { 0% { transform: scale(.6); opacity: 0 } 70% { transform: scale(1.06); opacity: 1 } 100% { transform: scale(1) } }
-  @keyframes mg-shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-5px) } 75% { transform: translateX(5px) } }
-  @keyframes mg-glow { 0%,100% { box-shadow: 0 0 0 0 var(--glow) } 50% { box-shadow: 0 0 22px 4px var(--glow) } }
-  @keyframes mg-in { 0% { transform: translateY(14px); opacity: 0 } 100% { transform: none; opacity: 1 } }
   .mg-card { perspective: 700px; }
   .mg-inner { position: relative; width: 100%; height: 100%; transition: transform .35s ease; transform-style: preserve-3d; }
   .mg-up .mg-inner { transform: rotateY(180deg); }
   .mg-side { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; border-radius: 14px; display: flex; align-items: center; justify-content: center; }
   .mg-face { transform: rotateY(180deg); }
 `;
-
-/** Things drifting up the background: bats for Halloween, snow for Christmas, and so on. */
-const Floaters: React.FC<{ theme: Theme }> = ({ theme }) => {
-  const items = useMemo(() => Array.from({ length: 10 }, (_, i) => ({
-    ch: theme.floaters[i % theme.floaters.length], left: (i * 37) % 100, size: 18 + ((i * 13) % 22), dur: 14 + ((i * 7) % 12), delay: -((i * 5) % 20),
-  })), [theme]);
-  return (
-    <div className="fixed inset-0 pointer-events-none overflow-hidden" aria-hidden>
-      {items.map((f, i) => (
-        <span key={i} className="absolute" style={{ left: `${f.left}%`, top: 0, fontSize: f.size, opacity: 0.22, animation: `mg-float ${f.dur}s linear ${f.delay}s infinite` }}>{f.ch}</span>
-      ))}
-    </div>
-  );
-};
-
-const Shell: React.FC<{ theme: Theme; children: React.ReactNode }> = ({ theme, children }) => (
-  <div className="min-h-screen w-full overflow-hidden select-none text-white flex flex-col relative" style={{ background: theme.bg, fontFamily: 'system-ui, -apple-system, sans-serif', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>
-    <style>{CSS}</style>
-    <Floaters theme={theme} />
-    <div className="relative flex-1 flex flex-col">{children}</div>
-  </div>
-);
-const Card: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="w-full max-w-sm rounded-3xl bg-black/55 backdrop-blur border border-white/15 p-6 text-center shadow-2xl" style={{ animation: 'mg-in .25s ease-out' }}>{children}</div>
-);
-const Big: React.FC<{ onClick: () => void; children: React.ReactNode; disabled?: boolean; light?: boolean; theme: Theme }> = ({ onClick, children, disabled, light, theme }) => (
-  <button type="button" onClick={onClick} disabled={disabled}
-    className="w-full py-3 rounded-2xl font-extrabold text-lg disabled:opacity-50 hover:brightness-110"
-    style={light ? { background: 'rgba(255,255,255,.12)', color: '#fff' } : { background: theme.accent, color: '#1a0b02' }}>{children}</button>
-);
+const Shell: React.FC<{ theme: Theme; children: React.ReactNode }> = ({ theme, children }) => <HolidayShell theme={theme} css={CSS}>{children}</HolidayShell>;
 
 const MatchGame: React.FC<GameProps<MatchProgress>> = ({ progress, save, exit, player, playerId }) => {
   const [themeChoice, setThemeChoice] = useState<ThemeId | 'auto'>(progress?.theme || 'auto');
-  const theme = themeChoice === 'auto' ? currentTheme() : THEMES[themeChoice];
+  const theme = themeOf(themeChoice);
   useEffect(() => { const was = document.title; document.title = theme.title; return () => { document.title = was; }; }, [theme.title]);
   const me: MemPlayer = { id: playerId || '', name: player };
 
@@ -98,36 +61,27 @@ const MatchGame: React.FC<GameProps<MatchProgress>> = ({ progress, save, exit, p
 
   const toLobby = () => { keep(null); current.current = null; setMatch(null); setError(null); };
   const pickTheme = (t: ThemeId | 'auto') => { setThemeChoice(t); save({ ...(progress || {}), theme: t }); };
+  const loadRecord = useCallback(async () => memRecord(await memHistory(), me.id), [me.id]);
 
   if (!playerId) return <Shell theme={theme}><div className="m-auto p-6">Sign in to play.</div></Shell>;
-  if (!match) return <Lobby theme={theme} themeChoice={themeChoice} pickTheme={pickTheme} me={me} error={error} setError={setError} exit={exit} onMatch={m => call(async () => m)} />;
+  if (!match) return (
+    <Lobby theme={theme} title={theme.title} me={me} themeChoice={themeChoice} pickTheme={pickTheme} error={error} setError={setError} exit={exit}
+      blurb="Take turns flipping two cards. Find a pair and it’s yours, and you go again. Miss and it’s their turn. Best of 3 boards."
+      preview={<div className="grid grid-cols-4 gap-2 w-40" aria-hidden>
+        {theme.pics.slice(0, 4).map((p, i) => (
+          <div key={i} className="aspect-[3/4] rounded-xl flex items-center justify-center text-2xl" style={{ background: i % 2 ? theme.back : 'rgba(255,255,255,.92)', animation: `mg-pop .4s ease-out ${i * 0.08}s both` }}>{i % 2 ? theme.backIcon : p}</div>
+        ))}
+      </div>}
+      create={async () => { await call(memCreate); }}
+      join={async code => { const r = await memJoin(code); if (!r.ok) return r.reason; await call(async () => r.match); return 'ok'; }}
+      loadRecord={loadRecord} />
+  );
   const them = match.host.id === me.id ? match.guest : match.host;
 
-  if (match.status === 'expired') return (
-    <Shell theme={theme}><div className="flex-1 flex items-center justify-center p-6"><Card>
-      <div className="text-4xl">⌛</div><div className="text-xl font-extrabold mt-2">That code ran out of time</div>
-      <div className="text-sm text-white/70 mt-1">Codes last 15 minutes. Make a new one.</div>
-      <div className="mt-5"><Big theme={theme} onClick={toLobby}>OK</Big></div>
-    </Card></div></Shell>);
-  if (match.status === 'waiting') return (
-    <Shell theme={theme}><div className="flex-1 flex items-center justify-center p-6"><Card>
-      {match.guest && match.guest.id !== me.id ? (
-        <><div className="text-4xl">🔁</div><div className="text-xl font-extrabold mt-2">Waiting for {match.guest.name}</div>
-          <div className="text-sm text-white/70 mt-1">They need to tap <b>Rematch</b> too.</div></>
-      ) : (
-        <><div className="text-sm uppercase tracking-widest text-white/70">Your code</div>
-          <div className="text-6xl font-black tracking-[.2em] mt-2" style={{ color: theme.accent }} aria-label="Match code">{match.code}</div>
-          <div className="text-sm text-white/70 mt-3">The other player taps <b>Join</b> and types this in.</div>
-          <div className="mt-4 text-white/70 animate-pulse">Waiting for someone to join…</div></>
-      )}
-      <div className="mt-5"><Big theme={theme} light onClick={async () => { await memLeave(match.id).catch(() => undefined); toLobby(); }}>Cancel</Big></div>
-    </Card></div></Shell>);
-  if (match.status === 'left') return (
-    <Shell theme={theme}><div className="flex-1 flex items-center justify-center p-6"><Card>
-      <div className="text-4xl">🚪</div>
-      <div className="text-xl font-extrabold mt-2">{match.left_by === me.id ? 'You left the match' : `${them?.name || 'They'} left the match`}</div>
-      <div className="mt-5"><Big theme={theme} onClick={toLobby}>OK</Big></div>
-    </Card></div></Shell>);
+  if (match.status === 'expired') return <Notice theme={theme} icon="⌛" title="That code ran out of time" sub="Codes last 15 minutes. Make a new one."><Big theme={theme} onClick={toLobby}>OK</Big></Notice>;
+  if (match.status === 'waiting') return <Waiting theme={theme} code={match.code} rematchWith={match.guest && match.guest.id !== me.id ? match.guest.name : null}
+    cancel={async () => { await memLeave(match.id).catch(() => undefined); toLobby(); }} />;
+  if (match.status === 'left') return <Notice theme={theme} icon="🚪" title={match.left_by === me.id ? 'You left the match' : `${them?.name || 'They'} left the match`}><Big theme={theme} onClick={toLobby}>OK</Big></Notice>;
   if (!them) return null;
   return (
     <Table theme={theme} match={match} me={me} them={them} serverNow={() => Date.now() + offset.current} error={error}
@@ -137,79 +91,6 @@ const MatchGame: React.FC<GameProps<MatchProgress>> = ({ progress, save, exit, p
         try { const r = await memRematch(match.id); if (r.ok) await call(async () => r.match); } catch (e) { setError(msg(e)); }
       }}
       done={toLobby} />
-  );
-};
-
-// ── the lobby ──
-const Lobby: React.FC<{ theme: Theme; themeChoice: ThemeId | 'auto'; pickTheme: (t: ThemeId | 'auto') => void; me: MemPlayer; error: string | null;
-  setError: (e: string | null) => void; exit: () => void; onMatch: (m: MemMatch) => void }> = ({ theme, themeChoice, pickTheme, me, error, setError, exit, onMatch }) => {
-  const [code, setCode] = useState('');
-  const [joining, setJoining] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [record, setRecord] = useState<ReturnType<typeof memRecord> | null>(null);
-  useEffect(() => { memHistory().then(h => setRecord(memRecord(h, me.id))).catch(() => setRecord([])); }, [me.id]);
-
-  const create = async () => { setBusy(true); setError(null); try { onMatch(await memCreate()); } catch (e) { setError(msg(e)); } finally { setBusy(false); } };
-  const join = async () => {
-    if (code.length !== 4) return;
-    setBusy(true); setError(null);
-    try {
-      const r = await memJoin(code);
-      if (r.ok) onMatch(r.match);
-      else setError(r.reason === 'own_match' ? 'That’s your own code. The other player types it in.' : 'No match with that code. Check the letters.');
-    } catch (e) { setError(msg(e)); } finally { setBusy(false); }
-  };
-  return (
-    <Shell theme={theme}>
-      <header className="flex items-center gap-2 px-4" style={{ paddingTop: 'max(16px, env(safe-area-inset-top))' }}>
-        <button type="button" aria-label="Back to games" onClick={exit} className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-xl">‹</button>
-        <div className="text-2xl font-extrabold tracking-tight">{theme.icon} {theme.title}</div>
-      </header>
-      <div className="flex-1 flex flex-col items-center px-6 py-6 gap-4 max-w-sm w-full mx-auto">
-        <div className="grid grid-cols-4 gap-2 w-40" aria-hidden>
-          {theme.pics.slice(0, 4).map((p, i) => (
-            <div key={i} className="aspect-[3/4] rounded-xl flex items-center justify-center text-2xl" style={{ background: i % 2 ? theme.back : 'rgba(255,255,255,.92)', animation: `mg-pop .4s ease-out ${i * 0.08}s both` }}>{i % 2 ? theme.backIcon : p}</div>
-          ))}
-        </div>
-        <div className="text-sm text-white/75 text-center">Take turns flipping two cards. Find a pair and it’s yours, and you go again. Miss and it’s their turn. Best of 3 boards.</div>
-        {!joining ? (
-          <>
-            <Big theme={theme} onClick={create} disabled={busy}>Create a match</Big>
-            <Big theme={theme} light onClick={() => { setJoining(true); setError(null); }}>Join with a code</Big>
-          </>
-        ) : (
-          <>
-            <input value={code} autoFocus inputMode="text" autoCapitalize="characters" autoComplete="off" spellCheck={false} maxLength={4} aria-label="Code"
-              onChange={e => setCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4))}
-              onKeyDown={e => { if (e.key === 'Enter') join(); }}
-              placeholder="ABCD" className="w-full text-center text-5xl font-black tracking-[.25em] rounded-2xl py-3 bg-white/10 border border-white/20 outline-none placeholder:text-white/20" />
-            <Big theme={theme} onClick={join} disabled={busy || code.length !== 4}>Join</Big>
-            <button type="button" onClick={() => { setJoining(false); setCode(''); setError(null); }} className="text-sm text-white/70 underline">Back</button>
-          </>
-        )}
-        {error && <div className="text-sm text-red-200 text-center">{error}</div>}
-        <div className="w-full mt-2">
-          <div className="text-xs uppercase tracking-widest text-white/60">Head to head</div>
-          <div className="mt-2 rounded-2xl bg-white/10 divide-y divide-white/10">
-            {record === null && <div className="p-3 text-white/60 animate-pulse text-sm">Loading…</div>}
-            {record?.length === 0 && <div className="p-3 text-white/60 text-sm">No matches yet.</div>}
-            {record?.map(r => (
-              <div key={r.id} className="p-3 flex items-center justify-between">
-                <div className="font-bold">{me.name} vs {r.name}</div>
-                <div className="font-extrabold text-lg" aria-label={`Record against ${r.name}`}>{r.won} – {r.lost}{r.drawn ? <span className="text-sm text-white/60"> ({r.drawn} tied)</span> : null}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <label className="w-full flex items-center justify-between text-sm text-white/70 mt-2">Theme
-          <select value={themeChoice} onChange={e => pickTheme(e.target.value as ThemeId | 'auto')} aria-label="Theme"
-            className="rounded-lg px-2 py-1.5 text-sm" style={{ background: '#fff', color: '#111827' }}>
-            <option value="auto">Next holiday ({currentTheme().name})</option>
-            {Object.values(THEMES).map(t => <option key={t.id} value={t.id}>{t.icon} {t.name}</option>)}
-          </select>
-        </label>
-      </div>
-    </Shell>
   );
 };
 
@@ -362,13 +243,7 @@ const Table: React.FC<{ theme: Theme; match: MemMatch; me: MemPlayer; them: MemP
 const Side: React.FC<{ name: string; colour: string; pairs: number; boards: number; active: boolean; secs: number | null; testid: string }> = ({ name, colour, pairs, boards, active, secs, testid }) => (
   <div className="rounded-2xl px-3 py-2 flex items-center gap-3 transition-all" data-testid={testid}
     style={{ background: active ? 'rgba(255,255,255,.16)' : 'rgba(0,0,0,.25)', ['--glow' as string]: colour + '88', animation: active ? 'mg-glow 1.6s ease-in-out infinite' : undefined, border: `2px solid ${active ? colour : 'transparent'}` }}>
-    <div className="relative w-10 h-10 shrink-0">
-      <svg viewBox="0 0 40 40" className="absolute inset-0 -rotate-90">
-        <circle cx="20" cy="20" r="17" fill="none" stroke="rgba(255,255,255,.15)" strokeWidth="4" />
-        {secs != null && <circle cx="20" cy="20" r="17" fill="none" stroke={secs <= 5 ? '#ef4444' : colour} strokeWidth="4" strokeDasharray="106.8" style={{ strokeDashoffset: 106.8 * (1 - secs / TURN_SECONDS), transition: 'stroke-dashoffset .3s linear' }} />}
-      </svg>
-      <div className="absolute inset-0 flex items-center justify-center text-sm font-black" style={{ color: colour }}>{secs != null ? secs : name.slice(0, 1).toUpperCase()}</div>
-    </div>
+    <Ring secs={secs} of={TURN_SECONDS} colour={colour} label={name.slice(0, 1).toUpperCase()} />
     <div className="min-w-0">
       <div className="text-sm font-bold truncate" style={{ color: colour }}>{name}</div>
       <div className="text-xs text-white/75"><b className="text-lg text-white" aria-label={`${name} pairs`}>{pairs}</b> pairs · {'●'.repeat(boards)}{'○'.repeat(Math.max(0, 2 - boards))}</div>

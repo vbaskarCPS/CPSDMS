@@ -3,6 +3,7 @@
 // progress (a small JSON object); no database change is needed for a new game.
 import React from 'react';
 import { currentTheme } from '../../lib/memory/themes';
+import { SEAS } from '../../lib/battle/fleet';
 
 /** What every game gets from the hub. */
 export type GameProps<T> = {
@@ -56,6 +57,12 @@ export const GAMES: GameInfo[] = [
     id: 'match', name: currentTheme().title, icon: currentTheme().icon, colour: '#6d28d9',
     blurb: 'Memory cards for two, turn by turn. Find the pairs!',
     component: React.lazy(() => import('./MatchGame')),
+  },
+  {
+    // Battleship, dressed for the next big holiday too (👻 Ghost Fleet for Halloween, …)
+    id: 'battle', name: SEAS[currentTheme().id].title, icon: '⚓', colour: '#0e7490',
+    blurb: 'Battleship for two: hide your fleet, sink theirs.',
+    component: React.lazy(() => import('./BattleGame')),
   },
   {
     id: 'chess', name: 'Little Chess', icon: '♞', colour: '#0f766e',
