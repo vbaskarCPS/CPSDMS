@@ -144,3 +144,17 @@ describe('clients by city › route map › route', () => {
     expect(oak.areas[1].routes.map(r => r.code)).toEqual(['GA02', 'GA10']);
   });
 });
+
+describe('a centre’s own service', async () => {
+  const { centerService, defaultSaleType } = await import('./permissions');
+  it('uses the centre’s service when no season says, sealing when it has none', () => {
+    expect(centerService(['lawn_rejuv'])).toBe('lawn_rejuv');
+    expect(centerService(['bogus', 'aeration'])).toBe('aeration');
+    expect(centerService([])).toBe('sealing');
+    expect(centerService(null)).toBe('sealing');
+  });
+  it('a new sale is SS on sealing, FP otherwise', () => {
+    expect(defaultSaleType('sealing')).toBe('SS');
+    expect(defaultSaleType('lawn_rejuv')).toBe('FP');
+  });
+});
