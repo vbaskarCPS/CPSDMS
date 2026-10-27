@@ -24,6 +24,13 @@ export const SERVICES = [
 ] as const;
 export type Service = typeof SERVICES[number]['key'];
 export const serviceLabel = (s: string) => SERVICES.find(x => x.key === s)?.label || s;
+/** A centre's own service when nothing else says (no season covers the day): the first it does,
+ *  sealing for a centre with none set. */
+export function centerService(services: readonly string[] | null | undefined): Service {
+  return ((services || []).find(s => SERVICES.some(x => x.key === s)) as Service | undefined) || 'sealing';
+}
+/** A new sale's property type: SS for sealing, else FP (front and back). */
+export const defaultSaleType = (service: string) => (service === 'sealing' ? 'SS' : 'FP');
 
 /** Mirror of public.app_make_username (without the clash suffix, which the database adds). */
 export function usernameBase(fullName: string): string {

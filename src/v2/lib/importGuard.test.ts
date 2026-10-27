@@ -81,7 +81,7 @@ describe('the checks that stop an import', () => {
 });
 
 describe('warnings', () => {
-  const mk = (dates: string[], prices: string[], line: 'aeration' | 'sealing') => {
+  const mk = (dates: string[], prices: string[], line: 'aeration' | 'sealing' | 'lawn_rejuv') => {
     const rows = [['HOUSE', 'STREET', 'DATE', 'YEAR', 'PRICE'], ...dates.map((d, i) => [String(10 + i), 'Elm Rd', d, d.slice(0, 4), prices[i]])];
     const m: Mapping = { headerRow: 0, serviceLine: line, columns: { 0: { field: 'house_no' }, 1: { field: 'street' }, 2: { field: 'job_date' }, 3: { field: 'year' }, 4: { field: 'price' } } };
     return { rows, m, a: applyMapping(rows, m) };
@@ -91,6 +91,11 @@ describe('warnings', () => {
     const t = guardChecks({ rows, mapping: m, applied: a, sensitive: [] }).map(c => c.text).join(' ');
     expect(t).toMatch(/outside the aeration season/);
     expect(t).toMatch(/aeration prices are outside/);
+  });
+  it('fall rejuvenation into November and BC’s February starts aren’t flagged', () => {
+    const { rows, m, a } = mk(['2025-11-04', '2025-11-12', '2026-02-15', '2026-02-20'], ['350', '420', '300', '280'], 'lawn_rejuv');
+    const t = guardChecks({ rows, mapping: m, applied: a, sensitive: [] }).map(c => c.text).join(' ');
+    expect(t).not.toMatch(/outside the lawn rejuv season/);
   });
   it('compares with the last file of the same layout, and spots the same file twice', () => {
     const { rows, m, a } = mk(['2025-05-02', '2025-05-03', '2025-05-04'], ['70', '70', '70'], 'aeration');
