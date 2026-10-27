@@ -13,11 +13,12 @@ import {
 } from '../../../lib/payoutCarts';
 import type { NewLine, PayoutLine } from '../../../lib/payslips';
 import { Btn, ErrorBox, Loading, Tag } from '../../../ui';
+import { defaultSaleType } from '../../../lib/permissions';
 import { ContractorLink } from '../ContractorCard';
 
 const money = (v: number) => `${v < 0 ? '−' : ''}$${Math.abs(Math.round(v * 100) / 100).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const n = (v: unknown) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
-const blankSale = (route = ''): CartSale => ({ route_code: route || null, address: null, client_name: null, price: 0, payment_type: 'Cash', payments: null, type: 'Sale', service: 'SS', notes: null, meta: {} });
+const blankSale = (route = '', service = 'sealing'): CartSale => ({ route_code: route || null, address: null, client_name: null, price: 0, payment_type: 'Cash', payments: null, type: 'Sale', service: defaultSaleType(service), notes: null, meta: {} });
 
 export const PayoutEditor: React.FC<{
   centerId: string; region: string; date: string; initial: PayoutCart[]; saved: PayoutLine[]; onCancel: () => void; onSaved: () => void;
@@ -178,7 +179,9 @@ export const PayoutEditor: React.FC<{
                         <NumIn v={c.eq_override} on={v => change(i, x => ({ ...x, eq_override: v }))} label="EQ set at payout" />
                         <Btn size="sm" kind="o" onClick={() => change(i, x => ({ ...x, eq_override: null }))}>Use the sales</Btn></div>
                     ) : <Btn size="sm" kind="o" onClick={() => change(i, x => ({ ...x, eq_override: Math.round(salesEQ * 100) / 100 }))}>Set the EQ by hand</Btn>}
-                    <div className="v2-row v2-small" style={{ gap: 6, marginTop: 8 }}>Crackfiller lbs <NumIn v={c.crackfill_lbs} on={v => change(i, x => ({ ...x, crackfill_lbs: v }))} label="Crackfiller pounds" /></div>
+                    {/* crackfiller is a sealing cost: only sealing carts (or one that already has some) */}
+                    {((ctx.data as CartContext | null)?.service === 'sealing' || c.crackfill_lbs > 0) &&
+                      <div className="v2-row v2-small" style={{ gap: 6, marginTop: 8 }}>Crackfiller lbs <NumIn v={c.crackfill_lbs} on={v => change(i, x => ({ ...x, crackfill_lbs: v }))} label="Crackfiller pounds" /></div>}
                   </div>
                   <div className="v2-card" style={{ padding: 10 }}>
                     <div className="v2-card-h" style={{ marginBottom: 6 }}>Bonuses <span className="v2-mut" style={{ textTransform: 'none', fontWeight: 600 }}>· shared by EQ split</span></div>
@@ -217,7 +220,7 @@ export const PayoutEditor: React.FC<{
                     </tbody>
                   </table>
                 </div>
-                <div style={{ marginTop: 8 }}><Btn size="sm" kind="o" icon={Plus} onClick={() => change(i, x => ({ ...x, sales: [...x.sales, blankSale(x.sales[x.sales.length - 1]?.route_code || '')] }))}>Add sale</Btn></div>
+                <div style={{ marginTop: 8 }}><Btn size="sm" kind="o" icon={Plus} onClick={() => change(i, x => ({ ...x, sales: [...x.sales, blankSale(x.sales[x.sales.length - 1]?.route_code || '', (ctx.data as CartContext | null)?.service)] }))}>Add sale</Btn></div>
               </div>
             )}
           </section>

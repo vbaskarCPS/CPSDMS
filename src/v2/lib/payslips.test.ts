@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { daysBetween, defaultSettings, lineCosts, lineToDay, mmmdd, statsToLine, toWorkerData, type PayoutLine } from './payslips';
-import { crackfillCostFor, payslipTotals, productCostTaken, sealantCostFor } from '../../lib/payslipExport';
+import { crackfillCostFor, defaultPayslipType, payslipTotals, productCostTaken, sealantCostFor } from '../../lib/payslipExport';
 
 describe('payout lines', () => {
   it('maps a Payout Stats row the way the old payslip read the sheet', () => {
@@ -27,6 +27,22 @@ describe('payout lines', () => {
       extraDeductions: [{ id: '1', label: 'x', amount: 5 }], additions: [{ id: '2', label: 'y', amount: 15 }] }), shown, 'sealing');
     expect(extras.finalPay).toBe(190 - 50 - 20 - 19 - 5 + 15);
     expect(payslipTotals(toWorkerData('I1', 'A', 'B', days, { ...defaultSettings(), hotels: 50 }), { ...shown, hotels: true }, 'sealing').finalPay).toBe(190);
+  });
+  it('lawn rejuv payslips: no crackfill, same extras', () => {
+    const line = (day: string, total: number) => ({ day, total_payout: total, manager: '', steps: 0, equiv: 0, total_prepay: 0, payout_rate: 0,
+      aer_comm: 0, upsell_comm: 0, mach_rent: 0, deductions: 0, daily_bonus: 0, indiv_gross: 0, crackfill_base: 0 }) as unknown as PayoutLine;
+    const days = [line('2026-10-06', 100), line('2026-10-07', 90)].map(lineToDay);
+    const shown = { hotels: false, advances: false, travelPkg: false };
+    const t = payslipTotals(toWorkerData('W1', 'A', 'B', days, { ...defaultSettings(), hotels: 50, crackfillPct: 10 }), shown, 'lawn_rejuv');
+    expect(t.crackfillDed).toBe(0);
+    expect(t.finalPay).toBe(140);
+  });
+  it('the generator opens on the centre’s own service', () => {
+    expect(defaultPayslipType(['sealing'])).toBe('sealing');
+    expect(defaultPayslipType(['lawn_rejuv'])).toBe('lawn_rejuv');
+    expect(defaultPayslipType(['aeration', 'lawn_rejuv'])).toBe('aeration');
+    expect(defaultPayslipType(['cleaning'])).toBe('cleaning');
+    expect(defaultPayslipType([])).toBe('aeration');
   });
 });
 

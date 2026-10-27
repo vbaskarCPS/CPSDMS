@@ -14,6 +14,7 @@
 //
 
 import { supabase } from '../supabase';
+import { placeQuery } from '../geoProvince';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -241,8 +242,7 @@ export async function geocodeAddress(
   proximityLat?: number,  // optional bias point — pulls results toward this location
   proximityLng?: number
 ): Promise<{ lat: number; lng: number } | null> {
-  const parts = [houseNum, streetName, city, 'Ontario', 'Canada'].filter(s => s.trim());
-  const query = parts.join(' ');
+  const query = placeQuery([houseNum, streetName, city], ' ');
   const encoded = encodeURIComponent(query);
 
   let url = [

@@ -95,8 +95,10 @@ export function importSummary(a: Applied): ImportSummary {
 }
 
 // ───────────── the checks ─────────────
+// months each line is normally worked; BC starts aeration and rejuvenation in February and runs fall
+// rejuvenation into November
 const SEASON: Record<string, number[]> = {
-  aeration: [3, 4, 5, 6, 8, 9, 10, 11], sealing: [4, 5, 6, 7, 8, 9, 10, 11], lawn_rejuv: [4, 5, 6, 7, 8, 9, 10], cleaning: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  aeration: [2, 3, 4, 5, 6, 8, 9, 10, 11], sealing: [4, 5, 6, 7, 8, 9, 10, 11], lawn_rejuv: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11], cleaning: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
 };
 const PRICE_BAND: Record<string, [number, number]> = {
   aeration: [20, 500], sealing: [50, 2500], lawn_rejuv: [40, 3000], cleaning: [40, 2500],

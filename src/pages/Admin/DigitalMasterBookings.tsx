@@ -20,6 +20,7 @@ import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
 import { generateDmbPCL, generateMastermap, DmbPCLProgress, MastermapPageFormat } from '../../lib/dmbPclService';
 import DmbEmailModal from '../../components/DmbEmailModal';
+import { placeQuery } from '../../lib/geoProvince';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -90,8 +91,7 @@ async function geocodeAddress(
   proximityLng: number
 ): Promise<{ lat: number; lng: number } | null> {
   const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
-  const parts = [houseNum, streetName, city, 'Ontario', 'Canada'].filter(Boolean);
-  const query = encodeURIComponent(parts.join(' '));
+  const query = encodeURIComponent(placeQuery([houseNum, streetName, city], ' '));
   const url = [
     `https://api.mapbox.com/geocoding/v5/mapbox.places/${query}.json`,
     `?access_token=${token}`,

@@ -34,6 +34,7 @@
 
 import { supabase } from './supabase';
 import { ManagerMappingConfig } from '../types';
+import { placeQuery } from './geoProvince';
 
 // Segment shape as stored in route_maps.segments (see Map Builder / MapViewer).
 export interface MapSegment {
@@ -278,7 +279,7 @@ export function nearestRouteForPoint(
 
 /**
  * Mapbox forward geocode with a hard bbox constraint. Mirrors RMMapTab's
- * geocodeAddress: Ontario/Canada query suffix, address-type results only,
+ * geocodeAddress: the centre's province + Canada query suffix, address-type results only,
  * and the bbox REJECTS out-of-area results rather than merely biasing toward
  * them. Returns null on any failure (missing token, network error, no result).
  */
@@ -288,7 +289,7 @@ export async function geocodeAddressInBbox(
 ): Promise<{ lat: number; lng: number } | null> {
   const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
   if (!token || !addr) return null;
-  const q = encodeURIComponent([addr, 'Ontario', 'Canada'].join(', '));
+  const q = encodeURIComponent(placeQuery([addr]));
   let url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&limit=1&country=ca&types=address`;
   if (bbox) url += `&bbox=${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}`;
   try {

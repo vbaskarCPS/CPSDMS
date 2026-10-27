@@ -774,7 +774,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
               {renderCalendar()}
               <div className="flex items-center justify-center gap-2">
                 <span className="text-xs text-gray-400 font-medium">Season type:</span>
-                {(['aeration', 'cleaning', 'sealing'] as PayslipSeason[]).map(opt => (
+                {(['aeration', 'cleaning', 'sealing', 'lawn_rejuv'] as PayslipSeason[]).map(opt => (
                   <button
                     key={opt}
                     onClick={() => setSeason(opt)}
@@ -784,7 +784,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
                         : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
                     }`}
                   >
-                    {opt}
+                    {opt === 'lawn_rejuv' ? 'lawn rejuv' : opt}
                   </button>
                 ))}
               </div>
