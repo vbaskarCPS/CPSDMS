@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { googleSheetsService } from '../../lib/googleSheetsService';
+import { placeQuery } from '../../lib/geoProvince';
 
 interface Props {
   onBack: () => void;
@@ -147,8 +148,7 @@ function matchingStreetDistances(
 
 async function geocode(address: string, city: string): Promise<{ lat: number; lng: number } | null> {
   const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
-  const parts = [address, city, 'Ontario', 'Canada'].filter(Boolean);
-  const q = encodeURIComponent(parts.join(', '));
+  const q = encodeURIComponent(placeQuery([address, city]));
   const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&limit=1&country=ca&types=address`;
   try {
     const res = await fetch(url);
