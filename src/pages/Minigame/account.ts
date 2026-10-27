@@ -3,6 +3,7 @@
 import { supabase } from '../../lib/supabase';
 import type { Match } from '../../lib/pour/pvp';
 import type { MemHistory, MemMatch } from '../../lib/memory/match';
+import type { Battle, BattleHistory } from '../../lib/battle/fleet';
 
 export type Player = { id: string; name: string; has_pin?: boolean };
 export type Progress = Record<string, Record<string, unknown>>;
@@ -74,3 +75,16 @@ export const memLeave = (id: string) => rpc<null>('minigame_memory_leave', { p_t
 export const memRematch = (id: string) =>
   rpc<{ ok: true; match: MemMatch } | { ok: false; reason: string }>('minigame_memory_rematch', { p_token: tok(), p_match: id });
 export const memHistory = () => rpc<MemHistory>('minigame_memory_history', { p_token: tok() });
+
+// ── Battleship (minigame_battle_* functions; see src/lib/battle/fleet.ts) ──
+export const batCreate = () => rpc<Battle>('minigame_battle_create', { p_token: tok() });
+export const batJoin = (code: string) =>
+  rpc<{ ok: true; match: Battle } | { ok: false; reason: 'no_match' | 'own_match' }>('minigame_battle_join', { p_token: tok(), p_code: code });
+export const batState = (id: string) => rpc<Battle>('minigame_battle_state', { p_token: tok(), p_match: id });
+export const batPlace = (id: string, ships: number[][]) =>
+  rpc<{ ok: boolean; reason?: string; match: Battle }>('minigame_battle_place', { p_token: tok(), p_match: id, p_ships: ships });
+export const batFire = (id: string, cell: number) => rpc<Battle>('minigame_battle_fire', { p_token: tok(), p_match: id, p_cell: cell });
+export const batLeave = (id: string) => rpc<null>('minigame_battle_leave', { p_token: tok(), p_match: id });
+export const batRematch = (id: string) =>
+  rpc<{ ok: true; match: Battle } | { ok: false; reason: string }>('minigame_battle_rematch', { p_token: tok(), p_match: id });
+export const batHistory = () => rpc<BattleHistory>('minigame_battle_history', { p_token: tok() });
