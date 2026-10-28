@@ -36,6 +36,13 @@ export function parseAddress(s: string | null | undefined): { email: string; nam
   return { email: v.toLowerCase(), name: null };
 }
 const list = (x: unknown): string[] => (Array.isArray(x) ? x : typeof x === 'string' && x ? [x] : []).map(a => parseAddress(String(a)).email).filter(Boolean);
+/** The Message-ID this email answers: In-Reply-To, else the last one in References. */
+export function answers(hdr: Record<string, string>): string | null {
+  const irt = (hdr['in-reply-to'] || '').trim();
+  if (irt) return (/<[^>]+>/.exec(irt)?.[0]) || irt;
+  const refs = (hdr['references'] || '').match(/<[^>]+>/g);
+  return refs?.length ? refs[refs.length - 1] : null;
+}
 const safeName = (s: string) => (s || 'file').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'file';
 
 Deno.serve(async req => {
@@ -60,8 +67,8 @@ Deno.serve(async req => {
       p_resend_id: id, p_from: from.email, p_from_name: from.name,
       p_to: [...list(e.to), ...list(e.received_for)], p_cc: list(e.cc), p_subject: String(e.subject || ''),
       p_html: typeof e.html === 'string' ? e.html : null, p_text: typeof e.text === 'string' ? e.text : null,
-      p_message_id: typeof e.message_id === 'string' ? e.message_id : null,
-      p_in_reply_to: hdr['in-reply-to'] || null, p_attachments: [], p_at: (e.created_at as string) || evt.data.created_at || null,
+      p_message_id: typeof e.message_id === 'string' && e.message_id.trim() ? (e.message_id.trim().startsWith('<') ? e.message_id.trim() : `<${e.message_id.trim()}>`) : null,
+      p_in_reply_to: answers(hdr), p_attachments: [], p_at: (e.created_at as string) || evt.data.created_at || null,
     });
     if (error) return json({ error: error.message }, 500);
     const f = filed as { thread_id?: string; message_id?: string; again?: boolean };
