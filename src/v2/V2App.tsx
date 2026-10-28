@@ -38,6 +38,8 @@ import { Cities } from './features/mainstreet/Cities';
 import { WorkerHome } from './features/worker/WorkerHome';
 import { RepApp } from './features/rep/RepApp';
 import { Deals as MsDeals } from './features/mainstreet/Deals';
+import { MailApp } from './features/mail/MailApp';
+import { Unsubscribe } from './features/mail/Unsubscribe';
 import { Loading } from './ui';
 
 const Guard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ perm, children }) => {
@@ -78,6 +80,7 @@ const V2Routes: React.FC = () => (
     <Route path="login" element={<Login />} />
     <Route path="password" element={<ChangePassword />} />
     <Route path="setup" element={<AccountSetup />} />
+    <Route path="unsubscribe" element={<Unsubscribe />} />
     {/* the worker dashboard: workers have no app account, so it has its own sign-in (a pass) */}
     <Route path="worker/*" element={<WorkerHome />} />
     {/* MainstreetAI reps: their own app, nothing else */}
@@ -119,6 +122,7 @@ const V2Routes: React.FC = () => (
     <Route path="mainstreet/reps" element={<Guard perm="mainstreet_admin"><Reps /></Guard>} />
     <Route path="mainstreet/dashboard" element={<Guard perm="mainstreet_admin"><MsDashboard /></Guard>} />
     <Route path="mainstreet/deals" element={<Guard perm="mainstreet_admin"><MsDeals /></Guard>} />
+    <Route path="mainstreet/inbox" element={<Guard perm="mainstreet_admin"><div className="v2-ms-mail"><MailApp admin /></div></Guard>} />
     <Route path="account" element={<Guard><MyAccount /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />
   </Routes>
