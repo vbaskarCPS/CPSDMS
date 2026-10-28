@@ -114,7 +114,7 @@ const KitEditor: React.FC<{ campaign: Campaign; onClose: () => void }> = ({ camp
     repKit(campaign.id).then(x => setK({
       pay_per_deal: x.pay_per_deal != null ? String(x.pay_per_deal) : '', retry_days: String(x.retry_days ?? 90),
       info_url: x.info_url || '', info_sms: x.info_sms || '', info_email_subject: x.info_email_subject || '', info_email_body: x.info_email_body || '',
-      pitch: x.pitch || '', objections: x.objections.length ? x.objections : [{ q: '', a: '' }], onepager_url: x.onepager_url || '',
+      pitch: x.pitch || '', objections: x.objections.length ? x.objections : [{ q: '', a: '' }], onepager_url: x.onepager_url || '', present_url: x.present_url || '',
     })).catch(setError);
   }, [campaign.id]);
   const set = (p: Partial<KitInput>) => setK(cur => (cur ? { ...cur, ...p } : cur));
@@ -151,6 +151,8 @@ const KitEditor: React.FC<{ campaign: Campaign; onClose: () => void }> = ({ camp
               <Btn kind="o" size="sm" icon={Plus} onClick={() => set({ objections: [...k.objections, { q: '', a: '' }] })}>Add an objection</Btn>
             </div>
           </Field>
+          <Field label="Presentation (optional)" hint="What reps open with Present at the door: a page in the app, e.g. /present/taxifi.html, or an https:// link.">
+            <input className="v2-input" placeholder="/present/…" value={k.present_url} onChange={e => set({ present_url: e.target.value })} /></Field>
           <Field label="One-pager link (optional)"><input className="v2-input" placeholder="https://" value={k.onepager_url} onChange={e => set({ onepager_url: e.target.value })} /></Field>
           <ErrorBox error={error} />
         </>)}
