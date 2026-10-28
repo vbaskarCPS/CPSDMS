@@ -3,10 +3,10 @@
   --link: #0f766e; --hover: #f9fafb; --brand: #0f766e;
   min-height: 100vh; background: var(--bg); color: var(--ink); display: flex; flex-direction: column; }
 .v2-rep-top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; padding: 10px 14px;
-  background: var(--brand); color: #fff; }
-.v2-rep-top .brand { font-weight: 800; font-size: 17px; letter-spacing: .2px; }
-.v2-rep-top .who { margin-left: auto; font-size: 13px; opacity: .9; }
-.v2-rep-top button { background: rgba(255,255,255,.14); border: 0; border-radius: 8px; padding: 6px 9px; color: #fff; }
+  background: #fff; color: var(--ink); border-bottom: 1px solid var(--line); }
+.v2-rep-top .brand { display: inline-flex; }
+.v2-rep-top .who { margin-left: auto; font-size: 13px; color: var(--mut); }
+.v2-rep-top button { background: var(--soft); border: 0; border-radius: 8px; padding: 6px 9px; color: var(--ink); }
 .v2-rep-body { flex: 1; width: 100%; max-width: 720px; margin: 0 auto; padding: 14px 14px 86px; }
 .v2-rep-body.full { max-width: none; padding: 0 0 70px; display: flex; flex-direction: column; }
 .v2-rep-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; background: #fff; border-top: 1px solid var(--line);

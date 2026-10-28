@@ -2,11 +2,12 @@
 // which only switches between components (each opens at its home).
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutGrid, ChevronRight, LogOut, UserRound, Home, Store } from 'lucide-react';
+import { LayoutGrid, ChevronRight, LogOut, UserRound, Home } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { useCurrentSeason } from '../lib/data';
 import { serviceLabel } from '../lib/permissions';
 import { Btn } from '../ui';
+import { MsLogo, MsTab } from '../ui/MsLogo';
 import { visibleComponents, findByPath, homeOf } from './nav';
 import { ContractorCardProvider } from '../features/workerbook/ContractorCard';
 
@@ -40,10 +41,10 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
           <LayoutGrid size={18} />
         </button>
         {brand
-          ? <Link to={homeOf(hereComp!)} className="v2-brand"><span className="v2-ms-mark" aria-hidden="true"><Store size={16} /></span><span>{brand}</span></Link>
+          ? <Link to={homeOf(hereComp!)} className="v2-brand" aria-label={brand}><MsLogo size={19} tone="dark" /><MsTab /></Link>
           : <Link to="/app" className="v2-brand"><img src="/icon-192.png" alt="" className="v2-logo" /><span className="v2-hide-sm">Property Stars</span></Link>}
         <span className="v2-crumb">
-          {here ? <>
+          {brand ? null : here ? <>
             <Link to={homeOf(hereComp || here.comp)}><b>{here.comp.label}</b></Link>
             {!here.comp.tabs && homeOf(here.comp) !== here.sub.path && <><ChevronRight size={14} />{here.sub.label}</>}
           </> : <b>Home</b>}
