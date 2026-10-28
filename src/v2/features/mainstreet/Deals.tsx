@@ -1,19 +1,20 @@
 // src/v2/features/mainstreet/Deals.tsx — MainstreetAI › Deals: the admins' pipeline. A rep's closed
 // deal waits here until an admin approves it (only then does it count) or rejects it with a reason
 // the rep sees. "Can't sell here" flags are sorted here too: take the business off every list, or
-// put it back on the rep's list.
+// put it back on the rep's list. Businesses reps added themselves are checked here for duplicates.
 import React, { useState } from 'react';
-import { Check, MapPin, X } from 'lucide-react';
+import { Check, GitMerge, MapPin, Trash2, X } from 'lucide-react';
 import { useLoad } from '../../lib/data';
-import { decideDeal, dealsList, flagsList, kindLabel, resolveFlag, whenLabel, type Flag, type PipelineDeal } from '../../lib/rep';
+import { dealPhotos, decideDeal, dealsList, flagsList, kindLabel, leadsList, photoUrls, resolveFlag, resolveLead, whenLabel, type Flag, type Lead, type PipelineDeal } from '../../lib/rep';
 import { Btn, ErrorBox, Loading, Tabs, Tag } from '../../ui';
 
-type View = 'pending' | 'approved' | 'rejected' | 'flags';
+type View = 'pending' | 'approved' | 'rejected' | 'flags' | 'leads';
 
 export const Deals: React.FC = () => {
   const [view, setView] = useState<View>('pending');
   const [tick, setTick] = useState(0);
-  const deals = useLoad(() => (view === 'flags' ? Promise.resolve([] as PipelineDeal[]) : dealsList(view)), [view, tick]);
+  const deals = useLoad(() => (view === 'flags' || view === 'leads' ? Promise.resolve([] as PipelineDeal[]) : dealsList(view)), [view, tick]);
+  const leads = useLoad(() => leadsList(), [tick]);
   const flags = useLoad(() => flagsList(), [tick]);
   const pending = useLoad(() => dealsList('pending').then(d => d.length), [tick]);
   const refresh = () => setTick(t => t + 1);
@@ -24,9 +25,11 @@ export const Deals: React.FC = () => {
         { key: 'pending', label: 'Waiting for approval', count: pending.data ?? undefined },
         { key: 'approved', label: 'Approved' }, { key: 'rejected', label: 'Rejected' },
         { key: 'flags', label: 'Can’t sell here', count: flags.data?.length },
+        { key: 'leads', label: 'Added by reps', count: leads.data?.length },
       ]} />
-      <ErrorBox error={view === 'flags' ? flags.error : deals.error} />
-      {view === 'flags'
+      <ErrorBox error={view === 'flags' ? flags.error : view === 'leads' ? leads.error : deals.error} />
+      {view === 'leads' ? (leads.loading && !leads.data ? <Loading /> : <LeadList list={leads.data || []} onDone={refresh} />)
+        : view === 'flags'
         ? (flags.loading && !flags.data ? <Loading /> : <FlagList list={flags.data || []} onDone={refresh} />)
         : (deals.loading && !deals.data ? <Loading /> : <DealList list={deals.data || []} view={view} onDone={refresh} />)}
     </div>
@@ -68,6 +71,7 @@ const DealList: React.FC<{ list: PipelineDeal[]; view: View; onDone: () => void 
             {(d.contact_name || d.contact_phone || d.contact_email) && <span>{[d.contact_name, d.contact_phone, d.contact_email].filter(Boolean).join(' · ')}</span>}
           </div>
           {d.notes && <div className="v2-small" style={{ marginTop: 6 }}>“{d.notes}”</div>}
+          <DealPhotos id={d.id} />
           {d.status !== 'pending' && <div className="v2-small v2-mut" style={{ marginTop: 6 }}>
             {d.status === 'approved' ? 'Approved' : 'Rejected'}{d.decided_by ? ` by ${d.decided_by}` : ''}{d.decided_at ? ` · ${whenLabel(d.decided_at)}` : ''}{d.decision_note ? ` · ${d.decision_note}` : ''}</div>}
           {d.status === 'pending' && (rejecting === d.id ? (
@@ -109,6 +113,57 @@ const FlagList: React.FC<{ list: Flag[]; onDone: () => void }> = ({ list, onDone
           <div className="v2-row" style={{ gap: 8, marginTop: 10 }}>
             <Btn kind="r" onClick={() => act(f.id, true)} disabled={busy === f.id}>Take it off every list</Btn>
             <Btn kind="o" onClick={() => act(f.id, false)} disabled={busy === f.id}>Put it back on the rep’s list</Btn>
+          </div>
+        </div>))}
+    </>
+  );
+};
+
+const DealPhotos: React.FC<{ id: string }> = ({ id }) => {
+  const p = useLoad(async () => { const paths = await dealPhotos(id); return paths.length ? { paths, urls: await photoUrls(paths) } : null; }, [id]);
+  if (!p.data) return null;
+  return (
+    <div className="v2-row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+      {p.data.paths.map(x => p.data!.urls[x] && (
+        <a key={x} href={p.data!.urls[x]} target="_blank" rel="noreferrer"><img src={p.data!.urls[x]} alt="Visit photo" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, display: 'block' }} /></a>))}
+    </div>
+  );
+};
+
+const LeadList: React.FC<{ list: Lead[]; onDone: () => void }> = ({ list, onDone }) => {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const act = async (id: string, action: 'keep' | 'remove' | 'merge', target?: string) => {
+    setBusy(id); setError(null);
+    try { await resolveLead(id, action, target); onDone(); } catch (e) { setError(e); } finally { setBusy(null); }
+  };
+  if (!list.length) return <div className="v2-card" style={{ padding: 30, textAlign: 'center' }}><div className="v2-note">Nothing to check. When a rep adds a business that wasn’t on the map it lands here.</div></div>;
+  return (
+    <>
+      <ErrorBox error={error} />
+      <div className="v2-note" style={{ marginBottom: 10 }}>These already count for the rep. Only check they aren’t a business that’s on the map under another name.</div>
+      {list.map(l => (
+        <div key={l.id} className="v2-card" style={{ padding: 14, marginBottom: 10 }}>
+          <div className="v2-row" style={{ gap: 8, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 15.5 }}>{l.name}</div>
+              <div className="v2-small v2-mut">{kindLabel(l.kind)}{l.address ? ` · ${l.address}` : ''}{l.phone ? ` · ${l.phone}` : ''}</div>
+            </div>
+            <a className="v2-small" href={`https://www.google.com/maps?q=${l.lat},${l.lng}`} target="_blank" rel="noreferrer">Map</a>
+          </div>
+          <div className="v2-small" style={{ margin: '8px 0 4px' }}><b>{l.rep}</b> · {whenLabel(l.at)}{l.campaign ? ` · ${l.campaign}` : ''} · {l.zone || <span style={{ color: 'var(--rose)' }}>outside every zone</span>}</div>
+          {l.nearby.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div className="v2-small v2-mut">Close by on the map:</div>
+              {l.nearby.map(n => (
+                <div key={n.id} className="v2-row v2-small" style={{ gap: 8, padding: '4px 0' }}>
+                  <span style={{ flex: 1 }}><b>{n.name}</b>{n.address ? ` · ${n.address}` : ''} · {n.m} m</span>
+                  <Btn kind="o" size="sm" icon={GitMerge} disabled={busy === l.id} onClick={() => act(l.id, 'merge', n.id)}>Same business</Btn>
+                </div>))}
+            </div>)}
+          <div className="v2-row" style={{ gap: 8, marginTop: 10 }}>
+            <Btn kind="g" icon={Check} onClick={() => act(l.id, 'keep')} disabled={busy === l.id}>It’s new: keep it</Btn>
+            <Btn kind="o" icon={Trash2} onClick={() => act(l.id, 'remove')} disabled={busy === l.id}>Not a business: remove</Btn>
           </div>
         </div>))}
     </>

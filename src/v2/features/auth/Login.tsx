@@ -7,6 +7,7 @@ import { completeSetup, setupInfo, useLoad } from '../../lib/data';
 import { repForgot, repSignIn } from '../../lib/rep';
 import { db } from '../../lib/client';
 import { Btn, Field, Loading } from '../../ui';
+import { MsLogo, MsTab } from '../../ui/MsLogo';
 
 export const Login: React.FC = () => {
   const { session, profile, loading, signIn, can } = useAuth();
@@ -78,7 +79,8 @@ export const Login: React.FC = () => {
   return (
     <div className="v2"><div className="v2-login"><div className="v2-login-card">
       {msOnly ? <>
-        <div className="v2-ms-brand">MainstreetAI</div>
+        <MsTab title="MainstreetAI · Sign in" />
+        <div className="v2-ms-brand"><MsLogo size={30} tone="dark" stack /></div>
         <div className="v2-mut" style={{ marginBottom: 18 }}>Rep sign-in</div>
       </> : <>
         <img src="/icon-192.png" alt="Canadian Property Stars" className="v2-logo-lg" />
@@ -200,7 +202,7 @@ export const AccountSetup: React.FC = () => {
 
   const shell = (body: React.ReactNode) => (
     <div className="v2"><div className="v2-login"><div className="v2-login-card">
-      {isRep.data ? <div className="v2-ms-brand">MainstreetAI</div> : <>
+      {isRep.data ? <div className="v2-ms-brand"><MsTab /><MsLogo size={30} tone="dark" stack /></div> : <>
         <img src="/icon-192.png" alt="Canadian Property Stars" className="v2-logo-lg" />
         <div style={{ fontSize: 22, fontWeight: 800 }}>Canadian Property Stars</div>
       </>}

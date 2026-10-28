@@ -1,10 +1,12 @@
 // src/v2/features/mainstreet/Campaigns.tsx — MainstreetAI › Campaigns: what the reps are selling. A name, a
 // colour (used for its zones on the map) and on/off. The first campaign is Taxifi.
 import React, { useState } from 'react';
-import { Pencil, Plus } from 'lucide-react';
+import { BookOpen, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { CAMPAIGN_COLORS, listCampaigns, listZones, saveCampaign, setCampaignActive, type Campaign } from '../../lib/mainstreet';
 import { BUSINESS_KINDS, kindLabel, listCampaignCategories, setCampaignCategories, TAXIFI_KINDS } from '../../lib/msCity';
+import { repKit, saveCampaignKit, type KitInput } from '../../lib/rep';
+import { DEFAULT_EMAIL_BODY, DEFAULT_EMAIL_SUBJECT, DEFAULT_SMS } from '../../lib/repField';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag, Toggle } from '../../ui';
 
 type Editing = { id: string | null; name: string; color: string; notes: string; kinds: string[] } | null;
@@ -15,6 +17,7 @@ export const Campaigns: React.FC = () => {
   const cats = useLoad(listCampaignCategories, []);
   const kindsOf = (id: string) => (cats.data || []).filter(c => c.campaign_id === id).map(c => c.category);
   const [editing, setEditing] = useState<Editing>(null);
+  const [kitFor, setKitFor] = useState<Campaign | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -59,7 +62,8 @@ export const Campaigns: React.FC = () => {
                   <td className="v2-small" style={{ maxWidth: 260 }}>{kindsOf(c.id).length ? kindsOf(c.id).map(kindLabel).join(', ') : <span style={{ color: 'var(--rose)' }}>None yet</span>}</td>
                   <td className="v2-mut v2-small" style={{ maxWidth: 220, whiteSpace: 'pre-wrap' }}>{c.notes || '—'}</td>
                   <td><Toggle on={c.is_active} disabled={busy} onChange={() => flip(c)} label={`${c.name} on`} /></td>
-                  <td style={{ textAlign: 'right' }}>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <Btn kind="o" size="sm" icon={BookOpen} onClick={() => setKitFor(c)}>Rep kit</Btn>{' '}
                     <Btn kind="o" size="sm" icon={Pencil} onClick={() => setEditing({ id: c.id, name: c.name, color: c.color, notes: c.notes || '', kinds: kindsOf(c.id) })}>Edit</Btn>
                   </td>
                 </tr>
@@ -69,6 +73,8 @@ export const Campaigns: React.FC = () => {
         )}
       </div>
       <div className="v2-note" style={{ marginTop: 10 }}>Turning a campaign off keeps its zones and history; it just can’t be put on new zones. A campaign’s colour is how its zones show on the map once a rep has them.</div>
+
+      {kitFor && <KitEditor campaign={kitFor} onClose={() => setKitFor(null)} />}
 
       {editing && (
         <Modal title={editing.id ? 'Edit campaign' : 'New campaign'} onClose={() => setEditing(null)}
@@ -96,5 +102,58 @@ export const Campaigns: React.FC = () => {
         </Modal>
       )}
     </div>
+  );
+};
+
+// ───────────── the reps' kit for a campaign: pay, retry, send-info texts, pitch, objections ─────────────
+const KitEditor: React.FC<{ campaign: Campaign; onClose: () => void }> = ({ campaign, onClose }) => {
+  const [k, setK] = useState<KitInput | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  React.useEffect(() => {
+    repKit(campaign.id).then(x => setK({
+      pay_per_deal: x.pay_per_deal != null ? String(x.pay_per_deal) : '', retry_days: String(x.retry_days ?? 90),
+      info_url: x.info_url || '', info_sms: x.info_sms || '', info_email_subject: x.info_email_subject || '', info_email_body: x.info_email_body || '',
+      pitch: x.pitch || '', objections: x.objections.length ? x.objections : [{ q: '', a: '' }], onepager_url: x.onepager_url || '',
+    })).catch(setError);
+  }, [campaign.id]);
+  const set = (p: Partial<KitInput>) => setK(cur => (cur ? { ...cur, ...p } : cur));
+  const save = async () => {
+    if (!k) return;
+    setBusy(true); setError(null);
+    try { await saveCampaignKit(campaign.id, k); onClose(); } catch (e) { setError(e); } finally { setBusy(false); }
+  };
+  return (
+    <Modal wide title={`Rep kit: ${campaign.name}`} onClose={onClose}
+      footer={<><Btn kind="o" onClick={onClose}>Cancel</Btn><Btn disabled={busy || !k} onClick={save}>{busy ? 'Saving…' : 'Save'}</Btn></>}>
+      {!k ? (error ? <ErrorBox error={error} /> : <Loading />) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <Field label="Pay per approved deal ($)" hint="Shows reps what they’ve earned. Leave empty if not set."><input className="v2-input" inputMode="decimal" value={k.pay_per_deal} onChange={e => set({ pay_per_deal: e.target.value.replace(/[^0-9.]/g, '') })} /></Field>
+            <Field label="Try “not interested” again after (days)" hint="It comes back on the rep’s list after this."><input className="v2-input" inputMode="numeric" value={k.retry_days} onChange={e => set({ retry_days: e.target.value.replace(/[^0-9]/g, '') })} /></Field>
+          </div>
+          <div className="v2-h2" style={{ margin: '8px 0 4px' }}>Send info</div>
+          <Field label="Information link" hint="The rep’s code is added to it (?ref=CODE), so sign-ups are credited to them."><input className="v2-input" placeholder="https://" value={k.info_url} onChange={e => set({ info_url: e.target.value })} /></Field>
+          <Field label="Text message" hint="{business}, {contact}, {link} and {rep} are filled in.">
+            <textarea className="v2-input" rows={2} placeholder={DEFAULT_SMS} value={k.info_sms} onChange={e => set({ info_sms: e.target.value })} /></Field>
+          <Field label="Email subject"><input className="v2-input" placeholder={DEFAULT_EMAIL_SUBJECT} value={k.info_email_subject} onChange={e => set({ info_email_subject: e.target.value })} /></Field>
+          <Field label="Email"><textarea className="v2-input" rows={4} placeholder={DEFAULT_EMAIL_BODY} value={k.info_email_body} onChange={e => set({ info_email_body: e.target.value })} /></Field>
+          <div className="v2-h2" style={{ margin: '8px 0 4px' }}>Pitch kit</div>
+          <Field label="The pitch"><textarea className="v2-input" rows={4} value={k.pitch} onChange={e => set({ pitch: e.target.value })} placeholder="What to say at the door, in a few lines" /></Field>
+          <Field label="Objections and answers">
+            <div>
+              {k.objections.map((o, i) => (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr auto', gap: 6, marginBottom: 6 }}>
+                  <input className="v2-input" placeholder="“We already have an accountant”" value={o.q} onChange={e => set({ objections: k.objections.map((x, j) => (j === i ? { ...x, q: e.target.value } : x)) })} />
+                  <input className="v2-input" placeholder="What to say back" value={o.a} onChange={e => set({ objections: k.objections.map((x, j) => (j === i ? { ...x, a: e.target.value } : x)) })} />
+                  <Btn kind="o" size="sm" icon={Trash2} aria-label="Remove" onClick={() => set({ objections: k.objections.filter((_, j) => j !== i) })} />
+                </div>))}
+              <Btn kind="o" size="sm" icon={Plus} onClick={() => set({ objections: [...k.objections, { q: '', a: '' }] })}>Add an objection</Btn>
+            </div>
+          </Field>
+          <Field label="One-pager link (optional)"><input className="v2-input" placeholder="https://" value={k.onepager_url} onChange={e => set({ onepager_url: e.target.value })} /></Field>
+          <ErrorBox error={error} />
+        </>)}
+    </Modal>
   );
 };
