@@ -130,3 +130,35 @@
 .v2-rep-present { position: fixed; inset: 0; z-index: 40; background: #0b131b; }
 .v2-rep-present iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .v2-rep-present .close { position: absolute; z-index: 1; top: calc(10px + env(safe-area-inset-top, 0px)); right: calc(10px + env(safe-area-inset-right, 0px)); width: 40px; height: 40px; border-radius: 50%; border: 0; background: rgba(14, 27, 43, .78); color: #fff; display: grid; place-items: center; cursor: pointer; }
+
+/* a business: a full page, pitch cards first */
+.v2-rep-page { position: fixed; inset: 0; z-index: 20; background: var(--bg); display: flex; flex-direction: column; }
+.v2-rep-page-top { display: flex; align-items: center; gap: 8px; padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px; background: #fff; border-bottom: 1px solid var(--line); }
+.v2-rep-page-top button { border: 0; background: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: var(--ink); cursor: pointer; }
+.v2-rep-page-top button:hover { background: var(--soft); }
+.v2-rep-page-top .t { font-weight: 700; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-rep-page-body { flex: 1; overflow-y: auto; }
+.v2-rep-page-body .in { max-width: 720px; margin: 0 auto; padding: 14px 16px calc(28px + env(safe-area-inset-bottom, 0px)); }
+.v2-rep-bname { font-size: 24px; line-height: 1.15; margin: 0 0 4px; letter-spacing: -0.01em; }
+.v2-rep-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 4px 0 12px; }
+.v2-rep-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; border: 1.5px solid var(--line); background: #fff; border-radius: 14px; padding: 12px; text-align: left; color: var(--brand); cursor: pointer; min-height: 96px; }
+.v2-rep-card span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.v2-rep-card b { color: var(--ink); font-size: 15px; }
+.v2-rep-card em { font-style: normal; color: var(--mut); font-size: 12px; line-height: 1.3; }
+.v2-rep-card.on { border-color: var(--brand); background: #f0fdfa; }
+.v2-rep-card:disabled { opacity: .5; cursor: default; }
+.v2-rep-card.present { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 14px; min-height: 0; padding: 16px; border: 0; color: #fff;
+  background: linear-gradient(120deg, #0f766e 0%, #115e59 55%, #1e3a8a 100%); box-shadow: 0 6px 18px rgba(15, 118, 110, .28); }
+.v2-rep-card.present span { flex: 1; }
+.v2-rep-card.present b { color: #fff; font-size: 19px; }
+.v2-rep-card.present em { color: rgba(255,255,255,.85); font-size: 13.5px; }
+.v2-rep-card.present:disabled { box-shadow: none; }
+.v2-rep-page .v2-rep-kit, .v2-rep-page .v2-rep-send { margin: 0 0 12px; }
+.v2-rep-mail { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 4px 12px 8px; margin-bottom: 12px; }
+.v2-rep-mailrow { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 8px 0; border-top: 1px solid var(--line-soft); color: var(--ink); text-decoration: none; }
+.v2-rep-mailrow .s { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-rep-mailrow .w { font-size: 12px; color: var(--mut); }
+.v2-rep-mailrow .p { grid-column: 1 / -1; font-size: 12.5px; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-rep-mailrow.unread .s { font-weight: 800; }
+.v2-rep-nav .badge.blue { background: #0b57d0; }
+.v2-rep-body.mail { padding: 0 0 62px; max-width: none; min-width: 0; overflow: hidden; display: flex; flex-direction: column; height: calc(100vh - 57px); }

@@ -1,9 +1,13 @@
-// src/v2/features/rep/BusinessSheet.tsx — one business: directions, call, hours, the pitch kit, send
-// info (text or email with the rep's code), log a visit (with photos, and a business card read into
-// the contact), and the rep's own history there. Works with no signal: the visit waits on the phone.
+// src/v2/features/rep/BusinessSheet.tsx — one business, as a full page: directions, call, hours; the
+// pitch cards (Present first, then Kit, Share info, Email); log a visit (with photos, and a business
+// card read into the contact); the email conversations with it; and the rep's own history there.
+// Works with no signal: the visit waits on the phone.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import QRCode from 'qrcode';
-import { BookOpen, Camera, ChevronLeft, Copy, ExternalLink, Globe, Mail, MapPin, MessageCircle, MessageSquare, Navigation, Phone, Presentation, QrCode, ScanLine, Send, X } from 'lucide-react';
+import { ArrowLeft, BookOpen, Camera, ChevronRight, Copy, ExternalLink, Globe, Mail, MapPin, MessageCircle, MessageSquare, Navigation, Phone, Presentation, QrCode, ScanLine, Send, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { inbox, mailWhen } from '../../lib/mail';
+import { Composer, type ComposeInit } from '../mail/Composer';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
@@ -11,7 +15,7 @@ import {
   type Kit, type LoggedVisit, type Outcome, type PinState, type RepBusinessView,
 } from '../../lib/rep';
 import {
-  DEFAULT_EMAIL_BODY, DEFAULT_EMAIL_SUBJECT, DEFAULT_SMS, fillTemplate, followUpIcs, hoursToday, mailHref, newId, openAt, parseCard, refLink, smsHref,
+  DEFAULT_EMAIL_BODY, DEFAULT_EMAIL_SUBJECT, DEFAULT_SMS, fillTemplate, followUpIcs, hoursToday, newId, openAt, parseCard, refLink, smsHref,
 } from '../../lib/repField';
 import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
@@ -20,6 +24,11 @@ import { download, useRep } from './repContext';
 /** What's known from the map, for when the business can't be loaded (no signal). */
 export interface SheetFallback { id: string; name: string; address?: string | null; kind: string; lat: number; lng: number; hours?: unknown; lead?: boolean }
 export interface SavedVisit { business: string; outcome: Outcome; state: PinState; here: { lat: number; lng: number } | null; queued: boolean }
+
+/** The contact email from the rep's latest visit with one. */
+function lastEmail(d: { visits?: { contact_email?: string }[] }): string {
+  return d.visits?.find(v => v.contact_email)?.contact_email || '';
+}
 
 async function kitFor(campaign: string): Promise<Kit> {
   try { const k = await repKit(campaign); cacheSet(`kit:${campaign}`, k); return k; }
@@ -41,7 +50,10 @@ export const BusinessSheet: React.FC<{
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [pitch, setPitch] = useState<null | 'menu' | 'kit' | 'share'>(null);
+  const [pitch, setPitch] = useState<null | 'kit' | 'share'>(null);
+  const [composing, setComposing] = useState<ComposeInit | null>(null);
+  const [mailTick, setMailTick] = useState(0);
+  const mail = useLoad(() => inbox('inbox', undefined, id).catch(() => []), [id, mailTick]);
   const [presenting, setPresenting] = useState(false);
   useEffect(() => () => photos.forEach(p => URL.revokeObjectURL(p.url)), []);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -110,6 +122,20 @@ export const BusinessSheet: React.FC<{
     } catch (e) { setError(e); } finally { setBusy(false); }
   }, [outcome, notes, cName, cPhone, cEmail, when, photos, id, campaign, d, session, toast, onSaved]);
 
+  const emailInit = (): ComposeInit => {
+    const name = d?.name || '';
+    const to = cEmail || (d ? lastEmail(d) : '');
+    const k = kit.data;
+    const vars = { business: name, link: k ? refLink(k.info_url, k.ref) : '', rep: '', contact: cName.split(' ')[0] || undefined };
+    return {
+      key: `biz:${id}`, title: 'New email', business_id: id, campaign_id: campaign, to: to ? [to] : [],
+      subject: k ? fillTemplate(k.info_email_subject || DEFAULT_EMAIL_SUBJECT, vars) : '',
+      html: k ? fillTemplate(k.info_email_body || DEFAULT_EMAIL_BODY, vars).replace(/\{rep\}/g, '').split(/\n{2,}/).map(par => `<p>${par.replace(/\n/g, '<br>')}</p>`).join('') : '',
+      context: `${name}${k ? ` · ${k.name}` : ''}`,
+      quick: ['Thanks for your time today, send the info and suggest a short call', 'Follow up: we spoke last week, still interested?', 'Book the 30-minute call this week'],
+    };
+  };
+
   if (!d) return (
     <Sheet onClose={onClose} label="Business"><ErrorBox error={b.error} />{!b.error && <Loading />}</Sheet>);
 
@@ -120,40 +146,46 @@ export const BusinessSheet: React.FC<{
     <Sheet onClose={onClose} label={d.name}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h2>{d.name}</h2>
+          <h1 className="v2-rep-bname">{d.name}</h1>
           <div className="v2-small v2-mut">{kindLabel(d.kind)}{d.plaza ? ` · ${d.plaza}` : ''}{d.lead ? ' · a lead you added' : ''}</div>
           {d.address && <div className="v2-small">{d.address}</div>}
           {today && <div className="v2-small" style={{ marginTop: 2 }}>
             {open != null && <b style={{ color: open ? '#15803d' : '#b91c1c' }}>{open ? 'Open now' : 'Closed now'} · </b>}<span className="v2-mut">Today {today}</span></div>}
         </div>
-        <button type="button" aria-label="Close" onClick={onClose} className="v2-rep-x"><X size={20} /></button>
       </div>
       {offline && <div className="v2-rep-note">No signal: you can still log a visit, it sends later.</div>}
       <div className="v2-rep-acts">
         <a href={dirs} target="_blank" rel="noreferrer"><Navigation size={15} />Directions</a>
         {d.phone && <a href={`tel:${d.phone.replace(/[^0-9+]/g, '')}`}><Phone size={15} />{d.phone}</a>}
         {d.website && <a href={/^https?:/i.test(d.website) ? d.website : `https://${d.website}`} target="_blank" rel="noreferrer"><Globe size={15} />Website<ExternalLink size={12} /></a>}
-        <button type="button" onClick={() => setPitch(pitch ? null : 'menu')} className={pitch ? 'on' : ''} aria-expanded={!!pitch}><BookOpen size={15} />Pitch kit</button>
       </div>
-      {pitch && (
-        <div className="v2-rep-pitch">
-          {pitch === 'menu' ? (
-            <div className="v2-rep-pitch-menu">
-              <button type="button" onClick={() => setPitch('kit')}><BookOpen size={22} /><b>Kit</b><span>Pitch, objections, one-pager</span></button>
-              <button type="button" disabled={!kit.data?.present_url} onClick={() => setPresenting(true)}><Presentation size={22} /><b>Present</b>
-                <span>{kit.data && !kit.data.present_url ? 'No presentation yet' : 'Show the owner, book a call'}</span></button>
-              <button type="button" onClick={() => setPitch('share')}><Send size={22} /><b>Share info</b><span>Text, email, WhatsApp, QR</span></button>
-            </div>
-          ) : (
-            <>
-              <button type="button" className="v2-rep-back" onClick={() => setPitch('menu')}><ChevronLeft size={15} />Pitch kit</button>
-              {pitch === 'kit' && <KitPanel kit={kit.data} error={kit.error} />}
-              {pitch === 'share' && <SendInfo kit={kit.data} error={kit.error} business={d.name} businessId={id} campaign={campaign}
-                phone={cPhone || d.phone || ''} email={cEmail} contact={cName} />}
-            </>
-          )}
-        </div>)}
+
+      <div className="v2-rep-cards">
+        <button type="button" className="v2-rep-card present" disabled={!kit.data?.present_url} onClick={() => setPresenting(true)}>
+          <Presentation size={26} /><span><b>Present</b><em>{kit.data && !kit.data.present_url ? 'No presentation for this campaign yet' : 'Show the owner and book a call'}</em></span><ChevronRight size={20} />
+        </button>
+        <button type="button" className={`v2-rep-card${pitch === 'kit' ? ' on' : ''}`} onClick={() => setPitch(pitch === 'kit' ? null : 'kit')} aria-expanded={pitch === 'kit'}>
+          <BookOpen size={22} /><span><b>Kit</b><em>Pitch, objections, one-pager</em></span></button>
+        <button type="button" className={`v2-rep-card${pitch === 'share' ? ' on' : ''}`} onClick={() => setPitch(pitch === 'share' ? null : 'share')} aria-expanded={pitch === 'share'}>
+          <Send size={22} /><span><b>Share info</b><em>Text, WhatsApp, QR</em></span></button>
+        <button type="button" className="v2-rep-card" disabled={offline} onClick={() => setComposing(emailInit())}>
+          <Mail size={22} /><span><b>Email</b><em>{offline ? 'Needs signal' : 'Write it, or let AI'}</em></span></button>
+      </div>
+      {pitch === 'kit' && <KitPanel kit={kit.data} error={kit.error} />}
+      {pitch === 'share' && <SendInfo kit={kit.data} error={kit.error} business={d.name} businessId={id} campaign={campaign}
+        phone={cPhone || d.phone || ''} email={cEmail || lastEmail(d)} contact={cName} onEmail={() => setComposing(emailInit())} />}
       {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref} onClose={() => setPresenting(false)} />}
+      {composing && <Composer init={composing} onClose={() => setComposing(null)} onSent={() => { setComposing(null); setMailTick(t => t + 1); toast('Email sent.'); }} />}
+
+      {!!mail.data?.length && (
+        <div className="v2-rep-mail">
+          <div className="v2-rep-row"><b style={{ fontSize: 14 }}>Emails</b><Link to="/app/rep/inbox" className="v2-rep-mini">Inbox</Link></div>
+          {mail.data.slice(0, 4).map(t => (
+            <Link key={t.id} to={`/app/rep/inbox?t=${t.id}`} className={`v2-rep-mailrow${t.unread ? ' unread' : ''}`}>
+              <span className="s">{t.subject || '(no subject)'}</span><span className="w">{mailWhen(t.last_at)}</span>
+              <span className="p">{t.last_dir === 'in' ? `${t.contact_name || t.contact_email}: ` : 'You: '}{t.snippet}</span>
+            </Link>))}
+        </div>)}
 
       <div style={{ fontWeight: 800, marginTop: 10 }}>What happened?</div>
       <div className="v2-rep-outs">
@@ -202,11 +234,22 @@ export const BusinessSheet: React.FC<{
   );
 };
 
-const Sheet: React.FC<{ onClose: () => void; label: string; children: React.ReactNode }> = ({ onClose, label, children }) => (
-  <div className="v2-rep-sheet-bg" onClick={onClose}>
-    <div className="v2-rep-sheet" role="dialog" aria-label={label} onClick={e => e.stopPropagation()}>{children}</div>
-  </div>
-);
+const Sheet: React.FC<{ onClose: () => void; label: string; children: React.ReactNode }> = ({ onClose, label, children }) => {
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('.v2-mail-compose, .v2-rep-present')) onClose(); };
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, [onClose]);
+  return (
+    <div className="v2-rep-page" role="dialog" aria-label={label}>
+      <div className="v2-rep-page-top">
+        <button type="button" onClick={onClose} aria-label="Back"><ArrowLeft size={21} /></button>
+        <span className="t">{label}</span>
+      </div>
+      <div className="v2-rep-page-body"><div className="in">{children}</div></div>
+    </div>
+  );
+};
 
 // ───────────── the pitch kit ─────────────
 const KitPanel: React.FC<{ kit: Kit | null; error: unknown }> = ({ kit, error }) => {
@@ -225,8 +268,8 @@ const KitPanel: React.FC<{ kit: Kit | null; error: unknown }> = ({ kit, error })
 
 // ───────────── share info: every channel, each one logged ─────────────
 type Channel = 'sms' | 'email' | 'whatsapp' | 'link' | 'qr';
-const SendInfo: React.FC<{ kit: Kit | null; error: unknown; business: string; businessId: string; campaign: string; phone: string; email: string; contact: string }> =
-  ({ kit, error, business, businessId, campaign, phone, email, contact }) => {
+const SendInfo: React.FC<{ kit: Kit | null; error: unknown; business: string; businessId: string; campaign: string; phone: string; email: string; contact: string; onEmail: () => void }> =
+  ({ kit, error, business, businessId, campaign, phone, email, contact, onEmail }) => {
     const { profile } = useAuth();
     const [to, setTo] = useState('');
     const [qr, setQr] = useState<string | null>(null);
@@ -239,8 +282,6 @@ const SendInfo: React.FC<{ kit: Kit | null; error: unknown; business: string; bu
     const mobile = (typed && !/@/.test(typed) ? typed : phone).trim();
     const mail = (typed && /@/.test(typed) ? typed : email).trim();
     const sms = kit ? fillTemplate(kit.info_sms || DEFAULT_SMS, vars) : '';
-    const subj = kit ? fillTemplate(kit.info_email_subject || DEFAULT_EMAIL_SUBJECT, vars) : '';
-    const body = kit ? fillTemplate(kit.info_email_body || DEFAULT_EMAIL_BODY, vars) : '';
     const digits = mobile.replace(/[^0-9]/g, '');
     const wa = `https://wa.me/${digits.length === 10 ? `1${digits}` : digits}?text=${encodeURIComponent(sms)}`;
     const log = (channel: Channel, dest: string) => {
@@ -262,7 +303,7 @@ const SendInfo: React.FC<{ kit: Kit | null; error: unknown; business: string; bu
         <input className="v2-input" placeholder={phone || email || 'Their mobile or email'} value={to} onChange={e => setTo(e.target.value)} inputMode="email" autoComplete="off" aria-label="Their mobile or email" />
         <div className="v2-rep-channels">
           <a className={mobile ? '' : 'off'} href={mobile ? smsHref(mobile, sms) : undefined} onClick={() => mobile && log('sms', mobile)} aria-disabled={!mobile}><MessageSquare size={18} />Text</a>
-          <a className={mail ? '' : 'off'} href={mail ? mailHref(mail, subj, body) : undefined} onClick={() => mail && log('email', mail)} aria-disabled={!mail}><Mail size={18} />Email</a>
+          <button type="button" onClick={onEmail}><Mail size={18} />Email</button>
           <a className={digits.length >= 10 ? '' : 'off'} href={digits.length >= 10 ? wa : undefined} target="_blank" rel="noreferrer" onClick={() => digits.length >= 10 && log('whatsapp', mobile)} aria-disabled={digits.length < 10}><MessageCircle size={18} />WhatsApp</a>
           <button type="button" onClick={copy}><Copy size={18} />{copied ? 'Copied' : 'Copy'}</button>
           <button type="button" className={showQr ? 'on' : ''} onClick={() => { if (!showQr) log('qr', ''); setShowQr(!showQr); }}><QrCode size={18} />QR</button>

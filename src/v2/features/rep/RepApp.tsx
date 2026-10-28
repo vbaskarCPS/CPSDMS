@@ -4,7 +4,7 @@
 // management portal.
 import React, { useMemo, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, Map as MapIcon, Trophy, User } from 'lucide-react';
+import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, Mail, Map as MapIcon, Trophy, User } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
@@ -13,6 +13,8 @@ import {
 } from '../../lib/rep';
 import { followUpIcs, openAt } from '../../lib/repField';
 import { drop } from '../../lib/repQueue';
+import { inboxCounts } from '../../lib/mail';
+import { MailApp } from '../mail/MailApp';
 import { ErrorBox, Loading } from '../../ui';
 import { MsLogo, MsTab } from '../../ui/MsLogo';
 import { BusinessSheet } from './BusinessSheet';
@@ -33,6 +35,7 @@ export const RepApp: React.FC = () => {
         <Route index element={<Frame full><HomeMap /></Frame>} />
         <Route path="zones" element={<Frame><Zones /></Frame>} />
         <Route path="zone/:zone/:campaign" element={<Frame full><ZoneScreen /></Frame>} />
+        <Route path="inbox" element={<Frame mail><MailApp quick={REP_QUICK} /></Frame>} />
         <Route path="followups" element={<Frame><Followups /></Frame>} />
         <Route path="me" element={<Frame><Me /></Frame>} />
         <Route path="numbers" element={<Navigate to="/app/rep/me" replace />} />
@@ -42,11 +45,14 @@ export const RepApp: React.FC = () => {
   );
 };
 
-const Frame: React.FC<{ full?: boolean; children: React.ReactNode }> = ({ full, children }) => {
+const REP_QUICK = ['Thanks for your time today', 'Follow up on my visit', 'Book a short call', 'Answer their question'];
+
+const Frame: React.FC<{ full?: boolean; mail?: boolean; children: React.ReactNode }> = ({ full, mail, children }) => {
   const { profile, signOut } = useAuth();
   const { queue } = useRep();
   const nav = useNavigate();
   const due = useLoad(() => repFollowups().then(f => f.filter(x => x.when !== 'later').length).catch(() => 0), []);
+  const unread = useLoad(() => inboxCounts().then(c => c.unread).catch(() => 0), []);
   const stuck = queue.filter(q => q.error).length;
   const tab = ({ isActive }: { isActive: boolean }) => (isActive ? 'on' : '');
   return (
@@ -56,10 +62,11 @@ const Frame: React.FC<{ full?: boolean; children: React.ReactNode }> = ({ full, 
         <span className="who">{profile?.full_name}</span>
         <button type="button" aria-label="Sign out" onClick={async () => { await signOut(); nav('/app/login?as=mainstreet', { replace: true }); }}><LogOut size={16} /></button>
       </div>
-      <div className={`v2-rep-body${full ? ' full' : ''}`}>{children}</div>
+      <div className={`v2-rep-body${full ? ' full' : ''}${mail ? ' mail' : ''}`}>{children}</div>
       <nav className="v2-rep-nav">
         <NavLink to="/app/rep" end className={tab}><MapIcon size={20} />Map</NavLink>
         <NavLink to="/app/rep/zones" className={tab}><LayoutList size={20} />Zones</NavLink>
+        <NavLink to="/app/rep/inbox" className={tab}><Mail size={20} />Inbox{!!unread.data && <span className="badge blue">{unread.data}</span>}</NavLink>
         <NavLink to="/app/rep/followups" className={tab}><Clock size={20} />Follow-ups{!!due.data && <span className="badge">{due.data}</span>}</NavLink>
         <NavLink to="/app/rep/me" className={tab}><User size={20} />Me{stuck > 0 && <span className="badge">{stuck}</span>}</NavLink>
       </nav>
