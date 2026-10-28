@@ -8,6 +8,10 @@
 //   3. ms_mail_sent (service role) records what Resend said, and the email's Message-ID is kept: a reply
 //      quotes it back (In-Reply-To), which is how the reply finds its conversation
 // The first email in a conversation carries who it's from and how to unsubscribe (Canada's anti-spam law).
+//
+// Staff mail ({ staff: true, mailbox_id?, thread_id?, to, cc, subject, html, text, attachments }): sent as the
+// manager, from their own address (ben@propertystars.app). mail_prepare delivers it to staff mailboxes
+// straight away (and the push function tells them); only outside addresses go through Resend.
 // The Resend key lives only in the RESEND_API_KEY secret.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
@@ -45,26 +49,111 @@ ${legal}
   return { html, text };
 }
 
-/** The Message-ID Resend gave the email, kept so a reply (In-Reply-To) finds its conversation. Reading a
- *  sent email needs a full-access key, so this uses RESEND_RECEIVING_API_KEY when it's set. */
-// deno-lint-ignore no-explicit-any
-async function keepMessageId(svc: any, messageId: string, resendId: string): Promise<void> {
+/** The Message-ID Resend gave an email (a reply quotes it back in In-Reply-To). Reading a sent email
+ *  needs a full-access key, so this uses RESEND_RECEIVING_API_KEY when it's set. */
+async function resendMessageId(resendId: string): Promise<string | null> {
   const key = Deno.env.get('RESEND_RECEIVING_API_KEY') || Deno.env.get('RESEND_API_KEY');
   for (const wait of [0, 1500, 4000]) {
     if (wait) await new Promise(r => setTimeout(r, wait));
     try {
       const r = await fetch(`https://api.resend.com/emails/${encodeURIComponent(resendId)}`, { headers: { Authorization: `Bearer ${key}` } });
-      if (!r.ok) { console.error('ms-mail: message id', r.status); return; }
+      if (!r.ok) { console.error('ms-mail: message id', r.status); return null; }
       const e = await r.json() as { message_id?: string };
-      if (e.message_id) { const id = e.message_id.trim(); await svc.from('ms_messages').update({ message_id: id.startsWith('<') ? id : `<${id}>` }).eq('id', messageId); return; }
-    } catch (err) { console.error('ms-mail: message id', err); return; }
+      if (e.message_id) { const id = e.message_id.trim(); return id.startsWith('<') ? id : `<${id}>`; }
+    } catch (err) { console.error('ms-mail: message id', err); return null; }
   }
+  return null;
+}
+// deno-lint-ignore no-explicit-any
+async function keepMessageId(svc: any, messageId: string, resendId: string): Promise<void> {
+  const id = await resendMessageId(resendId);
+  if (id) await svc.from('ms_messages').update({ message_id: id }).eq('id', messageId);
+}
+
+/** Tell people about new messages (the push function); never holds up or fails the send. */
+async function notify(messages: string[]): Promise<void> {
+  if (!messages.length) return;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/push`, {
+      method: 'POST', signal: ctl.signal,
+      headers: { Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'notify', messages }),
+    });
+    clearTimeout(t);
+  } catch (e) { console.error('ms-mail: notify', e instanceof Error ? e.message : e); }
+}
+
+interface StaffPrepared {
+  message_id: string; thread_id: string; from: string; sender_name: string; sender_phone: string | null; to: string[]; cc: string[];
+  subject: string; html: string | null; text: string | null; attachments: { name: string; path: string }[]; in_reply_to: string | null;
+  delivered: { thread_id: string; message_id: string }[];
+}
+/** A manager's email: what they wrote and their signature. */
+export function wrapStaff(p: StaffPrepared): { html: string; text: string } {
+  const sig = [esc(p.sender_name), 'Canadian Property Stars', p.sender_phone ? esc(p.sender_phone) : ''].filter(Boolean).join('<br>');
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#ffffff;">
+<div style="max-width:620px;padding:8px 4px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;color:#1c1b1a;">
+${p.html || `<p>${esc(p.text || '').replace(/\n/g, '<br>')}</p>`}
+<p style="margin:20px 0 0;color:#3d4148;font-size:14px;line-height:1.45;">${sig}</p>
+</div></body></html>`;
+  const text = `${p.text || ''}\n\n${p.sender_name}\nCanadian Property Stars${p.sender_phone ? `\n${p.sender_phone}` : ''}\n`;
+  return { html, text };
 }
 
 function b64(bytes: Uint8Array): string {
   let s = '';
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(s);
+}
+
+// deno-lint-ignore no-explicit-any
+async function sendStaff(b: Record<string, unknown>, asUser: any, apiKey: string): Promise<Response> {
+  const { data, error } = await asUser.rpc('mail_prepare', {
+    p_box: b.mailbox_id || null, p_thread: b.thread_id || null,
+    p_to: Array.isArray(b.to) ? b.to : [], p_cc: Array.isArray(b.cc) ? b.cc : [],
+    p_subject: typeof b.subject === 'string' ? b.subject : '', p_html: typeof b.html === 'string' ? b.html : null,
+    p_text: typeof b.text === 'string' ? b.text : null, p_attachments: Array.isArray(b.attachments) ? b.attachments : [],
+  });
+  if (error) return json({ error: error.message }, /not allowed/i.test(error.message) ? 403 : 400);
+  const p = data as StaffPrepared;
+  const delivered = (p.delivered || []).map(d => d.message_id);
+  if (!p.to.length) { await notify(delivered); return json({ ok: true, thread_id: p.thread_id, message_id: p.message_id }); }
+
+  const svc = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
+  const body = wrapStaff(p);
+  const attachments: { filename: string; content: string }[] = [];
+  for (const a of p.attachments || []) {
+    const { data: file, error: fe } = await svc.storage.from('ms-mail').download(a.path);
+    if (fe || !file) { await svc.rpc('ms_mail_sent', { p_message: p.message_id, p_resend_id: null, p_error: `Couldn’t attach ${a.name}` }); return json({ error: `Couldn’t attach ${a.name}` }, 400); }
+    attachments.push({ filename: a.name, content: b64(new Uint8Array(await file.arrayBuffer())) });
+  }
+  const headers: Record<string, string> = {};
+  if (p.in_reply_to) { headers['In-Reply-To'] = p.in_reply_to; headers['References'] = p.in_reply_to; }
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: `${p.sender_name.replace(/[<>"]/g, '')} <${p.from}>`,
+      to: p.to, ...(p.cc?.length ? { cc: p.cc } : {}),
+      subject: p.subject, html: body.html, text: body.text, ...(Object.keys(headers).length ? { headers } : {}),
+      ...(attachments.length ? { attachments } : {}),
+    }),
+  });
+  const result = await res.json().catch(() => ({}));
+  const sendError = res.ok ? null : String(result?.message || `Resend error ${res.status}`);
+  await svc.rpc('ms_mail_sent', { p_message: p.message_id, p_resend_id: result?.id ?? null, p_error: sendError });
+  if (res.ok && result?.id) {
+    const ext = await resendMessageId(result.id);
+    if (ext) await svc.rpc('mail_set_ext_id', { p_message: p.message_id, p_ext: ext });
+  }
+  await svc.from('email_logs').insert({ recipient_email: p.to.join(', '), email_type: 'staff_mail', status: res.ok ? 'sent' : 'failed',
+    resend_message_id: result?.id ?? null, bounce_reason: sendError });
+  await notify(delivered);
+  if (!res.ok) return json({ error: `The email didn’t send to ${p.to.join(', ')}: ${sendError}`, thread_id: p.thread_id }, 502);
+  return json({ ok: true, thread_id: p.thread_id, message_id: p.message_id });
 }
 
 Deno.serve(async req => {
@@ -77,6 +166,7 @@ Deno.serve(async req => {
     const asUser = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
       global: { headers: { Authorization: req.headers.get('Authorization') || '' } }, auth: { persistSession: false },
     });
+    if (b.staff) return await sendStaff(b, asUser, apiKey);
     const { data, error } = await asUser.rpc('ms_mail_prepare', {
       p_thread: b.thread_id || null, p_business: b.business_id || null, p_campaign: b.campaign_id || null,
       p_to: Array.isArray(b.to) ? b.to : [], p_cc: Array.isArray(b.cc) ? b.cc : [],

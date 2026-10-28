@@ -3,6 +3,7 @@
 // POST as the signed-in rep or admin:
 //   { mode: 'write',   thread_id? | business_id + campaign_id, instruction }       a new email or a reply
 //   { mode: 'rewrite', thread_id? | business_id + campaign_id, subject, html, how } shorter, friendlier, …
+//   add staff: true for a manager's own mailbox (mail_context: their name and the conversation)
 // → { subject, html }
 // What Claude knows comes from ms_mail_context, run as the person asking (so a rep only ever gets their
 // own businesses): the rep, the business, the campaign's pitch and objections, the rep's last visits
@@ -27,6 +28,15 @@ Rules:
 - Don't add a signature or sign-off name; the app adds the rep's signature. End with the last sentence of the body.
 - Don't add an unsubscribe line; the app adds it.
 - Output only JSON: {"subject": "...", "html": "..."} where html uses only <p>, <br>, <strong>, <em>, <ul>, <ol>, <li> and <a href="...">. Links only to URLs that appear in the context.`;
+
+const STAFF_RULES = `You write clear, friendly, professional emails for a manager at Canadian Property Stars, a Canadian home-services company (lawn aeration, lawn rejuvenation, driveway sealing, window cleaning). Recipients are customers, crew members or other managers.
+Rules:
+- Write as the manager, first person. Use the recipient's first name when known.
+- Short and plain: usually 40 to 150 words unless asked otherwise. Get to the point; one clear next step if one is needed.
+- No hype, no emoji, no "I hope this email finds you well".
+- Never invent facts, prices, dates, times, addresses or promises. Only use what's in the context or the request; if something needed is missing, leave a short placeholder in square brackets, e.g. [date].
+- Don't add a signature or sign-off name; the app adds the manager's signature. End with the last sentence of the body.
+- Output only JSON: {"subject": "...", "html": "..."} where html uses only <p>, <br>, <strong>, <em>, <ul>, <ol>, <li> and <a href="...">. Links only to URLs that appear in the context or the request.`;
 
 function extractJson(s: string): { subject?: string; html?: string } | null {
   const m = /\{[\s\S]*\}/.exec(s);
@@ -53,19 +63,22 @@ Deno.serve(async req => {
     const asUser = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
       global: { headers: { Authorization: req.headers.get('Authorization') || '' } }, auth: { persistSession: false },
     });
-    const { data: ctx, error } = await asUser.rpc('ms_mail_context', { p_thread: b.thread_id || null, p_business: b.business_id || null, p_campaign: b.campaign_id || null });
+    const staff = !!(b as Record<string, unknown>).staff;
+    const { data: ctx, error } = staff
+      ? await asUser.rpc('mail_context', { p_thread: b.thread_id || null })
+      : await asUser.rpc('ms_mail_context', { p_thread: b.thread_id || null, p_business: b.business_id || null, p_campaign: b.campaign_id || null });
     if (error) return json({ error: error.message }, /not allowed/i.test(error.message) ? 403 : 400);
 
     const ask = mode === 'rewrite'
       ? `Rewrite this draft: ${String(b.how || 'make it clearer').slice(0, 300)}.\nKeep its meaning and any links. Subject: ${String(b.subject || '').slice(0, 300)}\nDraft HTML:\n${String(b.html || '').slice(0, 8000)}`
-      : `${(ctx as { thread?: unknown[] }).thread?.length ? 'Write the reply to the latest message in this conversation.' : 'Write a new email.'}\nWhat the rep wants: ${String(b.instruction || 'a friendly follow-up after my visit').slice(0, 1000)}`;
+      : `${(ctx as { thread?: unknown[] }).thread?.length ? 'Write the reply to the latest message in this conversation.' : 'Write a new email.'}\nWhat ${staff ? 'the manager' : 'the rep'} wants: ${String(b.instruction || (staff ? 'a short, friendly note' : 'a friendly follow-up after my visit')).slice(0, 1000)}`;
 
     const WORKSPACE = (Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '').trim();
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
       body: JSON.stringify({
-        model: MODEL, max_tokens: 1500, system: RULES,
+        model: MODEL, max_tokens: 1500, system: staff ? STAFF_RULES : RULES,
         messages: [{ role: 'user', content: `Context (JSON):\n${JSON.stringify(ctx).slice(0, 30000)}\n\n${ask}` }],
       }),
     });

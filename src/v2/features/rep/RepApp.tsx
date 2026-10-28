@@ -15,6 +15,7 @@ import { followUpIcs, openAt } from '../../lib/repField';
 import { drop } from '../../lib/repQueue';
 import { inboxCounts } from '../../lib/mail';
 import { MailApp } from '../mail/MailApp';
+import { PushToggle } from '../mail/PushToggle';
 import { ErrorBox, Loading } from '../../ui';
 import { MsLogo, MsTab } from '../../ui/MsLogo';
 import { BusinessSheet } from './BusinessSheet';
@@ -227,6 +228,7 @@ const Me: React.FC = () => {
   return (
     <>
       <h1>Me</h1>
+      <div style={{ marginBottom: 12 }}><PushToggle /></div>
       {(stuck.length > 0 || waiting.length > 0) && (
         <div className="v2-rep-zone">
           <b>On your phone, not sent yet</b>

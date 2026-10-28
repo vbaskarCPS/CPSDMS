@@ -4,10 +4,12 @@
 // webhook's signing secret (RESEND_WEBHOOK_SECRET, Svix format), then (with RESEND_RECEIVING_API_KEY, a
 // full-access key, falling back to RESEND_API_KEY):
 //   1. the full email (body, headers) is fetched from Resend's receiving API
-//   2. ms_mail_inbound files it: the conversation's reply address, else the message it answers, else the
-//      latest conversation with that sender, else a new one (under the business with that contact's
-//      email, or "unsorted" for admins). "Unsubscribe" in the subject or first lines records an opt-out.
+//   2. mail_inbound files it: to a staff address (or an alias) → that manager's mailbox, in the conversation
+//      it answers; otherwise the MainstreetAI rules (ms_mail_inbound): the conversation's reply address, the
+//      message it answers, the latest conversation with that sender, a new one under the business with
+//      that contact's email, or "unsorted" for admins. "Unsubscribe" records an opt-out.
 //   3. attachments are copied into the private ms-mail bucket (in/<conversation>/<message>/<file>)
+//   4. the push function tells whoever it's for
 // Deployed without JWT verification (Resend isn't signed in); the signature check stands in for it.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
@@ -63,33 +65,59 @@ Deno.serve(async req => {
     const from = parseAddress(String(e.from || ''));
     const hdr = Object.fromEntries(Object.entries(e.headers || {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
     const svc = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
-    const { data: filed, error } = await svc.rpc('ms_mail_inbound', {
+    const args = {
       p_resend_id: id, p_from: from.email, p_from_name: from.name,
       p_to: [...list(e.to), ...list(e.received_for)], p_cc: list(e.cc), p_subject: String(e.subject || ''),
       p_html: typeof e.html === 'string' ? e.html : null, p_text: typeof e.text === 'string' ? e.text : null,
       p_message_id: typeof e.message_id === 'string' && e.message_id.trim() ? (e.message_id.trim().startsWith('<') ? e.message_id.trim() : `<${e.message_id.trim()}>`) : null,
-      p_in_reply_to: answers(hdr), p_attachments: [], p_at: (e.created_at as string) || evt.data.created_at || null,
-    });
+      p_in_reply_to: answers(hdr), p_at: (e.created_at as string) || evt.data.created_at || null,
+    };
+    let { data: filed, error } = await svc.rpc('mail_inbound', args);
+    if (error && /mail_inbound/.test(error.message)) {
+      // staff mailboxes (RUN_65) not in this database yet: MainstreetAI filing only
+      const old = await svc.rpc('ms_mail_inbound', { ...args, p_attachments: [] });
+      error = old.error;
+      const o = old.data as { thread_id?: string; message_id?: string; again?: boolean } | null;
+      filed = o?.again ? { again: true } : { deliveries: o ? [o] : [] };
+    }
     if (error) return json({ error: error.message }, 500);
-    const f = filed as { thread_id?: string; message_id?: string; again?: boolean };
-    if (f.again || !f.thread_id || !f.message_id) return json({ ok: true, again: !!f.again });
+    const f = filed as { again?: boolean; deliveries?: { thread_id?: string; message_id?: string }[] };
+    const deliveries = (f.deliveries || []).filter(d => d.thread_id && d.message_id) as { thread_id: string; message_id: string }[];
+    if (f.again || !deliveries.length) return json({ ok: true, again: !!f.again });
 
-    // attachments into the private bucket
-    const saved: { name: string; type: string; size: number; path: string }[] = [];
+    // attachments into the private bucket, a copy for each conversation it landed in
+    let saved = 0;
     const al = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(id)}/attachments`, { headers: { Authorization: `Bearer ${apiKey}` } });
     if (al.ok) {
-      const { data: atts } = await al.json() as { data?: { id: string; filename: string; size: number; content_type: string; download_url: string; content_disposition?: string }[] };
+      const { data: atts } = await al.json() as { data?: { id: string; filename: string; size: number; content_type: string; download_url: string }[] };
+      const files: { name: string; type: string; size: number; bytes: ArrayBuffer }[] = [];
       for (const a of atts || []) {
         if (a.size > MAX_ATTACHMENT || !a.download_url) continue;
         const dl = await fetch(a.download_url);
-        if (!dl.ok) continue;
-        const path = `in/${f.thread_id}/${f.message_id}/${safeName(a.filename)}`;
-        const up = await svc.storage.from('ms-mail').upload(path, await dl.arrayBuffer(), { contentType: a.content_type || 'application/octet-stream', upsert: true });
-        if (!up.error) saved.push({ name: a.filename || 'file', type: a.content_type, size: a.size, path });
+        if (dl.ok) files.push({ name: a.filename || 'file', type: a.content_type || 'application/octet-stream', size: a.size, bytes: await dl.arrayBuffer() });
       }
-      if (saved.length) await svc.rpc('ms_mail_set_attachments', { p_message: f.message_id, p_attachments: saved });
+      for (const d of files.length ? deliveries : []) {
+        const list: { name: string; type: string; size: number; path: string }[] = [];
+        for (const fl of files) {
+          const path = `in/${d.thread_id}/${d.message_id}/${safeName(fl.name)}`;
+          const up = await svc.storage.from('ms-mail').upload(path, fl.bytes, { contentType: fl.type, upsert: true });
+          if (!up.error) list.push({ name: fl.name, type: fl.type, size: fl.size, path });
+        }
+        if (list.length) { await svc.rpc('ms_mail_set_attachments', { p_message: d.message_id, p_attachments: list }); saved += list.length; }
+      }
     }
-    return json({ ok: true, thread_id: f.thread_id, attachments: saved.length });
+    // tell whoever it's for (never fails the delivery)
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 8000);
+      await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/push`, {
+        method: 'POST', signal: ctl.signal,
+        headers: { Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'notify', messages: deliveries.map(d => d.message_id) }),
+      });
+      clearTimeout(t);
+    } catch (err) { console.error('ms-mail-inbound: notify', err instanceof Error ? err.message : err); }
+    return json({ ok: true, deliveries: deliveries.length, attachments: saved });
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : 'Something went wrong' }, 500);
   }
