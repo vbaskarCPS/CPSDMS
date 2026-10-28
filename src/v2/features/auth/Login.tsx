@@ -67,6 +67,7 @@ export const Login: React.FC = () => {
         setError(pass.reason === 'left' ? signInProblem(pass) : 'That CN # and PIN (or first name) don’t match anyone on this year’s contractor list or today’s session.');
         return;
       }
+      if (username.includes('@')) { setError('MainstreetAI reps sign in on the MainstreetAI tab with their email.'); return; }
       try { await signIn(username, password); nav(target, { replace: true, state: target === '/app' ? { fromLogin: true } : undefined }); }
       catch (err) {
         // Not a new-app account: the old app's logins still work from here.
@@ -178,7 +179,8 @@ export const AccountSetup: React.FC = () => {
   const [code] = useState(() => new URLSearchParams(loc.hash.replace(/^#/, '')).get('t') || '');
   const info = useLoad(() => (code ? setupInfo(code) : Promise.resolve(null)), [code]);
   // a MainstreetAI rep's link: MainstreetAI look, and they sign in with their email
-  const isRep = useLoad(async () => { if (!code) return false; const { data } = await db.rpc('ms_setup_is_rep', { p_code: code }); return data === true; }, [code]);
+  const repEmail = useLoad(async () => { if (!code) return null; const { data } = await db.rpc('ms_setup_rep_email', { p_code: code }); return typeof data === 'string' && data ? data : null; }, [code]);
+  const isRep = { data: !!repEmail.data, loading: repEmail.loading };
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -193,7 +195,8 @@ export const AccountSetup: React.FC = () => {
       const username = await completeSetup(code, pw);
       if (session) await signOut();   // someone else was signed in on this device
       window.history.replaceState(null, '', '/app/setup');   // the used code leaves the address bar
-      await signIn(username, pw);
+      if (repEmail.data) await repSignIn(repEmail.data, pw);   // a rep has no username: their email
+      else await signIn(username, pw);
       if (isRep.data) nav('/app/rep', { replace: true });
       else nav('/app', { replace: true, state: { fromLogin: true } });
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not set your password'); }
@@ -223,7 +226,7 @@ export const AccountSetup: React.FC = () => {
       <div className="v2-small" style={{ marginBottom: 14 }}>{isRep.data
         ? <>You sign in with your email. Choose a password (at least 8 characters).</>
         : <>Your username is <b style={{ fontFamily: 'monospace', fontSize: 15 }}>{info.data.username}</b>. Choose a password (at least 8 characters).</>}</div>
-      <input type="text" autoComplete="username" value={info.data.username} readOnly hidden />
+      <input type="text" autoComplete="username" value={repEmail.data || info.data.username} readOnly hidden />
       <Field label="Password"><input className="v2-input" type="password" autoComplete="new-password" value={pw} onChange={e => setPw(e.target.value)} required minLength={8} /></Field>
       <Field label="Type it again"><input className="v2-input" type="password" autoComplete="new-password" value={pw2} onChange={e => setPw2(e.target.value)} required minLength={8} /></Field>
       {error && <div className="v2-err" style={{ marginBottom: 12 }}>{error}</div>}
