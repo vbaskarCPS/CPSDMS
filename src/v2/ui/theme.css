@@ -532,3 +532,6 @@
 @media (max-width: 1000px) { .v2-ms-map { height: 360px; } }
 .v2-spin { animation: v2spin 1s linear infinite; }
 @keyframes v2spin { to { transform: rotate(360deg); } }
+
+/* the MainstreetAI sign-in and setup pages (reps) */
+.v2 .v2-ms-brand { font-size: 26px; font-weight: 900; color: #5eead4; letter-spacing: .3px; margin: 6px 0 2px; }

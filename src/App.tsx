@@ -89,6 +89,8 @@ function App() {
 
         {/* New app — everything under /app/* (static segment ranks above /:slug). */}
         <Route path="/app/*" element={<V2App />} />
+        {/* the MainstreetAI reps' sign-in link */}
+        <Route path="/mainstreet" element={<Navigate to="/app/login?as=mainstreet" replace />} />
 
         {/* Public catch-all: handles both job fair forms AND shuttle pages */}
         <Route path="/:slug" element={<SlugRouter />} />

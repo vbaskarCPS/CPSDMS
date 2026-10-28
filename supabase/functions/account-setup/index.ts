@@ -44,6 +44,30 @@ export function setupEmail(p: { firstName: string; username: string; link: strin
   return { subject, html, text };
 }
 
+/** A MainstreetAI rep's version: MainstreetAI only (no Property Stars), and they sign in with their email. */
+export function repSetupEmail(p: { firstName: string; email: string; link: string; invitedBy: string | null; expires: string }): { subject: string; html: string; text: string } {
+  const subject = 'Set up your MainstreetAI account';
+  const by = p.invitedBy ? `${esc(p.invitedBy)} added you` : 'You’ve been added';
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px;"><tr><td align="center">
+<table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border-radius:12px;overflow:hidden;">
+  <tr><td style="background:#0f766e;padding:24px;text-align:center;color:#fff;font-size:22px;font-weight:bold;letter-spacing:.3px;">MainstreetAI</td></tr>
+  <tr><td style="padding:28px;">
+    <h2 style="margin:0 0 10px;color:#111827;font-size:20px;">Hi ${esc(p.firstName)},</h2>
+    <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">${by} as a MainstreetAI rep. Choose your password to finish setting up your account.</p>
+    <table cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin:0 0 20px;width:100%;">
+      <tr><td style="padding:14px 16px;font-size:14px;color:#374151;">You sign in with this email: <b style="color:#111827;">${esc(p.email)}</b></td></tr>
+    </table>
+    <p style="margin:0 0 22px;text-align:center;"><a href="${p.link}" style="display:inline-block;background:#0f766e;color:#fff;text-decoration:none;font-weight:bold;padding:13px 26px;border-radius:8px;font-size:15px;">Set up my account</a></p>
+    <p style="margin:0 0 6px;color:#6b7280;font-size:13px;line-height:1.5;">The link works once and expires ${esc(p.expires)}. After that, sign in at <a href="${APP_URL}/mainstreet" style="color:#0f766e;">${APP_URL.replace(/^https?:\/\//, '')}/mainstreet</a>.</p>
+    <p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.5;">If you weren’t expecting this, you can ignore it.</p>
+  </td></tr>
+</table></td></tr></table></body></html>`;
+  const text = `Hi ${p.firstName},\n\n${p.invitedBy ? `${p.invitedBy} added you` : 'You’ve been added'} as a MainstreetAI rep.\n\nYou sign in with this email: ${p.email}\n\nChoose your password here (works once, expires ${p.expires}):\n${p.link}\n\nAfter that, sign in at ${APP_URL}/mainstreet.\n`;
+  return { subject, html, text };
+}
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -64,16 +88,21 @@ Deno.serve(async req => {
 
     const link = `${APP_URL}/app/setup#t=${row.code}`;
     const expires = new Date(row.expires_at).toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/Toronto' });
-    const mail = setupEmail({ firstName: row.full_name.split(/\s+/)[0] || row.full_name, username: row.username, link, invitedBy: row.invited_by, expires });
+    const svc = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    // a MainstreetAI rep gets the MainstreetAI email (and signs in with their email, not a username)
+    const { data: repRow } = await svc.from('user_permissions').select('user_id').eq('user_id', userId).eq('permission', 'mainstreet_rep').maybeSingle();
+    const firstName = row.full_name.split(/\s+/)[0] || row.full_name;
+    const mail = repRow
+      ? repSetupEmail({ firstName, email: row.email, link, invitedBy: row.invited_by, expires })
+      : setupEmail({ firstName, username: row.username, link, invitedBy: row.invited_by, expires });
 
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: FROM, to: row.email, subject: mail.subject, html: mail.html, text: mail.text, ...(row.reply_to ? { reply_to: row.reply_to } : {}) }),
+      body: JSON.stringify({ from: repRow ? (Deno.env.get('MAINSTREET_FROM') || 'MainstreetAI <accounts@propertystars.app>') : FROM, to: row.email, subject: mail.subject, html: mail.html, text: mail.text, ...(row.reply_to ? { reply_to: row.reply_to } : {}) }),
     });
     const result = await res.json().catch(() => ({}));
 
-    const svc = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
     const sendError = res.ok ? null : String(result?.message || `Resend error ${res.status}`);
     await svc.rpc('app_setup_record_send', { p_code: row.code, p_resend_id: result?.id ?? null, p_error: sendError });
     await svc.from('email_logs').insert({ recipient_email: row.email, email_type: 'account_setup', status: res.ok ? 'sent' : 'failed',
