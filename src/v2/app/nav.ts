@@ -4,7 +4,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Map, BookOpen, CalendarCheck, Phone, Shield, Calendar, FileText, SlidersHorizontal, UserPlus, Contact, AlertCircle,
-  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck,
+  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck, BadgeCheck,
 } from 'lucide-react';
 import type { ColorName } from '../ui';
 import type { Permission } from '../lib/permissions';
@@ -58,6 +58,7 @@ export const COMPONENTS: Component[] = [
     { key: 'cities', label: 'Cities', icon: Building2, color: 'sky', path: '/app/mainstreet/cities', ready: true },
     { key: 'campaigns', label: 'Campaigns', icon: Megaphone, color: 'rose', path: '/app/mainstreet/campaigns', ready: true },
     { key: 'reps', label: 'Reps', icon: UserCheck, color: 'blue', path: '/app/mainstreet/reps', ready: true },
+    { key: 'deals', label: 'Deals', icon: BadgeCheck, color: 'green', path: '/app/mainstreet/deals', ready: true },
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3, color: 'violet', path: '/app/mainstreet/dashboard', ready: true },
   ] },
   { key: 'sa', label: 'Super Admin', icon: Shield, color: 'rose', perm: 'super_admin_any', tabs: true, blurb: 'Users, centers, availability and territory', subs: [

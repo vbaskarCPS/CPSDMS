@@ -1,0 +1,62 @@
+/* The MainstreetAI rep app: light, phone first, big tap targets (used outdoors, one-handed). */
+.v2 .v2-rep { --bg: #f5f6f8; --card: #fff; --line: #e5e7eb; --line-soft: #f0f1f3; --ink: #111827; --mut: #6b7280; --soft: #f3f4f6;
+  --link: #0f766e; --hover: #f9fafb; --brand: #0f766e;
+  min-height: 100vh; background: var(--bg); color: var(--ink); display: flex; flex-direction: column; }
+.v2-rep-top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: var(--brand); color: #fff; }
+.v2-rep-top .brand { font-weight: 800; font-size: 17px; letter-spacing: .2px; }
+.v2-rep-top .who { margin-left: auto; font-size: 13px; opacity: .9; }
+.v2-rep-top button { background: rgba(255,255,255,.14); border: 0; border-radius: 8px; padding: 6px 9px; color: #fff; }
+.v2-rep-body { flex: 1; width: 100%; max-width: 720px; margin: 0 auto; padding: 14px 14px 86px; }
+.v2-rep-body.full { max-width: none; padding: 0 0 70px; display: flex; flex-direction: column; }
+.v2-rep-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; background: #fff; border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom); }
+.v2-rep-nav a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0 9px; font-size: 11.5px; color: var(--mut); position: relative; }
+.v2-rep-nav a.on { color: var(--brand); font-weight: 700; }
+.v2-rep-nav .badge { position: absolute; top: 4px; left: calc(50% + 6px); background: #dc2626; color: #fff; border-radius: 9px; font-size: 10px; padding: 0 5px; line-height: 16px; }
+.v2-rep h1 { font-size: 20px; margin: 4px 0 12px; }
+.v2-rep-zone { display: block; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 10px; }
+.v2-rep-zone .row { display: flex; align-items: center; gap: 8px; }
+.v2-rep-zone .name { font-weight: 800; font-size: 16px; }
+.v2-rep-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: var(--soft); }
+.v2-rep-chip i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.v2-rep-bar { height: 8px; border-radius: 6px; background: #e5e7eb; overflow: hidden; margin: 10px 0 8px; }
+.v2-rep-bar b { display: block; height: 100%; background: var(--brand); }
+.v2-rep-nums { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--mut); }
+.v2-rep-nums b { color: var(--ink); }
+.v2-rep-bar2 { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #fff; border-bottom: 1px solid var(--line); }
+.v2-rep-bar2 .t { font-weight: 800; }
+.v2-rep-seg { display: inline-flex; background: var(--soft); border-radius: 9px; padding: 2px; }
+.v2-rep-seg button { border: 0; background: none; padding: 6px 11px; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--mut); }
+.v2-rep-seg button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.v2-rep-map { flex: 1; min-height: 60vh; position: relative; }
+.v2-rep-map > .box { position: absolute; inset: 0; }
+.v2-rep-legend { position: absolute; left: 8px; bottom: 8px; z-index: 2; background: rgba(255,255,255,.95); border-radius: 10px; padding: 6px 9px; font-size: 11.5px;
+  display: flex; flex-wrap: wrap; gap: 3px 10px; max-width: calc(100% - 16px); box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+.v2-rep-dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; border: 1.5px solid #111827; vertical-align: -1px; margin-right: 4px; }
+.v2-rep-list { padding: 8px 12px; }
+.v2-rep-group { font-size: 12px; font-weight: 800; color: var(--mut); text-transform: uppercase; letter-spacing: .4px; margin: 12px 4px 6px; }
+.v2-rep-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px; margin-bottom: 6px; }
+.v2-rep-item .n { font-weight: 700; }
+.v2-rep-item .a { font-size: 12.5px; color: var(--mut); }
+.v2-rep-sheet-bg { position: fixed; inset: 0; z-index: 20; background: rgba(17,24,39,.45); display: flex; align-items: flex-end; justify-content: center; }
+.v2-rep-sheet { background: #fff; width: 100%; max-width: 640px; max-height: 92vh; overflow-y: auto; border-radius: 18px 18px 0 0; padding: 16px 16px calc(18px + env(safe-area-inset-bottom)); }
+.v2-rep-sheet h2 { font-size: 19px; margin: 0; }
+.v2-rep-acts { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.v2-rep-acts a { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 10px; background: var(--soft); font-weight: 600; font-size: 13.5px; color: var(--ink); }
+.v2-rep-outs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+.v2-rep-out { border: 2px solid var(--line); background: #fff; border-radius: 12px; padding: 11px 10px; text-align: left; }
+.v2-rep-out b { display: flex; align-items: center; gap: 7px; font-size: 14.5px; }
+.v2-rep-out span { display: block; font-size: 11.5px; color: var(--mut); margin-top: 2px; line-height: 1.3; }
+.v2-rep-out.on { border-color: var(--brand); background: #f0fdfa; }
+.v2-rep-visit { border-top: 1px solid var(--line-soft); padding: 9px 0; font-size: 13.5px; }
+.v2-rep-visit .h { display: flex; gap: 8px; align-items: center; }
+.v2-rep-toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 82px; z-index: 30; background: #111827; color: #fff; padding: 10px 14px; border-radius: 10px;
+  font-size: 13.5px; max-width: calc(100% - 28px); box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.v2-rep-days { display: flex; align-items: flex-end; gap: 4px; height: 120px; margin: 8px 0 4px; }
+.v2-rep-days div { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; height: 100%; font-size: 10px; color: var(--mut); }
+.v2-rep-days i { display: block; width: 100%; background: var(--brand); border-radius: 4px 4px 0 0; min-height: 2px; }
+.v2-rep-stat { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.v2-rep-stat > div { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+.v2-rep-stat b { display: block; font-size: 22px; }
+.v2-rep-stat span { font-size: 12px; color: var(--mut); }

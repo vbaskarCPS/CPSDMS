@@ -36,6 +36,8 @@ import { Campaigns } from './features/mainstreet/Campaigns';
 import { Reps, Dashboard as MsDashboard } from './features/mainstreet/Reps';
 import { Cities } from './features/mainstreet/Cities';
 import { WorkerHome } from './features/worker/WorkerHome';
+import { RepApp } from './features/rep/RepApp';
+import { Deals as MsDeals } from './features/mainstreet/Deals';
 import { Loading } from './ui';
 
 const Guard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ perm, children }) => {
@@ -44,6 +46,8 @@ const Guard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ per
   if (loading) return <div className="v2"><Loading /></div>;
   if (!session || !profile) return <Navigate to="/app/login" replace state={{ from: loc.pathname }} />;
   if (profile.must_change_password) return <Navigate to="/app/password" replace />;
+  // a MainstreetAI rep only ever gets the rep app
+  if (can('mainstreet_rep')) return <Navigate to="/app/rep" replace />;
   if (perm && !can(perm)) return <AppShell><div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to this screen.</div></div></AppShell>;
   return <AppShell>{children}</AppShell>;
 };
@@ -55,6 +59,7 @@ const BareGuard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({
   if (loading) return <div className="v2"><Loading /></div>;
   if (!session || !profile) return <Navigate to="/app/login" replace state={{ from: loc.pathname }} />;
   if (profile.must_change_password) return <Navigate to="/app/password" replace />;
+  if (can('mainstreet_rep')) return <Navigate to="/app/rep" replace />;
   if (perm && !can(perm)) return <AppShell><div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to this screen.</div></div></AppShell>;
   return <>{children}</>;
 };
@@ -75,6 +80,8 @@ const V2Routes: React.FC = () => (
     <Route path="setup" element={<AccountSetup />} />
     {/* the worker dashboard: workers have no app account, so it has its own sign-in (a pass) */}
     <Route path="worker/*" element={<WorkerHome />} />
+    {/* MainstreetAI reps: their own app, nothing else */}
+    <Route path="rep/*" element={<RepApp />} />
     <Route index element={<Guard><Home /></Guard>} />
     <Route path="admin/users" element={<Guard perm="sa_users"><Users /></Guard>} />
     <Route path="admin/centers" element={<Guard perm="sa_users"><Centers /></Guard>} />
@@ -111,6 +118,7 @@ const V2Routes: React.FC = () => (
     <Route path="mainstreet/cities" element={<Guard perm="mainstreet_admin"><Cities /></Guard>} />
     <Route path="mainstreet/reps" element={<Guard perm="mainstreet_admin"><Reps /></Guard>} />
     <Route path="mainstreet/dashboard" element={<Guard perm="mainstreet_admin"><MsDashboard /></Guard>} />
+    <Route path="mainstreet/deals" element={<Guard perm="mainstreet_admin"><MsDeals /></Guard>} />
     <Route path="account" element={<Guard><MyAccount /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />
   </Routes>
