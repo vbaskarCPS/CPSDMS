@@ -1,6 +1,7 @@
 // supabase/functions/rep-auth/index.ts — MainstreetAI reps: sign in with their email, and "forgot password".
 //
-// Reps sign in with their email (managers use usernames). The browser can't be allowed to ask which
+// Reps sign in with their email only: they have no username they can use (RUN_62 gives each rep a hidden
+// sign-in address, which only this function looks up). The browser can't be allowed to ask which
 // emails belong to reps, so both steps happen here, with the service role, and always answer the
 // same way whether or not the email is a rep's.
 //
@@ -29,7 +30,7 @@ export function resetEmail(p: { firstName: string; link: string }): { subject: s
 <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px;"><tr><td align="center">
 <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border-radius:12px;overflow:hidden;">
-  <tr><td style="background:#0f766e;padding:24px;text-align:center;color:#fff;font-size:22px;font-weight:bold;letter-spacing:.3px;">MainstreetAI</td></tr>
+  <tr><td style="background:#1c1b1a;padding:24px;text-align:center;color:#f6f1e7;font-size:24px;font-weight:bold;letter-spacing:-.5px;">Mainstreet<span style="color:#5eead4;">AI</span></td></tr>
   <tr><td style="padding:28px;">
     <h2 style="margin:0 0 10px;color:#111827;font-size:20px;">Hi ${esc(p.firstName)},</h2>
     <p style="margin:0 0 20px;color:#374151;font-size:15px;line-height:1.6;">Someone asked to reset the password for your MainstreetAI account. Choose a new one here:</p>

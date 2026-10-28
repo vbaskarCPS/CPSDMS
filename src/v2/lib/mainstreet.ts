@@ -18,7 +18,7 @@ export interface ZoneRun {
   proposal: ProposedZone[]; stats: { eligible?: number; share?: number; zones?: number; free_blocks?: number }; created_at: string; accepted_at: string | null;
 }
 export interface Rep {
-  id: string; username: string; full_name: string; email: string | null; phone: string | null; is_active: boolean; must_change_password: boolean;
+  id: string; rep_code: string | null; full_name: string; email: string | null; phone: string | null; is_active: boolean; must_change_password: boolean;
   created_at: string; setup_sent_at: string | null; setup_used_at: string | null; setup_error: string | null; zones: number;
 }
 
@@ -112,6 +112,10 @@ export async function listReps(): Promise<Rep[]> {
 export async function createRep(r: { full_name: string; email: string; phone: string }): Promise<{ id: string; username: string }> {
   const rows = must(await db.rpc('ms_admin_create_rep', { p_full_name: r.full_name, p_email: r.email, p_phone: r.phone || null })) as { id: string; username: string }[];
   return rows[0];
+}
+/** The code on the rep's send-info links (?ref=…). Comes back cleaned up (capitals, letters and numbers). */
+export async function setRepCode(id: string, code: string): Promise<string> {
+  return must(await db.rpc('ms_admin_set_rep_code', { p_user: id, p_code: code })) as string;
 }
 export async function updateRep(id: string, r: { full_name: string; email: string; phone: string; is_active: boolean }): Promise<void> {
   must(await db.rpc('ms_admin_update_rep', { p_user: id, p_full_name: r.full_name, p_email: r.email || null, p_phone: r.phone || null, p_active: r.is_active }));
