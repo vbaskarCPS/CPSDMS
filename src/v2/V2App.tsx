@@ -122,6 +122,7 @@ const V2Routes: React.FC = () => (
     <Route path="mainstreet/reps" element={<Guard perm="mainstreet_admin"><Reps /></Guard>} />
     <Route path="mainstreet/dashboard" element={<Guard perm="mainstreet_admin"><MsDashboard /></Guard>} />
     <Route path="mainstreet/deals" element={<Guard perm="mainstreet_admin"><MsDeals /></Guard>} />
+    <Route path="email" element={<Guard><div className="v2-staff-mail"><MailApp staff /></div></Guard>} />
     <Route path="mainstreet/inbox" element={<Guard perm="mainstreet_admin"><div className="v2-ms-mail"><MailApp admin /></div></Guard>} />
     <Route path="account" element={<Guard><MyAccount /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />

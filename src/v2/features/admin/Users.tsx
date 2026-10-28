@@ -5,6 +5,7 @@ import { useAuth, type Center } from '../../lib/auth';
 import { PERMISSIONS, SUPER_ADMIN_PERMISSIONS, usernameBase, type Permission } from '../../lib/permissions';
 import { listUsers, listCenters, createUser, updateUser, resetPassword, sendSetupEmail, setupStatus, useLoad, type SetupStatus, type UserRow, type UserInput } from '../../lib/data';
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tag, Toggle } from '../../ui';
+import { Mailboxes } from './Mailboxes';
 
 const blank = (): UserInput => ({ full_name: '', phone: '', email: '', permissions: [], center_ids: [], rm_center_id: null, is_active: true });
 
@@ -55,6 +56,7 @@ export const Users: React.FC = () => {
           </table></div>
         </Card>
       )}
+      {users.data && <Mailboxes users={users.data} />}
       {editing && centers.data && (
         <UserEditor user={editing === 'new' ? null : editing} centers={centers.data} isSuperAdmin={!!profile?.is_super_admin}
           setup={editing === 'new' ? undefined : setups.data?.get(editing.id)}

@@ -6,7 +6,7 @@ import { db, must } from './client';
 export type Box = 'inbox' | 'unread' | 'starred' | 'sent' | 'archived' | 'unsorted';
 export interface ThreadRow {
   id: string; subject: string; snippet?: string; last_at: string; last_dir: 'in' | 'out'; messages: number; unread: number;
-  starred: boolean; archived: boolean; contact_email?: string; contact_name?: string;
+  starred: boolean; archived: boolean; contact_email?: string; contact_name?: string; mailbox?: string;
   business_id?: string; business?: string; campaign_id?: string; campaign?: string; color?: string; zone?: string; rep?: string;
 }
 export interface Attachment { name: string; type?: string; size?: number; path: string }
@@ -37,6 +37,7 @@ export async function fileThread(id: string, business: string, campaign: string)
 
 export interface Draft {
   thread_id?: string | null; business_id?: string | null; campaign_id?: string | null;
+  staff?: boolean; mailbox_id?: string | null;          // a manager's own mailbox (staff email)
   to: string[]; cc: string[]; subject: string; html: string; text: string; attachments: Attachment[];
 }
 async function fnError(e: unknown, data: unknown): Promise<string> {
@@ -51,11 +52,33 @@ export async function sendMail(d: Draft): Promise<{ thread_id: string; message_i
   if (error || !(data as { ok?: boolean })?.ok) throw new Error(await fnError(error, data));
   return data as { thread_id: string; message_id: string };
 }
-export async function aiWrite(p: { mode: 'write' | 'rewrite'; thread_id?: string | null; business_id?: string | null; campaign_id?: string | null;
+export async function aiWrite(p: { mode: 'write' | 'rewrite'; staff?: boolean; thread_id?: string | null; business_id?: string | null; campaign_id?: string | null;
   instruction?: string; how?: string; subject?: string; html?: string }): Promise<{ subject: string; html: string }> {
   const { data, error } = await db.functions.invoke('ms-mail-ai', { body: p });
   if (error || !(data as { html?: string })?.html) throw new Error(await fnError(error, data));
   return data as { subject: string; html: string };
+}
+
+// ───────────── staff email: a manager's own mailbox (RUN_65) ─────────────
+export interface MailBox { id: string; address: string; kind: 'person' | 'shared'; unread: number }
+export interface Contact { name: string; address: string; me?: boolean }
+export async function myBoxes(): Promise<MailBox[]> { return (must(await db.rpc('mail_my_boxes')) as MailBox[]) || []; }
+export async function directory(): Promise<Contact[]> { return (must(await db.rpc('mail_directory')) as Contact[]) || []; }
+export async function mailInbox(box: Box = 'inbox', search?: string, mailbox?: string | null): Promise<ThreadRow[]> {
+  return (must(await db.rpc('mail_inbox', { p_box: mailbox || null, p_folder: box, p_search: search || null })) as ThreadRow[]) || [];
+}
+export async function mailCounts(): Promise<{ unread: number; unsorted: number }> {
+  const r = must(await db.rpc('mail_counts')) as { unread: number } | null;
+  return { unread: r?.unread || 0, unsorted: 0 };
+}
+export interface AdminBox {
+  id: string; address: string; local: string; kind: string; active: boolean; owner_id: string | null; owner: string | null;
+  owner_active: boolean; aliases: string[]; conversations: number;
+}
+export async function adminBoxes(): Promise<AdminBox[]> { return (must(await db.rpc('mail_admin_boxes')) as AdminBox[]) || []; }
+export async function adminRename(box: string, local: string): Promise<void> { must(await db.rpc('mail_admin_rename', { p_box: box, p_local: local })); }
+export async function adminHandover(box: string, toUser: string, mode: 'move' | 'merge'): Promise<void> {
+  must(await db.rpc('mail_admin_handover', { p_box: box, p_to_user: toUser, p_mode: mode }));
 }
 
 export async function uploadAttachment(uid: string, file: File): Promise<Attachment> {

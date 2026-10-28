@@ -9,11 +9,13 @@ import Underline from '@tiptap/extension-underline';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import {
-  Bold, ChevronDown, Italic, Link2, List, ListOrdered, Loader2, Maximize2, Minimize2, Paperclip, Redo2, RemoveFormatting,
-  Send, Sparkles, Trash2, Underline as UnderlineIcon, Undo2, Wand2, X,
+  Bold, BookUser, ChevronDown, Italic, Link2, List, ListOrdered, Loader2, Maximize2, Minimize2, Paperclip, Redo2, RemoveFormatting,
+  Search, Send, Sparkles, Trash2, Underline as UnderlineIcon, Undo2, Wand2, X,
 } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
-import { aiWrite, fileSize, htmlToText, isEmail, sendMail, splitAddresses, uploadAttachment, type Attachment, type Draft } from '../../lib/mail';
+import {
+  aiWrite, directory, fileSize, htmlToText, initials, isEmail, sendMail, splitAddresses, uploadAttachment, type Attachment, type Contact, type Draft,
+} from '../../lib/mail';
 import './mail.css';
 
 export interface ComposeInit {
@@ -23,7 +25,14 @@ export interface ComposeInit {
   to?: string[]; cc?: string[]; subject?: string; html?: string;
   context?: string;                  // a line under the title: "Ace Plumbing · Taxify"
   quick?: string[];                  // suggested AI asks
+  staff?: boolean;                   // a manager's own mailbox (staff email): contacts, sent as them
+  mailbox_id?: string | null;
+  attachments?: Attachment[];        // forwarded files
 }
+
+// everyone with a staff mailbox, loaded once per visit
+let book: Promise<Contact[]> | null = null;
+const loadBook = () => (book ||= directory().catch(() => { book = null; return [] as Contact[]; }));
 
 const DRAFTS = 'ms-mail-drafts';
 function loadDraft(key: string): Partial<Draft> | null {
@@ -52,7 +61,9 @@ export const Composer: React.FC<{ init: ComposeInit; docked?: boolean; onClose: 
   const [cc, setCc] = useState<string[]>(saved?.cc || init.cc || []);
   const [showCc, setShowCc] = useState((saved?.cc || init.cc || []).length > 0);
   const [subject, setSubject] = useState(saved?.subject ?? init.subject ?? '');
-  const [files, setFiles] = useState<Attachment[]>(saved?.attachments || []);
+  const [files, setFiles] = useState<Attachment[]>(saved?.attachments || init.attachments || []);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  useEffect(() => { if (init.staff) loadBook().then(setContacts); }, [init.staff]);
   const [uploading, setUploading] = useState(0);
   const [busy, setBusy] = useState<null | 'send' | 'ai'>(null);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +120,8 @@ export const Composer: React.FC<{ init: ComposeInit; docked?: boolean; onClose: 
     if (uploading) { setError('Wait for the attachment to finish.'); return; }
     setBusy('send'); setError(null);
     try {
-      const r = await sendMail({ thread_id: init.thread_id, business_id: init.business_id, campaign_id: init.campaign_id, to, cc, subject: subject.trim(), html, text, attachments: files });
+      const r = await sendMail({ thread_id: init.thread_id, business_id: init.business_id, campaign_id: init.campaign_id, staff: init.staff, mailbox_id: init.mailbox_id,
+        to, cc, subject: subject.trim(), html, text, attachments: files });
       saveDraft(init.key, null);
       onSent(r.thread_id);
     } catch (e) { setError(e instanceof Error ? e.message : 'The email didn’t send.'); }
@@ -121,7 +133,7 @@ export const Composer: React.FC<{ init: ComposeInit; docked?: boolean; onClose: 
     setBusy('ai'); setError(null);
     const before = { subject, html: editor.getHTML() };
     try {
-      const r = await aiWrite({ mode: 'write', thread_id: init.thread_id, business_id: init.business_id, campaign_id: init.campaign_id, instruction });
+      const r = await aiWrite({ mode: 'write', staff: init.staff, thread_id: init.thread_id, business_id: init.business_id, campaign_id: init.campaign_id, instruction });
       editor.commands.setContent(r.html, true);
       if (r.subject && (!subject.trim() || !init.thread_id)) setSubject(r.subject);
       setUndoAi(before); setAiOpen(false); setAsk('');
@@ -133,7 +145,7 @@ export const Composer: React.FC<{ init: ComposeInit; docked?: boolean; onClose: 
     setBusy('ai'); setError(null); setRewriteOpen(false);
     const before = { subject, html: editor.getHTML() };
     try {
-      const r = await aiWrite({ mode: 'rewrite', thread_id: init.thread_id, business_id: init.business_id, campaign_id: init.campaign_id, how, subject, html: before.html });
+      const r = await aiWrite({ mode: 'rewrite', staff: init.staff, thread_id: init.thread_id, business_id: init.business_id, campaign_id: init.campaign_id, how, subject, html: before.html });
       editor.commands.setContent(r.html, true);
       setUndoAi(before);
     } catch (e) { setError(e instanceof Error ? e.message : 'AI couldn’t rewrite it.'); }
@@ -164,8 +176,9 @@ export const Composer: React.FC<{ init: ComposeInit; docked?: boolean; onClose: 
       </div>
 
       <div className="fields">
-        <Chips label="To" values={to} onChange={setTo} autoFocus={!to.length} right={!showCc ? <button type="button" className="link" onClick={() => setShowCc(true)}>Cc</button> : null} />
-        {showCc && <Chips label="Cc" values={cc} onChange={setCc} />}
+        <Chips label="To" values={to} onChange={setTo} autoFocus={!to.length} book={init.staff ? contacts : undefined}
+          right={!showCc ? <button type="button" className="link" onClick={() => setShowCc(true)}>Cc</button> : null} />
+        {showCc && <Chips label="Cc" values={cc} onChange={setCc} book={init.staff ? contacts : undefined} />}
         <div className="row">
           <input className="subject" placeholder="Subject" value={subject} onChange={e => setSubject(e.target.value)} aria-label="Subject" maxLength={200} />
         </div>
@@ -191,8 +204,10 @@ export const Composer: React.FC<{ init: ComposeInit; docked?: boolean; onClose: 
             <button type="button" className="go" disabled={!ask.trim() || busy === 'ai'} onClick={() => write(ask.trim())}>Write</button>
           </div>
           {!!init.quick?.length && <div className="quick">{init.quick.map(q => <button key={q} type="button" onClick={() => write(q)} disabled={busy === 'ai'}>{q}</button>)}</div>}
-          <div className="note">AI uses this business, your visits and the campaign’s pitch. Read it before sending.</div>
+          <div className="note">{init.staff ? 'AI uses this conversation and what you ask. Read it before sending.' : 'AI uses this business, your visits and the campaign’s pitch. Read it before sending.'}</div>
         </div>)}
+
+      <div className="editor" onClick={() => editor?.commands.focus()}><EditorContent editor={editor} /></div>
 
       {editor && (
         <div className="toolbar" role="toolbar" aria-label="Formatting">
@@ -213,8 +228,6 @@ export const Composer: React.FC<{ init: ComposeInit; docked?: boolean; onClose: 
           <input autoFocus placeholder="https://" value={linkUrl} onChange={e => setLinkUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); setLink(); } }} aria-label="Link address" />
           <button type="button" className="go" onClick={setLink}>{linkUrl.trim() ? 'Apply' : 'Remove link'}</button>
         </div>)}
-
-      <div className="editor"><EditorContent editor={editor} /></div>
 
       {(files.length > 0 || uploading > 0) && (
         <div className="files">
@@ -238,33 +251,77 @@ export const Composer: React.FC<{ init: ComposeInit; docked?: boolean; onClose: 
   );
 };
 
-// ───────────── To / Cc: addresses as chips ─────────────
-const Chips: React.FC<{ label: string; values: string[]; onChange: (v: string[]) => void; autoFocus?: boolean; right?: React.ReactNode }> = ({ label, values, onChange, autoFocus, right }) => {
+// ───────────── To / Cc: addresses as chips, with the staff contacts list ─────────────
+const Chips: React.FC<{ label: string; values: string[]; onChange: (v: string[]) => void; autoFocus?: boolean; right?: React.ReactNode; book?: Contact[] }> = ({ label, values, onChange, autoFocus, right, book }) => {
   const [text, setText] = useState('');
+  const [openBook, setOpenBook] = useState(false);
+  const [find, setFind] = useState('');
+  const [hi, setHi] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const byAddr = useMemo(() => new Map((book || []).map(c => [c.address, c])), [book]);
+  const add = (list: string[]) => {
+    const next = [...values, ...list].filter((v, i, a) => v && a.indexOf(v) === i);
+    if (next.length !== values.length) onChange(next);
+  };
   const commit = (raw: string) => {
     const found = splitAddresses(raw);
     const rest = raw.trim() && !found.length ? [raw.trim().toLowerCase()] : [];
-    const next = [...values, ...found, ...rest].filter((v, i, a) => v && a.indexOf(v) === i);
-    if (next.length !== values.length) onChange(next);
+    add([...found, ...rest]);
     setText('');
   };
+  const match = (q: string) => {
+    const t = q.trim().toLowerCase();
+    return (book || []).filter(c => !c.me && !values.includes(c.address) && (!t || c.name.toLowerCase().includes(t) || c.address.includes(t)));
+  };
+  const suggest = text.trim() && book ? match(text).slice(0, 6) : [];
+  const pick = (c: Contact) => { add([c.address]); setText(''); setHi(0); input.current?.focus(); };
   return (
-    <label className="row chips">
+    <div className="row chips">
       <span className="lab">{label}</span>
-      <span className="wrap">
-        {values.map(v => (
-          <span key={v} className={`chip${isEmail(v) ? '' : ' bad'}`} title={isEmail(v) ? v : 'Not an email address'}>{v}
-            <button type="button" aria-label={`Remove ${v}`} onClick={() => onChange(values.filter(x => x !== v))}><X size={12} /></button></span>))}
-        <input value={text} autoFocus={autoFocus} type="email" inputMode="email" autoComplete="off" aria-label={label}
-          onChange={e => { const v = e.target.value; if (/[,;\s]$/.test(v)) commit(v); else setText(v); }}
+      <span className="wrap" onClick={() => input.current?.focus()}>
+        {values.map(v => {
+          const c = byAddr.get(v);
+          return (
+            <span key={v} className={`chip${isEmail(v) ? '' : ' bad'}${c ? ' known' : ''}`} title={isEmail(v) ? v : 'Not an email address'}>
+              {c && <span className="ci">{initials(c.name)}</span>}{c ? c.name : v}
+              <button type="button" aria-label={`Remove ${v}`} onClick={e => { e.stopPropagation(); onChange(values.filter(x => x !== v)); }}><X size={12} /></button></span>);
+        })}
+        <input ref={input} value={text} autoFocus={autoFocus} type="email" inputMode="email" autoComplete="off" aria-label={label}
+          onChange={e => { const v = e.target.value; setHi(0); if (/[,;\s]$/.test(v)) commit(v); else setText(v); }}
           onKeyDown={e => {
+            if (suggest.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setHi(h => (h + (e.key === 'ArrowDown' ? 1 : suggest.length - 1)) % suggest.length); return; }
+            if ((e.key === 'Enter' || e.key === 'Tab') && suggest.length && !isEmail(text)) { e.preventDefault(); pick(suggest[hi] || suggest[0]); return; }
             if ((e.key === 'Enter' || e.key === 'Tab') && text.trim()) { e.preventDefault(); commit(text); }
             if (e.key === 'Backspace' && !text && values.length) onChange(values.slice(0, -1));
           }}
           onPaste={e => { const t = e.clipboardData.getData('text'); if (/[,;\s]/.test(t)) { e.preventDefault(); commit(text + t); } }}
-          onBlur={() => text.trim() && commit(text)} />
+          onBlur={() => setTimeout(() => { if (input.current && document.activeElement !== input.current && text.trim() && !suggest.length) commit(text); }, 150)} />
       </span>
+      {book && <button type="button" className="icon sm book-btn" onClick={() => { setOpenBook(o => !o); setFind(''); }} aria-label="Contacts" title="Contacts" aria-expanded={openBook}><BookUser size={18} /></button>}
       {right}
-    </label>
+      {suggest.length > 0 && (
+        <div className="suggest" role="listbox">
+          {suggest.map((c, i) => (
+            <button key={c.address} type="button" role="option" aria-selected={i === hi} className={i === hi ? 'on' : ''} onMouseDown={e => e.preventDefault()} onClick={() => pick(c)}>
+              <span className="ci big">{initials(c.name)}</span><span className="t"><b>{c.name}</b><span>{c.address}</span></span></button>))}
+        </div>)}
+      {openBook && book && (
+        <div className="book" role="dialog" aria-label="Contacts">
+          <div className="book-h"><b>Contacts</b><span className="mut">{book.filter(c => !c.me).length} people</span>
+            <button type="button" className="icon sm" onClick={() => setOpenBook(false)} aria-label="Close contacts"><X size={16} /></button></div>
+          <label className="book-s"><Search size={15} /><input autoFocus placeholder="Search people" value={find} onChange={e => setFind(e.target.value)} aria-label="Search contacts" /></label>
+          <div className="book-l">
+            {(book || []).filter(c => !c.me && (!find.trim() || c.name.toLowerCase().includes(find.trim().toLowerCase()) || c.address.includes(find.trim().toLowerCase()))).map(c => {
+              const on = values.includes(c.address);
+              return (
+                <button key={c.address} type="button" className={on ? 'on' : ''} onClick={() => (on ? onChange(values.filter(x => x !== c.address)) : add([c.address]))}>
+                  <span className="ci big">{initials(c.name)}</span><span className="t"><b>{c.name}</b><span>{c.address}</span></span>
+                  <span className={`tick${on ? ' on' : ''}`} aria-hidden="true" /></button>);
+            })}
+            {!book.length && <div className="mut" style={{ padding: 12 }}>Loading…</div>}
+          </div>
+          <div className="book-f"><button type="button" className="go" onClick={() => setOpenBook(false)}>Done</button></div>
+        </div>)}
+    </div>
   );
 };

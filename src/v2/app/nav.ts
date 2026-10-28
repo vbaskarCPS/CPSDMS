@@ -11,7 +11,7 @@ import type { Permission } from '../lib/permissions';
 
 export interface Sub { key: string; label: string; icon: LucideIcon; color: ColorName; path: string; ready: boolean; superAdminOnly?: boolean }
 export interface Component {
-  key: string; label: string; icon: LucideIcon; color: ColorName; perm: Permission | 'super_admin_any'; subs: Sub[];
+  key: string; label: string; icon: LucideIcon; color: ColorName; perm: Permission | 'super_admin_any' | 'everyone'; subs: Sub[];
   /** where the component opens (default: its first ready screen) */
   home?: string;
   /** show the component's ready screens as tabs under the bar */
@@ -62,6 +62,9 @@ export const COMPONENTS: Component[] = [
     { key: 'inbox', label: 'Inbox', icon: Mail, color: 'blue', path: '/app/mainstreet/inbox', ready: true },
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3, color: 'violet', path: '/app/mainstreet/dashboard', ready: true },
   ] },
+  { key: 'email', label: 'Email', icon: Mail, color: 'blue', perm: 'everyone', home: '/app/email', blurb: 'Your own inbox: firstname@propertystars.app', subs: [
+    { key: 'inbox', label: 'Inbox', icon: Inbox, color: 'blue', path: '/app/email', ready: true },
+  ] },
   { key: 'sa', label: 'Super Admin', icon: Shield, color: 'rose', perm: 'super_admin_any', tabs: true, blurb: 'Users, centers, availability and territory', subs: [
     { key: 'users', label: 'Users', icon: Users, color: 'rose', path: '/app/admin/users', ready: true },
     { key: 'centers', label: 'Centers & seasons', icon: Building2, color: 'blue', path: '/app/admin/centers', ready: true },
@@ -77,9 +80,11 @@ export const SA_SUB_PERM: Record<string, Permission> = {
 };
 
 export function visibleComponents(can: (p: Permission) => boolean): Component[] {
-  return COMPONENTS
+  const shown = COMPONENTS
     .map(c => c.key === 'sa' ? { ...c, subs: c.subs.filter(s => can(SA_SUB_PERM[s.key])) } : c)
-    .filter(c => c.perm === 'super_admin_any' ? c.subs.length > 0 : can(c.perm) || (c.key === 'rm' && can('rm_floater')));
+    .filter(c => c.perm !== 'everyone' && (c.perm === 'super_admin_any' ? c.subs.length > 0 : can(c.perm) || (c.key === 'rm' && can('rm_floater'))));
+  // Email: everyone who manages anything has a mailbox (RUN_65)
+  return shown.length ? COMPONENTS.filter(c => c.perm === 'everyone' || shown.some(x => x.key === c.key)).map(c => shown.find(x => x.key === c.key) || c) : [];
 }
 
 export function findByPath(path: string): { comp: Component; sub: Sub } | null {

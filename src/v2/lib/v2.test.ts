@@ -74,8 +74,8 @@ describe('navigation by permission', () => {
   it('shows nothing without permissions', () => {
     expect(visibleComponents(only())).toEqual([]);
   });
-  it('a workerbook-only user sees just Workerbook', () => {
-    expect(visibleComponents(only('workerbook')).map(c => c.key)).toEqual(['wb']);
+  it('a workerbook-only user sees just Workerbook, and their Email', () => {
+    expect(visibleComponents(only('workerbook')).map(c => c.key)).toEqual(['wb', 'email']);
   });
   it('Super Admin sees everything', () => {
     expect(visibleComponents(() => true).length).toBe(COMPONENTS.length);
