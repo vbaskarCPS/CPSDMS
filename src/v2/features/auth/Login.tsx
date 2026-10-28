@@ -84,9 +84,15 @@ export const Login: React.FC = () => {
         <div className="v2-ms-brand"><MsLogo size={30} tone="dark" stack /></div>
         <div className="v2-mut" style={{ marginBottom: 18 }}>Rep sign-in</div>
       </> : <>
-        <img src="/icon-192.png" alt="Canadian Property Stars" className="v2-logo-lg" />
-        <div style={{ fontSize: 22, fontWeight: 800 }}>Canadian Property Stars</div>
-        <div className="v2-mut" style={{ marginBottom: 18 }}>Sign in to continue</div>
+        {tab === 'mainstreet' ? <>
+          <MsTab title="MainstreetAI · Sign in" />
+          <div className="v2-ms-brand"><MsLogo size={30} tone="dark" stack /></div>
+          <div className="v2-mut" style={{ marginBottom: 18 }}>Rep sign-in</div>
+        </> : <>
+          <img src="/icon-192.png" alt="Canadian Property Stars" className="v2-logo-lg" />
+          <div style={{ fontSize: 22, fontWeight: 800 }}>Canadian Property Stars</div>
+          <div className="v2-mut" style={{ marginBottom: 18 }}>Sign in to continue</div>
+        </>}
         <div className="v2-tabs" role="tablist">
           <button type="button" className={tab === 'manager' ? 'on' : ''} onClick={() => { setTab('manager'); setError(null); setForgot(false); }}>Manager</button>
           <button type="button" className={tab === 'worker' ? 'on' : ''} onClick={() => { setTab('worker'); setError(null); setForgot(false); }}>Worker</button>
