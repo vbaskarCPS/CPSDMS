@@ -49,6 +49,14 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
   const counts = useLoad(() => (staff ? mailCounts() : inboxCounts()), [staff, tick]);
   useEffect(() => { const t = setInterval(() => setTick(x => x + 1), 45000); return () => clearInterval(t); }, []);
   useEffect(() => { const t = setTimeout(() => setSearch(q.trim()), 300); return () => clearTimeout(t); }, [q]);
+  // ?compose=1 (the home page's Compose): open a new email once the mailbox is known
+  useEffect(() => {
+    if (sp.get('compose') && (!staff || boxesList.data)) {
+      setCompose(newMessage());
+      const n = new URLSearchParams(sp); n.delete('compose'); setSp(n, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp, staff, boxesList.data]);
 
   const go = (p: { box?: Box; t?: string | null; mb?: string }) => {
     const n = new URLSearchParams(sp);
