@@ -7,6 +7,7 @@ import { legacyManagerId } from '../lib/startSession';
 import { useAuth } from '../lib/auth';
 import { visibleComponents, homeOf } from './nav';
 import { StatCards } from './StatCards';
+import { EmailCard } from './EmailCard';
 
 export const Home: React.FC = () => {
   const { profile, can, center } = useAuth();
@@ -39,6 +40,7 @@ export const Home: React.FC = () => {
         <div className="v2-mut">{d.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })}{center ? ` · ${center.display_name}` : ''}</div>
         <div className="v2-h1">{greet}, {first}</div>
       </div>
+      {comps.length > 0 && <EmailCard />}
       <StatCards comps={comps} onOpen={c => nav(homeOf(c))} />
       {comps.length === 0 && <div className="v2-card">Your account has no permissions yet. Ask the Super Admin to set them in User Management.</div>}
       {!center && comps.length > 0 && <div className="v2-note">You aren’t linked to a command center yet.</div>}

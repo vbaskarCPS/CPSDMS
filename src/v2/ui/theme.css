@@ -535,3 +535,25 @@
 
 /* the MainstreetAI sign-in and setup pages (reps) */
 .v2 .v2-ms-brand { margin: 6px 0 10px; }
+
+/* the home page's Email card: first, full width, the newest mail */
+.v2-mailcard { margin-bottom: 16px; }
+.v2-mailcard-top { display: flex; align-items: stretch; gap: 10px; margin-bottom: 10px; }
+.v2-mailcard-top .v2-kpi-box { min-width: 120px; }
+.v2-mailcard-new { margin-left: auto; align-self: center; display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 14px; padding: 12px 18px;
+  background: #c2e7ff; color: #001d35; font: inherit; font-weight: 700; font-size: 14px; cursor: pointer; }
+.v2-mailcard-new:hover { background: #b3defa; }
+.v2-mailcard-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.v2-mailcard-list li + li { border-top: 1px solid var(--line-soft); }
+.v2-mailcard-list .row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 6px; border: 0; background: none; text-align: left; font: inherit; color: var(--ink); border-radius: 10px; cursor: pointer; }
+.v2-mailcard-list .row:hover { background: var(--hover); }
+.v2-mailcard-list .row.skel { height: 52px; background: var(--line-soft); margin: 4px 0; }
+.v2-mailcard-list .av { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+.v2-mailcard-list .m { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.v2-mailcard-list .l1 { display: flex; gap: 8px; align-items: baseline; }
+.v2-mailcard-list .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.v2-mailcard-list .when { font-size: 12px; color: var(--mut); white-space: nowrap; }
+.v2-mailcard-list .l2 { font-size: 13px; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-mailcard-list .l2 b { font-weight: 500; color: var(--ink); }
+.v2-mailcard-list .row.unread .who, .v2-mailcard-list .row.unread .l2 b, .v2-mailcard-list .row.unread .when { font-weight: 800; color: var(--ink); }
+.v2-mailcard-list .dot { width: 9px; height: 9px; border-radius: 50%; background: #0b57d0; flex-shrink: 0; }
