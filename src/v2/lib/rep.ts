@@ -95,7 +95,7 @@ export interface RepVisit {
 export interface RepBusinessView {
   id: string; name: string; address: string | null; lat: number; lng: number; kind: string; phone: string | null; website: string | null;
   hours: unknown; plaza: string | null; zone_id: string | null; campaign_id: string; visits: RepVisit[]; lead?: boolean;
-  sends: { at: string; channel: 'sms' | 'email'; to: string | null }[];
+  sends: { at: string; channel: 'sms' | 'email' | 'whatsapp' | 'link' | 'qr'; to: string | null }[];
 }
 export async function repBusiness(business: string, campaign: string): Promise<RepBusinessView> {
   const r = must(await db.rpc('ms_rep_business', { p_business: business, p_campaign: campaign })) as RepBusinessView;
@@ -255,7 +255,7 @@ export async function reverseGeocode(p: { lat: number; lng: number }): Promise<s
 export interface Kit {
   id: string; name: string; color: string; pitch: string | null; objections: { q: string; a: string }[];
   info_url: string | null; info_sms: string | null; info_email_subject: string | null; info_email_body: string | null;
-  onepager_url: string | null; pay_per_deal: number | null; retry_days: number; ref: string;
+  onepager_url: string | null; present_url?: string | null; pay_per_deal: number | null; retry_days: number; ref: string;
 }
 export async function repKit(campaign: string): Promise<Kit> {
   const k = must(await db.rpc('ms_rep_kit', { p_campaign: campaign })) as Kit;
@@ -313,7 +313,7 @@ export async function shrinkPhoto(file: File, max = 1600): Promise<Blob> {
 // ───────────── admins: the kit, goals, leads, who's working ─────────────
 export interface KitInput {
   pay_per_deal: string; retry_days: string; info_url: string; info_sms: string; info_email_subject: string; info_email_body: string;
-  pitch: string; objections: { q: string; a: string }[]; onepager_url: string;
+  pitch: string; objections: { q: string; a: string }[]; onepager_url: string; present_url: string;
 }
 export async function saveCampaignKit(id: string, k: KitInput): Promise<void> {
   must(await db.rpc('ms_save_campaign_kit', { p_id: id, p_kit: { ...k, objections: k.objections.filter(o => o.q.trim() || o.a.trim()) } }));

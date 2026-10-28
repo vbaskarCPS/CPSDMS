@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<!-- public/present/taxifi.html — the Taxifi door deck MainstreetAI reps open from the pitch menu (Present).
+     The app opens it as /present/taxifi.html#ref=CODE so the booking links carry the rep's code. -->
+<title>Taxifi Door Deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: one card per screen, swiped sideways like a stack of ledger pages; a fixed bar at the bottom moves between them. */
+:root {
+  --bg: #f3f6f5;          /* cool paper */
+  --card: #ffffff;
+  --ink: #0e1b2b;         /* ledger ink */
+  --mut: #5a6878;
+  --line: #dde4e2;
+  --accent: #0b7d57;      /* posted-in-green */
+  --accent-soft: #e3f3ec;
+  --warn: #b4501c;
+  --on-accent: #ffffff;
+  --display: "Bricolage Grotesque", "Figtree", system-ui, sans-serif;
+  --body: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b131b; --card: #121d28; --ink: #e9eff3; --mut: #9aa9b7; --line: #22313f;
+    --accent: #3fcf96; --accent-soft: #123528; --warn: #f0935f; --on-accent: #06251a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b131b; --card: #121d28; --ink: #e9eff3; --mut: #9aa9b7; --line: #22313f;
+  --accent: #3fcf96; --accent-soft: #123528; --warn: #f0935f; --on-accent: #06251a; color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 17px; line-height: 1.45; overflow: hidden; }
+* { box-sizing: border-box; }
+button, input { font: inherit; color: inherit; }
+a { color: var(--accent); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.app { height: 100%; display: flex; flex-direction: column; }
+.top { display: flex; align-items: center; gap: 10px; padding-block: 12px 6px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.brand { font-family: var(--display); font-weight: 800; font-size: 22px; letter-spacing: -0.02em; }
+.brand small { font-family: var(--body); font-weight: 500; font-size: 12.5px; color: var(--mut); letter-spacing: 0; margin-left: 6px; }
+.top .sp { flex: 1; }
+.notes-btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 7px 12px; font-size: 13px; font-weight: 600; color: var(--mut); cursor: pointer; }
+
+.deck { flex: 1; display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain; }
+.deck::-webkit-scrollbar { display: none; }
+.slide { flex: 0 0 100%; scroll-snap-align: start; overflow-y: auto; padding-block: 8px 20px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.inner { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; min-height: 100%; }
+.kicker { font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+h1, h2 { font-family: var(--display); font-weight: 800; letter-spacing: -0.025em; line-height: 1.04; margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(38px, 11vw, 58px); }
+h2 { font-size: clamp(30px, 8.5vw, 44px); }
+.lede { font-size: 19px; color: var(--mut); margin: 0; max-width: 34ch; }
+.lede b { color: var(--ink); font-weight: 600; }
+
+/* cover */
+.cover { justify-content: center; }
+.ledger { border: 1px solid var(--line); background: var(--card); border-radius: 14px; overflow: hidden; font-family: var(--mono); font-size: 13.5px; }
+.ledger div { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--line); align-items: center; }
+.ledger div:first-child { border-top: 0; }
+.ledger .ok { color: var(--accent); font-weight: 700; }
+.ledger .when { color: var(--mut); }
+.cue { font-size: 14px; color: var(--mut); display: flex; align-items: center; gap: 8px; }
+
+/* lists */
+.pains, .services, .safe { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.pains li { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; font-size: 18px; font-weight: 500; }
+.pains li span { display: block; font-size: 14.5px; color: var(--mut); font-weight: 400; margin-top: 2px; }
+.services li { display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: start; padding: 4px 0; }
+.ico { width: 44px; height: 44px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; }
+.ico svg { width: 22px; height: 22px; }
+.services b { display: block; font-size: 18px; }
+.services span { color: var(--mut); font-size: 15px; }
+.price-note { border: 1.5px dashed var(--accent); border-radius: 14px; padding: 12px 14px; font-weight: 600; background: var(--accent-soft); }
+
+/* flow */
+.flow { display: grid; gap: 0; }
+.step { display: grid; grid-template-columns: 40px 1fr; gap: 12px; }
+.step .rail { display: flex; flex-direction: column; align-items: center; }
+.step .dot { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--accent); display: grid; place-items: center; font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--accent); background: var(--card); }
+.step .bar { flex: 1; width: 2px; background: var(--line); min-height: 18px; }
+.step:last-child .bar { display: none; }
+.step .txt { padding-bottom: 18px; }
+.step b { font-size: 18px; display: block; }
+.step span { color: var(--mut); font-size: 15px; }
+.who { display: inline-block; font-family: var(--mono); font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); margin-bottom: 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 7px 12px; font-size: 14px; font-weight: 600; }
+
+/* compare */
+.cmp-wrap { overflow-x: auto; }
+.cmp { width: 100%; border-collapse: collapse; font-size: 16px; }
+.cmp th, .cmp td { text-align: left; padding: 13px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cmp thead th { font-size: 13px; color: var(--mut); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.cmp td:first-child { font-weight: 600; width: 34%; }
+.cmp td.us { color: var(--accent); font-weight: 700; background: var(--accent-soft); }
+.cmp thead th.us { color: var(--accent); background: var(--accent-soft); border-radius: 10px 10px 0 0; }
+
+/* cost */
+.calc { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 6px 16px; }
+.row { display: grid; grid-template-columns: 1fr 128px; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.row:last-child { border-bottom: 0; }
+.row label b { display: block; font-size: 16.5px; }
+.row label span { font-size: 13px; color: var(--mut); }
+.money { display: flex; align-items: center; border: 1.5px solid var(--line); border-radius: 10px; background: var(--bg); padding: 0 10px; }
+.money:focus-within { border-color: var(--accent); }
+.money i { font-style: normal; color: var(--mut); font-family: var(--mono); }
+.money input { width: 100%; border: 0; background: transparent; padding: 10px 6px; font-family: var(--mono); font-size: 17px; font-weight: 700; text-align: right; outline: none; font-variant-numeric: tabular-nums; }
+.total { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 4px 2px; flex-wrap: wrap; }
+.total span { color: var(--mut); font-weight: 600; }
+.total b { font-family: var(--mono); font-size: clamp(30px, 9vw, 40px); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.small { font-size: 13.5px; color: var(--mut); margin: 0; }
+
+/* safe */
+.safe li { display: grid; grid-template-columns: 28px 1fr; gap: 10px; font-size: 18px; font-weight: 500; align-items: start; }
+.tick { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; }
+.tick svg { width: 16px; height: 16px; }
+.safe span { display: block; font-size: 14.5px; color: var(--mut); font-weight: 400; }
+
+/* book */
+.cta { display: block; text-align: center; text-decoration: none; border-radius: 16px; padding: 18px 16px; font-weight: 700; font-size: 19px; }
+.cta.primary { background: var(--accent); color: var(--on-accent); }
+.cta.secondary { border: 2px solid var(--accent); color: var(--accent); background: var(--card); }
+.cta small { display: block; font-weight: 500; font-size: 13.5px; opacity: 0.85; margin-top: 2px; }
+.call { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; }
+.call ol { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; }
+.copyrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.copyrow code { font-family: var(--mono); font-size: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.copyrow button { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 8px 12px; font-weight: 600; cursor: pointer; }
+.foot { margin-top: auto; padding-top: 6px; font-size: 12.5px; color: var(--mut); }
+
+/* bottom bar */
+.nav { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); background: var(--card); padding-block: 10px calc(10px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.nav button.arrow { width: 48px; height: 48px; border-radius: 14px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; display: grid; place-items: center; }
+.nav button.arrow:disabled { opacity: 0.35; cursor: default; }
+.nav button.arrow svg { width: 22px; height: 22px; }
+.dots { flex: 1; display: flex; justify-content: center; gap: 7px; flex-wrap: wrap; }
+.dots button { width: 9px; height: 9px; padding: 0; border-radius: 50%; border: 0; background: var(--line); cursor: pointer; transition: width .2s, background .2s; }
+.dots button[aria-current="true"] { width: 24px; border-radius: 6px; background: var(--accent); }
+
+/* rep notes */
+.sheet-bg { position: fixed; inset: 0; background: rgba(5, 12, 20, 0.5); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+.sheet { background: var(--card); width: 100%; max-width: 620px; max-height: 88%; overflow-y: auto; border-radius: 20px 20px 0 0;
+  padding-block: 18px calc(22px + env(safe-area-inset-bottom, 0px)); padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px)); }
+.sheet h3 { font-family: var(--display); font-size: 22px; margin: 0; }
+.sheet h4 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--accent); margin: 18px 0 6px; font-family: var(--mono); }
+.sheet ol, .sheet ul { margin: 0; padding-left: 20px; display: grid; gap: 5px; font-size: 15.5px; }
+.sheet .obj { border-top: 1px solid var(--line); padding: 9px 0; font-size: 15px; }
+.sheet .obj b { display: block; }
+.sheet .obj span { color: var(--mut); }
+.sheet .close { float: right; border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 6px 12px; font-weight: 600; cursor: pointer; }
+.sheet .warn { color: var(--warn); }
+.field { display: grid; gap: 6px; margin-top: 8px; }
+.field input { border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); font-family: var(--mono); text-transform: uppercase; }
+
+@media (prefers-reduced-motion: reduce) { .deck { scroll-behavior: auto; } .dots button { transition: none; } }
+</style>
+
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:0}body{margin:0}[hidden]{display:none!important}
+/* opened from the MainstreetAI app: room on the right for the app's close button */
+.embed .top{padding-right:calc(max(16px, env(safe-area-inset-right, 0px)) + 52px)}
+@media (max-width:420px){.embed .brand small{display:none}}</style>
+<script>if(/(?:^|[#&])embed=1/.test(location.hash))document.documentElement.classList.add('embed');</script>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <span class="brand">taxifi<small>Ottawa accounting firm</small></span>
+    <span class="sp"></span>
+    <button type="button" class="notes-btn" id="notes-open" aria-haspopup="dialog">Rep notes</button>
+  </header>
+
+  <main class="deck" id="deck" tabindex="-1" aria-roledescription="carousel" aria-label="Taxifi presentation">
+
+    <!-- 1 -->
+    <section class="slide" aria-label="1 of 8" id="s-cover">
+      <div class="inner cover">
+        <div class="kicker">For incorporated Canadian businesses</div>
+        <h1>Your books, current every day.</h1>
+        <p class="lede">Bookkeeping, payroll, HST and your corporate return, done for you. <b>A Canadian accountant reviews and signs everything.</b></p>
+        <div class="ledger" aria-label="Example: a day of books kept current">
+          <div><span>Supplier invoice</span><span class="when">today</span><span class="ok">matched</span></div>
+          <div><span>Card deposit</span><span class="when">today</span><span class="ok">matched</span></div>
+          <div><span>HST return</span><span class="when">due</span><span class="ok">ready</span></div>
+          <div><span>Payroll run</span><span class="when">Friday</span><span class="ok">scheduled</span></div>
+        </div>
+        <div class="cue"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Swipe to see how it works</div>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section class="slide" aria-label="2 of 8">
+      <div class="inner">
+        <div class="kicker">Sound familiar?</div>
+        <h2>Running the business, then doing the books at night.</h2>
+        <ul class="pains">
+          <li>Receipts and statements pile up<span>The books are weeks or months behind.</span></li>
+          <li>The accountant only shows up in April<span>Questions the rest of the year are billed by the hour.</span></li>
+          <li>HST and payroll deadlines sneak up<span>Late filings mean penalties.</span></li>
+          <li>Three or four different bills<span>Bookkeeper, software, year-end return, payroll.</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section class="slide" aria-label="3 of 8">
+      <div class="inner">
+        <div class="kicker">What taxifi does</div>
+        <h2>One team for all of it.</h2>
+        <ul class="services">
+          <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><div><b>Bookkeeping</b><span>Every transaction sorted and matched as it happens.</span></div></li>
+          <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M17 8h4M19 6v4"/></svg></span><div><b>Payroll</b><span>Pay runs on your schedule, CRA remittances and T4s.</span></div></li>
+          <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 5L5 19"/><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/></svg></span><div><b>HST / GST</b><span>Prepared and filed on time.</span></div></li>
+          <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3h9l3 3v15H6z"/><path d="M9 12l2 2 4-4"/></svg></span><div><b>T2 corporate return</b><span>Year-end included, not referred out.</span></div></li>
+          <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg></span><div><b>Advice from an accountant</b><span>Ask questions any time. No hourly bills.</span></div></li>
+        </ul>
+        <div class="price-note">All of it in one flat monthly price, quoted for your business on a 30-minute call.</div>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section class="slide" aria-label="4 of 8">
+      <div class="inner">
+        <div class="kicker">How it works</div>
+        <h2>AI does the daily work. An accountant signs.</h2>
+        <div class="flow">
+          <div class="step"><div class="rail"><span class="dot">1</span><span class="bar"></span></div><div class="txt"><span class="who">Every day</span><b>Your transactions come in</b><span>Bank, cards and receipts flow in automatically.</span></div></div>
+          <div class="step"><div class="rail"><span class="dot">2</span><span class="bar"></span></div><div class="txt"><span class="who">AI</span><b>Sorted and matched within 24 hours</b><span>Your books stay current, not 30 to 90 days behind.</span></div></div>
+          <div class="step"><div class="rail"><span class="dot">3</span><span class="bar"></span></div><div class="txt"><span class="who">Canadian accountant</span><b>Reviewed, signed and filed</b><span>HST, payroll and your T2, every filing signed.</span></div></div>
+        </div>
+        <div class="chips"><span class="chip">CRA EFILE authorized</span><span class="chip">Your data stays in Canada</span><span class="chip">Ask questions in plain English</span></div>
+      </div>
+    </section>
+
+    <!-- 5 -->
+    <section class="slide" aria-label="5 of 8">
+      <div class="inner">
+        <div class="kicker">The difference</div>
+        <h2>A traditional firm, next to taxifi.</h2>
+        <div class="cmp-wrap">
+          <table class="cmp">
+            <thead><tr><th scope="col"></th><th scope="col">Traditional firm</th><th scope="col" class="us">taxifi</th></tr></thead>
+            <tbody>
+              <tr><td>Your books</td><td>30 to 90 days behind</td><td class="us">Current within 24 hours</td></tr>
+              <tr><td>Corporate tax return</td><td>Often referred out</td><td class="us">Included</td></tr>
+              <tr><td>Questions for an accountant</td><td>Billed by the hour</td><td class="us">Included, any time</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6 -->
+    <section class="slide" aria-label="6 of 8">
+      <div class="inner">
+        <div class="kicker">Let's look at your numbers</div>
+        <h2>What does all this cost you today?</h2>
+        <div class="calc" role="group" aria-label="Your current costs">
+          <div class="row"><label for="c-book"><b>Bookkeeper</b><span>per month · typical $400 to $800</span></label><div class="money"><i>$</i><input id="c-book" inputmode="numeric" value="600" aria-describedby="c-note"></div></div>
+          <div class="row"><label for="c-soft"><b>Software</b><span>per month · typical $30 to $90</span></label><div class="money"><i>$</i><input id="c-soft" inputmode="numeric" value="60"></div></div>
+          <div class="row"><label for="c-ye"><b>Year-end corporate return</b><span>once a year · typical $2,000 to $4,000</span></label><div class="money"><i>$</i><input id="c-ye" inputmode="numeric" value="3000"></div></div>
+          <div class="row"><label for="c-hrs"><b>Your own hours on the books</b><span>per month, at $50 an hour</span></label><div class="money"><input id="c-hrs" inputmode="numeric" value="6" style="text-align:right"><i>h</i></div></div>
+        </div>
+        <div class="total" aria-live="polite"><span>A year, all in</span><b id="c-total">$14,520</b></div>
+        <p class="small" id="c-note">Example figures to start. Change them to what you pay now. Your exact flat monthly price is quoted live on a 30-minute call.</p>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section class="slide" aria-label="7 of 8">
+      <div class="inner">
+        <div class="kicker">No risk to try</div>
+        <h2>Easy to start. Easy to leave.</h2>
+        <ul class="safe">
+          <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span><div>Month to month, no contract<span>Stay because it works.</span></div></li>
+          <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span><div>Your first month is guaranteed<span>Not a fit in the first 30 days? That month is free.</span></div></li>
+          <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span><div>Switching is free<span>taxifi handles the handoff from your current accountant.</span></div></li>
+          <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span><div>Keep your accountant if you like them<span>taxifi can cover the other eleven months.</span></div></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 8 -->
+    <section class="slide" aria-label="8 of 8">
+      <div class="inner">
+        <div class="kicker">Next step</div>
+        <h2>Let's book your 30-minute call.</h2>
+        <a class="cta primary" id="cta-talk" href="https://taxifi.ai/talk" target="_blank" rel="noopener">Book a time now<small>Pick a slot together, takes a minute</small></a>
+        <a class="cta secondary" id="cta-start" href="https://taxifi.ai/start" target="_blank" rel="noopener">Start today instead<small>Three steps, no credit card. The call still happens.</small></a>
+        <div class="call">
+          <b>On the call</b>
+          <ol>
+            <li>A few questions about your business</li>
+            <li>Your flat monthly price, quoted live</li>
+            <li>You decide. No pressure, no contract.</li>
+          </ol>
+        </div>
+        <div>
+          <p class="small" style="margin-bottom:6px">Not a good time? With your OK, we'll text you the link:</p>
+          <div class="copyrow"><code id="link-text">https://taxifi.ai/talk</code><button type="button" id="copy-link">Copy</button></div>
+        </div>
+        <p class="foot">Questions? (613) 889-2763 · hello@taxifi.ai · 1167 Wellington Street West, Ottawa. Shown by your MainstreetAI rep on behalf of taxifi.</p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="nav" aria-label="Slides">
+    <button type="button" class="arrow" id="prev" aria-label="Previous slide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <div class="dots" id="dots"></div>
+    <button type="button" class="arrow" id="next" aria-label="Next slide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+  </nav>
+</div>
+
+<div class="sheet-bg" id="notes" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="notes-title">
+    <button type="button" class="close" id="notes-close">Close</button>
+    <h3 id="notes-title">Rep notes</h3>
+    <p class="small">For you, not the owner. Swipe the deck with them, then book on the last screen.</p>
+
+    <h4>Your rep code</h4>
+    <div class="field">
+      <label for="ref" class="small">Added to the booking links so the sign-up is credited to you. Saved on this phone.</label>
+      <input id="ref" placeholder="e.g. VIJAYB" maxlength="12" autocomplete="off">
+    </div>
+
+    <h4>The gate</h4>
+    <p style="margin:0">"Is the business incorporated?" No and never planning to: thank them and point to the free calculators at taxifi.ai/tools. "Not yet" with real revenue: keep going.</p>
+
+    <h4>The eight questions</h4>
+    <ol>
+      <li>Is the business incorporated?</li>
+      <li>Who keeps the books month to month?</li>
+      <li>Who files the corporate return in April?</li>
+      <li>Revenue band: under $250K, $250K to $1M, $1M to $5M, over?</li>
+      <li>Payroll: just you, 1 to 4, 5 to 10, more?</li>
+      <li>HST registered, and who files it?</li>
+      <li>Are the books current or behind?</li>
+      <li>What does all of this cost today?</li>
+    </ol>
+    <p class="small" style="margin-top:8px">Then first name, company, cell and email. Never leave without the email.</p>
+
+    <h4>Objections</h4>
+    <div class="obj"><b>"I already have an accountant."</b><span>Keep them if you like them. taxifi covers the other eleven months, and switching is free.</span></div>
+    <div class="obj"><b>"What does it cost?"</b><span>Typical costs on screen 6, then: the flat price is quoted live on the call.</span></div>
+    <div class="obj"><b>"So AI is doing my taxes?"</b><span>No. AI handles the daily volume. A Canadian accountant reviews, advises, signs and files. CRA EFILE authorized, data in Canada.</span></div>
+    <div class="obj"><b>"I do it myself, it's fine."</b><span>It's costing your evenings. The first month is guaranteed.</span></div>
+    <div class="obj"><b>"My partner handles that."</b><span>Get their email and send the two-line version with the call link.</span></div>
+    <div class="obj"><b>"Not interested."</b><span>Accept it. Leave a card and mention taxifi.ai/tools.</span></div>
+
+    <h4>Never at the door</h4>
+    <ul class="warn">
+      <li>A firm price, or a ballpark for catch-up work or over $5M / multiple corporations</li>
+      <li>A tax outcome, refund, or tax advice</li>
+      <li>Guarantees beyond: month to month, first month guaranteed, free switching</li>
+      <li>Sole proprietors or non-Canadian businesses</li>
+      <li>Criticizing anyone's current accountant</li>
+    </ul>
+    <p class="small" style="margin-top:12px">Texting the link? Ask first and log their consent (Canada's anti-spam law). Log every answered door in MainstreetAI before the next knock.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var deck = document.getElementById('deck');
+  var slides = Array.prototype.slice.call(deck.querySelectorAll('.slide'));
+  var dots = document.getElementById('dots');
+  var prev = document.getElementById('prev');
+  var next = document.getElementById('next');
+  var current = 0;
+
+  slides.forEach(function (s, i) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('aria-label', 'Go to slide ' + (i + 1));
+    b.addEventListener('click', function () { go(i); });
+    dots.appendChild(b);
+  });
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function go(i) {
+    i = Math.max(0, Math.min(slides.length - 1, i));
+    deck.scrollTo({ left: i * deck.clientWidth, behavior: reduce ? 'auto' : 'smooth' });
+  }
+  function mark() {
+    var i = Math.round(deck.scrollLeft / Math.max(1, deck.clientWidth));
+    if (i === current && dots.children[i] && dots.children[i].getAttribute('aria-current') === 'true') return;
+    current = i;
+    Array.prototype.forEach.call(dots.children, function (d, j) { d.setAttribute('aria-current', j === i ? 'true' : 'false'); });
+    prev.disabled = i === 0;
+    next.disabled = i === slides.length - 1;
+  }
+  var t;
+  deck.addEventListener('scroll', function () { clearTimeout(t); t = setTimeout(mark, 60); }, { passive: true });
+  window.addEventListener('resize', function () { go(current); });
+  prev.addEventListener('click', function () { go(current - 1); });
+  next.addEventListener('click', function () { go(current + 1); });
+  document.addEventListener('keydown', function (e) {
+    if (e.target && /input/i.test(e.target.tagName)) return;
+    if (!document.getElementById('notes').hidden) { if (e.key === 'Escape') closeNotes(); return; }
+    if (e.key === 'ArrowRight') go(current + 1);
+    if (e.key === 'ArrowLeft') go(current - 1);
+  });
+  current = -1; mark();
+
+  // the cost tally
+  var ids = ['c-book', 'c-soft', 'c-ye', 'c-hrs'];
+  function num(id) { var v = parseFloat(String(document.getElementById(id).value).replace(/[^0-9.]/g, '')); return isFinite(v) ? v : 0; }
+  function tally() {
+    var year = num('c-book') * 12 + num('c-soft') * 12 + num('c-ye') + num('c-hrs') * 50 * 12;
+    document.getElementById('c-total').textContent = '$' + Math.round(year).toLocaleString('en-CA');
+  }
+  ids.forEach(function (id) { document.getElementById(id).addEventListener('input', tally); });
+  tally();
+
+  // rep code on the booking links
+  var refInput = document.getElementById('ref');
+  function withRef(url, ref) { if (!ref) return url; try { var u = new URL(url); u.searchParams.set('ref', ref); return u.toString(); } catch (e) { return url; } }
+  function applyRef() {
+    var ref = refInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    document.getElementById('cta-talk').href = withRef('https://taxifi.ai/talk', ref);
+    document.getElementById('cta-start').href = withRef('https://taxifi.ai/start', ref);
+    document.getElementById('link-text').textContent = withRef('https://taxifi.ai/talk', ref);
+    try { localStorage.setItem('taxifi-door-ref', ref); } catch (e) {}
+  }
+  var fromHash = (/(?:^|[#&])ref=([A-Za-z0-9]{2,12})/.exec(location.hash) || [])[1];
+  try { refInput.value = fromHash || localStorage.getItem('taxifi-door-ref') || ''; } catch (e) { refInput.value = fromHash || ''; }
+  refInput.addEventListener('input', applyRef);
+  applyRef();
+
+  // copy the booking link
+  var copyBtn = document.getElementById('copy-link');
+  copyBtn.addEventListener('click', function () {
+    var text = document.getElementById('link-text').textContent;
+    var done = function () { copyBtn.textContent = 'Copied'; setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1800); };
+    var fallback = function () {
+      var r = document.createRange(); r.selectNodeContents(document.getElementById('link-text'));
+      var s = window.getSelection(); s.removeAllRanges(); s.addRange(r); copyBtn.textContent = 'Selected';
+    };
+    try { navigator.clipboard.writeText(text).then(done, fallback); } catch (e) { fallback(); }
+  });
+
+  // rep notes
+  var notes = document.getElementById('notes');
+  var opener = document.getElementById('notes-open');
+  function closeNotes() { notes.hidden = true; opener.focus(); }
+  opener.addEventListener('click', function () { notes.hidden = false; document.getElementById('notes-close').focus(); });
+  document.getElementById('notes-close').addEventListener('click', closeNotes);
+  notes.addEventListener('click', function (e) { if (e.target === notes) closeNotes(); });
+})();
+</script>
+
+</body>
+</html>

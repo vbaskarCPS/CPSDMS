@@ -3,7 +3,7 @@
 // the contact), and the rep's own history there. Works with no signal: the visit waits on the phone.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import QRCode from 'qrcode';
-import { BookOpen, Camera, ExternalLink, Globe, Mail, MapPin, MessageSquare, Navigation, Phone, QrCode, ScanLine, X } from 'lucide-react';
+import { BookOpen, Camera, ChevronLeft, Copy, ExternalLink, Globe, Mail, MapPin, MessageCircle, MessageSquare, Navigation, Phone, Presentation, QrCode, ScanLine, Send, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
@@ -41,7 +41,8 @@ export const BusinessSheet: React.FC<{
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [panel, setPanel] = useState<null | 'kit' | 'qr'>(null);
+  const [pitch, setPitch] = useState<null | 'menu' | 'kit' | 'share'>(null);
+  const [presenting, setPresenting] = useState(false);
   useEffect(() => () => photos.forEach(p => URL.revokeObjectURL(p.url)), []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const d: (RepBusinessView | (SheetFallback & { phone?: null; website?: null; plaza?: null; visits: []; sends: [] })) | null =
@@ -132,12 +133,27 @@ export const BusinessSheet: React.FC<{
         <a href={dirs} target="_blank" rel="noreferrer"><Navigation size={15} />Directions</a>
         {d.phone && <a href={`tel:${d.phone.replace(/[^0-9+]/g, '')}`}><Phone size={15} />{d.phone}</a>}
         {d.website && <a href={/^https?:/i.test(d.website) ? d.website : `https://${d.website}`} target="_blank" rel="noreferrer"><Globe size={15} />Website<ExternalLink size={12} /></a>}
-        <button type="button" onClick={() => setPanel(panel === 'kit' ? null : 'kit')} className={panel === 'kit' ? 'on' : ''}><BookOpen size={15} />Pitch</button>
+        <button type="button" onClick={() => setPitch(pitch ? null : 'menu')} className={pitch ? 'on' : ''} aria-expanded={!!pitch}><BookOpen size={15} />Pitch kit</button>
       </div>
-      {panel === 'kit' && <KitPanel kit={kit.data} error={kit.error} />}
-
-      <SendInfo kit={kit.data} business={d.name} businessId={id} campaign={campaign}
-        phone={cPhone || d.phone || ''} email={cEmail} contact={cName} showQr={panel === 'qr'} onQr={() => setPanel(panel === 'qr' ? null : 'qr')} />
+      {pitch && (
+        <div className="v2-rep-pitch">
+          {pitch === 'menu' ? (
+            <div className="v2-rep-pitch-menu">
+              <button type="button" onClick={() => setPitch('kit')}><BookOpen size={22} /><b>Kit</b><span>Pitch, objections, one-pager</span></button>
+              <button type="button" disabled={!kit.data?.present_url} onClick={() => setPresenting(true)}><Presentation size={22} /><b>Present</b>
+                <span>{kit.data && !kit.data.present_url ? 'No presentation yet' : 'Show the owner, book a call'}</span></button>
+              <button type="button" onClick={() => setPitch('share')}><Send size={22} /><b>Share info</b><span>Text, email, WhatsApp, QR</span></button>
+            </div>
+          ) : (
+            <>
+              <button type="button" className="v2-rep-back" onClick={() => setPitch('menu')}><ChevronLeft size={15} />Pitch kit</button>
+              {pitch === 'kit' && <KitPanel kit={kit.data} error={kit.error} />}
+              {pitch === 'share' && <SendInfo kit={kit.data} error={kit.error} business={d.name} businessId={id} campaign={campaign}
+                phone={cPhone || d.phone || ''} email={cEmail} contact={cName} />}
+            </>
+          )}
+        </div>)}
+      {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref} onClose={() => setPresenting(false)} />}
 
       <div style={{ fontWeight: 800, marginTop: 10 }}>What happened?</div>
       <div className="v2-rep-outs">
@@ -207,44 +223,72 @@ const KitPanel: React.FC<{ kit: Kit | null; error: unknown }> = ({ kit, error })
   );
 };
 
-// ───────────── send info ─────────────
-const SendInfo: React.FC<{ kit: Kit | null; business: string; businessId: string; campaign: string; phone: string; email: string; contact: string; showQr: boolean; onQr: () => void }> =
-  ({ kit, business, businessId, campaign, phone, email, contact, showQr, onQr }) => {
+// ───────────── share info: every channel, each one logged ─────────────
+type Channel = 'sms' | 'email' | 'whatsapp' | 'link' | 'qr';
+const SendInfo: React.FC<{ kit: Kit | null; error: unknown; business: string; businessId: string; campaign: string; phone: string; email: string; contact: string }> =
+  ({ kit, error, business, businessId, campaign, phone, email, contact }) => {
     const { profile } = useAuth();
     const [to, setTo] = useState('');
     const [qr, setQr] = useState<string | null>(null);
+    const [showQr, setShowQr] = useState(false);
+    const [copied, setCopied] = useState(false);
     const link = kit ? refLink(kit.info_url, kit.ref) : '';
     const rep = profile?.full_name?.split(' ')[0] || '';
     const vars = { business, link, rep, contact: contact.split(' ')[0] || undefined };
-    const target = to.trim() || phone || email;
-    const isEmail = /@/.test(target);
+    const typed = to.trim();
+    const mobile = (typed && !/@/.test(typed) ? typed : phone).trim();
+    const mail = (typed && /@/.test(typed) ? typed : email).trim();
     const sms = kit ? fillTemplate(kit.info_sms || DEFAULT_SMS, vars) : '';
     const subj = kit ? fillTemplate(kit.info_email_subject || DEFAULT_EMAIL_SUBJECT, vars) : '';
     const body = kit ? fillTemplate(kit.info_email_body || DEFAULT_EMAIL_BODY, vars) : '';
-    useEffect(() => {
-      if (!showQr || !link) return;
-      QRCode.toDataURL(link, { width: 240, margin: 1 }).then(setQr).catch(() => setQr(null));
-    }, [showQr, link]);
-    const log = (channel: 'sms' | 'email', dest: string) => {
+    const digits = mobile.replace(/[^0-9]/g, '');
+    const wa = `https://wa.me/${digits.length === 10 ? `1${digits}` : digits}?text=${encodeURIComponent(sms)}`;
+    const log = (channel: Channel, dest: string) => {
       sendOrQueue({ id: newId(), rpc: 'ms_rep_log_send', args: { p_business: businessId, p_campaign: campaign, p_channel: channel, p_to: dest || null },
         label: `Sent info to ${business}`, queued_at: Date.now() }).catch(() => {});
     };
-    if (!kit) return null;
-    if (!link) return <div className="v2-small v2-mut" style={{ margin: '4px 0' }}>Send info: your admin hasn’t added the {kit.name} link yet.</div>;
+    useEffect(() => {
+      if (!showQr || !link) return;
+      QRCode.toDataURL(link, { width: 260, margin: 1 }).then(setQr).catch(() => setQr(null));
+    }, [showQr, link]);
+    const copy = async () => {
+      try { await navigator.clipboard.writeText(sms || link); setCopied(true); setTimeout(() => setCopied(false), 1800); log('link', ''); } catch { /* the link is shown to select by hand */ }
+    };
+    if (!kit) return error ? <ErrorBox error={error} /> : <Loading />;
+    if (!link) return <div className="v2-small v2-mut">Your admin hasn’t added the {kit.name} link yet.</div>;
     return (
       <div className="v2-rep-send">
-        <div className="v2-rep-row"><b style={{ fontSize: 13.5 }}>Send info</b><span className="v2-small v2-mut">Your code {kit.ref} is on the link</span></div>
-        <input className="v2-input" placeholder={phone || email || 'Their mobile or email'} value={to} onChange={e => setTo(e.target.value)} inputMode="email" autoComplete="off" />
-        <div className="v2-rep-acts" style={{ margin: '8px 0 0' }}>
-          {!isEmail && target && <a href={smsHref(target, sms)} onClick={() => log('sms', target)}><MessageSquare size={15} />Text it</a>}
-          {(isEmail || !target) && <a href={mailHref(isEmail ? target : '', subj, body)} onClick={() => log('email', isEmail ? target : '')}><Mail size={15} />Email it</a>}
-          {!isEmail && target && email && <a href={mailHref(email, subj, body)} onClick={() => log('email', email)}><Mail size={15} />Email it</a>}
-          <button type="button" onClick={onQr} className={showQr ? 'on' : ''}><QrCode size={15} />Show QR</button>
+        <div className="v2-rep-row"><b style={{ fontSize: 13.5 }}>Share info</b><span className="v2-small v2-mut">Your code {kit.ref} is on the link</span></div>
+        <input className="v2-input" placeholder={phone || email || 'Their mobile or email'} value={to} onChange={e => setTo(e.target.value)} inputMode="email" autoComplete="off" aria-label="Their mobile or email" />
+        <div className="v2-rep-channels">
+          <a className={mobile ? '' : 'off'} href={mobile ? smsHref(mobile, sms) : undefined} onClick={() => mobile && log('sms', mobile)} aria-disabled={!mobile}><MessageSquare size={18} />Text</a>
+          <a className={mail ? '' : 'off'} href={mail ? mailHref(mail, subj, body) : undefined} onClick={() => mail && log('email', mail)} aria-disabled={!mail}><Mail size={18} />Email</a>
+          <a className={digits.length >= 10 ? '' : 'off'} href={digits.length >= 10 ? wa : undefined} target="_blank" rel="noreferrer" onClick={() => digits.length >= 10 && log('whatsapp', mobile)} aria-disabled={digits.length < 10}><MessageCircle size={18} />WhatsApp</a>
+          <button type="button" onClick={copy}><Copy size={18} />{copied ? 'Copied' : 'Copy'}</button>
+          <button type="button" className={showQr ? 'on' : ''} onClick={() => { if (!showQr) log('qr', ''); setShowQr(!showQr); }}><QrCode size={18} />QR</button>
         </div>
+        {!mobile && !mail && <div className="v2-small v2-mut">Type their mobile or email above to text, email or WhatsApp. Ask first: Canada’s anti-spam law needs their OK.</div>}
         {showQr && <div className="v2-rep-qr">{qr ? <img src={qr} alt="QR code for the information link" /> : <Loading />}<div className="v2-small v2-mut">They scan it with their camera.</div></div>}
+        <div className="v2-small v2-mut" style={{ overflowWrap: 'anywhere', marginTop: 6 }}>{link}</div>
       </div>
     );
   };
+
+// ───────────── present: the campaign's deck, full screen ─────────────
+const Presenter: React.FC<{ url: string; code: string; onClose: () => void }> = ({ url, code, onClose }) => {
+  const src = `${url}#embed=1&ref=${encodeURIComponent(code)}`;
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, [onClose]);
+  return (
+    <div className="v2-rep-present" role="dialog" aria-label="Presentation">
+      <iframe src={src} title="Presentation" />
+      <button type="button" className="close" onClick={onClose} aria-label="Close the presentation"><X size={20} /></button>
+    </div>
+  );
+};
 
 // ───────────── the rep's history here ─────────────
 const History: React.FC<{ d: RepBusinessView; loading: boolean }> = ({ d, loading }) => {
@@ -275,7 +319,7 @@ const History: React.FC<{ d: RepBusinessView; loading: boolean }> = ({ d, loadin
       {!!d.sends.length && (
         <>
           <div style={{ fontWeight: 800, margin: '14px 0 2px' }}>Info sent</div>
-          {d.sends.map((s, i) => <div key={i} className="v2-small v2-rep-visit">{s.channel === 'sms' ? 'Text' : 'Email'}{s.to ? ` to ${s.to}` : ''} · {whenLabel(s.at)}</div>)}
+          {d.sends.map((s, i) => <div key={i} className="v2-small v2-rep-visit">{({ sms: 'Text', email: 'Email', whatsapp: 'WhatsApp', link: 'Link copied', qr: 'QR shown' } as Record<string, string>)[s.channel] || s.channel}{s.to ? ` to ${s.to}` : ''} · {whenLabel(s.at)}</div>)}
         </>)}
     </>
   );
