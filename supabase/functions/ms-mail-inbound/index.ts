@@ -1,7 +1,8 @@
 // supabase/functions/ms-mail-inbound/index.ts — MainstreetAI mail: Resend's "email.received" webhook.
 //
 // Resend posts here when mail arrives at propertystars.app. The post is checked against the
-// webhook's signing secret (RESEND_WEBHOOK_SECRET, Svix format), then:
+// webhook's signing secret (RESEND_WEBHOOK_SECRET, Svix format), then (with RESEND_RECEIVING_API_KEY, a
+// full-access key, falling back to RESEND_API_KEY):
 //   1. the full email (body, headers) is fetched from Resend's receiving API
 //   2. ms_mail_inbound files it: the conversation's reply address, else the message it answers, else the
 //      latest conversation with that sender, else a new one (under the business with that contact's
@@ -46,10 +47,11 @@ Deno.serve(async req => {
   try {
     const evt = JSON.parse(raw) as { type?: string; data?: { email_id?: string; created_at?: string } };
     if (evt.type !== 'email.received' || !evt.data?.email_id) return json({ ignored: evt.type || 'unknown' });
-    const apiKey = Deno.env.get('RESEND_API_KEY')!;
+    // reading received mail needs a full-access key; the app's sending key may be "sending access" only
+    const apiKey = Deno.env.get('RESEND_RECEIVING_API_KEY') || Deno.env.get('RESEND_API_KEY')!;
     const id = evt.data.email_id;
     const r = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${apiKey}` } });
-    if (!r.ok) return json({ error: `Couldn’t fetch the email (${r.status})` }, 502);   // Resend retries
+    if (!r.ok) { const why = await r.text().catch(() => ''); console.error('ms-mail-inbound: fetch failed', r.status, why.slice(0, 300)); return json({ error: `Couldn’t fetch the email (${r.status})` }, 502); }   // Resend retries
     const e = await r.json() as Record<string, unknown> & { headers?: Record<string, string> };
     const from = parseAddress(String(e.from || ''));
     const hdr = Object.fromEntries(Object.entries(e.headers || {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
