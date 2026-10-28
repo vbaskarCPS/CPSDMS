@@ -106,6 +106,45 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 .cmp td.us { color: var(--accent); font-weight: 700; background: var(--accent-soft); }
 .cmp thead th.us { color: var(--accent); background: var(--accent-soft); border-radius: 10px 10px 0 0; }
 
+/* head to head (slide 5) */
+.vs { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.vs-h, .vs-r { display: grid; grid-template-columns: 30% 1fr 1fr; }
+.vs-h span { padding: 10px; font-family: var(--mono); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); }
+.vs-h .us { color: var(--accent); background: var(--accent-soft); }
+.vs-r > span { padding: 10px; border-top: 1px solid var(--line); font-size: 14px; line-height: 1.3; display: flex; gap: 6px; align-items: flex-start; }
+.vs-r > span:first-child { font-weight: 700; font-size: 13.5px; }
+.vs-r .us { background: var(--accent-soft); font-weight: 600; }
+.vs .x, .vs .y { flex-shrink: 0; width: 16px; height: 16px; border-radius: 50%; margin-top: 1px; position: relative; }
+.vs .x { background: rgba(180, 80, 28, .14); }
+.vs .x::before, .vs .x::after { content: ""; position: absolute; left: 7px; top: 4px; width: 2px; height: 8px; background: var(--warn); border-radius: 1px; transform: rotate(45deg); }
+.vs .x::after { transform: rotate(-45deg); }
+.vs .y { background: var(--accent); }
+.vs .y::after { content: ""; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px; border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+
+/* side by side (slide 6) */
+.sbs { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.sbs-h, .sbs-r, .sbs-t { display: grid; grid-template-columns: 1fr 104px 104px; gap: 8px; align-items: center; padding: 0 12px; }
+.sbs-h { padding-top: 10px; padding-bottom: 6px; }
+.sbs-h span { font-family: var(--mono); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); text-align: right; }
+.sbs-h .us { color: var(--accent); }
+.sbs-r { border-top: 1px solid var(--line); padding-top: 10px; padding-bottom: 10px; }
+.sbs-r label b, .sbs-r .lab b { display: block; font-size: 15px; }
+.sbs-r label > span, .sbs-r .lab > span { display: block; font-size: 12px; line-height: 1.35; color: var(--mut); margin-top: 2px; }
+.sbs .money input { padding: 8px 4px; font-size: 15px; }
+.sbs .us { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+.sbs .us b { font-family: var(--mono); font-size: 16px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.sbs .us span { font-size: 11px; color: var(--mut); }
+.sbs .emp input { width: 34px; border: 1.5px solid var(--line); border-radius: 6px; background: var(--bg); padding: 1px 4px; font-family: var(--mono); font-size: 12px; font-weight: 700; text-align: center; }
+.sbs-r.disc { background: var(--accent-soft); }
+.sbs-t { border-top: 2px solid var(--ink); padding-top: 12px; padding-bottom: 12px; }
+.sbs-t span { font-weight: 700; }
+.sbs-t b { text-align: right; font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; }
+.sbs-t b.us { color: var(--accent); display: block; }
+.save { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; justify-content: center; text-align: center; background: var(--accent); color: var(--on-accent); border-radius: 16px; padding: 14px 16px; }
+.save span { font-weight: 600; }
+.save b { font-family: var(--mono); font-size: clamp(30px, 9vw, 40px); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+@media (max-width: 380px) { .sbs-h, .sbs-r, .sbs-t { grid-template-columns: 1fr 88px 84px; gap: 6px; padding: 0 10px; } .vs-h, .vs-r { grid-template-columns: 28% 1fr 1fr; } .vs-r > span { font-size: 13px; padding: 9px 8px; } }
+
 /* cost */
 .calc { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 6px 16px; }
 .row { display: grid; grid-template-columns: 1fr 128px; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
@@ -176,7 +215,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 <body>
 <div class="app">
   <header class="top">
-    <span class="brand">taxifi<small>Ottawa accounting firm</small></span>
+    <span class="brand">taxifi<small>Accounting Powered by AI</small></span>
     <span class="sp"></span>
     <button type="button" class="notes-btn" id="notes-open" aria-haspopup="dialog">Rep notes</button>
   </header>
@@ -188,11 +227,11 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
       <div class="inner cover">
         <div class="kicker">For incorporated Canadian businesses</div>
         <h1>Your books, current every day.</h1>
-        <p class="lede">Bookkeeping, payroll, HST and your corporate return, done for you. <b>A Canadian accountant reviews and signs everything.</b></p>
+        <p class="lede">Bookkeeping, payroll, sales tax and your corporate return, done for you. <b>A Canadian accountant reviews and signs everything.</b></p>
         <div class="ledger" aria-label="Example: a day of books kept current">
           <div><span>Supplier invoice</span><span class="when">today</span><span class="ok">matched</span></div>
           <div><span>Card deposit</span><span class="when">today</span><span class="ok">matched</span></div>
-          <div><span>HST return</span><span class="when">due</span><span class="ok">ready</span></div>
+          <div><span>Sales tax return</span><span class="when">due</span><span class="ok">ready</span></div>
           <div><span>Payroll run</span><span class="when">Friday</span><span class="ok">scheduled</span></div>
         </div>
         <div class="cue"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Swipe to see how it works</div>
@@ -207,8 +246,8 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
         <ul class="pains">
           <li>Receipts and statements pile up<span>The books are weeks or months behind.</span></li>
           <li>The accountant only shows up in April<span>Questions the rest of the year are billed by the hour.</span></li>
-          <li>HST and payroll deadlines sneak up<span>Late filings mean penalties.</span></li>
-          <li>Three or four different bills<span>Bookkeeper, software, year-end return, payroll.</span></li>
+          <li>Sales tax and payroll deadlines sneak up<span>Late filings mean penalties.</span></li>
+          <li>QuickBooks, a bookkeeper and an accountant<span>Three separate bills. taxifi puts all of it under one roof.</span></li>
         </ul>
       </div>
     </section>
@@ -221,7 +260,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
         <ul class="services">
           <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><div><b>Bookkeeping</b><span>Every transaction sorted and matched as it happens.</span></div></li>
           <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M17 8h4M19 6v4"/></svg></span><div><b>Payroll</b><span>Pay runs on your schedule, CRA remittances and T4s.</span></div></li>
-          <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 5L5 19"/><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/></svg></span><div><b>HST / GST</b><span>Prepared and filed on time.</span></div></li>
+          <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 5L5 19"/><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/></svg></span><div><b>Sales tax</b><span>Returns prepared and filed on time.</span></div></li>
           <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3h9l3 3v15H6z"/><path d="M9 12l2 2 4-4"/></svg></span><div><b>T2 corporate return</b><span>Year-end included, not referred out.</span></div></li>
           <li><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg></span><div><b>Advice from an accountant</b><span>Ask questions any time. No hourly bills.</span></div></li>
         </ul>
@@ -237,7 +276,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
         <div class="flow">
           <div class="step"><div class="rail"><span class="dot">1</span><span class="bar"></span></div><div class="txt"><span class="who">Every day</span><b>Your transactions come in</b><span>Bank, cards and receipts flow in automatically.</span></div></div>
           <div class="step"><div class="rail"><span class="dot">2</span><span class="bar"></span></div><div class="txt"><span class="who">AI</span><b>Sorted and matched within 24 hours</b><span>Your books stay current, not 30 to 90 days behind.</span></div></div>
-          <div class="step"><div class="rail"><span class="dot">3</span><span class="bar"></span></div><div class="txt"><span class="who">Canadian accountant</span><b>Reviewed, signed and filed</b><span>HST, payroll and your T2, every filing signed.</span></div></div>
+          <div class="step"><div class="rail"><span class="dot">3</span><span class="bar"></span></div><div class="txt"><span class="who">Canadian accountant</span><b>Reviewed, signed and filed</b><span>Sales tax, payroll and your T2, every filing signed.</span></div></div>
         </div>
         <div class="chips"><span class="chip">CRA EFILE authorized</span><span class="chip">Your data stays in Canada</span><span class="chip">Ask questions in plain English</span></div>
       </div>
@@ -246,34 +285,52 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     <!-- 5 -->
     <section class="slide" aria-label="5 of 8">
       <div class="inner">
-        <div class="kicker">The difference</div>
-        <h2>A traditional firm, next to taxifi.</h2>
-        <div class="cmp-wrap">
-          <table class="cmp">
-            <thead><tr><th scope="col"></th><th scope="col">Traditional firm</th><th scope="col" class="us">taxifi</th></tr></thead>
-            <tbody>
-              <tr><td>Your books</td><td>30 to 90 days behind</td><td class="us">Current within 24 hours</td></tr>
-              <tr><td>Corporate tax return</td><td>Often referred out</td><td class="us">Included</td></tr>
-              <tr><td>Questions for an accountant</td><td>Billed by the hour</td><td class="us">Included, any time</td></tr>
-            </tbody>
-          </table>
+        <div class="kicker">Head to head</div>
+        <h2>QuickBooks, next to taxifi.</h2>
+        <p class="lede" style="font-size:16px">QuickBooks is good software. <b>taxifi is the firm that does the work.</b></p>
+        <div class="vs" role="table" aria-label="QuickBooks Online compared with taxifi">
+          <div class="vs-h" role="row"><span role="columnheader"></span><span role="columnheader">QuickBooks</span><span role="columnheader" class="us">taxifi</span></div>
+          <div class="vs-r" role="row"><span role="rowheader">What it is</span><span role="cell">Software you or your bookkeeper run</span><span role="cell" class="us">An accounting firm powered by AI</span></div>
+          <div class="vs-r" role="row"><span role="rowheader">Who does the work</span><span role="cell"><i class="x" aria-hidden="true"></i>You, or people you hire</span><span role="cell" class="us"><i class="y" aria-hidden="true"></i>AI daily, a Canadian accountant signs</span></div>
+          <div class="vs-r" role="row"><span role="rowheader">Corporate return (T2)</span><span role="cell"><i class="x" aria-hidden="true"></i>Not included, hire an accountant</span><span role="cell" class="us"><i class="y" aria-hidden="true"></i>Prepared, signed and filed</span></div>
+          <div class="vs-r" role="row"><span role="rowheader">Payroll remittances</span><span role="cell"><i class="x" aria-hidden="true"></i>Calculated, running it is on you</span><span role="cell" class="us"><i class="y" aria-hidden="true"></i>Handled for you</span></div>
+          <div class="vs-r" role="row"><span role="rowheader">Sales tax returns</span><span role="cell"><i class="x" aria-hidden="true"></i>Tracked, filing is on you</span><span role="cell" class="us"><i class="y" aria-hidden="true"></i>Prepared and filed</span></div>
+          <div class="vs-r" role="row"><span role="rowheader">Tax planning</span><span role="cell"><i class="x" aria-hidden="true"></i>None, software doesn’t advise</span><span role="cell" class="us"><i class="y" aria-hidden="true"></i>Included, from books current daily</span></div>
+          <div class="vs-r" role="row"><span role="rowheader">When CRA asks</span><span role="cell"><i class="x" aria-hidden="true"></i>You, alone, with your reports</span><span role="cell" class="us"><i class="y" aria-hidden="true"></i>Your accountant answers</span></div>
+          <div class="vs-r" role="row"><span role="rowheader">Your time</span><span role="cell"><i class="x" aria-hidden="true"></i>Hours every week, plus year-end</span><span role="cell" class="us"><i class="y" aria-hidden="true"></i>The occasional question</span></div>
         </div>
+        <p class="small">Comparison from taxifi.ai/quickbooks-vs-taxifi, August 2026.</p>
       </div>
     </section>
 
     <!-- 6 -->
     <section class="slide" aria-label="6 of 8">
       <div class="inner">
-        <div class="kicker">Let's look at your numbers</div>
-        <h2>What does all this cost you today?</h2>
-        <div class="calc" role="group" aria-label="Your current costs">
-          <div class="row"><label for="c-book"><b>Bookkeeper</b><span>per month · typical $400 to $800</span></label><div class="money"><i>$</i><input id="c-book" inputmode="numeric" value="600" aria-describedby="c-note"></div></div>
-          <div class="row"><label for="c-soft"><b>Software</b><span>per month · typical $30 to $90</span></label><div class="money"><i>$</i><input id="c-soft" inputmode="numeric" value="60"></div></div>
-          <div class="row"><label for="c-ye"><b>Year-end corporate return</b><span>once a year · typical $2,000 to $4,000</span></label><div class="money"><i>$</i><input id="c-ye" inputmode="numeric" value="3000"></div></div>
-          <div class="row"><label for="c-hrs"><b>Your own hours on the books</b><span>per month, at $50 an hour</span></label><div class="money"><input id="c-hrs" inputmode="numeric" value="6" style="text-align:right"><i>h</i></div></div>
+        <div class="kicker">Let’s look at your numbers</div>
+        <h2>What you pay now, next to taxifi.</h2>
+        <div class="sbs" role="group" aria-label="Your costs today next to taxifi">
+          <div class="sbs-h"><span></span><span>Today</span><span class="us">taxifi</span></div>
+          <div class="sbs-r"><label for="c-book"><b>Bookkeeping</b><span>a month · typical $400 to $800</span></label>
+            <div class="money"><i>$</i><input id="c-book" inputmode="numeric" value="600"></div>
+            <div class="us"><b>$299</b><span>Core, from</span></div></div>
+          <div class="sbs-r"><label for="c-soft"><b>Software</b><span>a month · QuickBooks or similar</span></label>
+            <div class="money"><i>$</i><input id="c-soft" inputmode="numeric" value="60"></div>
+            <div class="us"><b>$0</b><span>included</span></div></div>
+          <div class="sbs-r"><label for="c-ye"><b>Corporate return</b><span>a year · typical $2,000 to $4,000</span></label>
+            <div class="money"><i>$</i><input id="c-ye" inputmode="numeric" value="3000"></div>
+            <div class="us"><b>$1,500</b><span>T2 Standard, from</span></div></div>
+          <div class="sbs-r"><label for="c-pay"><b>Payroll</b><span>a month · <span class="emp">for <input id="c-emp" inputmode="numeric" value="3" aria-label="Number of employees"> staff</span></span></label>
+            <div class="money"><i>$</i><input id="c-pay" inputmode="numeric" value="60"></div>
+            <div class="us"><b id="t-pay">$79</b><span>$49 + $10 each</span></div></div>
+          <div class="sbs-r"><label for="c-hrs"><b>Your time on the books</b><span>hours a month, at $50 an hour</span></label>
+            <div class="money"><input id="c-hrs" inputmode="numeric" value="6" style="text-align:right"><i>h</i></div>
+            <div class="us"><b>$0</b><span>the odd question</span></div></div>
+          <div class="sbs-r disc"><span class="lab"><b>Bundle discount</b><span>on the taxifi quote</span></span><span></span>
+            <div class="us"><b id="t-disc">−15%</b><span id="t-disc-n">3 services</span></div></div>
+          <div class="sbs-t"><span>A year</span><b id="c-total">$15,240</b><b class="us" id="t-total">$5,131</b></div>
         </div>
-        <div class="total" aria-live="polite"><span>A year, all in</span><b id="c-total">$14,520</b></div>
-        <p class="small" id="c-note">Example figures to start. Change them to what you pay now. Your exact flat monthly price is quoted live on a 30-minute call.</p>
+        <div class="save" aria-live="polite"><span>You’d keep about</span><b id="t-save">$10,109</b><span>a year</span></div>
+        <p class="small" id="c-note">Sales tax returns and year-round questions to your accountant are included in Core. taxifi figures are the starting prices at taxifi.ai/pricing (CAD, before tax, August 2026); Core scales with your monthly expenses. Your exact price is quoted on the 30-minute call.</p>
       </div>
     </section>
 
@@ -344,7 +401,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
       <li>Who files the corporate return in April?</li>
       <li>Revenue band: under $250K, $250K to $1M, $1M to $5M, over?</li>
       <li>Payroll: just you, 1 to 4, 5 to 10, more?</li>
-      <li>HST registered, and who files it?</li>
+      <li>Registered for sales tax, and who files it?</li>
       <li>Are the books current or behind?</li>
       <li>What does all of this cost today?</li>
     </ol>
@@ -352,7 +409,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 
     <h4>Objections</h4>
     <div class="obj"><b>"I already have an accountant."</b><span>Keep them if you like them. taxifi covers the other eleven months, and switching is free.</span></div>
-    <div class="obj"><b>"What does it cost?"</b><span>Typical costs on screen 6, then: the flat price is quoted live on the call.</span></div>
+    <div class="obj"><b>"What does it cost?"</b><span>Screen 6 puts what they pay now next to taxifi’s published starting prices. Their exact price is quoted live on the call.</span></div>
     <div class="obj"><b>"So AI is doing my taxes?"</b><span>No. AI handles the daily volume. A Canadian accountant reviews, advises, signs and files. CRA EFILE authorized, data in Canada.</span></div>
     <div class="obj"><b>"I do it myself, it's fine."</b><span>It's costing your evenings. The first month is guaranteed.</span></div>
     <div class="obj"><b>"My partner handles that."</b><span>Get their email and send the two-line version with the call link.</span></div>
@@ -412,14 +469,27 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   });
   current = -1; mark();
 
-  // the cost tally
-  var ids = ['c-book', 'c-soft', 'c-ye', 'c-hrs'];
+  // the cost tally: today next to taxifi's published starting prices (taxifi.ai/pricing)
+  var CORE = 299, T2 = 1500, PAY_BASE = 49, PAY_EACH = 10;
   function num(id) { var v = parseFloat(String(document.getElementById(id).value).replace(/[^0-9.]/g, '')); return isFinite(v) ? v : 0; }
+  function money(v) { return '$' + Math.round(v).toLocaleString('en-CA'); }
   function tally() {
-    var year = num('c-book') * 12 + num('c-soft') * 12 + num('c-ye') + num('c-hrs') * 50 * 12;
-    document.getElementById('c-total').textContent = '$' + Math.round(year).toLocaleString('en-CA');
+    var emp = Math.max(0, Math.round(num('c-emp')));
+    var today = num('c-book') * 12 + num('c-soft') * 12 + num('c-ye') + num('c-pay') * 12 + num('c-hrs') * 50 * 12;
+    var pay = emp > 0 ? PAY_BASE + PAY_EACH * emp : 0;
+    var services = 2 + (pay ? 1 : 0);                 // bookkeeping + T2 (+ payroll)
+    var disc = services >= 3 ? 0.15 : 0.10;
+    var taxifi = (CORE * 12 + T2 + pay * 12) * (1 - disc);
+    var save = today - taxifi;
+    document.getElementById('t-pay').textContent = money(pay);
+    document.getElementById('t-disc').textContent = '\u2212' + Math.round(disc * 100) + '%';
+    document.getElementById('t-disc-n').textContent = services + ' services';
+    document.getElementById('c-total').textContent = money(today);
+    document.getElementById('t-total').textContent = money(taxifi);
+    document.getElementById('t-save').textContent = money(Math.max(0, save));
+    document.querySelector('.save').hidden = save <= 0;
   }
-  ids.forEach(function (id) { document.getElementById(id).addEventListener('input', tally); });
+  ['c-book', 'c-soft', 'c-ye', 'c-pay', 'c-emp', 'c-hrs'].forEach(function (id) { document.getElementById(id).addEventListener('input', tally); });
   tally();
 
   // rep code on the booking links
