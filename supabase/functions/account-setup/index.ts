@@ -52,7 +52,7 @@ export function repSetupEmail(p: { firstName: string; email: string; link: strin
 <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px;"><tr><td align="center">
 <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border-radius:12px;overflow:hidden;">
-  <tr><td style="background:#1c1b1a;padding:24px;text-align:center;color:#f6f1e7;font-size:24px;font-weight:bold;letter-spacing:-.5px;">Mainstreet<span style="color:#5eead4;">AI</span></td></tr>
+  <tr><td style="background:#1c1b1a;padding:24px;text-align:center;color:#f6f1e7;font-size:24px;font-weight:bold;letter-spacing:-.5px;">Mainstreet<span style="color:#FFD54A;">AI</span></td></tr>
   <tr><td style="padding:28px;">
     <h2 style="margin:0 0 10px;color:#111827;font-size:20px;">Hi ${esc(p.firstName)},</h2>
     <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">${by} as a MainstreetAI rep. Choose your password to finish setting up your account.</p>
