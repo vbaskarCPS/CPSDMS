@@ -1,6 +1,6 @@
 // supabase/functions/ms-mail-inbound/index.ts — MainstreetAI mail: Resend's "email.received" webhook.
 //
-// Resend posts here when mail arrives at reply.propertystars.app. The post is checked against the
+// Resend posts here when mail arrives at propertystars.app. The post is checked against the
 // webhook's signing secret (RESEND_WEBHOOK_SECRET, Svix format), then:
 //   1. the full email (body, headers) is fetched from Resend's receiving API
 //   2. ms_mail_inbound files it: the conversation's reply address, else the message it answers, else the

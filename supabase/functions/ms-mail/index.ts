@@ -5,7 +5,7 @@
 //   1. ms_mail_prepare (as them) checks who may write to whom, unsubscribes and attachments, and keeps the
 //      message as "sending"
 //   2. Resend sends it from mainstreetai@propertystars.app. Replies go to the conversation's own address
-//      (c-<token>@reply.propertystars.app), so they land back in the right conversation
+//      (c-<token>@propertystars.app), so they land back in the right conversation
 //   3. ms_mail_sent (service role) records what Resend said
 // The first email in a conversation carries who it's from and how to unsubscribe (Canada's anti-spam law).
 // The Resend key lives only in the RESEND_API_KEY secret.
@@ -13,7 +13,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
 const APP_URL = (Deno.env.get('APP_URL') || 'https://propertystars.app').replace(/\/+$/, '');
 const FROM_ADDRESS = Deno.env.get('MAINSTREET_MAIL_FROM') || 'mainstreetai@propertystars.app';
-const REPLY_DOMAIN = Deno.env.get('MAINSTREET_REPLY_DOMAIN') || 'reply.propertystars.app';
+const REPLY_DOMAIN = Deno.env.get('MAINSTREET_REPLY_DOMAIN') || 'propertystars.app';
 const MAILING_ADDRESS = Deno.env.get('MAINSTREET_MAILING_ADDRESS') || '';
 const cors = {
   'Access-Control-Allow-Origin': '*',
