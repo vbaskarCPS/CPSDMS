@@ -4,16 +4,15 @@
 // as the signed-in rep or admin.
 //   1. ms_mail_prepare (as them) checks who may write to whom, unsubscribes and attachments, and keeps the
 //      message as "sending"
-//   2. Resend sends it from mainstreetai@propertystars.app. Replies go to the conversation's own address
-//      (c-<token>@propertystars.app), so they land back in the right conversation
-//   3. ms_mail_sent (service role) records what Resend said
+//   2. Resend sends it from mainstreetai@propertystars.app (the reply address is the same, clean address)
+//   3. ms_mail_sent (service role) records what Resend said, and the email's Message-ID is kept: a reply
+//      quotes it back (In-Reply-To), which is how the reply finds its conversation
 // The first email in a conversation carries who it's from and how to unsubscribe (Canada's anti-spam law).
 // The Resend key lives only in the RESEND_API_KEY secret.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
 const APP_URL = (Deno.env.get('APP_URL') || 'https://propertystars.app').replace(/\/+$/, '');
 const FROM_ADDRESS = Deno.env.get('MAINSTREET_MAIL_FROM') || 'mainstreetai@propertystars.app';
-const REPLY_DOMAIN = Deno.env.get('MAINSTREET_REPLY_DOMAIN') || 'propertystars.app';
 const MAILING_ADDRESS = Deno.env.get('MAINSTREET_MAILING_ADDRESS') || '';
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -44,6 +43,22 @@ ${legal}
 </div></body></html>`;
   const text = `${p.text || ''}\n\n${p.sender_first}\n${p.campaign ? `${p.campaign} · via MainstreetAI` : 'MainstreetAI'}${p.sender_phone ? `\n${p.sender_phone}` : ''}\n\n${p.first_contact ? `Sent through MainstreetAI${MAILING_ADDRESS ? `, ${MAILING_ADDRESS}` : ''}. ` : ''}Unsubscribe: ${unsubscribe}\n`;
   return { html, text };
+}
+
+/** The Message-ID Resend gave the email, kept so a reply (In-Reply-To) finds its conversation. Reading a
+ *  sent email needs a full-access key, so this uses RESEND_RECEIVING_API_KEY when it's set. */
+// deno-lint-ignore no-explicit-any
+async function keepMessageId(svc: any, messageId: string, resendId: string): Promise<void> {
+  const key = Deno.env.get('RESEND_RECEIVING_API_KEY') || Deno.env.get('RESEND_API_KEY');
+  for (const wait of [0, 1500, 4000]) {
+    if (wait) await new Promise(r => setTimeout(r, wait));
+    try {
+      const r = await fetch(`https://api.resend.com/emails/${encodeURIComponent(resendId)}`, { headers: { Authorization: `Bearer ${key}` } });
+      if (!r.ok) { console.error('ms-mail: message id', r.status); return; }
+      const e = await r.json() as { message_id?: string };
+      if (e.message_id) { const id = e.message_id.trim(); await svc.from('ms_messages').update({ message_id: id.startsWith('<') ? id : `<${id}>` }).eq('id', messageId); return; }
+    } catch (err) { console.error('ms-mail: message id', err); return; }
+  }
 }
 
 function b64(bytes: Uint8Array): string {
@@ -81,7 +96,7 @@ Deno.serve(async req => {
       attachments.push({ filename: a.name, content: b64(new Uint8Array(await file.arrayBuffer())) });
     }
     const headers: Record<string, string> = {
-      'List-Unsubscribe': `<mailto:c-${p.token}@${REPLY_DOMAIN}?subject=unsubscribe>, <${unsubscribe}>`,
+      'List-Unsubscribe': `<mailto:${FROM_ADDRESS}?subject=unsubscribe>, <${unsubscribe}>`,
     };
     if (p.in_reply_to) { headers['In-Reply-To'] = p.in_reply_to; headers['References'] = p.in_reply_to; }
 
@@ -91,7 +106,6 @@ Deno.serve(async req => {
       body: JSON.stringify({
         from: `${p.sender_name.replace(/[<>"]/g, '')} <${FROM_ADDRESS}>`,
         to: p.to, ...(p.cc?.length ? { cc: p.cc } : {}),
-        reply_to: `c-${p.token}@${REPLY_DOMAIN}`,
         subject: p.subject, html: body.html, text: body.text, headers,
         ...(attachments.length ? { attachments } : {}),
       }),
@@ -99,6 +113,7 @@ Deno.serve(async req => {
     const result = await res.json().catch(() => ({}));
     const sendError = res.ok ? null : String(result?.message || `Resend error ${res.status}`);
     await svc.rpc('ms_mail_sent', { p_message: p.message_id, p_resend_id: result?.id ?? null, p_error: sendError });
+    if (res.ok && result?.id) await keepMessageId(svc, p.message_id, result.id);
     await svc.from('email_logs').insert({ recipient_email: p.to.join(', '), email_type: 'mainstreet_mail', status: res.ok ? 'sent' : 'failed',
       resend_message_id: result?.id ?? null, bounce_reason: sendError });
     if (!res.ok) return json({ error: `The email didn’t send: ${sendError}`, thread_id: p.thread_id }, 502);
