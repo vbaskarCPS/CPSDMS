@@ -1,11 +1,19 @@
-// src/v2/ui/MsLogo.tsx — the MainstreetAI logo: a brick wall with the top of a maple leaf carved into the
-// centre brick (dark maroon), a sparkle, and "Mainstreet" + "AI". The sparkle and "AI" share a gradient:
+// src/v2/ui/MsLogo.tsx — the MainstreetAI logo: a brick wall with a maple leaf carved softly across it, rising
+// from the bottom edge, a sparkle, and "Mainstreet" + "AI". The sparkle and "AI" share a gradient:
 // gold for the first half, then teal, then blue. tone "light" sits on white or cream, "dark" on a dark background.
 import React from 'react';
 
-/** An 11-point maple leaf in a 100-unit box. */
-const LEAF = 'M50 0 L56 12 L63 9 L61 30 L72 19 L75 26 L88 23 L84 37 L92 41 L70 59 L73 67 L53 64 L54 86 L46 86 L47 64 L27 67 L30 59 L8 41 L16 37 L12 23 L25 26 L28 19 L39 30 L37 9 L44 12 Z';
+/** A maple leaf with exaggerated points, in a 100-unit box (tip at -8). */
+const LEAF = 'M50 -8 L55.5 13 L67 5 L59.5 34 L72.5 18 L77 25.5 L97 16 L82 40.5 L101 42 L68.5 61 L74 70 L53 65 L54 86 L46 86 L47 65 L26 70 L31.5 61 L-1 42 L18 40.5 L3 16 L23 25.5 L27.5 18 L40.5 34 L33 5 L44.5 13 Z';
 const SPARK = 'M0 -1 C0.12 -0.12 0.12 -0.12 1 0 C0.12 0.12 0.12 0.12 0 1 C-0.12 0.12 -0.12 0.12 -1 0 C-0.12 -0.12 -0.12 -0.12 0 -1 Z';
+/** The wall: three rows, tight joints; the top-right space holds the sparkle. [x, y, w, h] */
+const BRICKS: [number, number, number, number][] = [
+  [2, 6, 55, 26.7],
+  [2, 35.7, 25, 26.6], [31, 35.7, 56, 26.6], [91, 35.7, 25, 26.6],
+  [2, 65.3, 55, 26.7], [61, 65.3, 55, 26.7],
+];
+/** The leaf, carved softly across the wall, low down: it rises from the bottom edge. */
+const LEAF_AT = 'translate(7 39.2) scale(.9)';
 
 const C = {
   light: { brick: '#b5452b', carve: '#5c1410', edge: '#cf6248', word: '#1c1b1a', grad: ['#F5B82A', '#1FAE9A', '#2F7BF5'] },
@@ -19,23 +27,21 @@ export const msGradientCss = (tone: 'light' | 'dark' = 'light') =>
 export const MsMark: React.FC<{ size?: number; tone?: 'light' | 'dark' }> = ({ size = 24, tone = 'light' }) => {
   const c = C[tone];
   const id = React.useId().replace(/:/g, '');
-  const leaf = (fill: string, dy: number) => (
-    <g clipPath={`url(#k${id})`}><path transform={`translate(30.5 ${39.5 + dy}) scale(.57)`} d={LEAF} fill={fill} /></g>);
+  const bricks = BRICKS.map(([x, y, w, h]) => <rect key={`${x}-${y}`} x={x} y={y} width={w} height={h} rx="3" />);
   return (
     <svg width={size * 1.25} height={size} viewBox="0 0 120 96" aria-hidden="true" style={{ display: 'block', flexShrink: 0 }}>
       <defs>
         <linearGradient id={`g${id}`} x1="0" y1="0" x2="1" y2="1">
           {STOPS.map(([o, i]) => <stop key={o} offset={o} stopColor={c.grad[i]} />)}
         </linearGradient>
-        <clipPath id={`k${id}`}><rect x="32" y="36" width="54" height="26" rx="3" /></clipPath>
+        <clipPath id={`k${id}`}>{bricks}</clipPath>
       </defs>
-      <g fill={c.brick}>
-        <rect x="2" y="66" width="54" height="26" rx="3" /><rect x="62" y="66" width="54" height="26" rx="3" />
-        <rect x="2" y="36" width="24" height="26" rx="3" /><rect x="32" y="36" width="54" height="26" rx="3" /><rect x="92" y="36" width="24" height="26" rx="3" />
-        <rect x="2" y="6" width="54" height="26" rx="3" />
+      <g fill={c.brick}>{bricks}</g>
+      <g clipPath={`url(#k${id})`} opacity={0.55}>
+        <path transform={`translate(0 .9) ${LEAF_AT}`} d={LEAF} fill={c.edge} />
+        <path transform={LEAF_AT} d={LEAF} fill={c.carve} />
       </g>
-      {leaf(c.edge, 0.9)}{leaf(c.carve, 0)}
-      <path transform="translate(89 18) scale(17)" d={SPARK} fill={`url(#g${id})`} />
+      <path transform="translate(88.5 18) scale(17)" d={SPARK} fill={`url(#g${id})`} />
     </svg>
   );
 };
