@@ -82,6 +82,7 @@ returns boolean language sql stable security definer set search_path = public as
   select coalesce((select ms_thread_can(((storage.foldername(p_name))[2])::uuid)
                     where (storage.foldername(p_name))[2] ~ '^[0-9a-f-]{36}$'), false)
 $$;
+revoke all on function public.ms_mail_can_path(text) from public, anon;
 grant execute on function public.ms_mail_can_path(text) to authenticated;
 
 -- storage policies (after ms_mail_can_path exists)
