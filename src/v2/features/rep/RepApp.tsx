@@ -14,6 +14,7 @@ import {
 import { followUpIcs, openAt } from '../../lib/repField';
 import { drop } from '../../lib/repQueue';
 import { ErrorBox, Loading } from '../../ui';
+import { MsLogo, MsTab } from '../../ui/MsLogo';
 import { BusinessSheet } from './BusinessSheet';
 import { HomeMap } from './HomeMap';
 import { RepMapView } from './RepMapView';
@@ -51,7 +52,7 @@ const Frame: React.FC<{ full?: boolean; children: React.ReactNode }> = ({ full, 
   return (
     <div className="v2"><div className="v2-rep">
       <div className="v2-rep-top">
-        <span className="brand">MainstreetAI</span>
+        <span className="brand"><MsLogo size={18} /><MsTab /></span>
         <span className="who">{profile?.full_name}</span>
         <button type="button" aria-label="Sign out" onClick={async () => { await signOut(); nav('/app/login?as=mainstreet', { replace: true }); }}><LogOut size={16} /></button>
       </div>
