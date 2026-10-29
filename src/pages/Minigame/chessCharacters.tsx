@@ -9,7 +9,7 @@ export type Mood = 'idle' | 'happy' | 'munch';
 const INK = '#1f2937', BODY = '#fffbeb', SHADE = '#f5e6c8', GOLD = '#facc15', CHEEK = '#fda4af';
 
 /** Two eyes (blinking), cheeks and a mouth, centred on (cx, cy). */
-const Face: React.FC<{ cx: number; cy: number; mood: Mood; scale?: number; one?: boolean }> = ({ cx, cy, mood, scale = 1, one }) => {
+export const Face: React.FC<{ cx: number; cy: number; mood: Mood; scale?: number; one?: boolean }> = ({ cx, cy, mood, scale = 1, one }) => {
   const s = scale, ex = 11 * s, er = 5.2 * s;
   const eyes = one ? [cx] : [cx - ex, cx + ex];
   return (

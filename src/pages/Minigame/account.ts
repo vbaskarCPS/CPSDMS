@@ -5,7 +5,7 @@ import type { Match } from '../../lib/pour/pvp';
 import type { MemHistory, MemMatch } from '../../lib/memory/match';
 import type { Battle, BattleHistory } from '../../lib/battle/fleet';
 
-export type Player = { id: string; name: string; has_pin?: boolean };
+export type Player = { id: string; name: string; has_pin?: boolean; kind?: 'adult' | 'kid' };
 export type Progress = Record<string, Record<string, unknown>>;
 
 const TOKEN = 'minigame.pass';
@@ -48,6 +48,12 @@ export const loadProgress = () => rpc<Progress>('minigame_progress_all', { p_tok
 
 export const saveProgress = (game: string, data: Record<string, unknown>) =>
   rpc<string>('minigame_save', { p_token: readToken(), p_game: game, p_data: data });
+
+// ── Little Lessons: a grown-up sees the kids' lessons and sets their mix ──
+export type Kid = { id: string; name: string; lessons: Record<string, unknown> | null; chess: Record<string, unknown> | null; settings: Record<string, unknown> | null; updated_at: string | null };
+export const listKids = () => rpc<Kid[]>('minigame_kids', { p_token: readToken() });
+export const saveKidSettings = (kid: string, data: Record<string, unknown>) =>
+  rpc<string>('minigame_kid_settings_save', { p_token: readToken(), p_kid: kid, p_data: data });
 
 // ── head-to-head matches (minigame_match_* functions; see src/lib/pour/pvp.ts) ──
 const tok = () => readToken();

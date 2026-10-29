@@ -2,10 +2,14 @@
 // PIN), then pick a game. Progress saves to the player's account (minigame_* functions), so it
 // follows them to any phone. Games are listed in ./games.ts; each opens at /minigame/<id>.
 // Stand-alone on purpose: no company branding and no link into the work app.
+// A kid account (Kiaan) goes straight into Little Lessons and nothing else; grown-ups get the other games
+// and a page for each kid's lessons (/minigame/kids).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { listPlayers, loadProgress, me, saveProgress, signIn, signOut, type Player, type Progress } from './account';
 import { GAMES, type GameInfo } from './games';
+
+const KidsLessons = React.lazy(() => import('./KidsLessons'));
 
 const BG = 'radial-gradient(120% 80% at 50% 0%, #4338ca 0%, #312e81 45%, #1e1b4b 100%)';
 const ICON = "data:image/svg+xml," + encodeURIComponent(
@@ -78,6 +82,7 @@ const MinigameHub: React.FC = () => {
       if (!live) return;
       setProgress(p);
       for (const g of GAMES) {
+        if (player.kind === 'kid') break;   // nothing to bring over into a kid's account
         const local = g.localProgress?.();
         if (!local || wasAsked(player.id, g.id) || isClaimed(g.id)) continue;
         const mine = p[g.id] || null;
@@ -119,14 +124,23 @@ const MinigameHub: React.FC = () => {
   );
 
   if (player === undefined) return shell(<div className="min-h-screen flex items-center justify-center text-indigo-200 animate-pulse">Loading…</div>);
-  if (!player) return shell(<SignIn onSignedIn={p => { setError(null); setPlayer(p); }} startError={error} />);
+  // after signing in, ask who it is again (that also says whether it's a kid's account)
+  if (!player) return shell(<SignIn onSignedIn={p => { setError(null); me().then(m => setPlayer(m || p)).catch(() => setPlayer(p)); }} startError={error} />);
 
-  const game = gameId ? GAMES.find(g => g.id === gameId && g.component && !g.comingSoon) : null;
+  const kid = player.kind === 'kid';
+  const leave = async () => { await signOut(); setPlayer(null); nav('/minigame'); };
+  const loading = shell(<div className="min-h-screen flex items-center justify-center text-indigo-200 animate-pulse">Loading…</div>);
+  // a kid plays Little Lessons, and only that; holding the back button signs out (back to "Who's playing?")
+  const game = kid ? GAMES.find(g => g.kids) : gameId ? GAMES.find(g => g.id === gameId && g.component && !g.comingSoon && !g.kids) : null;
+  if (!kid && gameId === 'kids') return <React.Suspense fallback={loading}><KidsLessons exit={() => nav('/minigame')} /></React.Suspense>;
+  if (kid && !progress) return error ? shell(<div className="min-h-screen flex flex-col items-center justify-center gap-4 text-red-200">{error}
+    <button type="button" onClick={leave} className="px-4 py-2 rounded-xl bg-white/10 text-white">Switch player</button></div>) : loading;
   if (game && progress && !offer) {
     const Game = game.component!;
     return (
-      <React.Suspense fallback={shell(<div className="min-h-screen flex items-center justify-center text-indigo-200 animate-pulse">Loading…</div>)}>
-        <Game key={`${player.id}.${game.id}`} progress={progress[game.id] || null} save={d => save(game.id, d)} exit={() => nav('/minigame')} player={player.name} playerId={player.id} />
+      <React.Suspense fallback={loading}>
+        <Game key={`${player.id}.${game.id}`} progress={progress[game.id] || null} save={d => save(game.id, d)} exit={kid ? leave : () => nav('/minigame')}
+          player={player.name} playerId={player.id} allProgress={progress} />
         {note && <div className="fixed bottom-24 inset-x-0 flex justify-center pointer-events-none z-50"><div className="px-4 py-2 rounded-xl bg-black/60 text-white text-sm">{note}</div></div>}
       </React.Suspense>
     );
@@ -139,14 +153,14 @@ const MinigameHub: React.FC = () => {
           <div className="text-xs uppercase tracking-widest text-indigo-200">Minigames</div>
           <div className="text-2xl font-extrabold">Hi {player.name}</div>
         </div>
-        <button type="button" onClick={async () => { await signOut(); setPlayer(null); nav('/minigame'); }}
+        <button type="button" onClick={leave}
           className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-sm font-semibold">Switch player</button>
       </div>
       {error && <div className="mt-4 text-sm text-red-200">{error}</div>}
       {!progress && !error && <div className="mt-8 text-indigo-200 animate-pulse">Loading your progress…</div>}
       {progress && (
         <div className="grid gap-3 mt-6">
-          {GAMES.map(g => {
+          {GAMES.filter(g => !g.kids).map(g => {
             const line = g.summary?.(progress[g.id] || null);
             return (
               <button key={g.id} type="button" disabled={g.comingSoon} onClick={() => nav(`/minigame/${g.id}`)}
@@ -161,6 +175,16 @@ const MinigameHub: React.FC = () => {
               </button>
             );
           })}
+          <button type="button" onClick={() => nav('/minigame/kids')}
+            className="text-left rounded-3xl p-4 flex items-center gap-4 border border-white/10 hover:brightness-110 transition"
+            style={{ background: 'linear-gradient(135deg, #0f766e, #0f766e99)' }}>
+            <div className="w-14 h-14 rounded-2xl bg-white/15 flex items-center justify-center text-3xl">🦉</div>
+            <div className="flex-1 min-w-0">
+              <div className="text-lg font-extrabold">Kiaan's lessons</div>
+              <div className="text-sm text-white/80">Little Lessons: how he's doing, and the mix of chess, words and math.</div>
+            </div>
+            <div className="text-sm font-bold whitespace-nowrap">Open</div>
+          </button>
         </div>
       )}
 
