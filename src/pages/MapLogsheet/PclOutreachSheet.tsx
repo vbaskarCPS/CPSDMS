@@ -10,6 +10,7 @@
 // out, since texting someone you've just spoken to is odd.
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { pclLook } from '../../lib/pclLook';
 import {
   X, Search, SlidersHorizontal, MessageSquare, Check, Settings, Save, Loader, Eye, EyeOff, Smartphone, ArrowLeft,
 } from 'lucide-react';
@@ -263,7 +264,7 @@ const PclOutreachSheet: React.FC<Props> = ({ worker, commandCenterId, clients: o
 
         {other && (
           <div className="flex gap-1.5 px-3 pb-2 shrink-0" role="tablist">
-            {([['own', `${ownLabel} PCLs`, ownClients.length, '#1d4ed8'], ['other', `${other.label}s`, other.clients.length, other.line === 'aeration' ? '#84cc16' : '#0ea5e9']] as const).map(([k, label, n, col]) => (
+            {([['own', `${ownLabel} PCLs`, ownClients.length, pclLook().pcl], ['other', `${other.label}s`, other.clients.length, other.line === 'aeration' ? '#84cc16' : '#0ea5e9']] as const).map(([k, label, n, col]) => (
               <button key={k} role="tab" aria-selected={which === k} onClick={() => setWhich(k)}
                 className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 ${which === k ? 'bg-gray-800 text-white' : 'bg-gray-900 text-gray-400 border-gray-800'}`}
                 style={which === k ? { borderColor: col } : undefined}>

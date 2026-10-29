@@ -20,6 +20,7 @@ import { supabase } from './supabase';
 import { commandCenterService } from './commandCenterService';
 import { Worker, MasterBooking, PendingSale, HistoricalProperty } from '../types';
 import { PCLClientGroup } from './pclCacheService';
+import { pclLook } from './pclLook';
 
 // ---------------------------------------------------------------------------
 // GATE — approved contractor ids live in public.map_logsheet_access (global
@@ -339,8 +340,8 @@ export function houseColor(v: Pick<HouseView, 'state' | 'isPcl' | 'isHistorical'
   if (v.state === 'invalid') return HOUSE_COLORS.invalid;
   // The session's own PCL first; else the other service's (lime / sky).
   const other = !v.isPcl && v.otherPcl && v.otherLine ? OTHER_PCL_COLORS[v.otherLine] : null;
-  if (v.state === 'not_home') return v.isPcl ? HOUSE_COLORS.pclNotHome : other ? other.notHome : HOUSE_COLORS.not_home;
-  return v.isPcl ? HOUSE_COLORS.pcl : other ? other.pcl : HOUSE_COLORS.none;
+  if (v.state === 'not_home') return v.isPcl ? pclLook().pclNotHome : other ? other.notHome : HOUSE_COLORS.not_home;
+  return v.isPcl ? pclLook().pcl : other ? other.pcl : HOUSE_COLORS.none;
 }
 
 export const routeHouseId = (routeCode: string, houseKey: string) => `${routeCode}::${houseKey}`;
@@ -1826,10 +1827,16 @@ export function shortName(first: string | undefined | null, last: string | undef
 
 /** "(24, 25)" — two-digit years of service oldest→newest. Empty when none. */
 export function pclYearsLine(p: PCLClientGroup): string {
-  const years = Array.from(new Set(
-    (p.history || []).map(h => Number(h.year)).filter(y => Number.isFinite(y) && y > 0)
-  )).sort((a, b) => a - b).map(y => String(y).slice(-2));
-  return years.length ? `(${years.join(', ')})` : '';
+  // lawn jobs carry their services (A, D, F, S, L): "(25 A, 26 DFSL)"; anything else shows the year alone
+  const by = new Map<number, Set<string>>();
+  for (const h of p.history || []) {
+    const y = Number(h.year); if (!Number.isFinite(y) || y <= 0) continue;
+    if (!by.has(y)) by.set(y, new Set());
+    const code = String((h as { serviceType?: string }).serviceType || '').toUpperCase();
+    if (/^[ADFSL]+$/.test(code) && new Set(code).size === code.length) by.get(y)!.add(code);   // SS / SSP are sealing sizes
+  }
+  const parts = [...by.keys()].sort((a, b) => a - b).map(y => [String(y).slice(-2), ...[...by.get(y)!]].join(' '));
+  return parts.length ? `(${parts.join(', ')})` : '';
 }
 
 /** "John M" on one line, "(24, 25)" on the next. Either line is dropped if empty. */

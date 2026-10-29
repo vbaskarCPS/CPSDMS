@@ -13,6 +13,7 @@
 // Gate: H01 + team season + digital mapping. Anything else → /logsheet.
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { isWestPcl } from '../../lib/pclLook';
 import { useNavigate } from 'react-router-dom';
 import {
   Loader, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
@@ -1006,7 +1007,7 @@ const MapLogsheetPage: React.FC = () => {
             texted={pclTexted}
             onTexted={key => setPclTexted(prev => new Set([...prev, key]))}
             onClose={() => setShowPclOutreach(false)}
-            ownLabel={otherPcl?.line === 'sealing' ? 'Aeration' : 'Sealing'}
+            ownLabel={isWestPcl() ? 'Lawn' : otherPcl?.line === 'sealing' ? 'Aeration' : 'Sealing'}
             other={otherPcl ? { line: otherPcl.line, label: OTHER_PCL_LABEL[otherPcl.line], clients: otherClients } : null}
           />
         )}

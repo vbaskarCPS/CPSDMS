@@ -185,6 +185,17 @@ export const CLIENT_LAYERS: { key: ClientLayer; bit: number; service: Service; l
   { key: 'done_rejuv', bit: 32, service: 'lawn_rejuv', label: y => `Lawn rejuv jobs ${y}`, color: '#0f766e', hint: 'Lawn rejuvenation done this season' },
   { key: 'prev_rejuv', bit: 16, service: 'lawn_rejuv', label: () => 'Previous lawn rejuv clients', color: '#f59e0b', hint: 'Lawn rejuvenation customers from earlier years (the rejuv PCL)' },
 ];
+/**
+ * WEST: aeration and lawn rejuv are one lawn list, so their past clients are one lime-green layer
+ * (blue is never used there). The layer colour and label for a center's region.
+ */
+export const WEST_LAWN = { pcl: '#84cc16', notHome: '#c3e88d' } as const;
+export function layerLook(l: (typeof CLIENT_LAYERS)[number], west: boolean, season: number): { color: string; label: string } {
+  if (west && (l.key === 'prev_aeration' || l.key === 'prev_rejuv')) {
+    return { color: WEST_LAWN.pcl, label: l.key === 'prev_aeration' ? 'Previous lawn clients · aeration' : 'Previous lawn clients · rejuv' };
+  }
+  return { color: l.color, label: l.label(season) };
+}
 /** Each service's bits: earlier years, this season. */
 export const SERVICE_BITS: Record<Service, { prev: number; done: number }> = {
   aeration: { prev: 1, done: 4 }, sealing: { prev: 2, done: 8 }, lawn_rejuv: { prev: 16, done: 32 },
@@ -210,9 +221,17 @@ export const RM_HOUSE = {
   done: '#7c3aed', pcl: '#1d4ed8', pclNotHome: '#93b4f5',
   other: { aeration: { pcl: '#84cc16', notHome: '#c3e88d' }, sealing: { pcl: '#0ea5e9', notHome: '#a5d8f5' }, lawn_rejuv: { pcl: '#f59e0b', notHome: '#fcd98a' } },
 } as const;
-export function houseLook(st: string | null, flags: number, on: Set<ClientLayer>, service: Service): { color: string; strong: boolean } {
+export function houseLook(st: string | null, flags: number, on: Set<ClientLayer>, service: Service, west = false): { color: string; strong: boolean } {
   const bits = CLIENT_LAYERS.filter(l => on.has(l.key)).reduce((b, l) => b | l.bit, 0);
   const f = flags & bits;
+  if (west && service !== 'sealing') {
+    // the West's one lawn list: this season's job purple, knocks as usual, every past lawn client lime
+    const lawnDone = f & (4 | 32), lawnPrev = f & (1 | 16);
+    if (lawnDone) return { color: RM_HOUSE.done, strong: true };
+    if (st === 'no' || st === 'go_back' || st === 'invalid') return { color: RM_HOUSE[st], strong: true };
+    if (st === 'not_home') return { color: lawnPrev ? WEST_LAWN.notHome : RM_HOUSE.not_home, strong: true };
+    return { color: lawnPrev ? WEST_LAWN.pcl : RM_HOUSE.none, strong: false };
+  }
   const mine = SERVICE_BITS[service];
   // a customer of another service: coloured as the first other service they had
   const otherLine = SERVICES.find(o => o !== service && (f & (SERVICE_BITS[o].prev | SERVICE_BITS[o].done))) || null;
