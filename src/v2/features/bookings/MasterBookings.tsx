@@ -13,10 +13,10 @@
 // shows each map's own current round. Settings (gear): default season and round, and how much of
 // a route has to be knocked for it to count as done.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import type { Map as MbMap, MapboxGeoJSONFeature } from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { AlertTriangle, ArrowLeft, Check, ChevronRight, Flame, Layers, Play, Settings, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, BadgeCheck, Check, ChevronRight, Flame, Layers, List, Play, Settings, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import { routeShapes, type RouteShape } from '../../lib/territory';
@@ -299,12 +299,23 @@ export const MasterBookings: React.FC = () => {
           </div>
           <div className="v2-mb-picker" role="group" aria-label="Season and round">
             <select className="v2-input" value={seasonKey(season)} onChange={e => { const s = parseSeason(e.target.value); if (s) setSeason(s); }} aria-label="Season">
-              {seasons.map(s => <option key={seasonKey(s)} value={seasonKey(s)}>{seasonLabel(s)}</option>)}
+              {seasons.map(s => { const l = listFor(lists.data || [], s.service, s.season); return <option key={seasonKey(s)} value={seasonKey(s)}>{l ? `${l.name} ${l.year}` : seasonLabel(s)}</option>; })}
             </select>
             <select className="v2-input" value={String(round)} onChange={e => setRound(parseRound(e.target.value))} aria-label="Round">
               <option value="current">Current</option>
               {Array.from({ length: Math.max(maxRound, typeof round === 'number' ? round : 1) }, (_, i) => i + 1).map(n => <option key={n} value={n}>Round {n}</option>)}
             </select>
+          </div>
+          {/* the season's booking list and the plans, one tap away */}
+          <div className="v2-mb-links">
+            <Link to="/app/bookings/list" className="v2-mb-listlink">
+              <List size={15} />
+              {seasonList
+                ? <span><b>{seasonList.name} {seasonList.year}</b> · {seasonList.total} bookings · {seasonList.done} done{seasonList.waiting ? ` · ${seasonList.waiting} waiting on a map` : ''}</span>
+                : <span><b>Booking lists</b></span>}
+              <ChevronRight size={15} />
+            </Link>
+            <Link to="/app/bookings/plans" className="v2-mb-listlink sm"><BadgeCheck size={15} /><span>Plans</span><ChevronRight size={15} /></Link>
           </div>
           <Crumbs level={level} maps={maps} route={route} onMaps={() => go({ maps: null, route: null })} onRoute={() => go({ route: null })} />
           <ErrorBox error={settings.error || ov.error || av.error || rv.error || shapes.error} />
