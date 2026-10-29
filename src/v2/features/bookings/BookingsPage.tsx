@@ -31,7 +31,7 @@ const nameOf = (b: Booking) => (b.people?.[0] ? `${b.people[0].first || ''} ${b.
 const addressOf = (b: Pick<Booking, 'house_no' | 'street_name' | 'unit'>) => `${b.house_no} ${b.street_name}${b.unit ? ` #${b.unit}` : ''}`;
 
 /** The center's lists, and the one picked (the list this center works, the fall one first). */
-function useLists(centerId: string | undefined) {
+export function useLists(centerId: string | undefined) {
   const lists = useLoad(() => (centerId ? listLists(centerId) : Promise.resolve([] as BookingList[])), [centerId]);
   const [pick, setPick] = useState<string>('');
   const all = lists.data || [];
@@ -75,6 +75,7 @@ export const BookingsPage: React.FC = () => {
         <span className="v2-h1">Bookings</span>
         <span className="v2-spacer" />
         <Link className="v2-link" to="/app/bookings/plans">Plans ›</Link>
+        <Link className="v2-link" to="/app/bookings/emails">Send emails ›</Link>
         <Link className="v2-link" to="/app/bookings/maps">Master maps ›</Link>
       </div>
       <ErrorBox error={lists.error || rows.error || err} />

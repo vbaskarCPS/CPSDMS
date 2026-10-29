@@ -4,7 +4,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Map, BookOpen, CalendarCheck, Phone, Shield, Calendar, FileText, SlidersHorizontal, UserPlus, Contact, AlertCircle,
-  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck, BadgeCheck, Mail,
+  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck, BadgeCheck, Mail, Send,
 } from 'lucide-react';
 import type { ColorName } from '../ui';
 import type { Permission } from '../lib/permissions';
@@ -41,6 +41,8 @@ export const COMPONENTS: Component[] = [
     { key: 'customers', label: 'Customers', icon: MapPin, color: 'amber', path: '/app/bookings/customers', ready: true },
     { key: 'bookings', label: 'Bookings', icon: List, color: 'amber', path: '/app/bookings/list', ready: true },
     { key: 'plans', label: 'Plans', icon: BadgeCheck, color: 'green', path: '/app/bookings/plans', ready: true },
+    { key: 'emails', label: 'Booking emails', icon: Send, color: 'blue', path: '/app/bookings/emails', ready: true },
+    { key: 'templates', label: 'Email templates', icon: FileText, color: 'slate', path: '/app/bookings/templates', ready: true },
     { key: 'inbox', label: 'Inbox', icon: Inbox, color: 'blue', path: '/app/bookings/inbox', ready: false },
     { key: 'accounts', label: 'Accounts', icon: Receipt, color: 'green', path: '/app/bookings/accounts', ready: false },
     { key: 'crews', label: 'Crews', icon: Truck, color: 'teal', path: '/app/bookings/crews', ready: false },

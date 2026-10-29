@@ -1,9 +1,10 @@
 // src/v2/features/admin/Mailboxes.tsx — Super Admin › Users › Mailboxes: everyone's firstname@propertystars.app,
-// rename one (the old address keeps working), and hand one over when someone leaves. Admins never read mail:
+// rename one (the old address keeps working), and hand one over when someone leaves. Also a centre's shared
+// mailboxes (CenterMail, on Centers) and a person's access to them (UserMailboxes, on a user). Admins never read mail:
 // only addresses and how many conversations are listed.
 import React, { useState } from 'react';
 import { ArrowRightLeft, AtSign, Pencil } from 'lucide-react';
-import { adminBoxes, adminHandover, adminRename, type AdminBox } from '../../lib/mail';
+import { adminBoxes, adminHandover, adminRename, centerBoxes, setBoxMember, setCenterBox, userBoxes, type AdminBox, type CenterBox, type UserBox } from '../../lib/mail';
 import { useLoad, type UserRow } from '../../lib/data';
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 
@@ -29,13 +30,13 @@ export const Mailboxes: React.FC<{ users: UserRow[] }> = ({ users }) => {
           <tbody>
             {live.map(b => (
               <tr key={b.id}>
-                <td><b>{b.address}</b></td>
-                <td>{b.owner || '—'}{b.owner_id && !b.owner_active && <> <Tag tone="r">Disabled</Tag></>}</td>
+                <td><b>{b.address}</b>{b.label && <div className="v2-mut v2-small">{b.label}</div>}</td>
+                <td>{b.owner || (b.members?.length ? b.members.map(m => m.name).join(', ') : '—')}{b.owner_id && !b.owner_active && <> <Tag tone="r">Disabled</Tag></>}</td>
                 <td className="v2-mut">{b.aliases.length ? b.aliases.join(', ') : '—'}</td>
                 <td style={{ textAlign: 'right' }}>{b.conversations}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <Btn size="sm" kind="o" icon={Pencil} onClick={() => setRenaming(b)}>Rename</Btn>{' '}
-                  <Btn size="sm" kind="o" icon={ArrowRightLeft} onClick={() => setHanding(b)}>Hand over</Btn>
+                  {!b.role && <Btn size="sm" kind="o" icon={ArrowRightLeft} onClick={() => setHanding(b)}>Hand over</Btn>}
                 </td>
               </tr>))}
             {!live.length && <tr><td colSpan={5} className="v2-mut">No mailboxes yet.</td></tr>}
@@ -107,5 +108,110 @@ const Handover: React.FC<{ box: AdminBox; users: UserRow[]; onClose: () => void;
       <p className="v2-note" style={{ marginTop: 12 }}>Nothing is deleted. You won’t see any of the mail.</p>
       <ErrorBox error={error} />
     </Modal>
+  );
+};
+
+// ───────────── a centre's shared mailboxes (RUN_69) ─────────────
+// Centers › a centre › Email: the client mailbox (receipts and booking emails go out from it, and customers'
+// replies land in it) and the staff one, and who works each. People are also added from Users › a person.
+export const CenterMail: React.FC<{ center: { id: string; display_name: string }; users: UserRow[] }> = ({ center, users }) => {
+  const boxes = useLoad(() => centerBoxes(center.id), [center.id]);
+  const [error, setError] = useState<unknown>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [adding, setAdding] = useState<Record<string, string>>({});
+  const roles: { role: 'client' | 'staff'; name: string; hint: string; eg: string }[] = [
+    { role: 'client', name: 'Customers', hint: 'Receipts and booking emails go out from here; customers’ replies come back here.', eg: `${slug(center.display_name)}clients` },
+    { role: 'staff', name: 'Staff', hint: 'For crews and staff of this centre.', eg: `${slug(center.display_name)}staff` },
+  ];
+  const member = async (box: string, user: string, on: boolean) => {
+    setError(null);
+    try { await setBoxMember(box, user, on); boxes.reload(); } catch (e) { setError(e); }
+  };
+  return (
+    <Card title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><AtSign size={16} />Email</span>}>
+      {notice && <div className="v2-ok" style={{ marginBottom: 8 }}>{notice}</div>}
+      <ErrorBox error={boxes.error || error} />
+      {boxes.loading && !boxes.data ? <Loading /> : roles.map(r => {
+        const b = boxes.data?.[r.role];
+        const people = users.filter(u => u.is_active && !b?.members.some(m => m.id === u.id) && !(u.permissions.length === 1 && u.permissions[0] === 'mainstreet_rep'))
+          .sort((x, y) => x.full_name.localeCompare(y.full_name));
+        return (
+          <div key={r.role} style={{ padding: '8px 0', borderTop: r.role === 'staff' ? '1px solid var(--v2-line, #e5e7eb)' : undefined }}>
+            <SlugRow center={center} role={r.role} name={r.name} hint={r.hint} eg={r.eg} box={b}
+              onSaved={m => { setNotice(m); boxes.reload(); }} />
+            {b && <div style={{ marginTop: 6 }}>
+              <div className="v2-label" style={{ marginBottom: 4 }}>Who works it</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                {b.members.map(m => <span key={m.id} className="v2-tag" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>{m.name}
+                  <button type="button" className="v2-link" onClick={() => member(b.id, m.id, false)} aria-label={`Take ${m.name} off`} style={{ border: 0, background: 'none', cursor: 'pointer', padding: 0 }}>×</button></span>)}
+                {!b.members.length && <span className="v2-mut">Nobody yet.</span>}
+                <select className="v2-sel" style={{ width: 'auto' }} value={adding[r.role] || ''}
+                  onChange={e => { const v = e.target.value; setAdding(a => ({ ...a, [r.role]: '' })); if (v) member(b.id, v, true); }}>
+                  <option value="">Add a person…</option>
+                  {people.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                </select>
+              </div>
+            </div>}
+          </div>);
+      })}
+      <p className="v2-note">Members see it as another mailbox in their Email and can send from it. It sends as “Property Stars · {center.display_name}”.</p>
+    </Card>
+  );
+};
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20);
+
+const SlugRow: React.FC<{ center: { id: string }; role: 'client' | 'staff'; name: string; hint: string; eg: string; box?: CenterBox; onSaved: (m: string) => void }> =
+  ({ center, role, name, hint, eg, box, onSaved }) => {
+    const [editing, setEditing] = useState(false);
+    const [local, setLocal] = useState(box?.address.split('@')[0] || '');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<unknown>(null);
+    const save = async () => {
+      setBusy(true); setError(null);
+      try {
+        const r = await setCenterBox(center.id, role, local);
+        setEditing(false);
+        onSaved(box ? `${box.address} is now ${r.address}. Mail to the old address still arrives.` : `${r.address} is set up. Add the people who work it.`);
+      } catch (e) { setError(e); } finally { setBusy(false); }
+    };
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <b>{name}</b>
+          {box && !editing && <><span>{box.address}</span><Btn size="sm" kind="o" icon={Pencil} onClick={() => { setLocal(box.address.split('@')[0]); setEditing(true); }}>Rename</Btn></>}
+          {!box && !editing && <Btn size="sm" onClick={() => { setLocal(eg); setEditing(true); }}>Set up</Btn>}
+        </div>
+        <div className="v2-mut v2-small">{hint}</div>
+        {editing && <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+          <input className="v2-input" style={{ flex: '1 1 160px', maxWidth: 260 }} value={local} autoFocus onChange={e => setLocal(e.target.value.replace(/@.*$/, '').toLowerCase())} />
+          <span className="v2-mut">@propertystars.app</span>
+          <Btn size="sm" onClick={save} disabled={busy || !local.trim()}>{busy ? 'Saving…' : 'Save'}</Btn>
+          <Btn size="sm" kind="o" onClick={() => setEditing(false)}>Cancel</Btn>
+        </div>}
+        <ErrorBox error={error} />
+      </div>
+    );
+  };
+
+/** Users › a person: the centres' shared mailboxes they work (on or off straight away). */
+export const UserMailboxes: React.FC<{ userId: string }> = ({ userId }) => {
+  const boxes = useLoad(() => userBoxes(userId), [userId]);
+  const [error, setError] = useState<unknown>(null);
+  const flip = async (b: UserBox) => {
+    setError(null);
+    try { await setBoxMember(b.id, userId, !b.on); boxes.reload(); } catch (e) { setError(e); }
+  };
+  if (!boxes.data?.length && !boxes.error) return null;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div className="v2-label">Shared mailboxes</div>
+      <ErrorBox error={boxes.error || error} />
+      {(boxes.data || []).map(b => (
+        <label key={b.id} className="v2-check">
+          <input type="checkbox" checked={b.on} onChange={() => flip(b)} />
+          <span><b style={{ fontWeight: 600 }}>{b.label || b.address}</b><br /><span className="v2-mut v2-small">{b.address}{b.role ? ` · ${b.role === 'client' ? 'customers' : 'staff'}` : ''}</span></span>
+        </label>))}
+      <div className="v2-note">Changes here save straight away.</div>
+    </div>
   );
 };

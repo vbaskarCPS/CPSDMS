@@ -16,7 +16,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { Map as MbMap, MapboxGeoJSONFeature } from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { AlertTriangle, ArrowLeft, BadgeCheck, Check, ChevronRight, Flame, Layers, List, Play, Settings, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, BadgeCheck, Check, ChevronRight, Flame, Layers, List, Play, Send, Settings, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import { routeShapes, type RouteShape } from '../../lib/territory';
@@ -318,6 +318,7 @@ export const MasterBookings: React.FC = () => {
               <ChevronRight size={15} />
             </Link>
             <Link to="/app/bookings/plans" className="v2-mb-listlink sm"><BadgeCheck size={15} /><span>Plans</span><ChevronRight size={15} /></Link>
+            <Link to="/app/bookings/emails" className="v2-mb-listlink sm"><Send size={15} /><span>Emails</span><ChevronRight size={15} /></Link>
           </div>
           <Crumbs level={level} maps={maps} route={route} onMaps={() => go({ maps: null, route: null })} onRoute={() => go({ route: null })} />
           <ErrorBox error={settings.error || ov.error || av.error || rv.error || shapes.error} />

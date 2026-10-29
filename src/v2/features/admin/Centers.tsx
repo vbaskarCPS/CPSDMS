@@ -3,9 +3,10 @@ import React, { useEffect, useState } from 'react';
 import { Plus, Lock, Unlock } from 'lucide-react';
 import { useAuth, type Center } from '../../lib/auth';
 import { SERVICES, serviceLabel, type Service } from '../../lib/permissions';
-import { listCenters, listSeasons, saveCenter, saveSeason, closeSeason, reopenSeason, regionTax, seasonState, useLoad, type Season } from '../../lib/data';
+import { listCenters, listUsers, listSeasons, saveCenter, saveSeason, closeSeason, reopenSeason, regionTax, seasonState, useLoad, type Season } from '../../lib/data';
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tag, Toggle } from '../../ui';
 import { getCenterType, setCenterType, type CenterType } from '../../lib/crew';
+import { CenterMail } from './Mailboxes';
 
 const REGIONS = ['East', 'West', 'Central'];
 const stateTag = (s: Season) => {
@@ -14,9 +15,10 @@ const stateTag = (s: Season) => {
 };
 
 export const Centers: React.FC = () => {
-  const { profile, reload: reloadAuth } = useAuth();
+  const { profile, reload: reloadAuth, can } = useAuth();
   const centers = useLoad(listCenters, []);
   const seasons = useLoad(() => listSeasons(), []);
+  const users = useLoad(() => (can('sa_users') ? listUsers() : Promise.resolve([])), [profile?.id]);
   const [sel, setSel] = useState<string | null>(null);
   const [editCenter, setEditCenter] = useState<Center | 'new' | null>(null);
   const [editSeason, setEditSeason] = useState<Season | 'new' | null>(null);
@@ -83,6 +85,7 @@ export const Centers: React.FC = () => {
                 </table></div>
                 <div className="v2-note">Seasons can’t overlap. The end date stops new Start sessions; Close season locks it read-only (crews and collections can finish before you close).</div>
               </Card>
+              {users.data && users.data.length > 0 && <CenterMail key={current.id} center={current} users={users.data} />}
             </div>
           )}
         </div>

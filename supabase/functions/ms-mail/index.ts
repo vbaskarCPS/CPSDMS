@@ -10,7 +10,8 @@
 // The first email in a conversation carries who it's from and how to unsubscribe (Canada's anti-spam law).
 //
 // Staff mail ({ staff: true, mailbox_id?, thread_id?, to, cc, subject, html, text, attachments }): sent as the
-// manager, from their own address (ben@propertystars.app). mail_prepare delivers it to staff mailboxes
+// manager, from their own address (ben@propertystars.app), or from a centre's shared mailbox they're a member of
+// (bcclients@propertystars.app, "Property Stars · BC Fall RJ"). mail_prepare delivers it to staff mailboxes
 // straight away (and the push function tells them); only outside addresses go through Resend.
 // The Resend key lives only in the RESEND_API_KEY secret.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
@@ -89,17 +90,21 @@ interface StaffPrepared {
   message_id: string; thread_id: string; from: string; sender_name: string; sender_phone: string | null; to: string[]; cc: string[];
   subject: string; html: string | null; text: string | null; attachments: { name: string; path: string }[]; in_reply_to: string | null;
   delivered: { thread_id: string; message_id: string }[];
+  box_label?: string | null; box_role?: 'client' | 'staff' | null;   // a centre's shared mailbox (RUN_69)
 }
-/** A manager's email: what they wrote and their signature. */
+/** Who an email says it's from: the centre for a shared mailbox ("Property Stars · BC Fall RJ"), else the manager. */
+export const fromName = (p: StaffPrepared) => (p.box_label || p.sender_name).replace(/[<>"]/g, '');
+/** A manager's email: what they wrote and their signature (their name, then the centre or the company). */
 export function wrapStaff(p: StaffPrepared): { html: string; text: string } {
-  const sig = [esc(p.sender_name), 'Canadian Property Stars', p.sender_phone ? esc(p.sender_phone) : ''].filter(Boolean).join('<br>');
+  const org = p.box_label || 'Canadian Property Stars';
+  const sig = [esc(p.sender_name), esc(org), p.sender_phone && !p.box_label ? esc(p.sender_phone) : ''].filter(Boolean).join('<br>');
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
 <body style="margin:0;padding:0;background:#ffffff;">
 <div style="max-width:620px;padding:8px 4px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;color:#1c1b1a;">
 ${p.html || `<p>${esc(p.text || '').replace(/\n/g, '<br>')}</p>`}
 <p style="margin:20px 0 0;color:#3d4148;font-size:14px;line-height:1.45;">${sig}</p>
 </div></body></html>`;
-  const text = `${p.text || ''}\n\n${p.sender_name}\nCanadian Property Stars${p.sender_phone ? `\n${p.sender_phone}` : ''}\n`;
+  const text = `${p.text || ''}\n\n${p.sender_name}\n${org}${p.sender_phone && !p.box_label ? `\n${p.sender_phone}` : ''}\n`;
   return { html, text };
 }
 
@@ -136,7 +141,7 @@ async function sendStaff(b: Record<string, unknown>, asUser: any, apiKey: string
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      from: `${p.sender_name.replace(/[<>"]/g, '')} <${p.from}>`,
+      from: `${fromName(p)} <${p.from}>`,
       to: p.to, ...(p.cc?.length ? { cc: p.cc } : {}),
       subject: p.subject, html: body.html, text: body.text, ...(Object.keys(headers).length ? { headers } : {}),
       ...(attachments.length ? { attachments } : {}),

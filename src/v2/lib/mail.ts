@@ -60,7 +60,12 @@ export async function aiWrite(p: { mode: 'write' | 'rewrite'; staff?: boolean; t
 }
 
 // ───────────── staff email: a manager's own mailbox (RUN_65) ─────────────
-export interface MailBox { id: string; address: string; kind: 'person' | 'shared'; unread: number }
+export interface MailBox {
+  id: string; address: string; kind: 'person' | 'shared'; unread: number;
+  label?: string | null; role?: 'client' | 'staff' | null; center_id?: string | null; mine?: boolean | null;   // a centre's shared mailbox (RUN_69)
+}
+/** What a mailbox is called in the app: "Property Stars · BC Fall RJ" for a centre's, else the address. */
+export const boxName = (b: Pick<MailBox, 'address' | 'label'>) => b.label || b.address;
 export interface Contact { name: string; address: string; me?: boolean }
 export async function myBoxes(): Promise<MailBox[]> { return (must(await db.rpc('mail_my_boxes')) as MailBox[]) || []; }
 export async function directory(): Promise<Contact[]> { return (must(await db.rpc('mail_directory')) as Contact[]) || []; }
@@ -74,11 +79,71 @@ export async function mailCounts(): Promise<{ unread: number; unsorted: number }
 export interface AdminBox {
   id: string; address: string; local: string; kind: string; active: boolean; owner_id: string | null; owner: string | null;
   owner_active: boolean; aliases: string[]; conversations: number;
+  label?: string | null; role?: string | null; center?: string | null; members?: { id: string; name: string }[];
 }
 export async function adminBoxes(): Promise<AdminBox[]> { return (must(await db.rpc('mail_admin_boxes')) as AdminBox[]) || []; }
 export async function adminRename(box: string, local: string): Promise<void> { must(await db.rpc('mail_admin_rename', { p_box: box, p_local: local })); }
 export async function adminHandover(box: string, toUser: string, mode: 'move' | 'merge'): Promise<void> {
   must(await db.rpc('mail_admin_handover', { p_box: box, p_to_user: toUser, p_mode: mode }));
+}
+
+// ───────────── a centre's shared mailboxes (RUN_69, Super Admin) ─────────────
+export interface CenterBox { id: string; address: string; label: string; members: { id: string; name: string }[] }
+export async function centerBoxes(center: string): Promise<{ client?: CenterBox; staff?: CenterBox }> {
+  return (must(await db.rpc('mail_admin_center_boxes', { p_center: center })) as { client?: CenterBox; staff?: CenterBox }) || {};
+}
+export async function setCenterBox(center: string, role: 'client' | 'staff', local: string): Promise<{ id: string; address: string; label: string }> {
+  return must(await db.rpc('mail_admin_set_center_box', { p_center: center, p_role: role, p_local: local })) as { id: string; address: string; label: string };
+}
+export async function setBoxMember(box: string, user: string, on: boolean): Promise<void> {
+  must(await db.rpc('mail_admin_box_member', { p_box: box, p_user: user, p_on: on }));
+}
+export interface UserBox { id: string; address: string; label: string | null; center: string | null; role: 'client' | 'staff' | null; on: boolean }
+export async function userBoxes(user: string): Promise<UserBox[]> { return (must(await db.rpc('mail_admin_user_boxes', { p_user: user })) as UserBox[]) || []; }
+
+// ───────────── a centre's email templates (receipts, booking emails) ─────────────
+export interface EmailTemplate { id: string; type: string; name: string; subject: string; html: string; active: boolean; updated_at: string }
+export async function emailTemplates(center: string): Promise<EmailTemplate[]> {
+  return (must(await db.rpc('app_email_templates', { p_center: center })) as EmailTemplate[]) || [];
+}
+export async function saveEmailTemplate(center: string, t: { type: string; name: string; subject: string; html: string; active?: boolean }): Promise<void> {
+  must(await db.rpc('app_email_template_save', { p_center: center, p_type: t.type, p_name: t.name, p_subject: t.subject, p_html: t.html, p_active: t.active ?? true }));
+}
+export async function aiTemplate(p: { center_id: string; type: string; instruction?: string; subject?: string; html?: string }): Promise<{ subject: string; html: string }> {
+  const { data, error } = await db.functions.invoke('ms-mail-ai', { body: { mode: 'template', ...p } });
+  if (error || !(data as { html?: string })?.html) throw new Error(await fnError(error, data));
+  return data as { subject: string; html: string };
+}
+/** One personal paragraph per booking (≤ 25 a call). */
+export async function aiBookingNotes(p: { kind: 'day_before' | 'next_try'; date: string; ids: string[]; instruction?: string }): Promise<Record<string, string>> {
+  const { data, error } = await db.functions.invoke('ms-mail-ai', { body: { mode: 'booking_note', ...p } });
+  if (error || !(data as { notes?: unknown })?.notes) throw new Error(await fnError(error, data));
+  return (data as { notes: Record<string, string> }).notes;
+}
+
+/** The booking emails' templates, and what each can say. Receipts are the other types. */
+export const BOOKING_TEMPLATES: { type: 'day_before' | 'next_try'; name: string; hint: string; vars: string[] }[] = [
+  { type: 'day_before', name: 'Day before', hint: 'Information only: we’re coming on this day.', vars: ['firstName', 'address', 'dateFriendly', 'services', 'companyName', 'note'] },
+  { type: 'next_try', name: 'Next try', hint: 'We came but couldn’t do it; we’ll try again on this day.', vars: ['firstName', 'address', 'dateFriendly', 'services', 'reason', 'companyName', 'note'] },
+];
+export const RECEIPT_TEMPLATES: { type: string; name: string }[] = [
+  { type: 'production', name: 'Receipt' }, { type: 'prepaid', name: 'Prepaid — done' }, { type: 'billed', name: 'Billed (invoice)' }, { type: 'sale', name: 'Sale (welcome)' },
+  { type: 'upgrade_star_plan_pro', name: 'Upgrade · Star Plan Pro' }, { type: 'upgrade_lawn_rejuv', name: 'Upgrade · Lawn Rejuv' }, { type: 'upgrade_golf_course', name: 'Upgrade · Golf Course' },
+  { type: 'addon_dethatch', name: 'Add-on · Dethatch' }, { type: 'addon_rejuv_after_care', name: 'Add-on · Rejuv after care' }, { type: 'addon_grub', name: 'Add-on · Grub' },
+  { type: 'addon_driveway_sealing', name: 'Add-on · Driveway sealing' }, { type: 'addon_hot_asphalt', name: 'Add-on · Hot asphalt' },
+];
+export const RECEIPT_VARS = ['firstName', 'lastName', 'fullName', 'address', 'displayPrice', 'paymentMethod', 'date', 'serviceName', 'workerName', 'companyName', 'ETRANSFER_INSTRUCTIONS_SECTION'];
+
+const escHtml = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+/** {{name}} → its value (escaped; "note" is already HTML). Unknown {{x}} are left out. */
+export function fillTemplate(t: string, vars: Record<string, string>, htmlVars: string[] = ['note']): string {
+  return t.replace(/<p>\s*(\{\{\s*note\s*\}\})\s*<\/p>/g, '$1').replace(/\{\{\s*([A-Za-z_]+)\s*\}\}/g, (_m, k: string) => (k in vars ? (htmlVars.includes(k) ? vars[k] : escHtml(vars[k])) : ''))
+    .replace(/<p>\s*<\/p>/g, '');
+}
+/** "Thursday, October 30" */
+export function dateFriendly(iso: string): string {
+  const d = new Date(`${iso}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
 export async function uploadAttachment(uid: string, file: File): Promise<Attachment> {

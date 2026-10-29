@@ -65,6 +65,7 @@
 .v2-mail-app .list-head .mut { font-size: 12.5px; }
 .v2-mail-app .boxes-sm { display: none; gap: 8px; padding: 0 12px 10px; overflow-x: auto; scrollbar-width: none; flex-shrink: 0; }
 .v2-mail-app .boxes-sm::-webkit-scrollbar { display: none; }
+.v2-mail-app .box-pick { display: none; margin: 0 12px 10px; padding: 8px 10px; border: 1px solid #c4c7c5; border-radius: 8px; background: var(--m-card); font: inherit; font-size: 14px; color: inherit; max-width: calc(100% - 24px); }
 .v2-mail-app .boxes-sm button { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; border: 1px solid #c4c7c5; background: var(--m-card); border-radius: 8px;
   height: 32px; padding: 0 14px; font-size: 13.5px; font-weight: 500; color: var(--m-ink2); }
 .v2-mail-app .boxes-sm button.on { background: var(--m-nav-on); border-color: var(--m-nav-on); color: var(--m-compose-ink); font-weight: 600; }
@@ -283,6 +284,7 @@
   .v2-mail-app .list, .v2-mail-app .reader { border-radius: 0; }
   .v2-mail-app .list-head { display: none; }
   .v2-mail-app .boxes-sm { display: flex; }
+  .v2-mail-app .box-pick { display: block; }
   .v2-mail-app .push-sm { display: block; }
   .v2-mail-app .reader { display: none; }
   .v2-mail-app.has-open .list, .v2-mail-app.has-open .top { display: none; }
