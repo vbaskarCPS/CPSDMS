@@ -17,6 +17,8 @@ export type GameProps<T> = {
   player: string;
   /** The signed-in player's id (for head-to-head games). */
   playerId?: string;
+  /** Every game's saved progress for this player (Little Lessons also reads its settings and old Little Chess). */
+  allProgress?: Record<string, Record<string, unknown>>;
 };
 
 export type GameInfo = {
@@ -26,6 +28,8 @@ export type GameInfo = {
   icon: string;
   colour: string;                     // card colour on the hub
   comingSoon?: boolean;
+  /** only for kid accounts (Little Lessons) */
+  kids?: boolean;
   component?: React.LazyExoticComponent<React.ComponentType<GameProps<any>>>; // eslint-disable-line @typescript-eslint/no-explicit-any
   /** One line for the hub card, from saved progress (e.g. "Level 19"). */
   summary?: (progress: Record<string, unknown> | null) => string | null;
@@ -65,9 +69,10 @@ export const GAMES: GameInfo[] = [
     component: React.lazy(() => import('./BattleGame')),
   },
   {
-    id: 'chess', name: 'Little Chess', icon: '♞', colour: '#0f766e',
-    blurb: 'First steps in chess, made for little hands.',
-    component: React.lazy(() => import('./LittleChess')),
+    // the kids' game: a kid signs straight into it; grown-ups see the kids' lessons page instead
+    id: 'lessons', name: 'Little Lessons', icon: '🦉', colour: '#0f766e', kids: true,
+    blurb: 'Chess, sight words and numbers, a little at a time.',
+    component: React.lazy(() => import('./LittleLessons')),
     summary: p => { const n = Array.isArray(p?.stickers) ? p!.stickers.length : 0; return n ? `${n} sticker${n === 1 ? '' : 's'}` : null; },
   },
 ];

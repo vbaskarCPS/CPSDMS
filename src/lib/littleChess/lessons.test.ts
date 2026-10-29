@@ -129,7 +129,9 @@ describe('the voice script', () => {
     const src = readFileSync('public/minigame/make-little-chess-voices.mjs', 'utf8');
     const block = src.slice(src.indexOf('// LINES-START'), src.indexOf('// LINES-END'));
     const lines = JSON.parse(block.slice(block.indexOf('['), block.lastIndexOf(']') + 1));
-    expect(lines).toEqual(voiceLines(['Kiaan']).map(l => [l.speaker, l.text, l.spoken]));
+    const { allVoiceLines } = await import('../littleLessons/voiceLines');
+    expect(lines).toEqual(allVoiceLines(['Kiaan']).map(l => [l.speaker, l.text, l.spoken]));
+    expect(voiceLines(['Kiaan']).length).toBeLessThan(lines.length);
   });
 });
 
