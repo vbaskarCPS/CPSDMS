@@ -13,7 +13,7 @@ import {
   BOARD, WORD, canMove, cheers, notThereLine, oopsLine, slowLine, clipId, spokenFor, movesFrom, sentenceFor, speakerFor,
   type Piece, type Round, type Speaker, type Sq,
 } from '../../lib/littleChess/lessons';
-import { castName, levelById, lessonLine, lessonOops, answerOf, type Cast, type Question, type Level } from '../../lib/littleLessons/levels';
+import { castName, countAloud, levelById, lessonLine, lessonOops, storyLine, answerOf, type Cast, type Question, type Level } from '../../lib/littleLessons/levels';
 import { applySettings, nextQuestion, readProgress, readSettings, recordAnswer, stickerFor, type LessonProgress, type LessonSettings } from '../../lib/littleLessons/engine';
 import type { GameProps } from './games';
 import { CHARACTER_CSS, Character, type Mood } from './chessCharacters';
@@ -26,15 +26,17 @@ const FONT = "'Andika', 'Comic Sans MS', 'Trebuchet MS', system-ui, sans-serif";
 
 // ── the voice: the recorded clip if there is one, else the tablet's most natural voice (or the one a grown-up picked) ──
 let chosenVoice: string | null = null, useRecorded = true, playerName = 'Kiaan';
-type Line = { text: string; who?: Speaker; said?: string };
-/** Say a line: chess lines use their recorded clips; lesson lines are read by the tablet from `said`. */
+type Line = { text: string; who?: Speaker | Cast; said?: string; key?: string };
+/** Say a line: its recorded clip (chess lines are named by their text, lesson lines by `key`), or the
+ *  tablet reads the full sentence. */
 const talk = (line: Line, on: boolean, onWord?: (i: number) => void, onEnd?: () => void) => {
-  const who = line.who || 'narrator';
-  say(line.text, line.said
-    ? { on, voice: chosenVoice, onWord, spoken: line.said, onEnd }
-    : { on, voice: chosenVoice, onWord, clip: clipId(who, line.text), recorded: useRecorded, spoken: spokenFor(who, line.text, playerName), onEnd });
+  const who = (line.who || 'narrator') as Speaker;
+  say(line.text, {
+    on, voice: chosenVoice, onWord, onEnd, recorded: useRecorded,
+    clip: clipId(who, line.key || line.text),
+    spoken: line.said || spokenFor(who, line.text, playerName),
+  });
 };
-const isPiece = (c: Cast): c is Piece => ['rook', 'knight', 'king', 'queen', 'bishop', 'pawn'].includes(c);
 
 // how long things wait (ms)
 const READ_AFTER = 1200;      // the sentence is read this long after a question starts
@@ -231,7 +233,7 @@ const StoryCard: React.FC<{ level: Level; voice: boolean; onDone: () => void; on
   useEffect(() => {
     let done = false;
     const go = () => { if (!done) { done = true; setReady(true); } };
-    const t1 = window.setTimeout(() => talk({ text: level.story.lines.join(' '), said: level.story.said }, voice, undefined, go), 600);
+    const t1 = window.setTimeout(() => talk(storyLine(level), voice, undefined, go), 600);
     const t2 = window.setTimeout(go, voice ? STORY_MAX : 4000);
     return () => { window.clearTimeout(t1); window.clearTimeout(t2); hush(); };
   }, [level, voice]);
@@ -270,7 +272,7 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
   const [cheer, setCheer] = useState<string | null>(null);
   const [lock, setLockState] = useState<Lock>(null);
   const [poke, setPoke] = useState(0);
-  const line: Line = isChess(q) ? { text: sentenceFor(q), who: speakerFor(q) } : (() => { const l = lessonLine(q)!; return { text: l.text, said: l.said }; })();
+  const line: Line = isChess(q) ? { text: sentenceFor(q), who: speakerFor(q) } : lessonLine(q)!;
   const idle = useRef<number | null>(null);
   const lockRef = useRef<Lock>(null);
   const seq = useRef(0);
@@ -320,7 +322,7 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
     if (quick) { const l = slowLine(name); setFlash(l); wait('slow', SLOW, { text: l }); return; }
     const l: Line = isChess(q)
       ? { text: typeof tapped === 'string' && tapped in WORD ? oopsLine(tapped as Piece) : notThereLine(q.piece) }
-      : (() => { const o = lessonOops(q, tapped as number | string); return { text: o.text, said: o.said }; })();
+      : lessonOops(q, tapped as number | string);
     setFlash(l.text);
     wait('think', THINK, l);
   };
@@ -329,7 +331,7 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
     if (idle.current) window.clearTimeout(idle.current);
     setFlash(null);
     const c = cheers(name)[Math.floor(Math.random() * 5)];
-    setCheer(c); talk({ text: c, who: isPiece(q.cast) ? q.cast : 'narrator' }, voice);
+    setCheer(c); talk({ text: c, who: q.cast }, voice);   // the question's character cheers in its own voice
     try { navigator.vibrate?.(40); } catch { /* ignore */ }
     const right = misses.current.length === 0;
     window.setTimeout(() => { setCheer(null); onDone(right); }, 1500);
@@ -608,7 +610,7 @@ const Things: React.FC<{ n: number; thing: string; size: number; gone?: number; 
     if (!counting || i >= left || tapped.includes(i)) return;
     const next = [...tapped, i];
     setTapped(next);
-    talk({ text: String(next.length), said: String(next.length) }, voice);
+    talk(countAloud(next.length), voice);
   };
   // rows of five, with a gap after each ten
   return (

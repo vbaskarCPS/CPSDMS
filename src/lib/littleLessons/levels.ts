@@ -6,7 +6,7 @@
 // Each level has a character, a little story told the first time the level shows up, and makes its own
 // questions (fresh numbers and boards each time). Pure data; the page draws it.
 import { LESSONS, WORD as PIECE_WORD, makeBoard, type Piece, type Round } from '../littleChess/lessons';
-import { WORD_GROUPS, lookAlikes } from './words';
+import { ALL_WORDS, WORD_GROUPS, lookAlikes } from './words';
 
 export type Subject = 'chess' | 'words' | 'math';
 export const SUBJECTS: Subject[] = ['chess', 'words', 'math'];
@@ -148,9 +148,11 @@ function wordLevel(i: number): Level {
 
 // ── math: Benny the Bear counts; Zip the Robot does real sums ──
 type MathSpec = { id: string; kind: MathRound['kind']; title: string; cast: Friend; things: string[]; story: Story;
-  nums: (rand: () => number) => { n?: number; a?: number; b?: number } };
-const MATH: MathSpec[] = [
-  { id: 'count-3', kind: 'count', title: 'Counting to 3', cast: 'benny', things: ['🍓', '🫐'],
+  nums: (rand: () => number) => { n?: number; a?: number; b?: number };
+  /** (sums) every a, b `nums` can give: each one gets a recorded line */
+  ok?: (a: number, b: number) => boolean };
+export const MATH: MathSpec[] = [
+  { id: 'count-3', kind: 'count', title: 'Counting to 3', cast: 'benny', things: ['🍓', '🍊']   /* one thing per picture (🫐 shows a bunch) */,
     story: { lines: ['THIS IS BENNY.', 'BENNY LOVES BERRIES.'], said: "Hello! This is Benny the Bear. Benny is going berry picking, and he needs a helper to count his berries. Will you help? Touch each berry and count with me!" },
     nums: r => ({ n: between(r, 1, 3) }) },
   { id: 'count-5', kind: 'count', title: 'Counting to 5', cast: 'benny', things: ['🍎', '🍓', '🐞'],
@@ -182,22 +184,22 @@ const MATH: MathSpec[] = [
     nums: r => { const a = between(r, 3, 10); return { a, b: between(r, 1, a - 1) }; } },
   { id: 'add-5', kind: 'add', title: 'Addition to 5', cast: 'zip',
     things: [], story: { lines: ['THIS IS ZIP.', 'ZIP LOVES NUMBERS.'], said: "Beep boop! This is Zip the Robot. Zip has a number machine! Put two numbers in, and the machine adds them up. Can you help Zip find the answer?" },
-    nums: r => { const a = between(r, 0, 4); return { a, b: between(r, 1, 5 - a) }; } },
+    nums: r => { const a = between(r, 0, 4); return { a, b: between(r, 1, 5 - a) }; }, ok: (a, b) => a <= 4 && b >= 1 && a + b <= 5 },
   { id: 'add-10', kind: 'add', title: 'Addition to 10', cast: 'zip', things: [],
     story: { lines: ['ZIP GOES FASTER!'], said: "Zip's machine got an upgrade! Now it adds bigger numbers, all the way to ten. Beep beep!" },
-    nums: r => { const a = between(r, 1, 9); return { a, b: between(r, 1, 10 - a) }; } },
+    nums: r => { const a = between(r, 1, 9); return { a, b: between(r, 1, 10 - a) }; }, ok: (a, b) => a >= 1 && b >= 1 && a + b <= 10 },
   { id: 'add-20', kind: 'add', title: 'Addition to 20', cast: 'zip', things: [],
     story: { lines: ['A ROCKET!', 'ZIP GOES UP!'], said: "Zip built a rocket! To fly it, we need to add numbers all the way to twenty. Three, two, one, blast off!" },
-    nums: r => { const a = between(r, 2, 15); return { a, b: between(r, 1, 20 - a) }; } },
+    nums: r => { const a = between(r, 2, 15); return { a, b: between(r, 1, 20 - a) }; }, ok: (a, b) => a >= 2 && a <= 15 && b >= 1 && a + b <= 20 },
   { id: 'sub-5', kind: 'sub', title: 'Subtraction to 5', cast: 'zip', things: [],
     story: { lines: ['ZIP TAKES AWAY.'], said: "Zip's machine can take away too! Put in a number, take some away, and see what's left. Beep boop!" },
-    nums: r => { const a = between(r, 1, 5); return { a, b: between(r, 0, a) }; } },
+    nums: r => { const a = between(r, 1, 5); return { a, b: between(r, 0, a) }; }, ok: (a, b) => a >= 1 && a <= 5 && b <= a },
   { id: 'sub-10', kind: 'sub', title: 'Subtraction to 10', cast: 'zip', things: [],
     story: { lines: ['ZIP IS A CHEF!'], said: "Zip is cooking cookies! Some got eaten. Take them away and find what's left, up to ten." },
-    nums: r => { const a = between(r, 2, 10); return { a, b: between(r, 1, a) }; } },
+    nums: r => { const a = between(r, 2, 10); return { a, b: between(r, 1, a) }; }, ok: (a, b) => a >= 2 && a <= 10 && b >= 1 && b <= a },
   { id: 'sub-20', kind: 'sub', title: 'Subtraction to 20', cast: 'zip', things: [],
     story: { lines: ['ZIP IN SPACE!'], said: "Zip is flying through space, and the rocket is using up fuel. Take away, all the way from twenty!" },
-    nums: r => { const a = between(r, 5, 20); return { a, b: between(r, 1, Math.min(a, 10)) }; } },
+    nums: r => { const a = between(r, 5, 20); return { a, b: between(r, 1, Math.min(a, 10)) }; }, ok: (a, b) => a >= 5 && a <= 20 && b >= 1 && b <= Math.min(a, 10) },
 ];
 
 function mathLevel(s: MathSpec): Level {
@@ -235,26 +237,59 @@ export function answerOf(q: Question): number | string | null {
 // ── what's shown and said ──
 const NUM_WORD = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
 export const numberWord = (n: number) => NUM_WORD[n] ?? String(n);
-const THING_NAME: Record<string, string> = { '🍓': 'berries', '🫐': 'blueberries', '🍎': 'apples', '🐞': 'ladybugs', '🐟': 'fish', '🌟': 'stars', '⭐': 'stars', '🦋': 'butterflies',
+const THING_NAME: Record<string, string> = { '🍓': 'berries', '🍊': 'oranges', '🍎': 'apples', '🐞': 'ladybugs', '🐟': 'fish', '🌟': 'stars', '⭐': 'stars', '🦋': 'butterflies',
   '🍯': 'honey pots', '🐝': 'bees', '🌻': 'sunflowers', '🍪': 'cookies', '🎈': 'balloons' };
 export const thingName = (t: string) => THING_NAME[t] || 'things';
 
-/** A new-kind question's sentence on screen (short sight words) and what's said out loud. */
-export function lessonLine(q: Question): { text: string; said: string } | null {
+/** Something said out loud: `text` on screen, `key` names its recorded clip (with `who`), `said` is what's spoken. */
+export type Said = { text: string; key: string; said: string; who: Cast | 'narrator' };
+const plural = (t: string) => thingName(t);
+
+/** A new-kind question's sentence on screen (short sight words) and what its character says. */
+export function lessonLine(q: Question): Said | null {
   switch (q.kind) {
-    case 'sight': return { text: 'FIND THE WORD.', said: `Find the word: ${q.word}. ${q.word}.` };
-    case 'count': return { text: 'HOW MANY?', said: `How many ${thingName(q.thing)}? Count them!` };
-    case 'countAdd': return { text: 'HOW MANY IN ALL?', said: `${cap(numberWord(q.a))} ${thingName(q.thing)}, and ${numberWord(q.b)} more. How many in all?` };
-    case 'countSub': return { text: 'HOW MANY ARE LEFT?', said: `There were ${numberWord(q.a)} ${thingName(q.thing)}. ${cap(numberWord(q.b))} went away. How many are left?` };
-    case 'add': return { text: `${q.a} + ${q.b} = ?`, said: `What is ${numberWord(q.a)} plus ${numberWord(q.b)}?` };
-    case 'sub': return { text: `${q.a} − ${q.b} = ?`, said: `What is ${numberWord(q.a)} take away ${numberWord(q.b)}?` };
+    case 'sight': return { text: 'FIND THE WORD.', ...sightFind(q.word) };
+    case 'count': return { text: 'HOW MANY?', ...howMany(plural(q.thing)) };
+    case 'countAdd': return { text: 'HOW MANY IN ALL?', ...inAll(plural(q.thing)) };
+    case 'countSub': return { text: 'HOW MANY ARE LEFT?', ...areLeft(plural(q.thing)) };
+    case 'add': case 'sub': return { text: `${q.a} ${q.kind === 'add' ? '+' : '−'} ${q.b} = ?`, ...sum(q.kind, q.a, q.b) };
     default: return null;
   }
 }
+const sightFind = (w: string) => ({ key: `FIND ${w}`, said: `Find the word: ${w}. ${w}.`, who: 'ollie' as const });
+// (`t` is the things' name: "berries")
+const howMany = (t: string) => ({ key: `HOW MANY ${t}`, said: `How many ${t}? Count them!`, who: 'benny' as const });
+const inAll = (t: string) => ({ key: `IN ALL ${t}`, said: `Let's put the ${t} together. How many ${t} in all?`, who: 'benny' as const });
+const areLeft = (t: string) => ({ key: `LEFT ${t}`, said: `Some ${t} went away! How many ${t} are left?`, who: 'benny' as const });
+const sum = (k: 'add' | 'sub', a: number, b: number) => ({ key: `${a} ${k === 'add' ? 'PLUS' : 'MINUS'} ${b}`,
+  said: `What is ${numberWord(a)} ${k === 'add' ? 'plus' : 'take away'} ${numberWord(b)}?`, who: 'zip' as const });
+
 /** A wrong tap on a new-kind question: say what he tapped, so the miss still teaches. */
-export function lessonOops(q: Question, tapped: number | string): { text: string; said: string } {
-  if (q.kind === 'sight') return { text: `THAT IS ${String(tapped).toUpperCase()}.`, said: `Oops! That word is ${tapped}. Listen again: ${q.word}.` };
-  return { text: 'TRY AGAIN.', said: `Hmm, not ${numberWord(Number(tapped))}. Let's count again!` };
+export function lessonOops(q: Question, tapped: number | string): Said {
+  if (q.kind === 'sight') return { text: `THAT IS ${String(tapped).toUpperCase()}.`, ...wordOops(String(tapped)) };
+  return { text: 'TRY AGAIN.', ...numberOops(Number(tapped), q.cast === 'zip' ? 'zip' : 'benny') };
+}
+const wordOops = (w: string) => ({ key: `NOT ${w}`, said: `Oops! That word is ${w}. Try again!`, who: 'ollie' as const });
+const numberOops = (n: number, who: 'benny' | 'zip') => ({ key: `NOT ${n}`, said: `Hmm, not ${numberWord(n)}. Let's try again!`, who });
+/** Benny counting out loud as he taps each thing. */
+export const countAloud = (n: number): Said => ({ text: String(n), key: `COUNT ${n}`, said: `${cap(numberWord(n))}!`, who: 'benny' });
+/** A level's story, told by its character. */
+export const storyLine = (l: Level): Said => ({ text: l.story.lines.join(' '), key: `STORY ${l.id}`, said: l.story.said, who: l.cast });
+
+/** Every lesson line there is (not the chess ones, which Little Chess already lists): for the voice script. */
+export function lessonLines(): Omit<Said, 'text'>[] {
+  const out: Omit<Said, 'text'>[] = [];
+  for (const s of SUBJECTS) for (const l of LEVELS[s]) { const x = storyLine(l); out.push({ key: x.key, said: x.said, who: x.who }); }
+  for (const w of ALL_WORDS) out.push(sightFind(w), wordOops(w));
+  const things = (kind: MathRound['kind']) => [...new Set(MATH.filter(m => m.kind === kind).flatMap(m => m.things.map(plural)))];
+  for (const t of things('count')) out.push(howMany(t));
+  for (const t of things('countAdd')) out.push(inAll(t));
+  for (const t of things('countSub')) out.push(areLeft(t));
+  for (const k of ['add', 'sub'] as const) for (let a = 0; a <= 20; a++) for (let b = 0; b <= 20; b++)
+    if (MATH.some(m => m.kind === k && m.ok?.(a, b))) out.push(sum(k, a, b));
+  for (let n = 0; n <= 23; n++) out.push(numberOops(n, 'benny'), numberOops(n, 'zip'));
+  for (let n = 1; n <= 20; n++) { const c = countAloud(n); out.push({ key: c.key, said: c.said, who: c.who }); }
+  return out;
 }
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
