@@ -581,7 +581,8 @@
 @media (max-width: 640px) { .v2-mb-sep { display: none; } .v2-mb-state { padding: 6px 10px; } }
 
 .v2-mb-links { display: flex; gap: 6px; margin-top: 8px; }
-.v2-mb-listlink { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 8px 10px; border-radius: 10px; background: #fef3c7; color: #78350f; font-size: 12.5px; text-decoration: none; border: 1px solid #fcd34d; }
+/* ".v2 a { color: inherit }" would give it the dark frame's white text on yellow */
+.v2 .v2-mb-listlink { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 8px 10px; border-radius: 10px; background: #fef3c7; color: #78350f; font-size: 12.5px; text-decoration: none; border: 1px solid #fcd34d; }
 .v2-mb-listlink span { flex: 1; min-width: 0; line-height: 1.35; }
-.v2-mb-listlink.sm { flex: 0 0 auto; background: #ecfdf5; color: #065f46; border-color: #6ee7b7; }
+.v2 .v2-mb-listlink.sm { flex: 0 0 auto; background: #ecfdf5; color: #065f46; border-color: #6ee7b7; }
 .v2-mb-listlink:hover { filter: brightness(.97); }
