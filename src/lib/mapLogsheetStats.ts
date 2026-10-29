@@ -53,8 +53,12 @@ export function computeCounts(
     else if (d.status === 'invalid') invalid++;
     else goBack++;
   });
-  const pending = houseViews.filter(v => v.state === 'pending').length;
-  const completed = houseViews.filter(v => v.state === 'completed').length;
+  // A prebook (an office booking) isn't a sale: it's left out of knocks, answered and closing %.
+  // It still counts as a step and in payouts (those are worked out from transactions, not here).
+  const prebook = (v: HouseView) => (v.state === 'pending' && !v.pendingSale && !!v.officeBooking)
+    || (v.state === 'completed' && !!v.completed && isPrebook(v.completed));
+  const pending = houseViews.filter(v => v.state === 'pending' && !prebook(v)).length;
+  const completed = houseViews.filter(v => v.state === 'completed' && !prebook(v)).length;
   // Knocks    = No + Not Home + Go Back + Invalid + Pending + Done
   // Answered  = Knocks − Not Home − Invalid   (a door that opened AND could buy; Go Back counts)
   // Answer %  = Answered ÷ Knocks
@@ -66,6 +70,10 @@ export function computeCounts(
   const closingRate = answered > 0 ? sales / answered : 0;
   return { no, notHome, goBack, invalid, pending, completed, knocks, answered, sales, answerRate, closingRate };
 }
+
+/** An office prebook (from the old sheet's feed or a Master Bookings list), not a door sale. */
+export const isPrebook = (b: { isPrebooked?: boolean; 'Booking ID'?: string } | null | undefined) =>
+  !!b && (b.isPrebooked === true || String(b['Booking ID'] || '').startsWith('mb:'));
 
 /** Average charge (today): total price of completed sales ÷ number of them.
  *  Upgrades/add-ons are excluded so the figure reads as "what a door is worth". */

@@ -2,7 +2,7 @@
 // The layers are added once; each level fills the ones it uses and empties the rest.
 //   level 1  map outlines (tap to pick)
 //   level 2  route lines in their colours, or (heat map) route outlines with each street coloured
-//            by its knocks; route numbers; customers and knocks as the filters say
+//            by its knocks; route numbers; customers, knocks and bookings as the filters say
 //   level 3  the route, its streets (heat map), every house coloured by its knock this round
 import mapboxgl from 'mapbox-gl';
 import { RM_LINE, RM_NUMBER, RM_STYLE, tidyRmBaseMap } from '../../../lib/rmMapStyle';
@@ -14,7 +14,7 @@ export const BLANK_STYLE: mapboxgl.StyleSpecification = {
 export const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
 export type AreaSource = 'mb-area';
-export const SOURCES = ['mb-outline', 'mb-outline-labels', 'mb-routes', 'mb-hull', 'mb-heat', 'mb-nums', 'mb-clients', 'mb-knocks', 'mb-sel'] as const;
+export const SOURCES = ['mb-outline', 'mb-outline-labels', 'mb-routes', 'mb-hull', 'mb-heat', 'mb-nums', 'mb-clients', 'mb-knocks', 'mb-bookings', 'mb-sel'] as const;
 export type SourceId = typeof SOURCES[number];
 
 export function createMap(box: HTMLDivElement, onReady: (m: mapboxgl.Map) => void, onFail: (msg: string) => void): mapboxgl.Map | null {
@@ -72,6 +72,10 @@ function addLayers(m: mapboxgl.Map): void {
     'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 2, 17, 5], 'circle-color': ['get', 'color'],
     'circle-opacity': ['case', ['==', ['get', 'fast'], 1], 0.45, 0.9],
     'circle-stroke-color': ['case', ['==', ['get', 'fast'], 1], '#facc15', '#111827'], 'circle-stroke-width': ['case', ['==', ['get', 'fast'], 1], 1.5, 0.4] } });
+  // bookings (levels 2 and 3): open yellow, tried orange, done green, cancelled grey; a dark ring so they stand out
+  m.addLayer({ id: 'mb-bookings', type: 'circle', source: 'mb-bookings', paint: {
+    'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 4, 17, 9], 'circle-color': ['get', 'color'],
+    'circle-stroke-color': '#111827', 'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 11, 1.2, 17, 2.5] } });
   m.addLayer({ id: 'mb-sel', type: 'circle', source: 'mb-sel', paint: {
     'circle-radius': 15, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#111827', 'circle-stroke-width': 2.5 } });
   m.addLayer({ id: 'mb-nums', type: 'symbol', source: 'mb-nums', layout: {

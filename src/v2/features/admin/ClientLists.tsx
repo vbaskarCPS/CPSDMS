@@ -24,6 +24,8 @@ import {
 import { ChecksCard, HealthCard, LessonsCard, PreviewPanel } from './ClientListPanels';
 import { Btn, ErrorBox, Loading, Tabs, Tag, Toggle } from '../../ui';
 import { TerritoryTabs } from './Territory';
+import { BookingImport } from '../bookings/BookingImport';
+import { looksLikeBookingTab, readBookingTabFromWorkbook } from '../../lib/bookings';
 import { BennyChat, type ChatMessage } from './BennyChat';
 import { applyChatActions, lessonProposals, openingMessage, REVIEW_PROMPT } from '../../lib/bennyChat';
 
@@ -72,6 +74,8 @@ export const ClientLists: React.FC = () => {
   const [baseline, setBaseline] = useState<{ summary: ImportSummary; at: string } | null>(null);
   const [sameFile, setSameFile] = useState<{ file_name: string; created_at: string }[]>([]);
   const [pending, setPending] = useState<Pending | null>(null);
+  // a Master Bookings booking tab (Star Plan Bookings): goes to the booking import, not the client import
+  const [bookingTab, setBookingTab] = useState<{ fileName: string; tab: string; rows: unknown[][] } | null>(null);
   const imports = useLoad(listImports, []);
   const recipes = useLoad(listRecipes, []);
 
@@ -141,6 +145,14 @@ export const ClientLists: React.FC = () => {
   };
 
   const onFile = (f: File | undefined) => f && run('Reading the file…', async () => {
+    if (/\.csv$/i.test(f.name)) {
+      const r = await parseCsv(await f.text());
+      if (looksLikeBookingTab(r)) { setBookingTab({ fileName: f.name, tab: f.name.replace(/\.csv$/i, '').replace(/^.*? - /, ''), rows: r }); return; }
+    } else {
+      // a Master Bookings workbook: only its booking tab is opened (never Accounts or CCDETF)
+      const tab = await readBookingTabFromWorkbook(f).catch(() => null);
+      if (tab && looksLikeBookingTab(tab.rows)) { setBookingTab({ fileName: f.name, tab: tab.name, rows: tab.rows }); return; }
+    }
     const sheets = /\.csv$/i.test(f.name) ? [{ name: f.name, rows: await parseCsv(await f.text()) }] : await readWorkbook(f);
     if (!sheets.length) throw new Error('That file has no rows.');
     const hash = await fileHash(await f.arrayBuffer()).catch(() => null);
@@ -151,6 +163,7 @@ export const ClientLists: React.FC = () => {
     const csv = await fetchSheetCsv(link.trim());
     const r = await parseCsv(csv);
     if (!r.length) throw new Error('That sheet has no rows.');
+    if (looksLikeBookingTab(r)) { setBookingTab({ fileName: 'Google Sheet', tab: 'Star Plan Bookings', rows: r }); return; }
     const hash = await fileHash(csv).catch(() => null);
     const s: Source = { fileName: `Google Sheet ${link.match(/\/d\/([\w-]{6})/)?.[1] || ''}`.trim(), kind: 'sheet', sheetUrl: link.trim(), sheets: [{ name: 'Sheet', rows: r }], sheet: 0, hash };
     setSrc(s); await readLayout(s);
@@ -445,7 +458,9 @@ export const ClientLists: React.FC = () => {
       <ErrorBox error={error} />
       {busy && <div className="v2-card v2-row" style={{ marginBottom: 12 }}><Sparkles size={16} color="#7c3aed" /><b>{busy}</b></div>}
 
-      {step === 'source' && (
+      {bookingTab && <div style={{ marginBottom: 14 }}><BookingImport fileName={bookingTab.fileName} tab={bookingTab.tab} rows={bookingTab.rows} onClose={() => setBookingTab(null)} /></div>}
+
+      {step === 'source' && !bookingTab && (
         <div className="v2-grid2" style={{ marginBottom: 14 }}>
           <div className="v2-card">
             <div className="v2-card-h"><FileSpreadsheet size={14} /> Upload a file</div>

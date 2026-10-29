@@ -40,7 +40,7 @@ export const AddLiveRoutes: React.FC<{ centerId: string; areas: Area[]; shapes: 
       </div>
       <ErrorBox error={error || live.error} />
       {note && <div className="v2-card v2-row v2-small" style={{ color: '#047857', marginBottom: 10, padding: 10 }}><Check size={16} />{note}</div>}
-      <MapRoutePicker areas={areas} shapes={shapes} managers={mgrs} routes={picks} locked={live.data.owner} active={painter}
+      <MapRoutePicker areas={areas} shapes={shapes} managers={mgrs} routes={picks} locked={live.data.owner} active={painter} centerId={centerId}
         onActive={id => { setActive(id); setPicks(new Map()); setNote(null); }}
         onChange={next => { if (!canEdit) return; setNote(null); setPicks(new Map([...next].filter(([, r]) => r.managerId === painter))); }}
         footer={
