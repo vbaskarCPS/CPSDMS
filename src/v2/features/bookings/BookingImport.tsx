@@ -12,8 +12,8 @@ import { CheckCircle2, MapPin, Upload, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
-  checkImport, cityForRoute, listLists, locateRows, parseBookingTab, repeats, saveImportRows, starPlanToBooking, STATE_HINT, STATE_LABEL,
-  type CheckRow, type ImportRow, type MapState,
+  bennyLocate, checkImport, cityForRoute, findPoint, listLists, locateRows, parseBookingTab, repeats, saveImportRows, starPlanToBooking, STATE_HINT, STATE_LABEL,
+  type CheckRow, type Found, type ImportRow, type MapState,
 } from '../../lib/bookings';
 import { Btn, ErrorBox, Loading, Tag } from '../../ui';
 
@@ -34,12 +34,32 @@ export const BookingImport: React.FC<{ fileName: string; tab: string; rows: unkn
   const [found, setFound] = useState<{ rows: (ImportRow & { i: number })[]; check: Map<number, CheckRow> } | null>(null);
   const [done, setDone] = useState<{ added: number; already: number; new_clients: number; states: Record<string, number> } | null>(null);
   const [show, setShow] = useState<MapState | 'already' | null>(null);
+  const [bennyCount, setBennyCount] = useState(0);
+  const [fix, setFix] = useState<{ i: number; house_no: string; street: string; city: string } | null>(null);
+  const [fixMsg, setFixMsg] = useState<string | null>(null);
+  /** One address fixed by hand: searched again, then placed on the maps. */
+  const tryFix = () => list && found && fix && run(async () => {
+    setBusy('Looking for that address…'); setFixMsg(null);
+    const src = parsed[fix.i];
+    const b = { ...src, house_no: fix.house_no.trim(), street: fix.street.trim(), city: fix.city.trim() };
+    const r = await findPoint({ house_no: b.house_no, street: b.street, city: b.city || cityForRoute(b.sheet_route), route: b.sheet_route });
+    if (!r.found) { setFixMsg(`Still not found${r.offered.length ? `. The map knows: ${r.offered.slice(0, 4).join(', ')}` : ''}.`); return; }
+    const row = { ...starPlanToBooking(b, r.found, cityForRoute(b.sheet_route)), key: src.key, i: fix.i };
+    const one = await checkImport(list.id, [row]);
+    const rows2 = found.rows.map(x => (x.i === fix.i ? row : x));
+    const check2 = new Map(found.check); const c = one.get(fix.i); if (c) check2.set(fix.i, c);
+    setFound({ rows: rows2, check: check2 }); setFix(null);
+  });
 
   const run = async (fn: () => Promise<void>) => { setError(null); try { await fn(); } catch (e) { setError(e); } finally { setBusy(null); } };
   const find = () => list && run(async () => {
     setBusy('Finding the addresses on the map…');
-    const pts = await locateRows(parsed, n => setBusy(`Finding the addresses on the map… ${n} of ${parsed.length}`));
-    const built = parsed.map((b, i) => ({ ...starPlanToBooking(b, pts.get(i) || null, cityForRoute(b.sheet_route)), i }));
+    const { points, missed } = await locateRows(parsed, n => setBusy(`Finding the addresses on the map… ${n} of ${parsed.length}`));
+    // the ones the map couldn't find: The Benny works out which real street each meant
+    const benny = await bennyLocate(parsed, missed, setBusy).catch(() => new Map<number, Found>());
+    for (const [i, f] of benny) points.set(i, f);
+    setBennyCount(benny.size);
+    const built = parsed.map((b, i) => ({ ...starPlanToBooking(b, points.get(i) || null, cityForRoute(b.sheet_route)), i }));
     setBusy('Placing them on the digital maps…');
     const check = await checkImport(list.id, built);
     setFound({ rows: built, check });
@@ -147,12 +167,24 @@ export const BookingImport: React.FC<{ fileName: string; tab: string; rows: unkn
                   <div key={r.i} className="v2-mb-booking">
                     <div className="v2-row" style={{ gap: 6 }}><b>{r.house_no} {r.street}</b><span className="v2-mut v2-small">{r.city}</span><span className="v2-spacer" />
                       <span className="v2-small">{k.map_state === 'moved' ? `${k.moved_from} → ${k.route_code}` : (k.route_code || r.sheet_route || 'no route')}</span></div>
-                    <div className="v2-mut v2-small">{[r.people[0] && `${r.people[0].first} ${r.people[0].last}`.trim(), k.area_name, `row ${r.source.row}`].filter(Boolean).join(' · ')}</div>
+                    <div className="v2-mut v2-small">{[r.people[0] && `${r.people[0].first} ${r.people[0].last}`.trim(), k.area_name, `row ${r.source.row}`].filter(Boolean).join(' · ')}
+                      {k.map_state === 'no_location' && !k.already && fix?.i !== r.i && <> · <button type="button" className="v2-link" onClick={() => { setFixMsg(null); setFix({ i: r.i, house_no: r.house_no, street: r.street, city: r.city || '' }); }}>Fix address</button></>}</div>
+                    {fix?.i === r.i && (
+                      <div className="v2-row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                        <input className="v2-input" style={{ width: 90 }} value={fix.house_no} onChange={e => setFix({ ...fix, house_no: e.target.value })} aria-label="House number" />
+                        <input className="v2-input" style={{ width: 200 }} value={fix.street} onChange={e => setFix({ ...fix, street: e.target.value })} aria-label="Street" />
+                        <input className="v2-input" style={{ width: 150 }} value={fix.city} onChange={e => setFix({ ...fix, city: e.target.value })} aria-label="City" placeholder="City" />
+                        <Btn size="sm" onClick={tryFix} disabled={!!busy}>Find</Btn>
+                        <Btn size="sm" kind="o" onClick={() => setFix(null)}>Cancel</Btn>
+                        {fixMsg && <span className="v2-small" style={{ color: '#b91c1c' }}>{fixMsg}</span>}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           )}
+          {bennyCount > 0 && <div className="v2-small"><b>The Benny placed {bennyCount}</b> address{bennyCount === 1 ? '' : 'es'} the map search couldn’t find (spelling fixed; the sheet’s spelling is kept in the office notes).</div>}
           <div className="v2-row" style={{ gap: 8 }}>
             <Btn icon={Upload} onClick={load} disabled={!!busy || !toLoad}>{toLoad ? `Load ${toLoad} bookings into ${list?.name}` : 'Nothing new to load'}</Btn>
             <Btn kind="o" onClick={() => setFound(null)} disabled={!!busy}>Back</Btn>
