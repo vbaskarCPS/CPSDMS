@@ -399,7 +399,9 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
         <div className="flex gap-2">{Array.from({ length: total }, (_, k) => <span key={k} className={`w-4 h-4 rounded-full ${k < at ? 'bg-yellow-300' : k === at ? '' : 'bg-white/25'}`} style={k === at ? { background: '#fff' } : undefined} />)}</div>
         <button type="button" onClick={replay} aria-label="Say it again" className="w-14 h-14 rounded-full bg-white/10 text-3xl" disabled={!voice}>🔊</button>
       </div>
-      <div className="mt-4"><Sentence text={line.text} lit={lit} flash={flash} /></div>
+      <div className="mt-4">{cheer
+        ? <div className="text-center font-black text-yellow-300" style={{ fontSize: 'clamp(40px, 7.5vw, 76px)', minHeight: '1.3em', lineHeight: 1.1, textShadow: '0 5px 0 #134e4a', animation: 'lc-pop .4s ease-out' }}>{cheer}</div>
+        : <Sentence text={line.text} lit={lit} flash={flash} />}</div>
       <div className="relative flex-1 flex items-center justify-center p-4" onPointerDown={() => nudge()}>
         <div className="flex items-center justify-center">
           {q.kind === 'find' && <Find round={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
@@ -428,13 +430,6 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
           </div>
           <div className="font-black text-center mt-8 px-4" style={{ fontSize: 'clamp(40px, 8vw, 72px)', color: '#fff' }}>{slowLine(name)}</div>
           <div className="font-black text-teal-100 mt-2" style={{ fontSize: 'clamp(26px, 5vw, 40px)' }}>BIG BREATH.</div>
-        </div>
-      )}
-      {cheer && (
-        <div className="fixed inset-x-0 z-40 flex justify-center pointer-events-none" style={{ top: '12%' }}>
-          <div className="font-black text-yellow-300 text-center" style={{ fontSize: 'clamp(48px, 9vw, 100px)', textShadow: '0 6px 0 #134e4a, 0 0 30px rgba(0,0,0,.4)', animation: 'lc-pop .4s ease-out' }}>
-            {cheer}
-          </div>
         </div>
       )}
     </div>
