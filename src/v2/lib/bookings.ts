@@ -39,7 +39,7 @@ export const PLAN_LABEL: Record<PlanKind, string> = {
 };
 export const STATE_LABEL: Record<MapState, string> = { on_map: 'On map', moved: 'Moved', waiting: 'Waiting on map', no_location: 'No location' };
 export const STATE_HINT: Record<MapState, string> = {
-  on_map: 'Its point is on a built route that matches the sheet’s code.',
+  on_map: 'Its point is on a built route. When that route isn’t the sheet’s code, the map’s route is used (shown as old → new).',
   moved: 'Its point is on a built route with a different code from the sheet; the map’s route is used.',
   waiting: 'No digital map is built there yet. It keeps the sheet’s code and can’t go into a day until the map exists.',
   no_location: 'The address couldn’t be found. Fix the address so it can be placed.',

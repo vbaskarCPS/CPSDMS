@@ -17,7 +17,9 @@ import {
 } from '../../lib/bookings';
 import { Btn, ErrorBox, Loading, Tag } from '../../ui';
 
-const STATES: MapState[] = ['on_map', 'moved', 'waiting', 'no_location'];
+// On map and Moved are one filter: either way the booking is on a built route (Moved just shows the route it moved to)
+const STATES: MapState[] = ['on_map', 'waiting', 'no_location'];
+const mapped = (s: MapState) => (s === 'moved' ? 'on_map' : s);
 const TONE: Record<MapState, 'g' | 'b' | 'a' | 'r'> = { on_map: 'g', moved: 'b', waiting: 'a', no_location: 'r' };
 
 export const BookingImport: React.FC<{ fileName: string; tab: string; rows: unknown[][]; onClose: () => void }> = ({ fileName, tab, rows, onClose }) => {
@@ -77,14 +79,14 @@ export const BookingImport: React.FC<{ fileName: string; tab: string; rows: unkn
       if (seen.has(r.key)) continue; seen.add(r.key);
       const k = found!.check.get(r.i);
       if (!k) continue;
-      if (k.already) c.already++; else c[k.map_state]++;
+      if (k.already) c.already++; else c[mapped(k.map_state)]++;
     }
     return c;
   }, [found]);
-  const toLoad = counts.on_map + counts.moved + counts.waiting + counts.no_location;
+  const toLoad = counts.on_map + counts.waiting + counts.no_location;
   const shownRows = (found?.rows || []).filter(r => {
     const k = found!.check.get(r.i); if (!k || !show) return false;
-    return show === 'already' ? k.already : !k.already && k.map_state === show;
+    return show === 'already' ? k.already : !k.already && mapped(k.map_state) === show;
   });
 
   if (!center) return <div className="v2-card v2-mut">Pick the center that works this list (BC Fall RJ) in the top bar first.</div>;
@@ -134,7 +136,7 @@ export const BookingImport: React.FC<{ fileName: string; tab: string; rows: unkn
         <div className="v2-card" style={{ background: 'var(--v2-green-bg, #f0fdf4)' }}>
           <div className="v2-row" style={{ gap: 8 }}><CheckCircle2 size={18} color="#16a34a" /><b>{done.added} bookings loaded into {list?.name}</b></div>
           <div className="v2-small" style={{ marginTop: 6 }}>
-            {STATES.map(s => `${done.states[s] || 0} ${STATE_LABEL[s].toLowerCase()}`).join(' · ')}{done.already ? ` · ${done.already} were already loaded` : ''}{done.new_clients ? ` · ${done.new_clients} new customer records` : ''}
+            {STATES.map(s => `${(done.states[s] || 0) + (s === 'on_map' ? done.states.moved || 0 : 0)} ${STATE_LABEL[s].toLowerCase()}`).join(' · ')}{done.already ? ` · ${done.already} were already loaded` : ''}{done.new_clients ? ` · ${done.new_clients} new customer records` : ''}
           </div>
           <div className="v2-row" style={{ gap: 8, marginTop: 10 }}>
             <Link className="v2-btn" to="/app/bookings/list">Open the bookings</Link>
