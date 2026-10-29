@@ -5,7 +5,7 @@ import { useAuth, type Center } from '../../lib/auth';
 import { PERMISSIONS, SUPER_ADMIN_PERMISSIONS, usernameBase, type Permission } from '../../lib/permissions';
 import { listUsers, listCenters, createUser, updateUser, resetPassword, sendSetupEmail, setupStatus, useLoad, type SetupStatus, type UserRow, type UserInput } from '../../lib/data';
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tag, Toggle } from '../../ui';
-import { Mailboxes } from './Mailboxes';
+import { Mailboxes, UserMailboxes } from './Mailboxes';
 
 const blank = (): UserInput => ({ full_name: '', phone: '', email: '', permissions: [], center_ids: [], rm_center_id: null, is_active: true });
 
@@ -196,6 +196,7 @@ const UserEditor: React.FC<{ user: UserRow | null; centers: Center[]; isSuperAdm
                 </select>
               </Field>
             )}
+            {user && !locked && <UserMailboxes userId={user.id} />}
           </div>
         </div>
         <div style={{ marginTop: 12 }}><ErrorBox error={error} /></div>

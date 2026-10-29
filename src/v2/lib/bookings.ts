@@ -32,6 +32,7 @@ export interface Booking {
   created_at: string; updated_at: string;
   plan: { id: string; kind: PlanKind; year: number; price: number | null; prepaid: boolean } | null;
   history?: { year?: number | string; service?: string; line?: string; price?: string; contractor?: string }[];
+  sent_emails?: { kind: string; at: string; thread_id?: string | null }[];   // booking emails sent ("day_before:2026-10-30")
 }
 export type PlanKind = 'sp_pro' | 'star_plan' | 'grub' | 'chafer' | 'sppp' | 'other';
 export const PLAN_LABEL: Record<PlanKind, string> = {

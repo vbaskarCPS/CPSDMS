@@ -15,7 +15,7 @@ import {
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
-  attachmentUrl, fileSize, fileThread, flagThread, htmlToText, inbox, inboxCounts, initials, mailCounts, mailInbox, mailWhen, myBoxes, reSubject,
+  attachmentUrl, boxName, fileSize, fileThread, flagThread, htmlToText, inbox, inboxCounts, initials, mailCounts, mailInbox, mailWhen, myBoxes, reSubject,
   thread as loadThread, type Box, type Message, type ThreadRow,
 } from '../../lib/mail';
 import { Composer, type ComposeInit } from './Composer';
@@ -69,7 +69,7 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
   const refresh = useCallback(() => setTick(x => x + 1), []);
   const unread = staff ? (mailbox?.unread ?? counts.data?.unread) : counts.data?.unread;
   const newMessage = (): ComposeInit => ({ key: staff ? `new:${mailbox?.id || ''}` : 'new', title: 'New message', quick, staff, mailbox_id: mailbox?.id,
-    context: staff && mailbox ? `From ${mailbox.address}` : undefined });
+    context: staff && mailbox ? `From ${mailbox.label ? `${mailbox.label} <${mailbox.address}>` : mailbox.address}` : undefined });
   const title = folders.find(f => f.key === box)?.label || 'Inbox';
 
   return (
@@ -89,7 +89,7 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
             <div className="h">{boxesList.data.length > 1 ? 'Mailboxes' : 'Your address'}</div>
             {boxesList.data.map(b => (
               <button key={b.id} type="button" className={mailbox?.id === b.id ? 'on' : ''} onClick={() => go({ mb: b.id })} disabled={boxesList.data!.length < 2}>
-                <span className="addr">{b.address}</span>{!!b.unread && <em>{b.unread}</em>}</button>))}
+                <span className="addr" title={b.address}>{boxName(b)}</span>{!!b.unread && <em>{b.unread}</em>}</button>))}
           </div>)}
         <div className="side-foot"><PushToggle /></div>
       </aside>
@@ -110,6 +110,10 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
               <b>{search ? `Results for “${search}”` : title}</b>
               {!search && !!list.data?.length && <span className="mut">{list.data.length}{list.data.length >= 60 ? '+' : ''}</span>}
             </div>
+            {staff && (boxesList.data?.length || 0) > 1 && (
+              <select className="box-pick" value={mailbox?.id || ''} onChange={e => go({ mb: e.target.value })} aria-label="Mailbox">
+                {boxesList.data!.map(b => <option key={b.id} value={b.id}>{boxName(b)}{b.unread ? ` (${b.unread})` : ''}</option>)}
+              </select>)}
             <div className="boxes-sm" role="tablist">
               {folders.map(b => <button key={b.key} type="button" role="tab" aria-selected={box === b.key} className={box === b.key ? 'on' : ''} onClick={() => go({ box: b.key })}>
                 {b.label}{(b.key === 'inbox' && unread) ? <em>{unread}</em> : null}{(b.key === 'unsorted' && counts.data?.unsorted) ? <em>{counts.data.unsorted}</em> : null}</button>)}
