@@ -7,6 +7,8 @@
 // missing house by hand.
 
 import React, { useState, useEffect, useRef } from 'react';
+import { CrewBookingInfo, bookingBadge } from '../../v2/features/bookings/CrewBookingInfo';
+import { isAppBooking } from '../../v2/lib/bookingCrew';
 import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus, Pencil, CircleSlash } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { HouseView, HouseDispositionStatus, HOUSE_COLORS, OTHER_PCL_COLORS, OTHER_PCL_LABEL, historicalSummary, houseAddressLabel } from '../../lib/mapLogsheetService';
@@ -282,6 +284,9 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
           </div>
         )}
 
+        {/* A Master Bookings booking: prepaid job code, access, last try */}
+        {state === 'pending' && !pendingSale && officeBooking && isAppBooking(officeBooking['Booking ID']) && <CrewBookingInfo job={officeBooking} compact />}
+
         {/* Pending — tap to complete */}
         {state === 'pending' && (pendingSale || officeBooking) && (
           <button
@@ -293,6 +298,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
             <DollarSign size={18} />
             {pendingSale
               ? `Complete pending sale${pendingSale.price ? ` · $${pendingSale.price}` : ''}`
+              : isAppBooking(officeBooking?.['Booking ID']) ? `Open booking · ${bookingBadge(officeBooking)}`
               : `Open booking${officeBooking?.Price ? ` · $${officeBooking.Price}` : ''}`}
           </button>
         )}

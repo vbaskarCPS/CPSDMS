@@ -343,6 +343,8 @@
 .v2 .v2-rchip { position: relative; display: flex; flex-direction: column; align-items: center; padding: 6px 2px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
 .v2 .v2-rchip b { font-size: 15px; }
 .v2 .v2-rchip span { font-size: 10px; color: var(--mut); }
+.v2 .v2-rnum i.bk { background: #d4a800; color: #111827; }
+.v2 .v2-rchip span.v2-bk, .v2 .v2-bk { color: #a16207; font-weight: 700; }
 .v2 .v2-rchip.on { background: var(--c); border-color: var(--c); color: #fff; }
 .v2 .v2-rchip.on span { color: rgba(255,255,255,.85); }
 .v2 .v2-rchip:disabled { cursor: not-allowed; opacity: .85; }
@@ -557,3 +559,23 @@
 .v2-mailcard-list .l2 b { font-weight: 500; color: var(--ink); }
 .v2-mailcard-list .row.unread .who, .v2-mailcard-list .row.unread .l2 b, .v2-mailcard-list .row.unread .when { font-weight: 800; color: var(--ink); }
 .v2-mailcard-list .dot { width: 9px; height: 9px; border-radius: 50%; background: #0b57d0; flex-shrink: 0; }
+
+/* ───────── Master Bookings › Bookings, Plans and the booking import (RUN_66) ───────── */
+.v2-mb-states { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
+.v2-mb-state { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: 13px; border: 1px solid var(--line); }
+.v2-mb-state b { font-variant-numeric: tabular-nums; font-size: 15px; }
+.v2-mb-state.on { outline: 2px solid var(--ink); outline-offset: -1px; }
+.v2-mb-sep { width: 1px; background: var(--line); margin: 4px 2px; }
+.v2 i.dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; display: inline-block; box-shadow: inset 0 0 0 1px rgba(17,24,39,.55); }
+.v2-mb-chip i.dot { width: 8px; height: 8px; margin-right: 4px; vertical-align: 0; }
+.v2-mb-wait { display: grid; gap: 2px; max-height: 340px; overflow: auto; }
+.v2-mb-waitrow { display: flex; gap: 10px; align-items: baseline; padding: 6px 4px; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+.v2-mb-waitrow > b:first-child { min-width: 54px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.v2-mb-waitrow .n { min-width: 28px; text-align: right; font-variant-numeric: tabular-nums; color: #b45309; }
+.v2-search { display: flex; align-items: center; gap: 6px; position: relative; }
+.v2-search svg { position: absolute; left: 10px; color: var(--mut); pointer-events: none; }
+.v2-search .v2-input { padding-left: 32px; }
+.v2-mb-form { display: grid; gap: 12px; }
+.v2-mb-form textarea.v2-input { resize: vertical; min-height: 64px; }
+.v2-chip:disabled { opacity: .6; }
+@media (max-width: 640px) { .v2-mb-sep { display: none; } .v2-mb-state { padding: 6px 10px; } }

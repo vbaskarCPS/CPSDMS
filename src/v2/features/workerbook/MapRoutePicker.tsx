@@ -2,8 +2,8 @@
 // routes to a live session). Always a map, Digimaps-style:
 //
 //   1. pick a map (an area) — from the list, or by tapping its name on the map
-//   2. the map zooms to it: its routes with big tappable route numbers, and the callbook
-//      past clients (PCL, from the client database) as small grey dots; each number also shows that route’s PCL count
+//   2. the map zooms to it: its routes with big tappable route numbers, the center's bookings as
+//      coloured dots (each number shows its open bookings), and past clients (PCL) as small grey dots
 //   3. assign the whole map to the manager you're picking for, or tap route numbers one by one
 //
 // Every manager's routes show in their own colour, so you can see how the day is split.
@@ -16,6 +16,7 @@ import { useLoad } from '../../lib/data';
 import { pclCounts, pclDots, type Area, type PclDot, type RouteShape } from '../../lib/territory';
 import type { PlanManager, PlanRoute } from '../../lib/startSession';
 import { Btn } from '../../ui';
+import { areaBookings, bookingColor, type BookingDot } from '../../lib/bookings';
 
 export const MANAGER_COLORS = ['#2563eb', '#d97706', '#7c3aed', '#0d9488', '#e11d48', '#0284c7', '#65a30d', '#c026d3'];
 const FREE = '#6b7280';
@@ -36,14 +37,20 @@ interface Props {
   onActive: (managerId: string) => void;
   onChange: (next: Map<string, PlanRoute>) => void;
   footer?: React.ReactNode;
+  /** the center whose booking lists show as dots and counts (bookings matter more than PCL here) */
+  centerId?: string;
 }
 
-export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, routes, locked, active, onActive, onChange, footer }) => {
+export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, routes, locked, active, onActive, onChange, footer, centerId }) => {
   const [areaName, setAreaName] = useState<string | null>(null);
   const area = areas.find(a => a.name === areaName) || null;
   const counts = useLoad(() => pclCounts(areas.map(a => a.name)), [areas.map(a => a.name).join('|')]);
   const dots = useLoad(() => area ? pclDots(area.name) : Promise.resolve([] as PclDot[]), [area?.name]);
   const pcl = counts.data || new Map<string, number>();
+  // the center's bookings: dots on the map, and an open-booking count on every route
+  const bk = useLoad(() => (centerId ? areaBookings(centerId, areas.map(a => a.name)).catch(() => [] as BookingDot[]) : Promise.resolve([] as BookingDot[])),
+    [centerId, areas.map(a => a.name).join('|')]);
+  const booked = useMemo(() => { const m = new Map<string, number>(); for (const d of bk.data || []) if (d.status === 'open' && d.route) m.set(d.route, (m.get(d.route) || 0) + 1); return m; }, [bk.data]);
 
   const colorOf = (id: string) => MANAGER_COLORS[Math.max(0, managers.findIndex(m => m.id === id)) % MANAGER_COLORS.length];
   const ownerOf = (code: string): string | null => locked?.get(code) || routes.get(code)?.managerId || null;
@@ -140,6 +147,16 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
     m.addLayer({ id: 'pcl-dots', type: 'circle', source: 'pcl', paint: { 'circle-radius': 3, 'circle-color': '#4b5563', 'circle-opacity': 0.75, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
   }, [ready, dots.data]);
 
+  // booking dots (every map): open yellow, tried orange, done green, cancelled grey
+  useEffect(() => {
+    const m = map.current; if (!m || !ready) return;
+    const fc: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: (bk.data || []).map(d => ({ type: 'Feature', properties: { c: bookingColor(d) }, geometry: { type: 'Point', coordinates: [d.lng, d.lat] } })) };
+    const src = m.getSource('bk') as mapboxgl.GeoJSONSource | undefined;
+    if (src) { src.setData(fc); return; }
+    m.addSource('bk', { type: 'geojson', data: fc });
+    m.addLayer({ id: 'bk-dots', type: 'circle', source: 'bk', paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 3.5, 15, 6.5], 'circle-color': ['get', 'c'], 'circle-stroke-color': '#111827', 'circle-stroke-width': 1.2 } });
+  }, [ready, bk.data]);
+
   // markers: the open map's route numbers (tap to pick), or every map's name (tap to open)
   useEffect(() => {
     const m = map.current; if (!m || !ready) return;
@@ -166,8 +183,8 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
         el.className = `v2-rnum${owner ? ' on' : ''}${lockedHere ? ' locked' : ''}`;
         el.style.setProperty('--c', owner ? colorOf(owner) : '#ffffff');
         el.setAttribute('aria-label', `Route ${s.code}${owner ? `, ${managers.find(x => x.id === owner)?.full_name || 'assigned'}` : ', free'}${lockedHere ? ' (on the live session)' : ''}`);
-        const n = pcl.get(s.code) || 0;
-        el.innerHTML = `<b>${s.number}</b>${n ? `<i>${n}</i>` : ''}`;
+        const nb = booked.get(s.code) || 0;
+        el.innerHTML = `<b>${s.number}</b>${nb ? `<i class="bk" title="open bookings">${nb}</i>` : ''}`;
         el.addEventListener('click', ev => { ev.stopPropagation(); toggleRef.current(s.code, s.area, s.number); });
         markers.current.push(new mapboxgl.Marker({ element: el }).setLngLat(at).addTo(m));
       }
@@ -183,7 +200,7 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, area?.name, byArea, routes, locked, managers, counts.data, areas]);
+  }, [ready, area?.name, byArea, routes, locked, managers, counts.data, areas, booked]);
 
   // zoom: the open map, or all of them
   useEffect(() => {
@@ -197,7 +214,8 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
   const areaStats = (a: Area) => {
     const own = new Map<string, number>();
     for (const r of a.routes) { const o = ownerOf(r.route_code); if (o) own.set(o, (own.get(o) || 0) + 1); }
-    return { picked: [...own.values()].reduce((x, y) => x + y, 0), own, pcl: a.routes.reduce((x, r) => x + (pcl.get(r.route_code) || 0), 0) };
+    return { picked: [...own.values()].reduce((x, y) => x + y, 0), own, pcl: a.routes.reduce((x, r) => x + (pcl.get(r.route_code) || 0), 0),
+      booked: a.routes.reduce((x, r) => x + (booked.get(r.route_code) || 0), 0) };
   };
   const held = (id: string) => { let n = 0; for (const a of areas) for (const r of a.routes) if (ownerOf(r.route_code) === id) n++; return n; };
 
@@ -237,7 +255,7 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
                 return (
                   <button key={a.name} type="button" className="v2-maprow" onClick={() => setAreaName(a.name)}>
                     <span style={{ minWidth: 0, flex: 1 }}><b>{a.name}</b>
-                      <span className="v2-small v2-mut" style={{ display: 'block' }}>{a.prefix} · {a.routes.length} routes · {st.pcl} PCL</span></span>
+                      <span className="v2-small v2-mut" style={{ display: 'block' }}>{a.prefix} · {a.routes.length} routes{st.booked ? <> · <b className="v2-bk">{st.booked} booked</b></> : null} · {st.pcl} PCL</span></span>
                     <span className="v2-row" style={{ gap: 3 }}>{[...st.own.keys()].map(id => <span key={id} className="dot-sm" style={{ background: colorOf(id) }} />)}</span>
                     <span className="v2-small" style={{ fontWeight: 700 }}>{st.picked}/{a.routes.length}</span>
                   </button>
@@ -252,7 +270,7 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
             <div className="v2-card" style={{ padding: 12 }}>
               <div className="v2-row" style={{ marginBottom: 8 }}>
                 <button type="button" className="v2-link" onClick={() => setAreaName(null)} aria-label="All maps"><ChevronLeft size={16} /></button>
-                <b>{area.name}</b><span className="v2-spacer" /><span className="v2-small v2-mut">{st.picked}/{area.routes.length} · {st.pcl} PCL</span>
+                <b>{area.name}</b><span className="v2-spacer" /><span className="v2-small v2-mut">{st.picked}/{area.routes.length}{st.booked ? ` · ${st.booked} booked` : ''} · {st.pcl} PCL</span>
               </div>
               <div className="v2-row" style={{ gap: 6, marginBottom: 10 }}>
                 <Btn size="sm" disabled={!active} onClick={() => assignArea(area)}>Whole map to {activeName.split(' ')[0] || '…'}</Btn>
@@ -260,12 +278,12 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
               </div>
               <div className="v2-rgrid">
                 {area.routes.map(r => {
-                  const owner = ownerOf(r.route_code); const lk = isLocked(r.route_code); const n = pcl.get(r.route_code) || 0;
+                  const owner = ownerOf(r.route_code); const lk = isLocked(r.route_code); const n = pcl.get(r.route_code) || 0; const nb = booked.get(r.route_code) || 0;
                   return (
                     <button key={r.route_code} type="button" className={`v2-rchip${owner ? ' on' : ''}`} disabled={lk} onClick={() => toggle(r.route_code, area.name, r.route_number)}
                       style={owner ? { ['--c' as string]: colorOf(owner) } : undefined}
                       title={`${r.route_code}${owner ? ` · ${managers.find(m => m.id === owner)?.full_name || ''}` : ''}${lk ? ' · on the live session' : ''}`}>
-                      <b>{r.route_number}</b><span>{n} PCL</span>{lk && <Lock size={10} className="lk" />}
+                      <b>{r.route_number}</b>{nb ? <span className="v2-bk">{nb} booked</span> : <span>{n} PCL</span>}{lk && <Lock size={10} className="lk" />}
                     </button>
                   );
                 })}

@@ -30,6 +30,7 @@ import { Clients } from './features/clients/Clients';
 import { CustomerMap } from './features/clients/CustomerMap';
 import { Customer } from './features/clients/Customer';
 import { MasterBookings } from './features/bookings/MasterBookings';
+import { BookingsPage, PlansPage } from './features/bookings/BookingsPage';
 import { MyAccount } from './features/account/MyAccount';
 import { Zones } from './features/mainstreet/Zones';
 import { Campaigns } from './features/mainstreet/Campaigns';
@@ -113,6 +114,8 @@ const V2Routes: React.FC = () => (
     <Route path="clients" element={<Guard><CustomerMap /></Guard>} />
     <Route path="bookings/customers" element={<Guard><CustomerMap /></Guard>} />
     <Route path="bookings/maps" element={<Guard perm="bookings"><MasterBookings /></Guard>} />
+    <Route path="bookings/list" element={<Guard perm="bookings"><BookingsPage /></Guard>} />
+    <Route path="bookings/plans" element={<Guard perm="bookings"><PlansPage /></Guard>} />
     <Route path="clients/list" element={<Guard><Clients /></Guard>} />
     <Route path="clients/c/:id" element={<Guard><Customer /></Guard>} />
     <Route path="mainstreet" element={<Navigate to="/app/mainstreet/zones" replace />} />

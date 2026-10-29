@@ -187,7 +187,7 @@ export const StartSession: React.FC = () => {
           <div className="v2-card">No digital-map areas are assigned to {center.display_name} yet. {can('sa_territory')
             ? <Link className="v2-link" to="/app/admin/territory">Assign them in Super Admin › Territory.</Link> : 'Ask the Super Admin to assign them in Territory.'}</div>
         ) : (
-          <MapRoutePicker areas={areas.data || []} shapes={shapes.data || []} managers={mgrs} routes={routes} active={painter}
+          <MapRoutePicker areas={areas.data || []} shapes={shapes.data || []} managers={mgrs} routes={routes} active={painter} centerId={center.id}
             onActive={setActiveMgr} onChange={setRoutes}
             footer={<Btn disabled={!routes.size} onClick={() => setStep(2)} style={{ justifyContent: 'center' }}>Next: roll call &amp; teams ({routes.size} routes)</Btn>} />
         )

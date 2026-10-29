@@ -57,7 +57,7 @@ export function defaultRateCard(service: Service, tax: { name: string; rate: num
         hats: { individual: INDIVIDUAL_HATS, ...REJUV_TEAM_HATS } };
     case 'lawn_rejuv':
       return { ...base, perEqSolo: 7, perEqTeam: 9, productCostPercent: 25, prepaidWeight: 0.6, noTaxOnCashDefault: true,
-        officeFlats: [{ code: 'FSL', value: 157.5 }], asphaltSplit: null,
+        officeFlats: [{ code: 'AFSL', value: 210 }, { code: 'FSL', value: 157.5 }], asphaltSplit: null,
         hats: { individual: INDIVIDUAL_HATS, ...REJUV_TEAM_HATS } };
     case 'sealing':
       return { ...base, perEqSolo: 6, perEqTeam: 8, productCostPercent: 0, prepaidWeight: 0.5, noTaxOnCashDefault: false,

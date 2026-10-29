@@ -3419,11 +3419,12 @@ class SessionService {
   
     // --- 6. BOOKING STATUS UPDATES ---
   
-    public async updateBookingStatus(bookingId: string, status: 'next_time' | 'cancelled'): Promise<void> {
+    /** reason / note: why it wasn't done (a Master Bookings booking keeps them on its list of tries). */
+    public async updateBookingStatus(bookingId: string, status: 'next_time' | 'cancelled', reason?: string, note?: string): Promise<void> {
       const ccId = this.getCCId();
       const { error } = await supabase
         .from('bookings')
-        .update({ status })
+        .update(bookingId.startsWith('mb:') ? { status, attempt_reason: reason || null, attempt_note: note || null } : { status })
         .eq('booking_id', bookingId)
         .eq('command_center_id', ccId);
       

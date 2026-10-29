@@ -1001,7 +1001,10 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
     payoutRateTeam: 9,
     // 25% product cost deduction for lawn rejuv
     defaultProductCostPercent: 25,
+    // AFSL: a prepaid fall Star Plan visit (aeration, fert, seed, lime), $200 + tax.
+    // Listed before FSL so the longest code is matched first.
     officeFlats: [
+      { code: 'AFSL', value: 210 },
       { code: 'FSL', value: 157.5 },
     ],
     hasUpgrades: false,

@@ -3,7 +3,7 @@
 // applyManagerMappingLive), so the RM map sees the new routes exactly as if they'd been picked
 // at the start. Add-only: a route another manager already has can't be taken.
 import { pointLegacyAt } from './legacy';
-import { mappingsFor, openLegacySession, type PlanRoute } from './startSession';
+import { feedBookings, mappingsFor, openLegacySession, type PlanRoute } from './startSession';
 
 export interface LiveManager { id: string; full_name: string }   // id = the old app's manager id (rm_…)
 export interface LiveRoutes { date: string; managers: LiveManager[]; owner: Map<string, string> }   // route code → manager id
@@ -41,6 +41,12 @@ export async function addLiveRoutes(centerId: string, managerId: string, picked:
     catch (e) { console.warn('[liveRoutes] street names not loaded:', e); }
     await sessionService.applyManagerMappingLive(managerId, cfg, cfg.routeCodes.map(code => ({ routeCode: code, streets: streets.get(code) || [] })));
     n += cfg.routeCodes.length;
+  }
+  // the open bookings on the added routes join the day too (ones already on it aren't added twice)
+  const pending = await feedBookings(centerId, picked.map(r => r.code));
+  if (pending.length) {
+    const date = await openLegacySession(centerId);
+    if (date) await sessionService.addAdditionalSessionData({ date, managers: [], workers: [], routes: [], pendingBookings: pending, commandCenterId: centerId } as never);
   }
   return n;
 }

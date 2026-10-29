@@ -7,7 +7,9 @@ import {
 } from 'lucide-react';
 import { sessionService, AsphaltCompletionContext } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
-import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
+import { commandCenterService, getSeasonConfig, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
+import { CrewBookingInfo, NextTimeSheet } from '../../v2/features/bookings/CrewBookingInfo';
+import { isAppBooking } from '../../v2/lib/bookingCrew';
 import { getStorageItem } from '../../lib/localStorage';
 import {
   Worker,
@@ -646,7 +648,12 @@ const JobDetail: React.FC = () => {
 
       // Map office flat codes to their dollar values (Aeration/Rejuv codes only;
       // Sealing has no office flats so this is a no-op for asphalt jobs).
-      if (rawPrice.startsWith('RJ') || rawPrice.startsWith('SP')) {
+      // (the season's own flats first, longest code first: AFSL before FSL)
+      const seasonFlat = [...getSeasonConfig(seasonType).officeFlats].sort((x, y) => y.code.length - x.code.length)
+        .find(f => rawPrice.startsWith(f.code));
+      if (seasonFlat) {
+        drivewayPriceVal = seasonFlat.value;
+      } else if (rawPrice.startsWith('RJ') || rawPrice.startsWith('SP')) {
         drivewayPriceVal = 52.5;
       } else if (rawPrice.startsWith('FSL')) {
         drivewayPriceVal = 157.5;
@@ -791,13 +798,13 @@ const JobDetail: React.FC = () => {
     }
   };
 
-  const handleCancel = async (status: 'next_time' | 'cancelled') => {
+  const handleCancel = async (status: 'next_time' | 'cancelled', reason?: string, note?: string) => {
     if (!originalJob) return;
 
     setLoading(true);
     try {
-      const service = isTrainingMode ? trainingService : sessionService;
-      await service.updateBookingStatus(originalJob['Booking ID'], status);
+      if (isTrainingMode) await trainingService.updateBookingStatus(originalJob['Booking ID'], status);
+      else await sessionService.updateBookingStatus(originalJob['Booking ID'], status, reason, note);
       navigate(returnPath);
     } catch (err) {
       console.error('Failed to update booking status:', err);
@@ -876,6 +883,8 @@ const JobDetail: React.FC = () => {
         </div>
 
         <div className="overflow-y-auto p-4 space-y-6 flex-grow custom-scrollbar">
+           {/* A Master Bookings booking: prepaid job code, access, last try, this year, past visits */}
+           {isAppBooking(originalJob?.['Booking ID']) && <CrewBookingInfo job={originalJob} />}
            {/* CLIENT DETAILS */}
            <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
               <h3 className="text-sm font-bold text-gray-300 uppercase mb-3">Client Details</h3>
@@ -1071,7 +1080,7 @@ const JobDetail: React.FC = () => {
 
            {/* NOTES */}
            <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
-               <h3 className="text-sm font-bold text-gray-300 uppercase mb-2 flex items-center gap-2"><FileText size={16}/> Office Notes (Read Only)</h3>
+               <h3 className="text-sm font-bold text-gray-300 uppercase mb-2 flex items-center gap-2"><FileText size={16}/> {isAppBooking(originalJob?.['Booking ID']) ? 'Field Notes' : 'Office Notes (Read Only)'}</h3>
                <div className="w-full bg-gray-800 border border-gray-700 rounded p-3 text-sm text-yellow-100/90 italic min-h-[3rem] whitespace-pre-wrap">{officeNotes || "No notes provided."}</div>
            </div>
 
@@ -1249,7 +1258,10 @@ const JobDetail: React.FC = () => {
       </div>
 
       {/* CANCEL MODAL */}
-      {showCancelModal && (
+      {showCancelModal && isAppBooking(originalJob?.['Booking ID']) && !isTrainingMode && (
+        <NextTimeSheet onPick={(status, reason, note) => handleCancel(status, reason, note)} onClose={() => setShowCancelModal(false)} />
+      )}
+      {showCancelModal && !(isAppBooking(originalJob?.['Booking ID']) && !isTrainingMode) && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-lg p-6 w-full max-w-sm text-center border border-gray-700 shadow-xl">
             <h3 className="text-lg font-bold text-white mb-4">Mark as Not Done?</h3>

@@ -150,7 +150,23 @@ async function writeLiveMap(p: Plan, centerId: string): Promise<void> {
   if (!cc) throw new Error('Couldn’t load this center in the old app.');
   commandCenterService.setCurrentCommandCenter(cc);
   const { data, meta } = buildLegacySession(p, centerId);
+  // the open bookings on the day's routes (Master Bookings' lists) become the day's prebooks
+  data.pendingBookings = await feedBookings(centerId, p.routes.map(r => r.code));
   await sessionService.uploadDailySession(data, p.settings.emailReceipts, meta);
+}
+
+/**
+ * The open bookings on these routes, as the old app's prebooks. A list that can't be read (no
+ * bookings set up for the center yet) doesn't stop the day: it starts with none, as before.
+ */
+export async function feedBookings(centerId: string, routes: string[]): Promise<DailySessionData['pendingBookings']> {
+  try {
+    const { dayBookings } = await import('./bookings');
+    return (await dayBookings(centerId, routes)) as unknown as DailySessionData['pendingBookings'];
+  } catch (e) {
+    console.warn('[StartSession] bookings not loaded:', e);
+    return [];
+  }
 }
 
 /** Writes the old session (so the live map works), then records the session in the new app. */
