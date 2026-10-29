@@ -293,5 +293,10 @@ export function lessonLines(): Omit<Said, 'text'>[] {
 }
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** Who asks a chess question: on a board, and for "which word?", the piece itself; to find or guess a
+ *  piece, the King (or the Queen, when the King is the one to find). */
+export const chessHost = (r: Round): Piece =>
+  r.kind === 'board' || r.kind === 'show' || r.kind === 'word' || r.kind === 'hello' ? r.piece : r.piece === 'king' ? 'queen' : 'king';
+
 /** The friend's name for a cast member who isn't a chess piece. */
 export const castName = (c: Cast) => (c in FRIEND_NAME ? FRIEND_NAME[c as Friend] : PIECE_WORD[c as Piece]);

@@ -8,17 +8,20 @@
 // what he tapped, and everything waits while he thinks; two quick misses get a calm "SLOW DOWN" pause, and
 // after two misses the right answer glows. A sticker after every few questions. Leaving and the grown-ups'
 // corner need a 3-second hold.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+//   The characters act it out: whoever asks the question walks in, says it with a moving mouth, sways while
+// he thinks, jumps for joy when he gets it, and looks worried (then encourages him) after a miss. The
+// answers pop in one by one; counted things hop; word cards flip in.
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BOARD, WORD, canMove, cheers, notThereLine, oopsLine, slowLine, clipId, spokenFor, movesFrom, sentenceFor, speakerFor,
+  BOARD, WORD, canMove, cheers, notThereLine, oopsLine, slowLine, clipId, spokenFor, movesFrom, sentenceFor,
   type Piece, type Round, type Speaker, type Sq,
 } from '../../lib/littleChess/lessons';
-import { castName, countAloud, levelById, lessonLine, lessonOops, storyLine, answerOf, type Cast, type Question, type Level } from '../../lib/littleLessons/levels';
+import { castName, chessHost, countAloud, levelById, lessonLine, lessonOops, storyLine, answerOf, type Cast, type Question, type Level } from '../../lib/littleLessons/levels';
 import { applySettings, nextQuestion, readProgress, readSettings, recordAnswer, stickerFor, type LessonProgress, type LessonSettings } from '../../lib/littleLessons/engine';
 import type { GameProps } from './games';
 import { CHARACTER_CSS, Character, type Mood } from './chessCharacters';
 import { CastShape, LESSON_CHARACTER_CSS } from './lessonCharacters';
-import { clipCount, englishVoices, hush, loadClips, onVoicesReady, say, type VoiceInfo } from './voice';
+import { clipCount, englishVoices, hush, loadClips, onSpeaking, onVoicesReady, say, type VoiceInfo } from './voice';
 
 const BG = 'radial-gradient(120% 80% at 50% 0%, #0f766e 0%, #134e4a 55%, #042f2e 100%)';
 const LIGHT = '#f0d9b5', DARK = '#b58863';
@@ -89,6 +92,16 @@ const CSS = `
   @keyframes lc-think { 0%,100% { transform: translateY(0) rotate(-4deg) } 50% { transform: translateY(-8px) rotate(4deg) } }
   @keyframes ll-flyaway { 0% { transform: translate(0,0) rotate(0); opacity: 1 } 100% { transform: translate(60px,-140px) rotate(25deg); opacity: 0 } }
   @keyframes ll-in { 0% { transform: translateY(24px); opacity: 0 } 100% { transform: none; opacity: 1 } }
+  @keyframes ll-enter { 0% { transform: translateX(-70vw) rotate(-12deg) } 60% { transform: translateX(4vw) rotate(4deg) } 80% { transform: translateX(-1vw) } 100% { transform: none } }
+  @keyframes ll-sway { 0%,100% { transform: rotate(-3deg) } 50% { transform: rotate(3deg) translateY(-3px) } }
+  @keyframes ll-talkbob { 0%,100% { transform: translateY(0) scale(1) } 50% { transform: translateY(-5px) scale(1.03, .98) } }
+  @keyframes ll-jump { 0%,100% { transform: translateY(0) scale(1) } 30% { transform: translateY(-30%) scale(.95, 1.08) rotate(-8deg) } 55% { transform: translateY(0) scale(1.1, .9) } 75% { transform: translateY(-10%) rotate(6deg) } }
+  @keyframes ll-shake { 0%,100% { transform: rotate(0) } 15% { transform: rotate(-10deg) } 35% { transform: rotate(9deg) } 55% { transform: rotate(-6deg) } 75% { transform: rotate(4deg) } }
+  @keyframes ll-ponder { 0%,100% { transform: rotate(-7deg) } 50% { transform: rotate(-4deg) translateY(-4px) } }
+  @keyframes ll-flip { 0% { transform: perspective(400px) rotateY(90deg) scale(.6); opacity: 0 } 70% { transform: perspective(400px) rotateY(-12deg) scale(1.05); opacity: 1 } 100% { transform: none } }
+  @keyframes ll-boing { 0% { transform: scale(0) } 50% { transform: scale(1.25) } 70% { transform: scale(.9) } 100% { transform: scale(1) } }
+  @keyframes ll-hop { 0%,100% { transform: translateY(0) } 40% { transform: translateY(-35%) scale(1.15) } }
+  @keyframes ll-spark { 0% { transform: translate(0,0) scale(.4); opacity: 1 } 100% { transform: translate(var(--dx), var(--dy)) scale(1.1) rotate(160deg); opacity: 0 } }
   ${CHARACTER_CSS}
   ${LESSON_CHARACTER_CSS}
 `;
@@ -230,6 +243,7 @@ const Grownups: React.FC<{ p: LessonProgress; onChange: (p: LessonProgress) => v
 const StoryCard: React.FC<{ level: Level; voice: boolean; onDone: () => void; onQuit: () => void }> = ({ level, voice, onDone, onQuit }) => {
   const [ready, setReady] = useState(false);
   const [lit, setLit] = useState(-1);
+  const talking = useTalking();
   useEffect(() => {
     let done = false;
     const go = () => { if (!done) { done = true; setReady(true); } };
@@ -243,7 +257,10 @@ const StoryCard: React.FC<{ level: Level; voice: boolean; onDone: () => void; on
       <div className="flex items-center justify-between px-4"><HoldButton onHold={onQuit} label="Hold to stop">‹</HoldButton><div className="w-14" /></div>
       <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
         <div className="rounded-[48px] bg-white/10 px-12 py-6" style={{ animation: 'lc-pop .5s ease-out' }}>
-          <CastShape who={level.cast} size={Math.min(280, window.innerHeight * 0.34)} mood={lit % 2 ? 'happy' : 'idle'} style={{ animation: 'lc-bounce 1.4s ease-in-out infinite' }} />
+          <div style={{ animation: 'll-enter .9s cubic-bezier(.3,1.4,.5,1) both' }}>
+            <CastShape who={level.cast} size={Math.min(280, window.innerHeight * 0.34)} mood={talking ? 'talk' : ready ? 'happy' : lit % 3 ? 'idle' : 'wow'}
+              style={{ animation: talking ? 'll-talkbob .45s ease-in-out infinite' : 'lc-bounce 1.4s ease-in-out infinite', transformOrigin: '50% 100%' }} />
+          </div>
         </div>
         <div className="mt-2 font-black text-yellow-300 text-2xl tracking-widest">{castName(level.cast)}</div>
         {level.story.lines.map((l, i) => (
@@ -260,6 +277,35 @@ const StoryCard: React.FC<{ level: Level; voice: boolean; onDone: () => void; on
   );
 };
 
+// ── the character on stage: talks while a line is said, reacts to his answers ──
+type Act = { talking: boolean; reaction: 'right' | 'wrong' | null; thinking: boolean };
+const ActCtx = createContext<Act>({ talking: false, reaction: null, thinking: false });
+/** true while a line is being said (the characters move their mouths) */
+function useTalking(): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => onSpeaking(setOn), []);
+  return on;
+}
+const SPARKS = ['⭐', '✨', '💛', '🌟', '✨', '⭐'];
+/** The character asking: walks in, talks with a moving mouth, sways while he thinks, jumps for joy
+ *  (with sparkles) when he gets it, and looks worried after a miss. */
+const Host: React.FC<{ who: Cast; size: number; enter?: boolean }> = ({ who, size, enter = true }) => {
+  const a = useContext(ActCtx);
+  const mood: Mood = a.reaction === 'right' ? 'happy' : a.reaction === 'wrong' ? 'oops' : a.talking ? 'talk' : 'idle';
+  const move = a.reaction === 'right' ? 'll-jump .8s ease-out 2' : a.reaction === 'wrong' ? 'll-shake .7s ease-in-out'
+    : a.talking ? 'll-talkbob .45s ease-in-out infinite' : a.thinking ? 'll-ponder 2.4s ease-in-out infinite' : 'll-sway 3.2s ease-in-out infinite';
+  return (
+    <div className="relative inline-block" style={{ animation: enter ? 'll-enter .9s cubic-bezier(.3,1.4,.5,1) both' : undefined }}>
+      <div style={{ animation: move, transformOrigin: '50% 100%' }}><CastShape who={who} size={size} mood={mood} /></div>
+      {a.reaction === 'right' && SPARKS.map((s, i) => (
+        <span key={i} className="absolute left-1/2 top-1/3 pointer-events-none" aria-hidden="true"
+          style={{ fontSize: size * 0.18, ['--dx' as string]: `${Math.cos((i / SPARKS.length) * Math.PI * 2) * size * 0.7}px`,
+            ['--dy' as string]: `${Math.sin((i / SPARKS.length) * Math.PI * 2) * size * 0.6}px`, animation: `ll-spark .9s ease-out ${i * 0.04}s both` }}>{s}</span>
+      ))}
+    </div>
+  );
+};
+
 // ── one question ──
 type Lock = 'listen' | 'think' | 'slow' | null;
 const LOCK_ICON: Record<Exclude<Lock, null>, string> = { listen: '👂', think: '💭', slow: '🐢' };
@@ -272,7 +318,10 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
   const [cheer, setCheer] = useState<string | null>(null);
   const [lock, setLockState] = useState<Lock>(null);
   const [poke, setPoke] = useState(0);
-  const line: Line = isChess(q) ? { text: sentenceFor(q), who: speakerFor(q) } : lessonLine(q)!;
+  const host: Cast = isChess(q) ? chessHost(q) : q.cast;
+  const line: Line = isChess(q) ? { text: sentenceFor(q), who: host } : lessonLine(q)!;
+  const [reaction, setReaction] = useState<'right' | 'wrong' | null>(null);
+  const talking = useTalking();
   const idle = useRef<number | null>(null);
   const lockRef = useRef<Lock>(null);
   const seq = useRef(0);
@@ -321,9 +370,10 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
     try { navigator.vibrate?.([30, 60, 30]); } catch { /* ignore */ }
     if (quick) { const l = slowLine(name); setFlash(l); wait('slow', SLOW, { text: l }); return; }
     const l: Line = isChess(q)
-      ? { text: typeof tapped === 'string' && tapped in WORD ? oopsLine(tapped as Piece) : notThereLine(q.piece) }
+      ? (typeof tapped === 'string' && tapped in WORD ? { text: oopsLine(tapped as Piece), who: host } : { text: notThereLine(q.piece), who: q.piece })
       : lessonOops(q, tapped as number | string);
     setFlash(l.text);
+    setReaction('wrong'); later(() => setReaction(r => (r === 'wrong' ? null : r)), 1300);
     wait('think', THINK, l);
   };
   const won = () => {
@@ -331,15 +381,18 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
     if (idle.current) window.clearTimeout(idle.current);
     setFlash(null);
     const c = cheers(name)[Math.floor(Math.random() * 5)];
-    setCheer(c); talk({ text: c, who: q.cast }, voice);   // the question's character cheers in its own voice
+    setCheer(c); setReaction('right');
+    talk({ text: c, who: q.cast }, voice);   // the question's character cheers in its own voice
     try { navigator.vibrate?.(40); } catch { /* ignore */ }
     const right = misses.current.length === 0;
     window.setTimeout(() => { setCheer(null); onDone(right); }, 1500);
   };
   const listening = lock === 'listen';
+  const act: Act = { talking, reaction, thinking: lock === 'think' };
   const replay = () => { if (!lockRef.current) talk(line, voice, setLit); };
 
   return (
+    <ActCtx.Provider value={act}>
     <div className="min-h-screen flex flex-col" style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
       <div className="flex items-center justify-between px-4">
         <HoldButton onHold={onQuit} label="Hold to stop">‹</HoldButton>
@@ -378,25 +431,26 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
         </div>
       )}
       {cheer && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center pointer-events-none">
-          <div className="font-black text-yellow-300 text-center" style={{ fontSize: 'clamp(56px, 12vw, 130px)', textShadow: '0 6px 0 #134e4a, 0 0 30px rgba(0,0,0,.4)', animation: 'lc-pop .4s ease-out' }}>
-            {cheer}<div className="text-[0.6em]">✨⭐✨</div>
+        <div className="fixed inset-x-0 z-40 flex justify-center pointer-events-none" style={{ top: '12%' }}>
+          <div className="font-black text-yellow-300 text-center" style={{ fontSize: 'clamp(48px, 9vw, 100px)', textShadow: '0 6px 0 #134e4a, 0 0 30px rgba(0,0,0,.4)', animation: 'lc-pop .4s ease-out' }}>
+            {cheer}
           </div>
         </div>
       )}
     </div>
+    </ActCtx.Provider>
   );
 };
 
 // ── answer pieces shared by the rounds ──
-const WordCard: React.FC<{ word: string; big?: boolean; glow?: boolean; wiggle?: boolean; crossed?: boolean; onClick?: () => void; lower?: boolean }> = ({ word, big, glow, wiggle, crossed, onClick, lower }) => {
+const WordCard: React.FC<{ word: string; big?: boolean; glow?: boolean; wiggle?: boolean; crossed?: boolean; onClick?: () => void; lower?: boolean; i?: number }> = ({ word, big, glow, wiggle, crossed, onClick, lower, i = 0 }) => {
   const El = onClick ? 'button' : 'div';
   return (
     <El {...(onClick ? { type: 'button' as const, onClick } : {})}
       className="relative mt-4 rounded-3xl font-black tracking-wider px-8 py-3"
       style={{ background: crossed ? '#fecaca' : '#fff', color: crossed ? '#b91c1c' : '#042f2e', fontSize: big ? 'clamp(44px, 8vw, 80px)' : 'clamp(36px, 6vw, 60px)',
         boxShadow: crossed ? 'inset 0 0 0 5px #ef4444' : undefined, opacity: crossed && !wiggle ? 0.6 : 1, textDecoration: crossed ? 'line-through' : undefined,
-        textTransform: lower ? 'none' : undefined, animation: wiggle ? 'lc-wiggle .5s' : glow ? 'lc-glow 1.1s ease-in-out infinite' : 'll-in .35s ease-out' }}>
+        textTransform: lower ? 'none' : undefined, animation: wiggle ? 'lc-wiggle .5s' : glow ? 'lc-glow 1.1s ease-in-out infinite' : `ll-flip .55s ease-out ${i * 0.15}s both` }}>
       {word}
       {crossed && <Cross />}
     </El>
@@ -429,16 +483,18 @@ const Find: React.FC<{ round: Extract<Round, { kind: 'find' }>; hint: boolean; l
   const [wrong, flag, crossed] = useWrong();
   const [got, setGot] = useState(false);
   const size = Math.min(200, window.innerWidth / (round.options.length + 1));
-  if (listening) return <div className="rounded-[48px] bg-white/10 px-12 py-10 text-[120px] leading-none" aria-hidden="true">🔎</div>;
+  const host = chessHost(round);
+  if (listening) return <Host who={host} size={Math.min(280, window.innerHeight * 0.34)} />;
   return (
-    <div className="flex flex-wrap justify-center gap-5">
+    <div className="flex flex-wrap items-end justify-center gap-5">
+      <Host who={host} size={Math.min(150, window.innerHeight * 0.2)} enter={false} />
       {round.options.map((piece, k) => {
         const right = piece === round.piece;
         return (
           <button key={k} type="button" aria-label={`Piece ${k + 1}`} onClick={() => { if (got || crossed.includes(k)) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(piece); } }}
             className="relative rounded-[36px] bg-white/10 p-5"
-            style={{ animation: got && right ? 'lc-bounce .7s ease-out 2' : hint && right ? 'lc-glow 1.1s ease-in-out infinite' : 'll-in .35s ease-out', ...wrongTile(crossed.includes(k), wrong === k) }}>
-            <PieceShape piece={piece} size={size} mood={got && right ? 'happy' : 'idle'} />
+            style={{ animation: got && right ? 'lc-bounce .7s ease-out 2' : hint && right ? 'lc-glow 1.1s ease-in-out infinite' : `ll-boing .5s ease-out ${k * 0.12}s both`, ...wrongTile(crossed.includes(k), wrong === k) }}>
+            <PieceShape piece={piece} size={size} mood={got && right ? 'happy' : crossed.includes(k) ? 'oops' : 'idle'} />
             {crossed.includes(k) && <><Cross /><NameTag piece={piece} /></>}
           </button>
         );
@@ -452,11 +508,11 @@ const Word: React.FC<{ round: Extract<Round, { kind: 'word' }>; hint: boolean; l
   const [got, setGot] = useState(false);
   return (
     <div className="flex flex-col items-center">
-      <div className="rounded-[48px] bg-white/10 px-10 py-4"><PieceShape piece={round.piece} size={Math.min(250, window.innerHeight * 0.28)} mood={got ? 'happy' : 'idle'} /></div>
+      <div className="rounded-[48px] bg-white/10 px-10 py-4"><Host who={round.piece} size={Math.min(250, window.innerHeight * 0.28)} /></div>
       <Answers listening={listening} className="flex flex-wrap justify-center gap-4 mt-4">
         {round.options.map((piece, k) => {
           const right = piece === round.piece;
-          return <WordCard key={k} word={WORD[piece]} wiggle={wrong === k} crossed={crossed.includes(k)} glow={(hint || got) && right}
+          return <WordCard key={k} i={k} word={WORD[piece]} wiggle={wrong === k} crossed={crossed.includes(k)} glow={(hint || got) && right}
             onClick={() => { if (got || crossed.includes(k)) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(piece); } }} />;
         })}
       </Answers>
@@ -484,15 +540,18 @@ const Guess: React.FC<{ round: Extract<Round, { kind: 'shadow' | 'peek' }>; hint
     );
   return (
     <div className="flex flex-col items-center">
-      <div className="rounded-[48px] bg-white/10 px-10 py-4 flex items-end justify-center">{hidden}</div>
+      <div className="flex items-end gap-4">
+        <Host who={chessHost(round)} size={Math.min(170, window.innerHeight * 0.2)} />
+        <div className="rounded-[48px] bg-white/10 px-10 py-4 flex items-end justify-center">{hidden}</div>
+      </div>
       <Answers listening={listening} className="flex flex-wrap justify-center gap-4 mt-5">
         {round.options.map((piece, k) => {
           const right = piece === round.piece;
           return round.answer === 'word'
-            ? <WordCard key={k} word={WORD[piece]} wiggle={wrong === k} crossed={crossed.includes(k)} glow={(hint || got) && right} onClick={() => tap(k, right)} />
+            ? <WordCard key={k} i={k} word={WORD[piece]} wiggle={wrong === k} crossed={crossed.includes(k)} glow={(hint || got) && right} onClick={() => tap(k, right)} />
             : (
               <button key={k} type="button" aria-label={`Piece ${k + 1}`} onClick={() => tap(k, right)} className="relative rounded-[32px] bg-white/10 p-4"
-                style={{ animation: hint && right && !got ? 'lc-glow 1.1s ease-in-out infinite' : 'll-in .35s ease-out', ...wrongTile(crossed.includes(k), wrong === k) }}>
+                style={{ animation: hint && right && !got ? 'lc-glow 1.1s ease-in-out infinite' : `ll-boing .5s ease-out ${k * 0.12}s both`, ...wrongTile(crossed.includes(k), wrong === k) }}>
                 <PieceShape piece={piece} size={Math.min(130, window.innerWidth / (round.options.length + 1.5))} />
                 {crossed.includes(k) && <><Cross /><NameTag piece={piece} /></>}
               </button>
@@ -522,7 +581,8 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
   const cell = Math.floor(Math.min(window.innerWidth * 0.86, window.innerHeight * 0.58, 600) / BOARD);
   const myColour = (round.start[0] + round.start[1]) % 2;
   const icon = round.kind === 'board' && round.mode === 'apple' ? '🍎' : '⭐';
-  if (listening) return <div className="rounded-[48px] bg-white/10 px-12 py-6"><PieceShape piece={piece} size={Math.min(260, window.innerHeight * 0.32)} style={{ animation: 'lc-float 2s ease-in-out infinite' }} /></div>;
+  const act = useContext(ActCtx);
+  if (listening) return <Host who={piece} size={Math.min(280, window.innerHeight * 0.34)} />;
 
   const tap = (sq: Sq) => {
     if (finished || same(sq, at)) return;
@@ -574,7 +634,7 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
       )}
       <div className="absolute flex items-center justify-center pointer-events-none"
         style={{ left: at[1] * cell, top: at[0] * cell, width: cell, height: cell, transition: 'left .35s ease-in-out, top .35s ease-in-out', zIndex: 5 }}>
-        <PieceShape piece={piece} size={cell * 0.86} mood={munch ? 'munch' : finished ? 'happy' : 'idle'}
+        <PieceShape piece={piece} size={cell * 0.86} mood={munch ? 'munch' : finished ? 'happy' : wiggle ? 'oops' : act.talking ? 'talk' : 'idle'}
           style={{ animation: wiggle ? 'lc-wiggle .5s' : finished ? 'lc-bounce .7s ease-out 2' : undefined }} />
       </div>
     </div>
@@ -588,12 +648,12 @@ const Sight: React.FC<{ q: Extract<Question, { kind: 'sight' }>; hint: boolean; 
   return (
     <div className="flex flex-col items-center">
       <div className="rounded-[48px] bg-white/10 px-10 py-4">
-        <CastShape who="ollie" size={Math.min(230, window.innerHeight * 0.27)} mood={got ? 'happy' : 'idle'} style={{ animation: got ? 'lc-bounce .7s ease-out 2' : 'lc-float 2.2s ease-in-out infinite' }} />
+        <Host who="ollie" size={Math.min(230, window.innerHeight * 0.27)} />
       </div>
       <Answers listening={listening} className="flex flex-wrap justify-center gap-4 mt-2">
         {q.options.map((w, k) => {
           const right = w === q.word;
-          return <WordCard key={k} word={w} big lower wiggle={wrong === k} crossed={crossed.includes(k)} glow={(hint || got) && right}
+          return <WordCard key={k} i={k} word={w} big lower wiggle={wrong === k} crossed={crossed.includes(k)} glow={(hint || got) && right}
             onClick={() => { if (got || crossed.includes(k)) return; if (right) { setGot(true); onRight(); } else { flag(k); onWrong(w); } }} />;
         })}
       </Answers>
@@ -621,7 +681,7 @@ const Things: React.FC<{ n: number; thing: string; size: number; gone?: number; 
             const i = row * 5 + c, away = i >= left, mark = tapped.indexOf(i);
             return (
               <button key={i} type="button" onClick={() => tap(i)} aria-label={away ? 'gone' : 'count it'} className="relative leading-none"
-                style={{ fontSize: size, width: size * 1.2, height: size * 1.2, animation: away ? 'll-flyaway 1.2s ease-in 1.4s forwards' : 'll-in .4s ease-out both', animationDelay: away ? undefined : `${i * 0.05}s` }}>
+                style={{ fontSize: size, width: size * 1.2, height: size * 1.2, animation: away ? 'll-flyaway 1.2s ease-in 1.4s forwards' : mark >= 0 ? 'll-hop .45s ease-out' : `ll-boing .45s ease-out ${i * 0.08}s both` }}>
                 {thing}
                 {mark >= 0 && <span className="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-yellow-300 text-teal-950 text-base font-black flex items-center justify-center">{mark + 1}</span>}
               </button>
@@ -642,7 +702,7 @@ const Numbers: React.FC<{ q: NumQ; hint: boolean; listening: boolean; voice: boo
   return (
     <div className="flex flex-col items-center">
       <div className="flex items-end gap-4">
-        <CastShape who={q.cast} size={Math.min(190, window.innerHeight * 0.24)} mood={got ? 'happy' : 'idle'} style={{ animation: got ? 'lc-bounce .7s ease-out 2' : 'lc-float 2.2s ease-in-out infinite' }} />
+        <Host who={q.cast} size={Math.min(190, window.innerHeight * 0.24)} />
         <div className="rounded-[36px] bg-white/10 px-5 py-4">
           {q.kind === 'count' && <Things n={q.n} thing={q.thing} size={size} counting={!listening} voice={voice} />}
           {q.kind === 'countAdd' && (
@@ -666,7 +726,7 @@ const Numbers: React.FC<{ q: NumQ; hint: boolean; listening: boolean; voice: boo
               className="relative rounded-full font-black flex flex-col items-center justify-center"
               style={{ width: 'clamp(96px, 18vw, 150px)', height: 'clamp(96px, 18vw, 150px)', background: crossed.includes(k) ? '#fecaca' : '#fff', color: crossed.includes(k) ? '#b91c1c' : '#042f2e',
                 fontSize: 'clamp(48px, 9vw, 80px)', lineHeight: 1, opacity: crossed.includes(k) && wrong !== k ? 0.6 : 1,
-                animation: wrong === k ? 'lc-wiggle .5s' : (hint || got) && right ? 'lc-glow 1.1s ease-in-out infinite' : 'll-in .35s ease-out' }}>
+                animation: wrong === k ? 'lc-wiggle .5s' : (hint || got) && right ? 'lc-glow 1.1s ease-in-out infinite' : `ll-boing .5s ease-out ${k * 0.15}s both` }}>
               {n}
               {q.kind === 'count' && q.dots && <span className="text-sm tracking-tighter" style={{ color: '#0d9488' }}>{'●'.repeat(n)}</span>}
               {crossed.includes(k) && <Cross />}

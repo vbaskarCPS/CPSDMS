@@ -38,6 +38,13 @@ function pickVoice(preferred?: string | null): SpeechSynthesisVoice | null {
   return best || null;
 }
 
+// ── who's talking: the characters move their mouths while a line is being said ──
+const speakingFns = new Set<(on: boolean) => void>();
+let speakingNow = false;
+function setSpeaking(on: boolean) { if (on === speakingNow) return; speakingNow = on; speakingFns.forEach(f => f(on)); }
+/** Called with true when a line starts being said and false when it stops. Returns an unsubscribe. */
+export function onSpeaking(fn: (on: boolean) => void): () => void { speakingFns.add(fn); return () => { speakingFns.delete(fn); }; }
+
 // ── recorded clips ──
 const CLIP_DIR = '/minigame/chess-voice';
 let clips: Set<string> | null = null;
@@ -71,11 +78,10 @@ export function say(text: string, opts: { on: boolean; voice?: string | null; on
     try {
       audio = new Audio(`${CLIP_DIR}/${opts.clip}.mp3`);
       const words = text.split(' ').length;
-      if (opts.onWord) {
-        const on = opts.onWord;
-        audio.onplay = () => wordTimer(words, Math.min(900, Math.max(300, ((audio?.duration || words * 0.6) * 1000) / words)), on);   // the full sentence is longer than the words on screen
-      }
-      if (opts.onEnd) { const end = opts.onEnd; audio.onended = () => end(); audio.onerror = () => end(); }
+      const on = opts.onWord;
+      audio.onplay = () => { setSpeaking(true); if (on) wordTimer(words, Math.min(900, Math.max(300, ((audio?.duration || words * 0.6) * 1000) / words)), on); };   // the full sentence is longer than the words on screen
+      const end = opts.onEnd;
+      audio.onended = () => { setSpeaking(false); end?.(); }; audio.onerror = () => { setSpeaking(false); end?.(); };
       audio.play().catch(() => sayWithTablet(text, opts));   // e.g. autoplay blocked: fall back
       return;
     } catch { /* fall through to the tablet's voice */ }
@@ -94,17 +100,17 @@ function sayWithTablet(text: string, opts: { voice?: string | null; onWord?: (i:
     if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'en-US';
     // a little slower and only slightly brighter than normal: friendly without sounding like a chipmunk
     u.rate = 0.88; u.pitch = 1.05;
-    if (opts.onWord) {
-      // spread the lit-up words over roughly how long the full sentence takes to say
-      const words = text.split(' ').length, said = (opts.spoken || text).split(' ').length, on = opts.onWord;
-      u.onstart = () => wordTimer(words, Math.max(400, (said * 400) / words), on);
-    }
-    if (opts.onEnd) { const end = opts.onEnd; u.onend = () => end(); u.onerror = () => end(); }
+    // spread the lit-up words over roughly how long the full sentence takes to say
+    const words = text.split(' ').length, said = (opts.spoken || text).split(' ').length, on = opts.onWord;
+    u.onstart = () => { setSpeaking(true); if (on) wordTimer(words, Math.max(400, (said * 400) / words), on); };
+    const end = opts.onEnd;
+    u.onend = () => { setSpeaking(false); end?.(); }; u.onerror = () => { setSpeaking(false); end?.(); };
     s.speak(u);
   } catch { opts.onEnd?.(); /* no voice on this device */ }
 }
 
 export const hush = () => {
+  setSpeaking(false);
   try { synth()?.cancel(); } catch { /* ignore */ }
   try { if (audio) { audio.pause(); audio = null; } } catch { /* ignore */ }
 };

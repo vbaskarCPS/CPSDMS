@@ -4,7 +4,9 @@
 import React from 'react';
 import type { Piece } from '../../lib/littleChess/lessons';
 
-export type Mood = 'idle' | 'happy' | 'munch';
+/** idle · happy (right answer) · munch (eating) · talk (mouth moving while it speaks) · oops (a miss: worried
+ *  brows, wobbly mouth) · wow (a round "oh!") */
+export type Mood = 'idle' | 'happy' | 'munch' | 'talk' | 'oops' | 'wow';
 
 const INK = '#1f2937', BODY = '#fffbeb', SHADE = '#f5e6c8', GOLD = '#facc15', CHEEK = '#fda4af';
 
@@ -27,6 +29,13 @@ export const Face: React.FC<{ cx: number; cy: number; mood: Mood; scale?: number
       {mood === 'idle' && <path d={`M${cx - 6 * s} ${cy + 9 * s} Q${cx} ${cy + 14 * s} ${cx + 6 * s} ${cy + 9 * s}`} fill="none" stroke={INK} strokeWidth={2.6 * s} strokeLinecap="round" />}
       {mood === 'happy' && <path d={`M${cx - 8 * s} ${cy + 8 * s} Q${cx} ${cy + 20 * s} ${cx + 8 * s} ${cy + 8 * s} Z`} fill="#be123c" stroke={INK} strokeWidth={2.4 * s} strokeLinejoin="round" />}
       {mood === 'munch' && <ellipse cx={cx} cy={cy + 12 * s} rx={5 * s} ry={6 * s} fill="#be123c" stroke={INK} strokeWidth={2.4 * s} />}
+      {mood === 'talk' && <ellipse className="lc-talk" cx={cx} cy={cy + 12 * s} rx={5.5 * s} ry={5 * s} fill="#be123c" stroke={INK} strokeWidth={2.4 * s}
+        style={{ transformOrigin: `${cx}px ${cy + 10 * s}px`, transformBox: 'view-box' as React.CSSProperties['transformBox'] }} />}
+      {mood === 'wow' && <ellipse cx={cx} cy={cy + 12 * s} rx={4 * s} ry={5.5 * s} fill="#be123c" stroke={INK} strokeWidth={2.4 * s} />}
+      {mood === 'oops' && <>
+        <path d={`M${cx - 6 * s} ${cy + 13 * s} q${3 * s} ${-4 * s} ${6 * s} 0 q${3 * s} ${4 * s} ${6 * s} 0`} fill="none" stroke={INK} strokeWidth={2.6 * s} strokeLinecap="round" />
+        {!one && eyes.map((x, i) => <path key={i} d={`M${x - 5 * s} ${cy - er * 1.9 + (i ? -2 : 2) * s} L${x + 5 * s} ${cy - er * 1.9 + (i ? 2 : -2) * s}`} stroke={INK} strokeWidth={2.4 * s} strokeLinecap="round" />)}
+      </>}
     </g>
   );
 };
@@ -84,6 +93,9 @@ function body(piece: Piece, mood: Mood): React.ReactNode {
       {mood === 'idle' && <path d="M24 64 Q30 68 36 64" fill="none" stroke={INK} strokeWidth="2.6" strokeLinecap="round" />}
       {mood === 'happy' && <path d="M22 62 Q30 72 38 62 Z" fill="#be123c" stroke={INK} strokeWidth="2.4" strokeLinejoin="round" />}
       {mood === 'munch' && <ellipse cx="29" cy="65" rx="5" ry="5.5" fill="#be123c" stroke={INK} strokeWidth="2.4" />}
+      {mood === 'talk' && <ellipse className="lc-talk" cx="29" cy="65" rx="5" ry="4.5" fill="#be123c" stroke={INK} strokeWidth="2.4" style={{ transformOrigin: '29px 63px', transformBox: 'view-box' as React.CSSProperties['transformBox'] }} />}
+      {mood === 'wow' && <ellipse cx="29" cy="65" rx="3.5" ry="5" fill="#be123c" stroke={INK} strokeWidth="2.4" />}
+      {mood === 'oops' && <path d="M23 66 q3 -4 6 0 q3 4 6 0" fill="none" stroke={INK} strokeWidth="2.6" strokeLinecap="round" />}
       <ellipse cx="54" cy="44" rx="4.5" ry="3" fill={CHEEK} opacity=".85" />
       {base}
     </>;
@@ -102,4 +114,6 @@ export const Character: React.FC<{ piece: Piece; size: number; mood?: Mood; clas
 export const CHARACTER_CSS = `
   @keyframes lc-blink { 0%, 92%, 100% { transform: scaleY(1) } 95% { transform: scaleY(.1) } }
   .lc-blink { animation: lc-blink 4.2s infinite; }
+  @keyframes lc-talk { 0%, 100% { transform: scaleY(.25) } 50% { transform: scaleY(1.05) } }
+  .lc-talk { animation: lc-talk .22s ease-in-out infinite; }
 `;
