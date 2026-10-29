@@ -1,21 +1,27 @@
 // src/v2/features/bookings/BookingEmails.tsx — Master Bookings › Send booking emails (RUN_69).
 //
-//   1. Pick the email (Day before / Next try), the day (tomorrow or the day after), the map and its routes.
+//   1. Pick the email (Day before / Next try), the day (tomorrow or the day after), and the routes on the map
+//      (the same picker as Start session: open a map, tap route numbers or take the whole map).
 //   2. Write them: each is the centre's saved template for the customer, plus one personal paragraph Claude
 //      writes from what we know of them (years with us, their plan, a missed visit's reason).
 //   3. Read them all, change or untick any, then Send. They go out from the centre's customer mailbox
 //      (replies come back there) and each booking remembers it was emailed for that day, so nobody gets two.
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Mail, Send, Sparkles } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
-import { areaCounts, listBookings, type Booking } from '../../lib/bookings';
+import { listBookings, type Booking } from '../../lib/bookings';
+import { centerAreas, routeShapes, type Area } from '../../lib/territory';
+import type { PlanManager, PlanRoute } from '../../lib/startSession';
+import { MapRoutePicker } from '../workerbook/MapRoutePicker';
 import { aiBookingNotes, boxName, emailTemplates, myBoxes, sendMail, dateFriendly } from '../../lib/mail';
 import { alreadySent, emailsOf, KIND_LABEL, markEmailed, nextDays, noteHtml, renderDraft, type BookingDraft, type BookingEmailKind } from '../../lib/bookingEmails';
 import { useLists } from './BookingsPage';
 import { Btn, ErrorBox, Field, Loading, Tag } from '../../ui';
 
+/** the picker's one "manager": routes are just picked */
+const PICKER: PlanManager[] = [{ id: 'pick', full_name: 'Email', username: '', phone: null }];
 const plain = (html: string) => html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>\s*<p>/gi, '\n\n').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
 
 export const BookingEmails: React.FC = () => {
@@ -24,8 +30,7 @@ export const BookingEmails: React.FC = () => {
   const days = nextDays();
   const [kind, setKind] = useState<BookingEmailKind>('day_before');
   const [date, setDate] = useState(days.tomorrow);
-  const [area, setArea] = useState('');
-  const [routes, setRoutes] = useState<string[]>([]);
+  const [routes, setRoutes] = useState<Map<string, PlanRoute>>(new Map());
   const [drafts, setDrafts] = useState<BookingDraft[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -35,21 +40,19 @@ export const BookingEmails: React.FC = () => {
   const box = boxes.data?.find(b => b.center_id === center?.id && b.role === 'client') || null;
   const templates = useLoad(() => (center ? emailTemplates(center.id) : Promise.resolve([])), [center?.id]);
   const template = templates.data?.find(t => t.type === kind && t.active) || null;
-  const areas = useLoad(() => (center && list ? areaCounts(center.id, list.service, list.year) : Promise.resolve({} as Awaited<ReturnType<typeof areaCounts>>)), [center?.id, list?.id]);
+  // the centre's digital maps, picked like Start session's routes
+  const mapAreas = useLoad(() => (center ? centerAreas(center.id) : Promise.resolve([] as Area[])), [center?.id]);
+  const shapes = useLoad(() => routeShapes((mapAreas.data || []).map(a => a.name)), [mapAreas.data]);
   const status = kind === 'next_try' ? 'tried' : 'open';
-  const inArea = useLoad(() => (list && area ? listBookings(list.id, { area, status }, 0, 1000) : Promise.resolve({ total: 0, rows: [] as Booking[] })), [list?.id, area, status]);
+  const codes = [...routes.keys()].sort();
+  const picked = useLoad(async () => {
+    if (!list || !codes.length) return [] as Booking[];
+    const got = await Promise.all(codes.map(route => listBookings(list.id, { route, status }, 0, 1000)));
+    const seen = new Set<string>();
+    return got.flatMap(g => g.rows).filter(b => (seen.has(b.id) ? false : (seen.add(b.id), true)));
+  }, [list?.id, status, codes.join('|')]);
 
-  const routeRows = useMemo(() => {
-    const m = new Map<string, { n: number; email: number; sent: number }>();
-    for (const b of inArea.data?.rows || []) {
-      const r = b.route_code || b.sheet_route || '—';
-      const x = m.get(r) || { n: 0, email: 0, sent: 0 };
-      x.n++; if (emailsOf(b).length) x.email++; if (alreadySent(b, kind, date)) x.sent++;
-      m.set(r, x);
-    }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
-  }, [inArea.data, kind, date]);
-  const chosen = (inArea.data?.rows || []).filter(b => routes.includes(b.route_code || b.sheet_route || '—'));
+  const chosen = picked.data || [];
   const ready = chosen.filter(b => emailsOf(b).length && !alreadySent(b, kind, date));
   const noEmail = chosen.filter(b => !emailsOf(b).length).length;
   const sentBefore = chosen.filter(b => emailsOf(b).length && alreadySent(b, kind, date)).length;
@@ -90,7 +93,7 @@ export const BookingEmails: React.FC = () => {
     }
     setBusy(null);
     setDone(`${ok} sent from ${box.address}${bad ? `, ${bad} didn’t send (shown below; press Send again to retry them)` : ''}.`);
-    inArea.reload();
+    picked.reload();
   };
 
   const left = drafts?.filter(d => d.include && d.status !== 'sent').length || 0;
@@ -99,58 +102,50 @@ export const BookingEmails: React.FC = () => {
       <div className="v2-head"><span className="v2-h1">Send booking emails</span><span className="v2-spacer" />
         <Link className="v2-link" to="/app/bookings/templates">Templates ›</Link>
         <Link className="v2-link" to="/app/bookings/list">Bookings ›</Link></div>
-      <ErrorBox error={lists.error || templates.error || boxes.error || areas.error || inArea.error || error} />
+      <ErrorBox error={lists.error || templates.error || boxes.error || mapAreas.error || picked.error || error} />
       {!boxes.loading && !box && <div className="v2-err" style={{ marginBottom: 10 }}>You’re not on {center.display_name}’s customer mailbox, so you can’t send from it. The Super Admin sets it up in Centers › Email and adds you.</div>}
       {!templates.loading && !template && <div className="v2-err" style={{ marginBottom: 10 }}>There’s no {KIND_LABEL[kind]} template saved for {center.display_name}. <Link to="/app/bookings/templates">Make one</Link> first.</div>}
 
       {!drafts ? (
-        <div className="v2-card">
-          <div className="v2-grid2" style={{ gap: 10 }}>
-            <Field label="Booking list">
-              <select className="v2-sel" value={list?.id || ''} onChange={e => { setPick(e.target.value); setArea(''); setRoutes([]); }}>
-                {sorted.map(l => <option key={l.id} value={l.id}>{l.name} {l.year}</option>)}
-              </select>
-            </Field>
-            <Field label="Email">
-              <div className="v2-row" style={{ gap: 6 }}>
-                {(['day_before', 'next_try'] as BookingEmailKind[]).map(k => <Btn key={k} size="sm" kind={kind === k ? undefined : 'o'} onClick={() => { setKind(k); setRoutes([]); }}>{KIND_LABEL[k]}</Btn>)}
-              </div>
-            </Field>
-            <Field label="For">
-              <div className="v2-row" style={{ gap: 6 }}>
-                <Btn size="sm" kind={date === days.tomorrow ? undefined : 'o'} onClick={() => setDate(days.tomorrow)}>Tomorrow · {dateFriendly(days.tomorrow)}</Btn>
-                <Btn size="sm" kind={date === days.after ? undefined : 'o'} onClick={() => setDate(days.after)}>Day after · {dateFriendly(days.after)}</Btn>
-              </div>
-            </Field>
-            <Field label="Map">
-              <select className="v2-sel" value={area} onChange={e => { setArea(e.target.value); setRoutes([]); }}>
-                <option value="">Pick a map…</option>
-                {Object.entries(areas.data || {}).filter(([, c]) => c.open > 0).sort((a, b) => a[0].localeCompare(b[0])).map(([a, c]) => <option key={a} value={a}>{a} · {c.open} open</option>)}
-              </select>
-            </Field>
+        <>
+          <div className="v2-card" style={{ marginBottom: 10 }}>
+            <div className="v2-grid2" style={{ gap: 10 }}>
+              <Field label="Booking list">
+                <select className="v2-sel" value={list?.id || ''} onChange={e => { setPick(e.target.value); setRoutes(new Map()); }}>
+                  {sorted.map(l => <option key={l.id} value={l.id}>{l.name} {l.year}</option>)}
+                </select>
+              </Field>
+              <Field label="Email">
+                <div className="v2-row" style={{ gap: 6 }}>
+                  {(['day_before', 'next_try'] as BookingEmailKind[]).map(k => <Btn key={k} size="sm" kind={kind === k ? undefined : 'o'} onClick={() => setKind(k)}>{KIND_LABEL[k]}</Btn>)}
+                </div>
+              </Field>
+              <Field label="For">
+                <div className="v2-row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                  <Btn size="sm" kind={date === days.tomorrow ? undefined : 'o'} onClick={() => setDate(days.tomorrow)}>Tomorrow · {dateFriendly(days.tomorrow)}</Btn>
+                  <Btn size="sm" kind={date === days.after ? undefined : 'o'} onClick={() => setDate(days.after)}>Day after · {dateFriendly(days.after)}</Btn>
+                </div>
+              </Field>
+            </div>
           </div>
-          {area && (inArea.loading && !inArea.data ? <Loading /> : (
-            <>
-              <div className="v2-row" style={{ gap: 8, margin: '10px 0 6px' }}>
-                <div className="v2-label" style={{ margin: 0 }}>Routes</div>
-                <button type="button" className="v2-link" style={{ border: 0, background: 'none', cursor: 'pointer' }} onClick={() => setRoutes(routes.length === routeRows.length ? [] : routeRows.map(r => r[0]))}>
-                  {routes.length === routeRows.length ? 'None' : 'All'}</button>
-              </div>
-              {!routeRows.length && <div className="v2-mut">No {kind === 'next_try' ? 'tried' : 'open'} bookings on this map.</div>}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {routeRows.map(([r, x]) => (
-                  <label key={r} className="v2-check" style={{ margin: 0, padding: '6px 10px' }}>
-                    <input type="checkbox" checked={routes.includes(r)} onChange={() => setRoutes(routes.includes(r) ? routes.filter(y => y !== r) : [...routes, r])} />
-                    <span><b>{r}</b> <span className="v2-mut v2-small">{x.email} of {x.n} have email{x.sent ? ` · ${x.sent} sent` : ''}</span></span>
-                  </label>))}
-              </div>
-              {routes.length > 0 && <p className="v2-note">{ready.length} to write{noEmail ? ` · ${noEmail} have no email` : ''}{sentBefore ? ` · ${sentBefore} already got the ${KIND_LABEL[kind].toLowerCase()} email for ${dateFriendly(date)}` : ''}.</p>}
-            </>))}
-          <div className="v2-row" style={{ gap: 8, marginTop: 10 }}>
-            <span className="v2-spacer" />
-            <Btn icon={Sparkles} onClick={write} disabled={!!busy || !ready.length || !template || !box}>{busy || `Write ${ready.length || ''} email${ready.length === 1 ? '' : 's'}`}</Btn>
-          </div>
-        </div>
+          {(mapAreas.data || []).length === 0 && !mapAreas.loading ? (
+            <div className="v2-card v2-mut">No digital maps are assigned to {center.display_name} yet.</div>
+          ) : (
+            <MapRoutePicker areas={mapAreas.data || []} shapes={shapes.data || []} managers={PICKER} routes={routes} active={PICKER[0].id} centerId={center.id}
+              single="Email" onActive={() => undefined} onChange={setRoutes}
+              footer={
+                <div className="v2-card" style={{ padding: 12 }}>
+                  {!routes.size ? <div className="v2-mut v2-small">Pick the routes you’re doing {date === days.tomorrow ? 'tomorrow' : 'the day after'}: open a map, then tap route numbers or “Email whole map”.</div>
+                    : picked.loading ? <Loading label="Finding the bookings…" />
+                    : <div className="v2-small">
+                        <b>{routes.size} route{routes.size === 1 ? '' : 's'}</b> · {chosen.length} {kind === 'next_try' ? 'tried' : 'open'} booking{chosen.length === 1 ? '' : 's'}
+                        <div className="v2-mut" style={{ marginTop: 4 }}>{ready.length} to write{noEmail ? ` · ${noEmail} have no email` : ''}{sentBefore ? ` · ${sentBefore} already got the ${KIND_LABEL[kind].toLowerCase()} email for ${dateFriendly(date)}` : ''}</div>
+                      </div>}
+                  <Btn icon={Sparkles} onClick={write} disabled={!!busy || !ready.length || !template || !box} style={{ width: '100%', justifyContent: 'center', marginTop: 10 }}>
+                    {busy || `Write ${ready.length || ''} email${ready.length === 1 ? '' : 's'}`}</Btn>
+                </div>} />
+          )}
+        </>
       ) : (
         <>
           <div className="v2-card v2-row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>

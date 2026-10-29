@@ -8,6 +8,7 @@
 //
 // Every manager's routes show in their own colour, so you can see how the day is split.
 // Routes in `locked` (already on a live session) can't be changed.
+// With `single` (Master Bookings › Booking emails) there are no managers: taps just pick routes.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -39,9 +40,12 @@ interface Props {
   footer?: React.ReactNode;
   /** the center whose booking lists show as dots and counts (bookings matter more than PCL here) */
   centerId?: string;
+  /** pick routes without managers (pass one manager, e.g. { id: 'pick' }): hides "Assign to"; the word
+   *  for what's picked, e.g. "Email" → "Email whole map" */
+  single?: string;
 }
 
-export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, routes, locked, active, onActive, onChange, footer, centerId }) => {
+export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, routes, locked, active, onActive, onChange, footer, centerId, single }) => {
   const [areaName, setAreaName] = useState<string | null>(null);
   const area = areas.find(a => a.name === areaName) || null;
   const counts = useLoad(() => pclCounts(areas.map(a => a.name)), [areas.map(a => a.name).join('|')]);
@@ -230,11 +234,12 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
             <b style={{ marginLeft: 6 }}>{area.name}</b>{dots.loading && <span className="v2-mut" style={{ marginLeft: 6 }}>loading PCL…</span>}</>
             : <>Tap a map to open it</>}
         </div>
-        {active && <div className="v2-routemap-hint bottom"><span style={{ background: colorOf(active) }} />Taps go to <b>{activeName}</b></div>}
+        {active && !single && <div className="v2-routemap-hint bottom"><span style={{ background: colorOf(active) }} />Taps go to <b>{activeName}</b></div>}
+        {single && area && <div className="v2-routemap-hint bottom"><span style={{ background: colorOf(active) }} />Tap route numbers to pick them</div>}
       </div>
 
       <div className="v2-stack" style={{ gap: 10 }}>
-        <div className="v2-card" style={{ padding: 12 }}>
+        {!single && <div className="v2-card" style={{ padding: 12 }}>
           <div className="v2-card-h">Assign to</div>
           <div className="v2-stack" style={{ gap: 6 }}>
             {managers.map(m => (
@@ -244,7 +249,7 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
             ))}
             {managers.length === 0 && <div className="v2-mut v2-small">No managers available.</div>}
           </div>
-        </div>
+        </div>}
 
         {!area ? (
           <div className="v2-card" style={{ padding: 0 }}>
@@ -273,8 +278,8 @@ export const MapRoutePicker: React.FC<Props> = ({ areas, shapes, managers, route
                 <b>{area.name}</b><span className="v2-spacer" /><span className="v2-small v2-mut">{st.picked}/{area.routes.length}{st.booked ? ` · ${st.booked} booked` : ''} · {st.pcl} PCL</span>
               </div>
               <div className="v2-row" style={{ gap: 6, marginBottom: 10 }}>
-                <Btn size="sm" disabled={!active} onClick={() => assignArea(area)}>Whole map to {activeName.split(' ')[0] || '…'}</Btn>
-                {mineHere && <Btn size="sm" kind="o" onClick={() => clearArea(area, true)}>Clear {activeName.split(' ')[0]}’s</Btn>}
+                <Btn size="sm" disabled={!active} onClick={() => assignArea(area)}>{single ? `${single} whole map` : `Whole map to ${activeName.split(' ')[0] || '…'}`}</Btn>
+                {mineHere && <Btn size="sm" kind="o" onClick={() => clearArea(area, true)}>{single ? 'Clear' : `Clear ${activeName.split(' ')[0]}’s`}</Btn>}
               </div>
               <div className="v2-rgrid">
                 {area.routes.map(r => {
