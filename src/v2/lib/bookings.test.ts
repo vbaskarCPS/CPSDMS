@@ -3,7 +3,7 @@ vi.mock('./client', () => ({ db: {}, must: (r: { data: unknown }) => r.data }));
 vi.mock('./clients', () => ({ geocode: async () => null }));
 import {
   accessFlags, attemptLine, bookingColor, bookingHeaderRow, cityForRoute, lastAttempt, listFor, looksLikeBookingTab, parseBookingTab, repeats,
-  servicesCode, servicesFromCode, starPlanToBooking, type BookingList,
+  servicesCode, servicesFromCode, starPlanToBooking, tidyStreet, type BookingList,
 } from './bookings';
 import { isPrebook } from '../../lib/mapLogsheetStats';
 
@@ -58,6 +58,18 @@ describe('helpers', () => {
   it('turns service flags into codes and back', () => {
     expect(servicesCode({ aeration: true, fertilizer: true, seed: true, lime: true })).toBe('AFSL');
     expect(servicesFromCode('fsl')).toEqual({ fertilizer: true, seed: true, lime: true });
+  });
+  it('tidies numbered streets for the map search', () => {
+    expect(tidyStreet('208 a st')).toBe('208A St');
+    expect(tidyStreet('197a street')).toBe('197A Street');
+    expect(tidyStreet('52 ave')).toBe('52 Ave');
+    expect(tidyStreet('burnside  road')).toBe('Burnside Road');
+  });
+  it('keeps the sheet’s spelling when The Benny corrected the street', () => {
+    const [b] = parseBookingTab(TAB);
+    const x = starPlanToBooking(b, { lat: 1, lng: 2, how: 'benny', street: 'Elm Road' }, '');
+    expect(x.street).toBe('Elm Road');
+    expect(x.office_notes).toContain('Sheet had “1234 Elm Rd”.');
   });
   it('knows the town of a BC route', () => {
     expect(cityForRoute('PCOQ49')).toBe('Port Coquitlam');

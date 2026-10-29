@@ -10,9 +10,8 @@ import { Link } from 'react-router-dom';
 import { Check, MapPin, Plus, RefreshCw, Search } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
-import { geocode } from '../../lib/clients';
 import {
-  attemptLine, bookingColor, cityForRoute, getBooking, lastAttempt, listBookings, listLists, listPlans, PART_LABEL, PLAN_LABEL, placeAgain,
+  attemptLine, bookingColor, cityForRoute, findPoint, getBooking, lastAttempt, listBookings, listLists, listPlans, PART_LABEL, PLAN_LABEL, placeAgain,
   saveBooking, servicesCode, servicesFromCode, STATE_HINT, STATE_LABEL, waiting,
   type Booking, type BookingList, type BookingPatch, type BookingStatus, type MapState, type PlanKind,
 } from '../../lib/bookings';
@@ -200,7 +199,7 @@ export const BookingModal: React.FC<{ id: string | null; list: Pick<BookingList,
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<unknown>(null);
     const set = (p: Partial<typeof f>) => setF(x => ({ ...x, ...p }));
-    const addrChanged = !b || f.house_no !== b.house_no || f.street_name !== b.street_name || (f.city || '') !== (b.city || '') || (f.unit || '') !== (b.unit || '');
+    const addrChanged = !b || b.lat == null || f.house_no !== b.house_no || f.street_name !== b.street_name || (f.city || '') !== (b.city || '') || (f.unit || '') !== (b.unit || '');
 
     const save = async () => {
       setBusy(true); setErr(null);
@@ -215,7 +214,7 @@ export const BookingModal: React.FC<{ id: string | null; list: Pick<BookingList,
         };
         if (!p.house_no || !p.street_name) throw new Error('A booking needs a house number and a street.');
         if (addrChanged) {
-          const g = await geocode({ house_no: p.house_no, street_name: p.street_name, city: p.city || cityForRoute(f.route_code || ''), province: 'BC', postal_code: '' });
+          const g = (await findPoint({ house_no: p.house_no, street: p.street_name, city: p.city || cityForRoute(f.route_code || b?.sheet_route || ''), route: f.route_code || b?.sheet_route || '' })).found;
           p.lat = g?.lat ?? null; p.lng = g?.lng ?? null;
         }
         if (f.route_code && (!b || f.route_code.toUpperCase() !== (b.route_code || '').toUpperCase())) p.route_code = f.route_code.toUpperCase();

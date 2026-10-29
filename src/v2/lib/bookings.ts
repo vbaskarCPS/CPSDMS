@@ -216,10 +216,13 @@ export function cityForRoute(route: string): string {
 }
 
 /** A Star Plan row as a Fall Rejuv booking: a prepaid AFSL office flat on an SP Pro plan. */
-export function starPlanToBooking(b: SheetBooking, point: { lat: number; lng: number } | null, cityHint: string) {
-  const officeNotes = [b.office_notes, !b.prepaid_marked ? 'PP wasn’t marked in the sheet (loaded as prepaid).' : null].filter(Boolean).join(' · ');
+export function starPlanToBooking(b: SheetBooking, point: { lat: number; lng: number; street?: string; city?: string; how?: string } | null, cityHint: string) {
+  const officeNotes = [b.office_notes, !b.prepaid_marked ? 'PP wasn’t marked in the sheet (loaded as prepaid).' : null,
+    point?.how === 'benny' && point.street && point.street.toLowerCase() !== b.street.toLowerCase() ? `Sheet had “${b.house_no} ${b.street}”.` : null].filter(Boolean).join(' · ');
   return {
-    key: b.key, house_no: b.house_no, street: b.street, unit: null, city: b.city || cityHint || null, province: 'BC', postal_code: null,
+    // the street as the map knows it when The Benny corrected it (the sheet's spelling stays in the office notes)
+    key: b.key, house_no: b.house_no, street: point?.how === 'benny' && point.street ? point.street : b.street, unit: null,
+    city: b.city || cityHint || null, province: 'BC', postal_code: null,
     lat: point?.lat ?? null, lng: point?.lng ?? null, sheet_route: b.sheet_route,
     people: (b.first || b.last) ? [{ first: b.first, last: b.last }] : [], phones: b.phones, emails: b.emails,
     field_notes: b.field_notes || null, office_notes: officeNotes || null,
@@ -234,20 +237,112 @@ export function starPlanToBooking(b: SheetBooking, point: { lat: number; lng: nu
 }
 export type ImportRow = ReturnType<typeof starPlanToBooking>;
 
-/** Find each row's point (Mapbox), a few at a time. */
-export async function locateRows(list: SheetBooking[], onProgress?: (done: number) => void): Promise<Map<number, { lat: number; lng: number }>> {
-  const out = new Map<number, { lat: number; lng: number }>();
-  let done = 0;
-  for (let k = 0; k < list.length; k += 8) {
-    await Promise.all(list.slice(k, k + 8).map(async (b, j) => {
-      const city = b.city || cityForRoute(b.sheet_route);
-      const g = b.house_no && b.street ? await geocode({ house_no: b.house_no, street_name: b.street, city, province: 'BC', postal_code: '' }) : null;
-      if (g) out.set(k + j, g);
+// ───────────── finding an address ─────────────
+/** Neighbourhoods the sheet uses as a city → the municipality a map search knows them by. */
+const MUNICIPALITY: Record<string, string> = {
+  ladner: 'Delta', tsawwassen: 'Delta', 'north delta': 'Delta', 'fort langley': 'Langley', 'walnut grove': 'Langley', murrayville: 'Langley',
+  aldergrove: 'Langley', brookswood: 'Langley', willoughby: 'Langley', albion: 'Maple Ridge', capilano: 'North Vancouver', 'lynn valley': 'North Vancouver',
+  rosedale: 'Chilliwack', sardis: 'Chilliwack', promontory: 'Chilliwack', vedder: 'Chilliwack', yarrow: 'Chilliwack', 'south surrey': 'Surrey',
+  cloverdale: 'Surrey', fleetwood: 'Surrey', 'west kelowna': 'West Kelowna', 'burke mountain': 'Coquitlam', 'port coquitlam': 'Port Coquitlam',
+};
+/** "208 a st" → "208A St", "52 ave" → "52 Ave" (numbered streets the way a map search reads them). */
+export function tidyStreet(street: string): string {
+  let t = street.trim().replace(/\s+/g, ' ');
+  t = t.replace(/^(\d+)\s+([a-z])\s+(st|street|ave|avenue|dr|drive|cres|crescent|pl|place|rd|road)\b/i, (_m, n, l, ty) => `${n}${l.toUpperCase()} ${ty}`);
+  t = t.replace(/^(\d+)([a-z])\b/, (_m, n, l) => `${n}${l.toUpperCase()}`);
+  return t.replace(/\b([a-z])/g, c => c.toUpperCase());
+}
+interface MapboxHit { lat: number; lng: number; number: string; street: string; place: string; region: string; relevance: number }
+async function mapboxSearch(q: string, limit = 5): Promise<MapboxHit[]> {
+  const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env || {};
+  const token = env.VITE_MAPBOX_TOKEN;
+  if (!token || token === 'pk.test') return [];
+  try {
+    const res = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${token}&limit=${limit}&country=ca&types=address&bbox=-139.1,48.2,-114.0,60.0`);
+    if (!res.ok) return [];
+    const j = await res.json() as { features?: { center: [number, number]; address?: string; text?: string; relevance?: number; context?: { id: string; text: string }[] }[] };
+    return (j.features || []).map(f => ({
+      lat: f.center[1], lng: f.center[0], number: String(f.address || ''), street: String(f.text || ''), relevance: Number(f.relevance) || 0,
+      place: (f.context || []).find(c => c.id.startsWith('place'))?.text || '', region: (f.context || []).find(c => c.id.startsWith('region'))?.text || '',
     }));
-    done = Math.min(list.length, k + 8); onProgress?.(done);
+  } catch { return []; }
+}
+const civic = (h: string) => (h.match(/^\d+/)?.[0] || '');
+export interface Found { lat: number; lng: number; how: 'exact' | 'search' | 'benny'; street?: string; city?: string }
+
+/**
+ * A BC address's point: the exact search first; then the street tidied ("208 a st" → "208A St"),
+ * the city as its municipality (Ladner → Delta) or left out, keeping only a result in BC with the
+ * same house number. Returns the street names the search offered when nothing fit (for The Benny).
+ */
+export async function findPoint(a: { house_no: string; street: string; city: string; route: string }): Promise<{ found: Found | null; offered: string[] }> {
+  if (!a.house_no || !a.street) return { found: null, offered: [] };
+  const g = await geocode({ house_no: a.house_no, street_name: a.street, city: a.city, province: 'BC', postal_code: '' });
+  if (g) return { found: { ...g, how: 'exact' }, offered: [] };
+  const no = civic(a.house_no);
+  const streets = [...new Set([a.street, tidyStreet(a.street)])];
+  const routeCity = cityForRoute(a.route);
+  const cities = [...new Set([a.city, MUNICIPALITY[a.city.toLowerCase()] || '', routeCity, MUNICIPALITY[routeCity.toLowerCase()] || '', ''].map(c => c.trim()))];
+  const offered = new Set<string>();
+  const towns = new Set([a.city, MUNICIPALITY[a.city.toLowerCase()], routeCity, MUNICIPALITY[routeCity.toLowerCase()]].filter((x): x is string => !!x).map(x => x.toLowerCase()));
+  for (const st of streets) {
+    for (const c of cities) {
+      const hits = await mapboxSearch([`${a.house_no} ${st}`, c, 'BC'].filter(Boolean).join(', '));
+      for (const h of hits) if (h.region === 'British Columbia' && h.street) offered.add(h.street);
+      // the same house number, in BC, in the town the sheet (or its route) says
+      const ok = hits.find(h => h.region === 'British Columbia' && h.number === no && h.relevance >= 0.6
+        && (!towns.size || !h.place || towns.has(h.place.toLowerCase())));
+      if (ok) return { found: { lat: ok.lat, lng: ok.lng, how: 'search', street: ok.street, city: ok.place || c }, offered: [] };
+    }
+  }
+  return { found: null, offered: [...offered].slice(0, 8) };
+}
+
+/** Find each row's point, a few at a time; the misses come back with what the map search offered. */
+export async function locateRows(list: SheetBooking[], onProgress?: (done: number) => void): Promise<{ points: Map<number, Found>; missed: Map<number, string[]> }> {
+  const points = new Map<number, Found>(); const missed = new Map<number, string[]>();
+  let done = 0;
+  for (let k = 0; k < list.length; k += 6) {
+    await Promise.all(list.slice(k, k + 6).map(async (b, j) => {
+      const r = await findPoint({ house_no: b.house_no, street: b.street, city: b.city || cityForRoute(b.sheet_route), route: b.sheet_route });
+      if (r.found) points.set(k + j, r.found); else missed.set(k + j, r.offered);
+    }));
+    done = Math.min(list.length, k + 6); onProgress?.(done);
+  }
+  return { points, missed };
+}
+
+/**
+ * The Benny looks at the addresses the map search couldn't find: it picks which real street each one
+ * meant (from the streets the search offered and the built maps' streets), and the corrected address
+ * is searched again. It never invents a street or a house number.
+ */
+export async function bennyLocate(list: SheetBooking[], missed: Map<number, string[]>, onProgress?: (label: string) => void): Promise<Map<number, Found>> {
+  const out = new Map<number, Found>();
+  const idx = [...missed.keys()].filter(i => list[i]?.house_no && list[i]?.street);
+  if (!idx.length) return out;
+  const { bennyPlace, streetCandidates } = await import('./clients');
+  onProgress?.(`The Benny is looking at ${idx.length} addresses the map couldn’t find…`);
+  const fromMaps = await streetCandidates(idx.map(i => ({ i, house_no: list[i].house_no, street: list[i].street, city: list[i].city || cityForRoute(list[i].sheet_route) })), [])
+    .catch(() => ({ found: new Map<number, { street: string; near: boolean; score: number }[]>(), failed: 0, error: null }));
+  const asks = idx.map(i => {
+    const offered = (missed.get(i) || []).map(st => ({ street: st.toLowerCase(), near: true, score: 0.9 }));
+    const maps = (fromMaps.found.get(i) || []).slice(0, 5);
+    const candidates = [...offered, ...maps].filter((c, n, all) => all.findIndex(x => x.street === c.street) === n).slice(0, 8);
+    const b = list[i];
+    return { i, house_no: b.house_no, street: b.street, city: b.city || cityForRoute(b.sheet_route), text: `${b.house_no} ${b.street}, ${b.city || cityForRoute(b.sheet_route)}`, candidates };
+  }).filter(x => x.candidates.length);
+  if (!asks.length) return out;
+  const placed = (await bennyPlace(asks).catch(() => [])).filter(p => p.street && p.confidence !== 'low');
+  onProgress?.(`The Benny suggested ${placed.length} corrections; checking them on the map…`);
+  for (const p of placed) {
+    const b = list[p.i];
+    const r = await findPoint({ house_no: p.house_no || b.house_no, street: tidyStreet(p.street!), city: b.city || cityForRoute(b.sheet_route), route: b.sheet_route });
+    if (r.found) out.set(p.i, { ...r.found, how: 'benny', street: tidyStreet(p.street!) });
   }
   return out;
 }
+
 export interface CheckRow { i: number; already: boolean; client_id: string | null; route_code: string | null; area_name: string | null; map_state: MapState; how: string | null; moved_from: string | null }
 export async function checkImport(listId: string, rows: (ImportRow & { i: number })[]): Promise<Map<number, CheckRow>> {
   const out = new Map<number, CheckRow>();
