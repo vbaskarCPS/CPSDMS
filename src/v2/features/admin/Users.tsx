@@ -1,11 +1,17 @@
 // src/v2/features/admin/Users.tsx — Super Admin › User Management › Users.
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Plus, Search, KeyRound, Mail } from 'lucide-react';
 import { useAuth, type Center } from '../../lib/auth';
 import { PERMISSIONS, SUPER_ADMIN_PERMISSIONS, usernameBase, type Permission } from '../../lib/permissions';
 import { listUsers, listCenters, createUser, updateUser, resetPassword, sendSetupEmail, setupStatus, useLoad, type SetupStatus, type UserRow, type UserInput } from '../../lib/data';
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tag, Toggle } from '../../ui';
 import { Mailboxes, UserMailboxes } from './Mailboxes';
+
+// MainstreetAI reps are added and managed in MainstreetAI › Reps, so they're not listed here and their
+// permission isn't offered as a checkbox (a staff member who also has it keeps it when saved).
+const STAFF_PERMISSIONS = PERMISSIONS.filter(p => p.key !== 'mainstreet_rep');
+const repOnly = (u: UserRow) => u.permissions.length > 0 && u.permissions.every(p => p === 'mainstreet_rep') && !u.is_super_admin;
 
 const blank = (): UserInput => ({ full_name: '', phone: '', email: '', permissions: [], center_ids: [], rm_center_id: null, is_active: true });
 
@@ -18,7 +24,8 @@ export const Users: React.FC = () => {
   const [editing, setEditing] = useState<UserRow | 'new' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const rows = useMemo(() => (users.data || []).filter(u =>
+  const reps = (users.data || []).filter(repOnly).length;
+  const rows = useMemo(() => (users.data || []).filter(u => !repOnly(u)).filter(u =>
     !q || `${u.full_name} ${u.username} ${u.phone || ''}`.toLowerCase().includes(q.toLowerCase())), [users.data, q]);
   const centerName = (id: string) => centers.data?.find(c => c.id === id)?.display_name || '—';
 
@@ -38,7 +45,7 @@ export const Users: React.FC = () => {
         <Card style={{ padding: '4px 10px' }}>
           <div className="v2-table-wrap"><table className="v2-table">
             <thead><tr><th>Name</th><th>Username</th><th>Centers</th><th>RM center</th>
-              {PERMISSIONS.map(p => <th key={p.key} title={p.unlocks}>{p.label.replace('Floater Route Manager', 'Floater RM').replace('SA · ', 'SA ').replace('Master ', '').replace('Clients & ', '').replace(' & Client Data', '')}</th>)}
+              {STAFF_PERMISSIONS.map(p => <th key={p.key} title={p.unlocks}>{p.label.replace('Floater Route Manager', 'Floater RM').replace('SA · ', 'SA ').replace('Master ', '').replace('Clients & ', '').replace(' & Client Data', '')}</th>)}
               <th>Status</th></tr></thead>
             <tbody>
               {rows.map(u => (
@@ -47,13 +54,14 @@ export const Users: React.FC = () => {
                   <td><code>{u.username}</code></td>
                   <td>{u.is_super_admin ? 'All' : u.center_ids.map(centerName).join(', ') || '—'}</td>
                   <td>{u.rm_center_id ? centerName(u.rm_center_id) : '—'}</td>
-                  {PERMISSIONS.map(p => <td key={p.key} style={{ textAlign: 'center' }}>{(u.permissions.includes(p.key) || (u.is_super_admin && p.key === 'sa_users')) ? '✓' : ''}</td>)}
+                  {STAFF_PERMISSIONS.map(p => <td key={p.key} style={{ textAlign: 'center' }}>{(u.permissions.includes(p.key) || (u.is_super_admin && p.key === 'sa_users')) ? '✓' : ''}</td>)}
                   <td>{u.is_active ? <Tag tone="g">Active</Tag> : <Tag>Disabled</Tag>}{u.must_change_password && u.is_active && <> <SetupTag s={setups.data?.get(u.id)} /></>}</td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={5 + PERMISSIONS.length} className="v2-mut">No users{q ? ' match' : ' yet'}.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={5 + STAFF_PERMISSIONS.length} className="v2-mut">No users{q ? ' match' : ' yet'}.</td></tr>}
             </tbody>
           </table></div>
+          {reps > 0 && <div className="v2-note" style={{ margin: '6px 4px 8px' }}>{reps} MainstreetAI rep{reps === 1 ? ' isn’t' : 's aren’t'} listed here; they’re managed in <Link className="v2-link" to="/app/mainstreet/reps">MainstreetAI › Reps</Link>.</div>}
         </Card>
       )}
       {users.data && <Mailboxes users={users.data} />}
@@ -174,7 +182,7 @@ const UserEditor: React.FC<{ user: UserRow | null; centers: Center[]; isSuperAdm
           <div>
             <div className="v2-label">Permissions</div>
             {user?.is_super_admin && <div className="v2-note" style={{ marginBottom: 6 }}>Super Admin always has User Management; the rest are set here like anyone else’s.</div>}
-            {PERMISSIONS.map(p => {
+            {STAFF_PERMISSIONS.map(p => {
               const saOnly = SUPER_ADMIN_PERMISSIONS.includes(p.key as Permission) && !isSuperAdmin;
               const fixed = !!user?.is_super_admin && p.key === 'sa_users';
               return (
