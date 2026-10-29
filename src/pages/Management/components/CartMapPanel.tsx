@@ -19,6 +19,7 @@
 // Read only — nothing here writes.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { pclLook } from '../../../lib/pclLook';
 import mapboxgl from 'mapbox-gl';
 import { format } from 'date-fns';
 import { Loader, MapPin, X } from 'lucide-react';
@@ -544,7 +545,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
         {v.completed && (
           <div className="text-xs text-green-300">Completed{v.completed.Price ? ` · $${v.completed.Price}` : ''}</div>
         )}
-        {v.pclName && <div className="text-xs" style={{ color: v.isPcl ? HOUSE_COLORS.pcl : v.otherLine ? OTHER_PCL_COLORS[v.otherLine].pcl : HOUSE_COLORS.pcl }}>{v.isPcl ? 'PCL client' : v.otherLine ? OTHER_PCL_LABEL[v.otherLine] : 'PCL client'} · {v.pclName}</div>}
+        {v.pclName && <div className="text-xs" style={{ color: v.isPcl ? pclLook().pcl : v.otherLine ? OTHER_PCL_COLORS[v.otherLine].pcl : pclLook().pcl }}>{v.isPcl ? 'PCL client' : v.otherLine ? OTHER_PCL_LABEL[v.otherLine] : 'PCL client'} · {v.pclName}</div>}
         {hist && <div className="text-xs" style={{ color: HOUSE_COLORS.historical }}>Previously serviced · {hist.name}</div>}
       </div>
     );

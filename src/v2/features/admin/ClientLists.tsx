@@ -26,6 +26,31 @@ import { Btn, ErrorBox, Loading, Tabs, Tag, Toggle } from '../../ui';
 import { TerritoryTabs } from './Territory';
 import { BookingImport } from '../bookings/BookingImport';
 import { looksLikeBookingTab, readBookingTabFromWorkbook } from '../../lib/bookings';
+import { WestPclImport, type WestSource } from './WestPclImport';
+import { callBookHeader, isSkippedTab, logsheetHeader, looksWest } from '../../lib/westPcl';
+
+/** A West list (the BC call book or the 2026 Logsheets) in these tabs, or null. */
+function westSource(fileName: string, tabs: { name: string; rows: unknown[][] }[]): WestSource | null {
+  const codesOf = (rows: unknown[][], hi: number, col: number) => rows.slice(hi + 1, hi + 400).map(r => String((r || [])[col] ?? ''));
+  const book = tabs.filter(t => !isSkippedTab(t.name) && callBookHeader(t.rows) >= 0);
+  if (book.length) {
+    const sample = book.flatMap(t => { const hi = callBookHeader(t.rows); const col = (t.rows[hi] || []).map(x => String(x).trim().toLowerCase()).indexOf('rc'); return codesOf(t.rows, hi, col); });
+    if (looksWest(sample)) return { kind: 'callbook', fileName, tabs: book };
+  }
+  const logs = tabs.filter(t => !isSkippedTab(t.name) && logsheetHeader(t.rows) >= 0);
+  if (logs.length && looksWest(logs.flatMap(t => codesOf(t.rows, logsheetHeader(t.rows), 0)))) return { kind: 'logsheets', fileName, tabs: logs };
+  return null;
+}
+
+/** An Excel download's tabs that could be a West list: every tab but CCD / Accounts (never opened). */
+async function readWestTabs(file: File, only?: RegExp): Promise<{ name: string; rows: unknown[][] }[]> {
+  const XLSX = await import('xlsx');
+  const buf = await file.arrayBuffer();
+  const names = (XLSX.read(buf, { type: 'array', bookSheets: true }).SheetNames || []).filter(n => !isSkippedTab(n) && (!only || only.test(n)));
+  if (!names.length) return [];
+  const wb = XLSX.read(buf, { type: 'array', sheets: names, cellNF: true });
+  return names.filter(n => wb.Sheets[n]).map(n => ({ name: n, rows: XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[n], { header: 1, raw: false, defval: '', blankrows: false }) }));
+}
 import { BennyChat, type ChatMessage } from './BennyChat';
 import { applyChatActions, lessonProposals, openingMessage, REVIEW_PROMPT } from '../../lib/bennyChat';
 
@@ -76,6 +101,10 @@ export const ClientLists: React.FC = () => {
   const [pending, setPending] = useState<Pending | null>(null);
   // a Master Bookings booking tab (Star Plan Bookings): goes to the booking import, not the client import
   const [bookingTab, setBookingTab] = useState<{ fileName: string; tab: string; rows: unknown[][] } | null>(null);
+  // a West past-client list (the BC call book or the 2026 Logsheets)
+  const [west, setWest] = useState<WestSource | null>(null);
+  // the BC Master Bookings workbook has both: which one to load
+  const [choose, setChoose] = useState<{ file: File; booking: { name: string; rows: unknown[][] } } | null>(null);
   const imports = useLoad(listImports, []);
   const recipes = useLoad(listRecipes, []);
 
@@ -147,11 +176,17 @@ export const ClientLists: React.FC = () => {
   const onFile = (f: File | undefined) => f && run('Reading the file…', async () => {
     if (/\.csv$/i.test(f.name)) {
       const r = await parseCsv(await f.text());
-      if (looksLikeBookingTab(r)) { setBookingTab({ fileName: f.name, tab: f.name.replace(/\.csv$/i, '').replace(/^.*? - /, ''), rows: r }); return; }
+      const tabName = f.name.replace(/\.csv$/i, '').replace(/^.*? - /, '');
+      if (looksLikeBookingTab(r)) { setBookingTab({ fileName: f.name, tab: tabName, rows: r }); return; }
+      const w = westSource(f.name, [{ name: tabName, rows: r }]);
+      if (w) { setWest(w); return; }
     } else {
-      // a Master Bookings workbook: only its booking tab is opened (never Accounts or CCDETF)
+      // a Master Bookings workbook: only its booking tab (and Logsheets) are opened, never Accounts or CCDETF
       const tab = await readBookingTabFromWorkbook(f).catch(() => null);
-      if (tab && looksLikeBookingTab(tab.rows)) { setBookingTab({ fileName: f.name, tab: tab.name, rows: tab.rows }); return; }
+      if (tab && looksLikeBookingTab(tab.rows)) { setChoose({ file: f, booking: tab }); return; }
+      // a call book: every tab but CCD
+      const w = westSource(f.name, await readWestTabs(f).catch(() => []));
+      if (w) { setWest(w); return; }
     }
     const sheets = /\.csv$/i.test(f.name) ? [{ name: f.name, rows: await parseCsv(await f.text()) }] : await readWorkbook(f);
     if (!sheets.length) throw new Error('That file has no rows.');
@@ -164,6 +199,7 @@ export const ClientLists: React.FC = () => {
     const r = await parseCsv(csv);
     if (!r.length) throw new Error('That sheet has no rows.');
     if (looksLikeBookingTab(r)) { setBookingTab({ fileName: 'Google Sheet', tab: 'Star Plan Bookings', rows: r }); return; }
+    { const w = westSource('Google Sheet', [{ name: 'Sheet', rows: r }]); if (w) { setWest(w); return; } }
     const hash = await fileHash(csv).catch(() => null);
     const s: Source = { fileName: `Google Sheet ${link.match(/\/d\/([\w-]{6})/)?.[1] || ''}`.trim(), kind: 'sheet', sheetUrl: link.trim(), sheets: [{ name: 'Sheet', rows: r }], sheet: 0, hash };
     setSrc(s); await readLayout(s);
@@ -458,9 +494,25 @@ export const ClientLists: React.FC = () => {
       <ErrorBox error={error} />
       {busy && <div className="v2-card v2-row" style={{ marginBottom: 12 }}><Sparkles size={16} color="#7c3aed" /><b>{busy}</b></div>}
 
+      {choose && (
+        <div className="v2-card" style={{ marginBottom: 14, display: 'grid', gap: 10 }}>
+          <b>This is the BC Master Bookings workbook. What should The Benny load?</b>
+          <div className="v2-row" style={{ gap: 8 }}>
+            <Btn onClick={() => { setBookingTab({ fileName: choose.file.name, tab: choose.booking.name, rows: choose.booking.rows }); setChoose(null); }}>Star Plan bookings (Fall Rejuv list)</Btn>
+            <Btn kind="o" onClick={() => run('Reading the Logsheets…', async () => {
+              const tabs = await readWestTabs(choose.file, /^logsheets$/i);
+              const w = westSource(choose.file.name, tabs);
+              if (!w) throw new Error('The Logsheets tab doesn’t look like a West list.');
+              setWest(w); setChoose(null);
+            })}>2026 Logsheets (past clients)</Btn>
+            <Btn kind="o" onClick={() => setChoose(null)}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+      {west && <div style={{ marginBottom: 14 }}><WestPclImport src={west} onClose={() => setWest(null)} /></div>}
       {bookingTab && <div style={{ marginBottom: 14 }}><BookingImport fileName={bookingTab.fileName} tab={bookingTab.tab} rows={bookingTab.rows} onClose={() => setBookingTab(null)} /></div>}
 
-      {step === 'source' && !bookingTab && (
+      {step === 'source' && !bookingTab && !west && !choose && (
         <div className="v2-grid2" style={{ marginBottom: 14 }}>
           <div className="v2-card">
             <div className="v2-card-h"><FileSpreadsheet size={14} /> Upload a file</div>

@@ -7,6 +7,7 @@
 // missing house by hand.
 
 import React, { useState, useEffect, useRef } from 'react';
+import { pclLook } from '../../lib/pclLook';
 import { CrewBookingInfo, bookingBadge } from '../../v2/features/bookings/CrewBookingInfo';
 import { isAppBooking } from '../../v2/lib/bookingCrew';
 import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus, Pencil, CircleSlash } from 'lucide-react';
@@ -46,7 +47,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
   const { house, state, isPcl, pcl, disposition, pendingSale, officeBooking, completed, historical, isHistorical } = view;
   // A past client of the other service (aeration in a sealing session …): lime / sky blue.
   const other = !isPcl && view.otherPcl && view.otherLine ? { c: view.otherPcl, line: view.otherLine, col: OTHER_PCL_COLORS[view.otherLine] } : null;
-  const notHomeColor = isPcl ? HOUSE_COLORS.pclNotHome : other ? other.col.notHome : HOUSE_COLORS.not_home;
+  const notHomeColor = isPcl ? pclLook().pclNotHome : other ? other.col.notHome : HOUSE_COLORS.not_home;
   const hist = isHistorical ? historicalSummary(historical) : null;
   const [showHistRows, setShowHistRows] = useState(false);
   const [note, setNote] = useState(disposition?.note || '');
@@ -119,7 +120,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
     state === 'invalid' ? HOUSE_COLORS.invalid :
     isHistorical ? HOUSE_COLORS.historical :
     state === 'not_home' ? notHomeColor :
-    isPcl ? HOUSE_COLORS.pcl : other ? other.col.pcl : '#e5e7eb';
+    isPcl ? pclLook().pcl : other ? other.col.pcl : '#e5e7eb';
 
     const dispoBtn = (status: HouseDispositionStatus, label: string, Icon: LucideIcon, color: string) => {
       const active = disposition?.status === status && state !== 'pending' && state !== 'completed';

@@ -20,6 +20,7 @@ import {
   geocodeAddressInBbox,
 } from './managerMappingService';
 import { placeQuery } from './geoProvince';
+import { setWestPcl } from './pclLook';
 
 // Re-declared here rather than imported so the map loader below doesn't depend
 // on the Session Command Center path continuing to exist.
@@ -1696,6 +1697,36 @@ async function activeSeasonFor(ccId: string): Promise<string | null> {
 export type PclLine = 'aeration' | 'sealing';
 
 /** Which service the centre's live session is for ("sealing" when there's no session). */
+/** A center's region (West / East / Central), remembered for the page's life. */
+const regionCache = new Map<string, Promise<string | null>>();
+export function regionFor(ccId: string): Promise<string | null> {
+  if (!regionCache.has(ccId)) {
+    regionCache.set(ccId, (async () => {
+      const { data, error } = await supabase.from('command_centers').select('region').eq('id', ccId).maybeSingle();
+      return error ? null : ((data?.region as string | undefined) || null);
+    })());
+  }
+  return regionCache.get(ccId)!;
+}
+/**
+ * WEST: both seasons are lawn care, so a route's aeration and lawn rejuv past clients are ONE list
+ * (lime green on every map, never blue). A customer in both lists is one entry with every job.
+ */
+export function mergeLawnLists(a: Map<string, PCLClientGroup[]>, b: Map<string, PCLClientGroup[]>): Map<string, PCLClientGroup[]> {
+  const out = new Map<string, PCLClientGroup[]>();
+  for (const code of new Set([...a.keys(), ...b.keys()])) {
+    const by = new Map<string, PCLClientGroup>();
+    for (const g of [...(a.get(code) || []), ...(b.get(code) || [])]) {
+      const k = String((g as { cid?: string }).cid || `${g.houseNum}|${String(g.streetName || '').toLowerCase()}`);
+      const cur = by.get(k);
+      if (!cur) { by.set(k, { ...g, history: [...(g.history || [])] }); continue; }
+      cur.history = [...(cur.history || []), ...(g.history || [])].sort((x, y) => Number(y.year) - Number(x.year));
+    }
+    out.set(code, [...by.values()]);
+  }
+  return out;
+}
+
 export async function sessionServiceFor(ccId: string): Promise<string> {
   return (await activeSeasonFor(ccId)) || 'sealing';
 }
@@ -1719,6 +1750,8 @@ async function readPclTable(table: 'map_pcl_by_service' | 'map_pcl_cache', route
 /** The other service's past clients on these routes, or null when the session has no partner service. */
 export async function getOtherServicePCL(routeCodes: string[], ccId: string): Promise<{ line: PclLine; byRoute: Map<string, PCLClientGroup[]> } | null> {
   if (!routeCodes.length || !ccId) return null;
+  // the West has one lawn list (see getWorkerPCL): no "other service" there
+  if ((await regionFor(ccId)) === 'West') return null;
   const season = await sessionServiceFor(ccId);
   if (season === 'sealing') return { line: 'aeration', byRoute: await readPclTable('map_pcl_by_service', routeCodes, 'aeration') };
   if (season === 'aeration') return { line: 'sealing', byRoute: await readPclTable('map_pcl_cache', routeCodes) };
@@ -1756,6 +1789,14 @@ export async function getWorkerPCL(
   // route and service. A session that isn't sealing reads its own service's list; the centre's
   // own rows fill any gaps, as below.
   const season = await activeSeasonFor(ccId);
+  const west = (await regionFor(ccId)) === 'West';
+  setWestPcl(west);
+  if (west && (!season || season === 'aeration' || season === 'lawn_rejuv')) {
+    const merged = mergeLawnLists(await readPclTable('map_pcl_by_service', routeCodes, 'aeration'), await readPclTable('map_pcl_by_service', routeCodes, 'lawn_rejuv'));
+    for (const [rc, list] of merged) if (list.length) result.set(rc, list);
+    for (const rc of routeCodes) if (!result.has(rc) && ccByRoute.has(rc)) result.set(rc, ccByRoute.get(rc)!);
+    return result;
+  }
   if (season && season !== 'sealing') {
     const CHUNK = 100;
     for (let i = 0; i < routeCodes.length; i += CHUNK) {

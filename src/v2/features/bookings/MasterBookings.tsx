@@ -23,7 +23,7 @@ import { routeShapes, type RouteShape } from '../../lib/territory';
 import {
   areaView, CLIENT_LAYERS, clientLayerOf, daysLabel, getSettings, heatColor, house as loadHouse, KNOCKS, knockOf, NEVER, NO_DOORS,
   outlines as loadOutlines, overview as loadOverview, parseRound, parseSeason, pctOf, roundName, routeView, seasonKey, seasonLabel,
-  cachedFilters, DEFAULT_FILTERS, houseLook, loadFilters, saveFilters, serviceMarks, type MbFilters, shortDay, shortName, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
+  cachedFilters, DEFAULT_FILTERS, houseLook, layerLook, loadFilters, saveFilters, serviceMarks, type MbFilters, shortDay, shortName, shownRound, startingSeason, startRound, type AreaView, type ClientLayer, type HouseRow, type MapCard, type RoundPick,
   type RouteView, type Season, type StreetHeat, prevCounts, serviceLabel, type Service,
 } from '../../lib/masterBookings';
 import { fmtDay, VISIT } from '../../lib/customers';
@@ -50,6 +50,8 @@ export const MasterBookings: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const allowed = can('bookings');
   const year = new Date().getFullYear();
+  // West: aeration and rejuv past clients are one lime-green lawn list
+  const west = center?.region === 'West';
 
   // ── the picker ──
   const settings = useLoad(() => (allowed && center ? getSettings(center.id) : Promise.resolve(null)), [allowed, center?.id]);
@@ -229,7 +231,7 @@ export const MasterBookings: React.FC = () => {
     const m = map.current; if (!m || !mapReady) return;
     if (level !== 2) { setData(m, 'mb-clients', EMPTY); setData(m, 'mb-knocks', EMPTY); return; }
     setData(m, 'mb-clients', fc(clientsShown.map(({ c, i, layer }) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lng, c.lat] },
-      properties: { i, color: CLIENT_LAYERS.find(l => l.key === layer)!.color } }))));
+      properties: { i, color: layerLook(CLIENT_LAYERS.find(l => l.key === layer)!, west, season.season).color } }))));
     setData(m, 'mb-knocks', heat ? EMPTY : fc((av.data?.knocks || []).filter(k => knockOn.has(k.status)).map(k => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [k.lng, k.lat] },
       properties: { color: knockOf(k.status)?.color || '#111827', fast: k.fast ? 1 : 0 } }))));
   }, [mapReady, level, clientsShown, av.data, heat, knockOn]);
@@ -250,7 +252,7 @@ export const MasterBookings: React.FC = () => {
   }, [level, shapes.data, rv.data, route]);
   // knock filters only take a knock's colour off a house: the house, its customer and PCL colours stay
   const houseItems = useMemo<MbHouse[]>(() => level !== 3 ? [] : (rv.data?.houses || []).map(h => {
-    const look = houseLook(h.st && knockOn.has(h.st) ? h.st : null, h.f, clientOn, season.service);
+    const look = houseLook(h.st && knockOn.has(h.st) ? h.st : null, h.f, clientOn, season.service, west);
     const marks = serviceMarks(h.f);
     const civic = h.no ?? (Number(String(h.k).match(/^\d+/)?.[0]) || 0);
     const shown = !!h.c && (h.f === 0 ? clientOn.size > 0 : !!clientLayerOf(h.f, clientOn, season.service));
@@ -533,6 +535,7 @@ const Level3: React.FC<{ view: RouteView | null; loading: boolean; sel: HouseRow
   };
 
 const HousePanel: React.FC<{ route: string; row: HouseRow; onClose: () => void; season: Season; onCustomer: (id: string) => void }> = ({ route, row, onClose, season, onCustomer }) => {
+  const west = useAuth().center?.region === 'West';
   const h = useLoad(() => loadHouse(route, row.k), [route, row.k]);
   const st = knockOf(row.st);
   return (
@@ -553,7 +556,7 @@ const HousePanel: React.FC<{ route: string; row: HouseRow; onClose: () => void; 
           <div className="v2-mb-client">
             <div className="v2-row" style={{ gap: 6 }}>
               <b>{h.data.client.name || 'Customer on file'}</b>
-              {CLIENT_LAYERS.filter(l => row.f & l.bit).map(l => <span key={l.key} className="v2-mb-chip" style={{ borderColor: l.color, color: l.color }}>{l.label(season.season)}</span>)}
+              {CLIENT_LAYERS.filter(l => row.f & l.bit).map(l => { const lk = layerLook(l, west, season.season); return <span key={l.key} className="v2-mb-chip" style={{ borderColor: lk.color, color: lk.color }}>{lk.label}</span>; })}
             </div>
             {h.data.client.jobs.length > 0 && <div className="v2-small v2-mut" style={{ marginTop: 4 }}>
               Jobs: {[...h.data.client.jobs].sort((a, b) => String(b.year || '').localeCompare(String(a.year || ''))).slice(0, 6)
@@ -590,6 +593,7 @@ const Filters: React.FC<{
   bkOn: Set<BkKey>; setBkOn: (s: Set<BkKey>) => void; hasList: boolean;
   counts: { clients: Record<ClientLayer, number>; knocks: Record<string, number>; bookings: Record<BkKey, number> };
 }> = ({ level, season, heat, setHeat, knockOn, setKnockOn, clientOn, setClientOn, bkOn, setBkOn, hasList, counts }) => {
+  const west = useAuth().center?.region === 'West';
   const flip = <T,>(s: Set<T>, k: T) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; };
   const layers = [...CLIENT_LAYERS].sort((a, b) => (a.service === season.service ? 0 : 1) - (b.service === season.service ? 0 : 1) || b.bit - a.bit);
   const knocksHidden = level === 2 && heat;
@@ -615,7 +619,7 @@ const Filters: React.FC<{
       <Group label="Customers" on={clientOn.size > 0} set={v => setClientOn(new Set(v ? CLIENT_LAYERS.map(l => l.key) : []))} />
       {layers.map(l => (
         <button key={l.key} type="button" className={`v2-crm-leg${clientOn.has(l.key) ? '' : ' off'}`} onClick={() => setClientOn(flip(clientOn, l.key))} aria-pressed={clientOn.has(l.key)} title={l.hint}>
-          <i style={{ background: l.color }} /><span>{l.label(season.season)}</span><b>{(counts.clients[l.key] || 0).toLocaleString()}</b>
+          <i style={{ background: layerLook(l, west, season.season).color }} /><span>{layerLook(l, west, season.season).label}</span><b>{(counts.clients[l.key] || 0).toLocaleString()}</b>
         </button>
       ))}
       <Group label="Bookings" on={bkOn.size > 0} set={v => setBkOn(new Set(v ? BK_KEYS.map(k => k.key) : []))} />
