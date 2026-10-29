@@ -17,7 +17,9 @@ import {
 } from '../../lib/bookings';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 
-const STATES: MapState[] = ['on_map', 'moved', 'waiting', 'no_location'];
+// On map and Moved are one filter: either way the booking is on a built route (Moved just shows the route it moved to)
+const STATES: MapState[] = ['on_map', 'waiting', 'no_location'];
+const mapped = (s: MapState) => (s === 'moved' ? 'on_map' : s);
 const STATE_TONE: Record<MapState, 'g' | 'b' | 'a' | 'r'> = { on_map: 'g', moved: 'b', waiting: 'a', no_location: 'r' };
 type StatusPick = BookingStatus | 'tried';
 const STATUS_LABEL: Record<StatusPick, string> = { open: 'Open', tried: 'Tried', done: 'Done', cancelled: 'Cancelled' };
@@ -100,7 +102,7 @@ export const BookingsPage: React.FC = () => {
             <span className="v2-mb-sep" />
             {STATES.map(s => (
               <button key={s} type="button" className={`v2-card v2-mb-state${state === s ? ' on' : ''}`} onClick={() => setState(state === s ? null : s)} title={STATE_HINT[s]}>
-                <Tag tone={STATE_TONE[s]}>{STATE_LABEL[s]}</Tag><b>{list[s]}</b>
+                <Tag tone={STATE_TONE[s]}>{STATE_LABEL[s]}</Tag><b>{s === 'on_map' ? list.on_map + list.moved : list[s]}</b>
               </button>
             ))}
           </div>
@@ -148,7 +150,7 @@ export const BookingsPage: React.FC = () => {
                           <td><b>{addressOf(b)}</b><div className="v2-mut v2-small">{b.city}</div></td>
                           <td>{nameOf(b) || <span className="v2-mut">—</span>}{b.plan && <div className="v2-small v2-mut">{PLAN_LABEL[b.plan.kind]}</div>}</td>
                           <td style={{ whiteSpace: 'nowrap' }}>{b.map_state === 'moved' ? <>{b.moved_from} → <b>{b.route_code}</b></> : <b>{b.route_code || b.sheet_route || '—'}</b>}<div className="v2-small v2-mut">{b.area_name}</div></td>
-                          <td><Tag tone={STATE_TONE[b.map_state]}>{STATE_LABEL[b.map_state]}</Tag></td>
+                          <td><Tag tone={STATE_TONE[mapped(b.map_state)]}>{STATE_LABEL[mapped(b.map_state)]}</Tag></td>
                           <td style={{ whiteSpace: 'nowrap' }}><b>{b.job_code || servicesCode(b.services)}</b>{b.prepaid && <div className="v2-small v2-mut">Prepaid</div>}</td>
                           <td style={{ whiteSpace: 'nowrap' }}>
                             <span className="v2-row" style={{ gap: 6 }}><i className="dot" style={{ background: bookingColor(b) }} />{b.status === 'done' ? `Done ${shortDay(b.done_on)}` : b.status === 'cancelled' ? 'Cancelled' : last ? 'Tried' : 'Open'}</span>
