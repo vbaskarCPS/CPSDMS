@@ -1579,6 +1579,8 @@ export async function setDisposition(input: {
   commandCenterId?: string | null;
   workerId: string;
   sessionId?: string | null;
+  /** When it was marked (kept when it waited on the phone in a dead zone). */
+  updatedAt?: string;
 }): Promise<HouseDisposition> {
   const row = {
     route_code: input.routeCode,
@@ -1589,7 +1591,7 @@ export async function setDisposition(input: {
     command_center_id: input.commandCenterId ?? null,
     worker_id: input.workerId,
     session_id: input.sessionId ?? null,
-    updated_at: new Date().toISOString(),
+    updated_at: input.updatedAt || new Date().toISOString(),
   };
   const { data, error } = await supabase
     .from('house_dispositions')

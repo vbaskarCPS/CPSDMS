@@ -169,5 +169,33 @@ export async function cachePut(k: string, v: unknown): Promise<void> {
   } catch (e) { console.warn('[dayStore] could not save', k, e); }
 }
 
+// ── the outbox: work done on this phone that hasn't reached the server yet (encrypted too) ──
+// It outlives a wipe: a day can end (sign-out, 18 h) with work still waiting, and that work is
+// never thrown away. Once the last item is sent after a wipe, the key goes too.
+export type OutboxRow<T> = { id: string; value: T };
+
+export async function outboxPut(id: string, v: unknown): Promise<void> {
+  const box = await seal(v);
+  await tx('outbox', 'readwrite', s => { s.put({ ...box, at: Date.now() }, id); });
+}
+
+export async function outboxAll<T>(): Promise<OutboxRow<T>[]> {
+  if (!hasStorage()) return [];
+  const keys = (await tx<IDBValidKey[]>('outbox', 'readonly', s => s.getAllKeys())) || [];
+  const out: OutboxRow<T>[] = [];
+  for (const k of keys.map(String).sort()) {
+    const box = await tx<{ iv: Uint8Array; data: ArrayBuffer }>('outbox', 'readonly', s => s.get(k));
+    if (!box) continue;
+    try { out.push({ id: k, value: await open<T>(box) }); } catch { /* unreadable (key gone): skip */ }
+  }
+  return out;
+}
+
+export async function outboxDelete(id: string): Promise<void> {
+  await tx('outbox', 'readwrite', s => { s.delete(id); });
+  // the day was already wiped and this was the last thing waiting: the key goes now
+  if (!current && (await count('outbox')) === 0) { await tx('meta', 'readwrite', s => { s.delete('key'); }); keyP = null; }
+}
+
 /** For tests: forget the in-memory state (as if the app had restarted). */
 export async function _restart() { current = null; keyP = null; readyP = null; const p = dbp; dbp = null; if (p) await p.then(d => d.close()).catch(() => undefined); }

@@ -28,6 +28,7 @@ import { getPass, workerSignOut } from '../../lib/workerPass';
 import { sessionService } from '../../lib/sessionService';
 import { fieldRead, onFieldFresh, readKey } from '../../lib/offline/cache';
 import { beginWorkerDay, endFieldDay } from '../../lib/offline/fieldDay';
+import { saveClearDisposition, saveDisposition } from '../../lib/offline/fieldWrites';
 import { SyncDot } from '../../components/SyncDot';
 import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
@@ -52,7 +53,7 @@ import { getPclTextedSet } from '../../lib/pclOutreachService';
 import {
   MAP_LOGSHEET_PATH, isMapWorker,
   SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView, StreetSegmentPick,
-  fetchRouteMaps, ensureRouteHouses, fetchDispositions, fetchDisposition, setDisposition, clearDisposition, addManualHouse, loadSegmentHouses,
+  fetchRouteMaps, ensureRouteHouses, fetchDispositions, fetchDisposition, addManualHouse, loadSegmentHouses,
   fetchHistoricalForRoutes, indexHistorical, historicalSummary, seasonJobsAsHistorical,
   indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId, OTHER_PCL_LABEL,
   subscribeToPendingSales, subscribeToDispositions,
@@ -594,13 +595,14 @@ const MapLogsheetPage: React.FC = () => {
         // The 5-second auto Not Home must never overwrite a partner: check
         // the database first, and if anyone has marked this house meanwhile,
         // keep theirs (with its note) and just show it.
-        const existing = await fetchDisposition(selectedView.house.routeCode, selectedView.house.houseKey);
+        // (no signal: go by what the phone knows; the outbox keeps it in order)
+        const existing = await fetchDisposition(selectedView.house.routeCode, selectedView.house.houseKey).catch(() => dispositions.get(routeHouseId(selectedView.house.routeCode, selectedView.house.houseKey)) || null);
         if (existing) {
           setDispositions(prev => { const m = new Map(prev); m.set(routeHouseId(existing.routeCode, existing.houseKey), existing); return m; });
           return;
         }
       }
-      const d = await setDisposition({
+      const d = await saveDisposition({
         routeCode: selectedView.house.routeCode,
         houseKey: selectedView.house.houseKey,
         status, note, firstName,
@@ -621,7 +623,7 @@ const MapLogsheetPage: React.FC = () => {
     if (!selectedView) return;
     setSaving(true);
     try {
-      await clearDisposition(selectedView.house.routeCode, selectedView.house.houseKey);
+      await saveClearDisposition(selectedView.house.routeCode, selectedView.house.houseKey);
       setDispositions(prev => { const m = new Map(prev); m.delete(routeHouseId(selectedView.house.routeCode, selectedView.house.houseKey)); return m; });
     } catch (err) {
       console.error('[MapLogsheet] clear failed', err);

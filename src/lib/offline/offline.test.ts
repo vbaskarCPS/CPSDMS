@@ -149,3 +149,23 @@ describe('phone-first (workers)', () => {
     off(); setReadMode('serverFirst');
   });
 });
+
+describe('"nothing" from Supabase in a dead zone', () => {
+  it('is not saved over the phone’s copy, and not shown instead of it', async () => {
+    const { setReadMode, onFieldFresh } = await import('./cache');
+    await beginDay('2026-10-30', 'w1');
+    expect(await fieldRead('sales', async () => ['A', 'B'])).toEqual(['A', 'B']);
+    await new Promise(r => setTimeout(r, 20));
+    // no signal: the request fails underneath, and the service quietly returns [] instead of an error
+    const quietlyEmpty = async () => { await trackedFetch(async () => { throw new TypeError('Failed to fetch'); })('x').catch(() => undefined); return []; };
+    markOnline();
+    expect(await fieldRead('sales', quietlyEmpty)).toEqual(['A', 'B']);                 // server-first: the copy
+    setReadMode('phoneFirst');
+    const fresh: string[] = []; const off = onFieldFresh(k => fresh.push(k));
+    expect(await fieldRead('sales', quietlyEmpty)).toEqual(['A', 'B']);                 // phone-first: the copy
+    await new Promise(r => setTimeout(r, 30));
+    expect(fresh).toEqual([]);                                                        // and no redraw to empty
+    expect((await cacheGet('sales'))?.value).toEqual(['A', 'B']);                     // the copy is untouched
+    off(); setReadMode('serverFirst'); markOnline();
+  });
+});

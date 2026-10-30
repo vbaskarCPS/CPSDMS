@@ -208,6 +208,19 @@ class SessionService {
   // --- HELPER: Generate a shared job key for grouping asphalt transactions ---
   // Falls back to a timestamped pseudo-random string if crypto.randomUUID is
   // unavailable (some older Safari WebViews don't have it).
+  /** Sales being re-sent from the phone's outbox whose receipt may already have gone: don't email it again. */
+  public noReceiptFor = new Set<string>();
+
+  /** Re-saving an asphalt job (an edit, or a repeat from the outbox) keeps its shared job key. */
+  private async sharedJobKeyFor(transactionId: string): Promise<string> {
+    try {
+      const { data } = await supabase.from('transactions').select('asphalt_meta').eq('id', transactionId).eq('command_center_id', this.getCCId()).maybeSingle();
+      const k = (data?.asphalt_meta as { sharedJobKey?: string } | null)?.sharedJobKey;
+      if (k) return k;
+    } catch { /* new job */ }
+    return this.generateSharedJobKey();
+  }
+
   private generateSharedJobKey(): string {
     try {
       if (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function') {
@@ -3758,7 +3771,7 @@ class SessionService {
             .eq('command_center_id', ccId);
           if (error) throw error;
       } else {
-          const { error } = await supabase.from('transactions').insert({ ...payload, id: transaction.id });
+          const { error } = await this.insertTransaction({ ...payload, id: transaction.id });
           if (error) throw error;
       }
   
@@ -3781,7 +3794,7 @@ class SessionService {
   
       await this.recalculateAndSaveWorkerStats(workerId);
   
-      if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
+      if (transaction.customerEmail && transaction.customerEmail.trim() !== '' && !this.noReceiptFor.delete(transaction.id)) {   // (not again on a repeat from the outbox)
         this.sendReceiptEmail({
           customerEmail: transaction.customerEmail,
           customerName: transaction.customerName,
@@ -3869,13 +3882,13 @@ class SessionService {
           partnerShare = split.cartShare;
           partnerRole = 'driveway-seller';
         }
-        sharedJobKey = this.generateSharedJobKey();
+        sharedJobKey = await this.sharedJobKeyFor(transaction.id);   // a repeat keeps the key
         partnerSessionIdForMeta = ctx.partner.sessionId;
       } else if (ctx.mode === 'self-both') {
         completerShare = split.total;
         partnerShare = 0;
         partnerRole = null;
-        sharedJobKey = this.generateSharedJobKey();
+        sharedJobKey = await this.sharedJobKeyFor(transaction.id);   // a repeat keeps the key
         partnerSessionIdForMeta = null;
       } else if (ctx.mode === 'driveway-deferred') {
         // Defensive: must have a positive asphalt amount, or this mode is meaningless.
@@ -3885,7 +3898,7 @@ class SessionService {
         completerShare = split.cartShare;
         partnerShare = 0;
         partnerRole = null;
-        sharedJobKey = this.generateSharedJobKey();
+        sharedJobKey = await this.sharedJobKeyFor(transaction.id);   // a repeat keeps the key
         // RC isn't assigned yet (or only auto-assigned to self for an RC voluntarily
         // deferring). partner_session_id on meta stays null — export pairs via sharedJobKey,
         // not session id, so this is fine.
@@ -3977,9 +3990,7 @@ class SessionService {
           .eq('command_center_id', ccId);
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from('transactions')
-          .insert({ ...completerPayload, id: transaction.id });
+        const { error } = await this.insertTransaction({ ...completerPayload, id: transaction.id });
         if (error) throw error;
       }
   
@@ -4055,9 +4066,7 @@ class SessionService {
             .eq('command_center_id', ccId);
           if (error) throw error;
         } else {
-          const { error } = await supabase
-            .from('transactions')
-            .insert({ ...partnerPayload, id: phantomTxId });
+          const { error } = await this.insertTransaction({ ...partnerPayload, id: phantomTxId });
           if (error) throw error;
         }
       }
@@ -4145,7 +4154,7 @@ class SessionService {
       }
   
       // --- COMMON: Receipt email (only from collecting cart, since the partner's row is phantom) ---
-      if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
+      if (transaction.customerEmail && transaction.customerEmail.trim() !== '' && !this.noReceiptFor.delete(transaction.id)) {   // (not again on a repeat from the outbox)
         this.sendReceiptEmail({
           customerEmail: transaction.customerEmail,
           customerName: transaction.customerName,
@@ -4198,7 +4207,9 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session');
 
-    const id = `pend_${input.workerId}_asphalt_deferred_${Date.now()}`;
+    // One deferred asphalt row per job: the id comes from the job's shared key, so saving the job
+    // again (an edit, or a repeat from the phone's outbox) updates it instead of adding a second.
+    const id = `pend_${input.workerId}_asphalt_deferred_${input.sharedJobKey}`;
     const row = {
       id,
       session_id: input.sessionId,
@@ -4222,11 +4233,17 @@ class SessionService {
       shared_job_key: input.sharedJobKey,
     };
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('pending_sales')
       .insert(row)
       .select()
       .single();
+    if (error && (error as { code?: string }).code === '23505') {
+      // already there (a repeat): bring its amounts up to date, keep its assignment
+      ({ data, error } = await supabase.from('pending_sales')
+        .update({ asphalt_amount: row.asphalt_amount, upsold_asphalt_amount: row.upsold_asphalt_amount, price: row.price })
+        .eq('id', id).select().single());
+    }
 
     if (error) {
       console.error('[Asphalt] createDeferredAsphaltChild failed:', error);
@@ -4796,6 +4813,25 @@ class SessionService {
    * PARENT row. UI fetches the child via getAsphaltChildrenForParent when needed.
    * For asphalt-only, returns the child row itself.
    */
+  /** Insert a sale; if it landed meanwhile (a slow first send and its repeat from the outbox), update it instead. */
+  private async insertTransaction(row: { id: string; command_center_id?: string }): Promise<{ error: any }> {
+    const r = await supabase.from('transactions').insert(row);
+    if (r.error && (r.error as { code?: string }).code === '23505') {
+      const { id, ...rest } = row;
+      return await supabase.from('transactions').update(rest).eq('id', id).eq('command_center_id', row.command_center_id ?? this.getCCId());
+    }
+    return r;
+  }
+
+  /** Insert a pending sale; if one with this id is already there (a repeat from the phone's outbox), return it. */
+  private async insertPendingRow(row: { id: string }): Promise<{ data: any; error: any }> {
+    const r = await supabase.from('pending_sales').insert(row).select().single();
+    if (r.error && (r.error as { code?: string }).code === '23505') {
+      return await supabase.from('pending_sales').select().eq('id', row.id).single();
+    }
+    return r;
+  }
+
   public async createPendingSale(input: PendingSaleInput): Promise<PendingSale> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -4840,7 +4876,7 @@ class SessionService {
 
     // --- Asphalt-only path (Scenario 3) ---
     if (isAsphaltOnly) {
-      const id = `pend_${input.workerId}_asphalt_${Date.now()}`;
+      const id = input.clientId || `pend_${input.workerId}_asphalt_${Date.now()}`;
       const row = {
         id,
         session_id: input.sessionId,
@@ -4866,11 +4902,7 @@ class SessionService {
         shared_job_key: input.sharedJobKey || null,
       };
 
-      const { data, error } = await supabase
-        .from('pending_sales')
-        .insert(row)
-        .select()
-        .single();
+      const { data, error } = await this.insertPendingRow(row);
 
       if (error) {
         console.error('[PendingSale] createPendingSale (asphalt-only) failed:', error);
@@ -4881,8 +4913,8 @@ class SessionService {
 
     // --- Parent + asphalt-child path (Scenario 1/2) ---
     if (isParentWithAsphaltChild) {
-      const parentId = `pend_${input.workerId}_${Date.now()}`;
-      const childId = `pend_${input.workerId}_asphalt_${Date.now() + 1}`;
+      const parentId = input.clientId || `pend_${input.workerId}_${Date.now()}`;
+      const childId = input.clientId ? `${input.clientId}_asphalt` : `pend_${input.workerId}_asphalt_${Date.now() + 1}`;
 
       const parentRow = {
         id: parentId,
@@ -4939,20 +4971,14 @@ class SessionService {
         shared_job_key: null,
       };
 
-      const { data: parentData, error: parentError } = await supabase
-        .from('pending_sales')
-        .insert(parentRow)
-        .select()
-        .single();
+      const { data: parentData, error: parentError } = await this.insertPendingRow(parentRow);
 
       if (parentError) {
         console.error('[PendingSale] createPendingSale (parent) failed:', parentError);
         throw parentError;
       }
 
-      const { error: childError } = await supabase
-        .from('pending_sales')
-        .insert(childRow);
+      const { error: childError } = await this.insertPendingRow(childRow);
 
       if (childError) {
         console.error('[PendingSale] createPendingSale (child) failed, rolling back parent:', childError);
@@ -4971,7 +4997,7 @@ class SessionService {
     }
 
     // --- Default path (driveway-only, no asphalt) ---
-    const id = `pend_${input.workerId}_${Date.now()}`;
+    const id = input.clientId || `pend_${input.workerId}_${Date.now()}`;
     const row = {
       id,
       session_id: input.sessionId,
@@ -4991,11 +5017,7 @@ class SessionService {
       email: input.email || null,
     };
 
-    const { data, error } = await supabase
-      .from('pending_sales')
-      .insert(row)
-      .select()
-      .single();
+    const { data, error } = await this.insertPendingRow(row);
 
     if (error) {
       console.error('[PendingSale] createPendingSale failed:', error);
