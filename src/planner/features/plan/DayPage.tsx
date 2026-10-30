@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight, Check, Plus, X, Sparkles, CalendarDays, Cale
 import { dayKey } from '../../lib/docs';
 import { useDoc } from '../../lib/useDoc';
 import { reflect } from '../../lib/ai';
-import { clock } from '../../lib/routine';
+import { clock, routineNow } from '../../lib/routine';
 import { Page, Header, Button, Prompt, Score, Input, useToast } from '../../ui/primitives';
 import { Section } from './Section';
 import { addDays, fmtDate, isValidDay } from './dates';
@@ -18,6 +18,7 @@ export function DayPage() {
   const { date } = useParams();
   const nav = useNavigate();
   const key = isValidDay(date) ? date : dayKey();
+  const morningP = routineNow().profile === 'morning';
   const isToday = key === dayKey();
   const { data, update, loading, save } = useDoc<Day>('day', key, emptyDay());
   const day = useMemo(() => normalizeDay(data), [data]);
@@ -62,7 +63,7 @@ export function DayPage() {
       {loading ? <p className="pl-muted">Loading…</p> : (
         <>
           {/* ── Bed Brief ── */}
-          <Section title={<span className="pl-row" style={{ gap: 8 }}><Sunrise aria-hidden style={{ width: 20, height: 20, color: 'var(--amber-2)' }} /> Bed Brief</span>}
+          <Section title={<span className="pl-row" style={{ gap: 8 }}><Sunrise aria-hidden style={{ width: 20, height: 20, color: 'var(--amber-2)' }} /> {morningP ? 'Morning Brief' : 'Bed Brief'}</span>}
             meta={day.brief.finishedAt ? `done${day.brief.seconds ? ` in ${Math.round(day.brief.seconds / 60)} min` : ''}` : `${briefN}/5`} done={!!day.brief.finishedAt}>
             {t.up && <p className="pl-muted" style={{ fontSize: 13 }}>Up at {clock(t.up)}{t.daycare ? ` · daycare ${clock(t.daycare)}` : ''}</p>}
             <div className="plan-brief-grid">
@@ -79,7 +80,7 @@ export function DayPage() {
                 <button type="button" className={`pl-check ${p.done ? 'is-on' : ''}`} aria-label={p.done ? 'Mark not done' : 'Mark done'} onClick={() => set(d => ({ ...d, priorities: d.priorities.map((x, j) => (j === i ? { ...x, done: !x.done } : x)) }))}><Check /></button>
               </div>
             ))}
-            {isToday && <Link to="/plan/brief" className="pl-btn pl-btn--small">{day.brief.finishedAt ? 'Edit brief' : 'Do the Bed Brief'}</Link>}
+            {isToday && <Link to="/plan/brief" className="pl-btn pl-btn--small">{day.brief.finishedAt ? 'Edit brief' : morningP ? 'Do the Morning Brief' : 'Do the Bed Brief'}</Link>}
           </Section>
 
           {/* ── Deep plan ── */}
@@ -111,8 +112,8 @@ export function DayPage() {
           </Section>
 
           {/* ── Miracle Night ── */}
-          <Section title={<span className="pl-row" style={{ gap: 8 }}><Moon aria-hidden style={{ width: 20, height: 20, color: 'var(--accent)' }} /> Miracle Night</span>}
-            meta={t.lightsOut ? `lights out ${clock(t.lightsOut)}` : avg !== null ? `avg ${avg}` : `${reviewN}/3`} done={!!t.lightsOut} open={!isToday || new Date().getHours() >= 21 || new Date().getHours() < 4}>
+          <Section title={<span className="pl-row" style={{ gap: 8 }}><Moon aria-hidden style={{ width: 20, height: 20, color: 'var(--accent)' }} /> {morningP ? 'Evening' : 'Miracle Night'}</span>}
+            meta={t.lightsOut ? `${morningP ? 'in bed' : 'lights out'} ${clock(t.lightsOut)}` : avg !== null ? `avg ${avg}` : `${reviewN}/3`} done={!!t.lightsOut} open={!isToday || new Date().getHours() >= (morningP ? 19 : 21) || new Date().getHours() < 4}>
             <p className="pl-muted" style={{ fontSize: 13 }}>
               {[t.dinner && `dinner ${clock(t.dinner)}`, t.gym && `gym ${clock(t.gym)}`, t.shake && `shake ${clock(t.shake)}`].filter(Boolean).join(' · ') || 'Dinner, gym and shake get ticked on the Today screen.'}
             </p>
@@ -129,7 +130,7 @@ export function DayPage() {
             {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
             <div className="pl-row" style={{ flexWrap: 'wrap' }}>
               <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another coach's note" : "Coach's note"}</Button>
-              {isToday && <Link to="/plan/night" className="pl-btn pl-btn--primary">Open Miracle Night</Link>}
+              {isToday && <Link to="/plan/night" className="pl-btn pl-btn--primary">{morningP ? 'Open the evening wind-down' : 'Open Miracle Night'}</Link>}
             </div>
           </Section>
         </>

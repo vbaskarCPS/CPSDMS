@@ -79,8 +79,8 @@ export function WeekReview() {
         <div className="pl-stats">
           <Stat label="Avg score" value={stats.overall ?? '—'} sub="of 5" />
           <Stat label="Priorities" value={`${stats.prioritiesDone}/${stats.prioritiesSet}`} sub="done" tone={stats.prioritiesSet > 0 && stats.prioritiesDone === stats.prioritiesSet ? 'good' : undefined} />
-          <Stat label="Bed Briefs" value={`${stats.briefs}/7`} tone={stats.briefs >= 5 ? 'good' : undefined} />
-          <Stat label="Lights out on time" value={`${stats.lightsOnTime}/7`} sub={stats.avgLightsOut ? `avg ${clock(stats.avgLightsOut)}` : undefined} tone={stats.lightsOnTime >= 5 ? 'good' : undefined} />
+          <Stat label={routineNow().profile === 'morning' ? 'Morning Briefs' : 'Bed Briefs'} value={`${stats.briefs}/7`} tone={stats.briefs >= 5 ? 'good' : undefined} />
+          <Stat label={routineNow().profile === 'morning' ? 'In bed on time' : 'Lights out on time'} value={`${stats.lightsOnTime}/7`} sub={stats.avgLightsOut ? `avg ${clock(stats.avgLightsOut)}` : undefined} tone={stats.lightsOnTime >= 5 ? 'good' : undefined} />
         </div>
         <Bars values={bars} max={5} labels={['M', 'T', 'W', 'T', 'F', 'S', 'S']} />
         {stats.logged === 0 && !stats.loading && <p className="pl-muted" style={{ fontSize: 13 }}>No day pages this week yet.</p>}
@@ -128,8 +128,8 @@ export function MonthReview() {
         <div className="pl-stats">
           <Stat label="Avg score" value={stats.overall ?? '—'} sub="of 5" />
           <Stat label="Priorities" value={`${stats.prioritiesDone}/${stats.prioritiesSet}`} sub="done" />
-          <Stat label="Bed Briefs" value={stats.briefs} sub={`of ${daysIn}`} tone={stats.briefs >= daysIn * 0.7 ? 'good' : undefined} />
-          <Stat label="Lights out on time" value={stats.lightsOnTime} sub={stats.avgLightsOut ? `avg ${clock(stats.avgLightsOut)}` : `of ${daysIn}`} tone={stats.lightsOnTime >= daysIn * 0.7 ? 'good' : undefined} />
+          <Stat label={routineNow().profile === 'morning' ? 'Morning Briefs' : 'Bed Briefs'} value={stats.briefs} sub={`of ${daysIn}`} tone={stats.briefs >= daysIn * 0.7 ? 'good' : undefined} />
+          <Stat label={routineNow().profile === 'morning' ? 'In bed on time' : 'Lights out on time'} value={stats.lightsOnTime} sub={stats.avgLightsOut ? `avg ${clock(stats.avgLightsOut)}` : `of ${daysIn}`} tone={stats.lightsOnTime >= daysIn * 0.7 ? 'good' : undefined} />
         </div>
       </Card>
 

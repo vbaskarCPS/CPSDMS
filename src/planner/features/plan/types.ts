@@ -13,7 +13,9 @@ export type Scores = Partial<Record<ScoreKey, number>>;
 /** The Bed Brief: ≤10 minutes, from bed, before getting up. Its priorities live in day.priorities. */
 export interface Brief { word: string; aGame: string; stress: string; stressResponse: string; excited: string; startedAt?: string; finishedAt?: string; seconds?: number }
 /** When each block of the routine was ticked ('HH:MM', phone time). */
-export interface Ticks { up?: string; daycare?: string; dinner?: string; gym?: string; shake?: string; lightsOut?: string }
+export interface Ticks { up?: string; kiaanUp?: string; daycare?: string; dinner?: string; gym?: string; shake?: string; lightsOut?: string }
+/** Miracle Morning (morning profile): stretch → meditate → light workout, each ticked as it completes. */
+export interface MorningRoutine { stretch?: boolean; meditate?: boolean; workout?: boolean; startedAt?: string; finishedAt?: string }
 /** Miracle Night: unwind, the quick review, tomorrow's #1. */
 export interface Night { unwindStart?: string; unwindEnd?: string; tomorrowTop?: string; review: { win: string; drag: string; tomorrow: string } }
 
@@ -21,6 +23,7 @@ export interface Day {
   brief: Brief;
   ticks: Ticks;
   night: Night;
+  morningRoutine: MorningRoutine;
   victory: Victory;
   morning: Morning;
   projects: Project[];
@@ -47,6 +50,7 @@ export const emptyDay = (): Day => ({
   brief: { word: '', aGame: '', stress: '', stressResponse: '', excited: '' },
   ticks: {},
   night: { review: { win: '', drag: '', tomorrow: '' } },
+  morningRoutine: {},
   victory: { move: false, reflect: false, grow: false, savers: { silence: false, affirmations: false, visualization: false, exercise: false, reading: false, scribing: false } },
   morning: { excited: '', word: '', aGame: '', stress: '', stressResponse: '', appreciate: '', progress: '' },
   projects: [{ name: '', steps: ['', '', ''] }, { name: '', steps: ['', '', ''] }, { name: '', steps: ['', '', ''] }],
@@ -68,6 +72,7 @@ export function normalizeDay(d: Partial<Day> | null | undefined): Day {
   return {
     brief: { ...e.brief, ...(d.brief || {}) },
     ticks: { ...(d.ticks || {}) },
+    morningRoutine: { ...(d.morningRoutine || {}) },
     night: { ...e.night, ...(d.night || {}), review: { ...e.night.review, ...(d.night?.review || {}) } },
     victory: { ...e.victory, ...(d.victory || {}), savers: { ...e.victory.savers, ...(d.victory?.savers || {}) } },
     morning: { ...e.morning, ...(d.morning || {}) },
