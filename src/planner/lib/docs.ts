@@ -26,8 +26,16 @@ export async function putDocs(docs: { kind: string; key: string; data: unknown |
   if (!d.ok) throw new Error('Could not save');
 }
 
-/** Today's key, in the phone's own time zone (YYYY-MM-DD). */
+/** Today's key (YYYY-MM-DD) in the phone's time zone. The planner's day starts at 4 am: a 1 am
+ *  lights-out, a late shake or a midnight set still belong to the day that's ending. */
+export const DAY_START_HOUR = 4;
 export function dayKey(d = new Date()): string {
+  const s = new Date(d.getTime() - DAY_START_HOUR * 3600_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${s.getFullYear()}-${p(s.getMonth() + 1)}-${p(s.getDate())}`;
+}
+/** The calendar date, with no 4 am shift (for things like bank transactions). */
+export function calendarKey(d = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
