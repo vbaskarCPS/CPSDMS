@@ -5,7 +5,7 @@
 -- planner stores is a JSON document under (kind, key) in planner_docs — a day page is kind 'day',
 -- key '2026-10-30'; a habit is kind 'habit', key <uuid>; and so on — so new planner screens don't
 -- need new tables. The tables are closed under RLS; the only way in is the planner_* functions,
--- which check the token. No PIN is written in this file: it's set once, by hand, with planner_set_pin.
+-- which check the token. No PIN is written in this file: it's set once, by hand (see the end of the file).
 
 create extension if not exists pgcrypto with schema extensions;
 
@@ -22,7 +22,7 @@ create table if not exists public.planner_users (
 
 create table if not exists public.planner_sessions (
   token_hash text primary key,
-  user_id uuid not null references public.planner_users(id) on delete cascade,
+  user_id uuid not null references public.planner_users(id),
   created_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now(),
   expires_at timestamptz not null default now() + interval '365 days'
@@ -30,7 +30,7 @@ create table if not exists public.planner_sessions (
 create index if not exists planner_sessions_user_idx on public.planner_sessions(user_id);
 
 create table if not exists public.planner_docs (
-  user_id uuid not null references public.planner_users(id) on delete cascade,
+  user_id uuid not null references public.planner_users(id),
   kind text not null,
   key text not null,
   data jsonb not null default '{}'::jsonb,
@@ -59,7 +59,7 @@ begin
 end $$;
 
 create or replace function public.planner_profile(u public.planner_users)
-returns jsonb language sql immutable as $$
+returns jsonb language sql immutable set search_path = public as $$
   select jsonb_build_object('id', u.id, 'username', u.username, 'display_name', u.display_name, 'settings', u.settings)
 $$;
 
@@ -82,7 +82,6 @@ begin
     return jsonb_build_object('ok', false, 'reason', case when u.pin_locked_until > now() then 'locked' else 'wrong' end, 'until', u.pin_locked_until);
   end if;
   update planner_users set pin_failures = 0, pin_locked_until = null where id = u.id;
-  delete from planner_sessions where expires_at < now();
   v_token := encode(gen_random_bytes(32), 'hex');
   insert into planner_sessions (token_hash, user_id) values (encode(digest(v_token, 'sha256'), 'hex'), u.id);
   return jsonb_build_object('ok', true, 'token', v_token, 'expires_at', now() + interval '365 days', 'user', planner_profile(u));
@@ -90,7 +89,7 @@ end $$;
 
 create or replace function public.planner_sign_out(p_token text)
 returns void language sql volatile security definer set search_path = public, extensions as $$
-  delete from planner_sessions where token_hash = encode(digest(coalesce(p_token, ''), 'sha256'), 'hex')
+  update planner_sessions set expires_at = now() where token_hash = encode(digest(coalesce(p_token, ''), 'sha256'), 'hex') and expires_at > now()
 $$;
 
 create or replace function public.planner_me(p_token text)
@@ -124,7 +123,7 @@ begin
   end if;
   if length(coalesce(p_new_pin, '')) < 4 then return jsonb_build_object('ok', false, 'reason', 'short'); end if;
   update planner_users set pin_hash = crypt(p_new_pin, gen_salt('bf')) where id = u.id;
-  delete from planner_sessions where user_id = u.id and token_hash <> encode(digest(p_token, 'sha256'), 'hex');
+  update planner_sessions set expires_at = now() where user_id = u.id and expires_at > now() and token_hash <> encode(digest(p_token, 'sha256'), 'hex');
   return jsonb_build_object('ok', true);
 end $$;
 
@@ -139,11 +138,12 @@ begin
   return jsonb_build_object('ok', true, 'docs', (
     select coalesce(jsonb_agg(jsonb_build_object('key', d.key, 'data', d.data, 'updated_at', d.updated_at) order by d.key), '[]'::jsonb)
       from planner_docs d
-     where d.user_id = u.id and d.kind = p_kind
+     where d.user_id = u.id and d.kind = p_kind and jsonb_typeof(d.data) <> 'null'
        and (p_from is null or d.key >= p_from) and (p_to is null or d.key <= p_to)));
 end $$;
 
--- planner_put: write (or overwrite) one doc. A null data deletes it — the only delete the planner does.
+-- planner_put: write (or overwrite) one doc. A null data removes it (kept as a JSON null, so no row
+-- is ever removed; planner_get leaves those out).
 create or replace function public.planner_put(p_token text, p_kind text, p_key text, p_data jsonb)
 returns jsonb language plpgsql volatile security definer set search_path = public, extensions as $$
 declare u planner_users;
@@ -153,12 +153,8 @@ begin
   if p_kind is null or p_key is null or length(p_kind) > 40 or length(p_key) > 120 then
     return jsonb_build_object('ok', false, 'reason', 'bad_key');
   end if;
-  if p_data is null then
-    delete from planner_docs where user_id = u.id and kind = p_kind and key = p_key;
-  else
-    insert into planner_docs (user_id, kind, key, data) values (u.id, p_kind, p_key, p_data)
-    on conflict (user_id, kind, key) do update set data = excluded.data, updated_at = now();
-  end if;
+  insert into planner_docs (user_id, kind, key, data) values (u.id, p_kind, p_key, coalesce(p_data, 'null'::jsonb))
+  on conflict (user_id, kind, key) do update set data = excluded.data, updated_at = now();
   return jsonb_build_object('ok', true);
 end $$;
 
@@ -171,12 +167,8 @@ begin
   if u.id is null then return jsonb_build_object('ok', false, 'reason', 'signed_out'); end if;
   for r in select * from jsonb_array_elements(coalesce(p_docs, '[]'::jsonb)) loop
     if r->>'kind' is null or r->>'key' is null then continue; end if;
-    if r->'data' is null or jsonb_typeof(r->'data') = 'null' then
-      delete from planner_docs where user_id = u.id and kind = r->>'kind' and key = r->>'key';
-    else
-      insert into planner_docs (user_id, kind, key, data) values (u.id, r->>'kind', r->>'key', r->'data')
-      on conflict (user_id, kind, key) do update set data = excluded.data, updated_at = now();
-    end if;
+    insert into planner_docs (user_id, kind, key, data) values (u.id, r->>'kind', r->>'key', coalesce(r->'data', 'null'::jsonb))
+    on conflict (user_id, kind, key) do update set data = excluded.data, updated_at = now();
   end loop;
   return jsonb_build_object('ok', true);
 end $$;
