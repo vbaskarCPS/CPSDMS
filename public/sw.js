@@ -102,8 +102,8 @@ self.addEventListener('push', e => {
   try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Property Stars', body: e.data ? e.data.text() : '' }; }
   e.waitUntil(self.registration.showNotification(d.title || 'Property Stars', {
     body: d.body || '',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    icon: d.icon || '/icon-192.png',     // the planner sends its own icon
+    badge: d.badge || d.icon || '/icon-192.png',
     tag: d.tag || undefined,
     renotify: !!d.tag,
     data: { url: d.url || '/app' },
