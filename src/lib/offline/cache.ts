@@ -2,21 +2,41 @@
 // every field read is saved (encrypted) on the phone, and when the server is slow or out of reach the
 // screen gets the saved copy straight away; the real answer still lands in the background and is
 // saved for next time. Off a field day (office desktops) it's a plain pass-through: nothing is kept.
-import { cacheGet, cachePut, dayActive, ready } from './dayStore';
+import { cacheGet, cachePut, dayActive, pack, ready } from './dayStore';
 import { isNetworkError, isOffline } from './net';
 
-/** How long a screen waits for the server before showing the phone's copy instead. */
+/** How long a screen waits for the server before showing the phone's copy instead (server-first). */
 export const WAIT_MS = 5000;
+
+/**
+ * Workers' screens are phone-first: they show the phone's copy at once and the server's answer
+ * lands a moment later (screens listen with onFieldFresh and redraw). Route managers stay
+ * server-first, so after moving a route they see the result, not an old copy.
+ */
+export type ReadMode = 'phoneFirst' | 'serverFirst';
+let mode: ReadMode = 'serverFirst';
+export const setReadMode = (m: ReadMode) => { mode = m; };
+export const readMode = () => mode;
+
+const freshListeners = new Set<(key: string) => void>();
+/** Something on the phone was just replaced by a newer answer from the server. */
+export function onFieldFresh(fn: (key: string) => void): () => void { freshListeners.add(fn); return () => freshListeners.delete(fn); }
+const announceFresh = (key: string) => freshListeners.forEach(f => { try { f(key); } catch { /* ignore */ } });
 
 export async function fieldRead<T>(key: string, fetcher: () => Promise<T>, waitMs = WAIT_MS): Promise<T> {
   await ready().catch(() => undefined);
   if (!dayActive()) return fetcher();
   const saved = await cacheGet<T>(key);
-  const live = fetcher().then(v => { cachePut(key, v); return v; });
+  const before = saved === undefined ? null : pack(saved.value);
+  const live = fetcher().then(async v => {
+    await cachePut(key, v);
+    if (before !== null && pack(v) !== before) announceFresh(key);   // the screen showed an older copy: redraw
+    return v;
+  });
 
   if (saved === undefined) return live;              // nothing on the phone yet: wait for the server
   live.catch(() => undefined);                       // (answered later, or never: either way don't complain)
-  if (isOffline()) return saved.value;               // known dead zone: the phone's copy, now
+  if (isOffline() || mode === 'phoneFirst') return saved.value;   // the phone's copy, now
 
   // otherwise the server gets a few seconds; then the phone's copy
   let timer: ReturnType<typeof setTimeout> | undefined;
