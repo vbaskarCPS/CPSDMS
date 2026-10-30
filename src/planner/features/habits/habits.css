@@ -1,0 +1,46 @@
+/* src/planner/features/habits/habits.css — habit rows, scorecard grid, heatmap. */
+.hb-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.hb-row.is-off { opacity: 0.55; }
+.hb-row__main { flex: 1; min-width: 0; text-decoration: none; color: inherit; }
+.hb-row__name { display: block; font-size: 15px; font-weight: 600; }
+.hb-row__identity { display: block; font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hb-row__meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.hb-streak { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: var(--amber-2); }
+.hb-streak svg { width: 13px; height: 13px; }
+.hb-streak.is-zero { color: var(--ink-2); }
+.hb-mini { min-height: 26px; padding: 0 9px; font-size: 11px; font-weight: 700; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2); color: var(--ink-2); cursor: pointer; }
+.hb-mini.is-on { background: var(--amber); color: #1b2a2b; border-color: transparent; }
+.pl-check.is-mini { background: var(--amber); border-color: var(--amber); color: #1b2a2b; }
+.pl-check.is-mini svg { opacity: 1; }
+
+.hb-score { display: grid; grid-template-columns: minmax(0, 1fr) repeat(7, 28px); gap: 4px 6px; align-items: center; font-size: 13px; }
+.hb-score__head { font-size: 11px; color: var(--ink-2); text-align: center; font-weight: 600; }
+.hb-score__head.is-today { color: var(--accent); }
+.hb-score__name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hb-score__cell { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink-2); }
+.hb-score__cell.is-done { background: var(--good); color: #fff; }
+.hb-score__cell.is-mini { background: var(--amber); color: #1b2a2b; }
+.hb-score__cell.is-missed { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+
+.hb-heat { display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-flow: column; grid-template-rows: repeat(7, 1fr); gap: 3px; }
+.hb-heat__cell { aspect-ratio: 1; border-radius: 3px; background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.hb-heat__cell.is-done { background: var(--good); }
+.hb-heat__cell.is-mini { background: var(--amber); }
+.hb-heat__cell.is-missed { background: color-mix(in srgb, var(--bad) 35%, transparent); }
+.hb-heat__cell.is-off { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.hb-heat__cell.is-future { background: transparent; border: 1px dashed var(--line); }
+.hb-heat__cell.is-today { outline: 2px solid var(--accent); outline-offset: -1px; }
+.hb-legend { display: flex; gap: 12px; font-size: 11px; color: var(--ink-2); flex-wrap: wrap; }
+.hb-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+
+.hb-law { display: flex; flex-direction: column; gap: 10px; }
+.hb-law__title { display: flex; align-items: baseline; gap: 8px; }
+.hb-law__n { font-family: var(--serif); font-size: 22px; font-weight: 700; color: var(--amber-2); }
+.hb-law__blurb { font-size: 13px; color: var(--ink-2); }
+.hb-sentence { padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); font-family: var(--serif); font-size: 15px; line-height: 1.4; }
+.hb-sentence em { font-style: normal; font-weight: 700; }
+.hb-days { display: flex; gap: 6px; }
+.hb-days button { flex: 1; min-height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg-2); font-weight: 700; cursor: pointer; }
+.hb-days button.is-on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.hb-nudge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--amber-2); background: color-mix(in srgb, var(--amber) 18%, transparent); padding: 3px 9px; border-radius: 999px; }
+.hb-nudge svg { width: 12px; height: 12px; }

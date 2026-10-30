@@ -33,14 +33,14 @@ function precacheManifest(): Plugin {
  *  rewrites it in production; this does the same for the dev server). Its own manifest makes it a
  *  separate home-screen app next to the field app. */
 function plannerPage(): Plugin {
+  const rewrite = (req: { url?: string }, _res: unknown, next: () => void) => {
+    if (req.url && /^\/vijayplanner(\/|$|\?)/.test(req.url) && !/\.\w+(\?|$)/.test(req.url)) req.url = '/planner.html';
+    next();
+  };
   return {
     name: 'cps-planner-page',
-    configureServer(server) {
-      server.middlewares.use((req, _res, next) => {
-        if (req.url && /^\/vijayplanner(\/|$|\?)/.test(req.url) && !/\.\w+(\?|$)/.test(req.url)) req.url = '/planner.html';
-        next();
-      });
-    },
+    configureServer(server) { server.middlewares.use(rewrite); },
+    configurePreviewServer(server) { server.middlewares.use(rewrite); },
   };
 }
 
