@@ -18,4 +18,4 @@ export interface Txn {
 export interface TxnMonth { rows: Txn[] }        // kind 'txns', key YYYY-MM
 export interface Rule { category: string }       // kind 'rule', key = merchant
 export type Budget = Record<string, number>;     // kind 'budget', key 'current'
-export interface RecurringPrefs { ignore: string[] }   // kind 'prefs', key 'recurringIgnore'
+export interface RecurringPrefs { ignore: string[] }   // kind 'moneyprefs' (shared by the household), key 'recurringIgnore'

@@ -1,0 +1,53 @@
+/* src/planner/features/cycle/cycle.css — the cycle tracker. Pink = period, teal = fertile. */
+:root { --cy-pink: #e8457a; --cy-pink-2: #fde2ea; --cy-teal: #1aa39a; --cy-teal-2: #d9f3f1; }
+@media (prefers-color-scheme: dark) { :root { --cy-pink-2: rgba(232, 69, 122, 0.28); --cy-teal-2: rgba(26, 163, 154, 0.28); } }
+
+.cy-hero { display: flex; align-items: center; gap: 16px; }
+.cy-hero__ring .pl-ring__arc { stroke: var(--cy-pink); }
+.cy-hero__ring.is-fertile .pl-ring__arc { stroke: var(--cy-teal); }
+.cy-phase { font-family: var(--serif); font-size: 22px; font-weight: 700; }
+.cy-late { color: var(--cy-pink); font-weight: 600; }
+
+.cy-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px 2px; }
+.cy-cal__dow { text-align: center; font-size: 11px; font-weight: 600; color: var(--ink-2); padding-bottom: 4px; }
+.cy-day { position: relative; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 999px; font-size: 14px; font-variant-numeric: tabular-nums; border: 0; background: transparent; color: var(--ink); cursor: pointer; padding: 0; font-family: inherit; }
+.cy-day:disabled { opacity: 0; cursor: default; }
+.cy-day.is-fertile { background: var(--cy-teal-2); color: var(--cy-teal); font-weight: 600; }
+.cy-day.is-ovulation { box-shadow: inset 0 0 0 2px var(--cy-teal); background: transparent; }
+.cy-day.is-ovulation::after { content: ''; position: absolute; inset: 2px; border-radius: 999px; border: 2px dotted var(--cy-teal); }
+.cy-day.is-predicted { box-shadow: inset 0 0 0 2px var(--cy-pink); color: var(--cy-pink); font-weight: 600; }
+.cy-day.is-period { background: var(--cy-pink); color: #fff; font-weight: 700; box-shadow: none; }
+.cy-day.is-today { outline: 2px solid var(--ink); outline-offset: 1px; }
+.cy-day.is-future { color: var(--ink-2); }
+.cy-day .cy-dot { position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 999px; background: currentColor; }
+.cy-day.is-period .cy-dot { background: #fff; }
+
+.cy-year { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 10px; }
+.cy-mini { display: flex; flex-direction: column; gap: 4px; }
+.cy-mini__name { font-size: 12px; font-weight: 700; text-align: center; }
+.cy-mini__grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+.cy-mini__d { aspect-ratio: 1; border-radius: 999px; font-size: 8px; display: flex; align-items: center; justify-content: center; color: var(--ink); }
+.cy-mini__d.is-fertile { background: var(--cy-teal-2); color: var(--cy-teal); }
+.cy-mini__d.is-ovulation { box-shadow: inset 0 0 0 1px var(--cy-teal); }
+.cy-mini__d.is-predicted { box-shadow: inset 0 0 0 1px var(--cy-pink); color: var(--cy-pink); }
+.cy-mini__d.is-period { background: var(--cy-pink); color: #fff; }
+.cy-mini__d.is-today { outline: 1px solid var(--ink); }
+.cy-mini__d.is-empty { visibility: hidden; }
+
+.cy-legend { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 12px; color: var(--ink-2); }
+.cy-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.cy-legend i { width: 12px; height: 12px; border-radius: 999px; display: inline-block; }
+
+.cy-strip { display: flex; gap: 3px; }
+.cy-strip__d { flex: 1; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink-2); }
+.cy-strip__d.is-fertile { background: var(--cy-teal-2); color: var(--cy-teal); }
+.cy-strip__d.is-ovulation { box-shadow: inset 0 0 0 2px var(--cy-teal); }
+.cy-strip__d.is-period, .cy-strip__d.is-predicted { background: var(--cy-pink-2); color: var(--cy-pink); }
+.cy-strip__d.is-period { background: var(--cy-pink); color: #fff; }
+.cy-strip__d.is-today { outline: 2px solid var(--ink); }
+
+.cy-chip--pink.is-on { background: var(--cy-pink); border-color: transparent; color: #fff; }
+.cy-chip--teal.is-on { background: var(--cy-teal); border-color: transparent; color: #fff; }
+.cy-hist { display: grid; grid-template-columns: 1fr auto auto; gap: 6px 12px; align-items: center; font-size: 14px; }
+.cy-hist > span:nth-child(3n+2), .cy-hist > span:nth-child(3n+3) { text-align: right; font-variant-numeric: tabular-nums; }
+.cy-hist__h { font-size: 11px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: .06em; }

@@ -1,0 +1,16 @@
+{
+  "id": "/roshplanner/",
+  "name": "Rosh Planner",
+  "short_name": "Rosh",
+  "description": "Personal planner: Miracle Morning, the day, cycle, habits, food, workouts and money.",
+  "start_url": "/roshplanner/",
+  "scope": "/roshplanner/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#3b1f5e",
+  "theme_color": "#3b1f5e",
+  "icons": [
+    { "src": "/roshplanner/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/roshplanner/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

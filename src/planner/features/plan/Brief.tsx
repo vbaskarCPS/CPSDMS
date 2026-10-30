@@ -83,11 +83,11 @@ export function Brief() {
         <div className="brief__dots" aria-label={`Step ${step + 1} of ${STEPS.length}`}>
           {STEPS.map((_, i) => <span key={i} className={i < step ? 'is-done' : i === step ? 'is-now' : ''} />)}
         </div>
-        <span className={`brief__clock ${left <= 120 ? 'is-amber' : ''} ${left < 0 ? 'is-over' : ''}`} title="Bed Brief budget">{left < 0 ? '+' : ''}{fmt(left)}</span>
+        <span className={`brief__clock ${left <= 120 ? 'is-amber' : ''} ${left < 0 ? 'is-over' : ''}`} title="Brief budget">{left < 0 ? '+' : ''}{fmt(left)}</span>
       </header>
 
       <section className="brief__body pl-fade" key={step}>
-        <p className="pl-eyebrow">Bed Brief · {step + 1} of {STEPS.length}</p>
+        <p className="pl-eyebrow">{routine.profile === 'morning' ? 'Morning Brief' : 'Bed Brief'} · {step + 1} of {STEPS.length}</p>
         <h1 className="brief__q">{STEPS[step].title}</h1>
         {STEPS[step].hint && <p className="pl-muted">{STEPS[step].hint}</p>}
         {loading ? <p className="pl-muted">Loading…</p> : STEPS[step].render(day, set, focus)}

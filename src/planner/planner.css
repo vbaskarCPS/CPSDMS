@@ -1,14 +1,16 @@
-/* src/planner/planner.css — the planner's own look: warm paper by day, deep teal by night. */
+/* src/planner/planner.css — the planner's look. Palette from logo A: navy and amber (Vijay); Rosh's
+   install gets a plum variant through html[data-theme="plum"] (set in planner.html from the path).
+   Variable names never change, so components don't care which identity or scheme is on. */
 :root {
-  --bg: #f6f1e7;
-  --bg-2: #fffdf8;
-  --ink: #1b2a2b;
-  --ink-2: #5a6b6b;
-  --line: #e2d9c8;
-  --accent: #0f3d3e;
-  --accent-ink: #f6f1e7;
-  --amber: #f6b23c;
-  --amber-2: #a86b0a;
+  --bg: #eef2ff;
+  --bg-2: #ffffff;
+  --ink: #101c3a;
+  --ink-2: #4a5578;
+  --line: #d8def2;
+  --accent: #101c3a;
+  --accent-ink: #eef2ff;
+  --amber: #ffd166;
+  --amber-2: #8a6200;
   --good: #2a9d8f;
   --bad: #c0392b;
   --radius: 16px;
@@ -17,18 +19,41 @@
   --serif: 'Fraunces', Georgia, serif;
   color-scheme: light;
 }
+html[data-theme="plum"] {
+  /* Rosh: purple base, pink accents */
+  --bg: #fbf1f8;
+  --bg-2: #ffffff;
+  --ink: #3b1f5e;
+  --ink-2: #74598f;
+  --line: #ecd9ea;
+  --accent: #5b2a86;
+  --accent-ink: #fff0f7;
+  --amber: #ff6fa8;
+  --amber-2: #b8336a;
+}
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0c2a2b;
-    --bg-2: #103637;
-    --ink: #f1ebdf;
-    --ink-2: #a9b8b7;
-    --line: #1d4a4b;
-    --accent: #f6b23c;
-    --accent-ink: #0c2a2b;
-    --amber: #f6b23c;
-    --amber-2: #ffd27a;
+    --bg: #101c3a;
+    --bg-2: #182650;
+    --ink: #eef2ff;
+    --ink-2: #aab4d4;
+    --line: #26355f;
+    --accent: #ffd166;
+    --accent-ink: #101c3a;
+    --amber: #ffd166;
+    --amber-2: #ffe08a;
     color-scheme: dark;
+  }
+  html[data-theme="plum"] {
+    --bg: #2a1545;
+    --bg-2: #382058;
+    --ink: #fdeef7;
+    --ink-2: #cdb5d9;
+    --line: #4d2f6e;
+    --accent: #ff6fa8;
+    --accent-ink: #2a1545;
+    --amber: #ff6fa8;
+    --amber-2: #ffa3c9;
   }
 }
 * { box-sizing: border-box; }
@@ -71,6 +96,8 @@ a { color: inherit; }
 .pl-nav { position: fixed; left: 0; right: 0; bottom: 0; height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); background: var(--bg-2); border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(6, 1fr); z-index: 10; }
 .pl-nav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; text-decoration: none; font-size: 10px; font-weight: 600; color: var(--ink-2); }
 .pl-nav a.active { color: var(--accent); }
+.pl-nav--7 { grid-template-columns: repeat(7, 1fr); }
+.pl-nav--7 a { font-size: 9.5px; }
 .pl-nav svg { width: 22px; height: 22px; }
 
 .pl-login { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; padding: 24px; max-width: 420px; margin: 0 auto; gap: 24px; }

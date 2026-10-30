@@ -6,12 +6,15 @@ import { Button, Card, Chip, Field, Input, Sheet } from '../../ui/primitives';
 import { EXTRAS, round, scaleItem, sum, type FoodItem, type Totals } from './model';
 import { clock, loadRoutine, routineNow, type Routine } from '../../lib/routine';
 import { breaksFast } from './fasting';
+import { swapFor } from './sway/lists';
+import { loadSwayPrefs, swayOnNow, tagItems } from './sway/prefs';
 
 const STEPS = [0.5, 0.75, 1, 1.5, 2];
 
 export interface Draft { name: string; time: string; items: FoodItem[]; note?: string; thumb?: string; saveFav: boolean }
 
-function ItemRow({ item, base, onChange, onRemove }: { item: FoodItem; base: FoodItem; onChange: (i: FoodItem) => void; onRemove: () => void }) {
+function ItemRow({ item, base, onChange, onRemove, sway }: { item: FoodItem; base: FoodItem; onChange: (i: FoodItem) => void; onRemove: () => void; sway: boolean }) {
+  const swap = sway && item.sway === 'ease' ? swapFor(item.name) : null;
   // the stepper scales from the AI's original numbers, so ×1 always returns to the draft
   const factor = base.kcal > 0 ? item.kcal / base.kcal : 1;
   const current = STEPS.find(s => Math.abs(s - factor) < 0.05);
@@ -20,7 +23,7 @@ function ItemRow({ item, base, onChange, onRemove }: { item: FoodItem; base: Foo
     <div className="fd-item">
       <div className="fd-item__top">
         <span className={`fd-dot fd-dot--${conf}`} title={`${conf} confidence`} />
-        <input className="fd-item__name" value={item.name} onChange={e => onChange({ ...item, name: e.target.value })} aria-label="Food name" />
+        <input className="fd-item__name" value={item.name} onChange={e => onChange({ ...item, name: e.target.value, sway: undefined })} aria-label="Food name" />
         <span className="fd-kcal">{item.kcal}</span>
         <button className="pl-btn pl-btn--ghost pl-btn--small" style={{ border: 0, padding: '0 6px' }} aria-label="Remove" onClick={onRemove}><Trash2 style={{ width: 18, height: 18 }} /></button>
       </div>
@@ -28,7 +31,9 @@ function ItemRow({ item, base, onChange, onRemove }: { item: FoodItem; base: Foo
         <span>{item.portion}{item.grams ? ` · ${item.grams} g` : ''}</span>
         <span>P {item.protein} · C {item.carbs} · F {item.fat}</span>
         {conf === 'low' && <span style={{ color: 'var(--amber-2)', fontWeight: 600 }}>Check this one</span>}
+        {sway && item.sway && item.sway !== 'neutral' && <span className={`fd-swaytag fd-swaytag--${item.sway}`}><span className={`fd-sway fd-sway--${item.sway}`} />{item.sway === 'go' ? 'go' : 'ease off'}</span>}
       </div>
+      {swap && <div className="fd-item__meta"><span style={{ color: 'var(--amber-2)' }}>swap: {swap}</span></div>}
       <div className="fd-steps" aria-label="Portion">
         {STEPS.map(s => <button key={s} type="button" className={current === s ? 'is-on' : ''} onClick={() => onChange({ ...scaleItem(base, s), name: item.name })}>×{s}</button>)}
       </div>
@@ -44,6 +49,21 @@ export function MealEditor({ draft, setDraft, tips, onSave, saving, onDelete }: 
   const [manual, setManual] = useState(false);
   const [routine, setRoutine] = useState<Routine>(() => routineNow());
   useEffect(() => { void loadRoutine().then(setRoutine); }, []);
+  // the sway guide: tag items (keywords, then the AI once) whenever an untagged item appears
+  const [sway, setSway] = useState<boolean>(() => swayOnNow());
+  useEffect(() => { void loadSwayPrefs().then(p => setSway(p.on)); }, []);
+  const untagged = draft.items.some(i => !i.sway);
+  useEffect(() => {
+    if (!sway || !untagged) return;
+    let on = true;
+    void tagItems(draft.items).then(tagged => {
+      if (!on) return;
+      // keep the stepper bases pointing at the same rows
+      setBases(b => { const n = new Map(b); draft.items.forEach((old, k) => { const base = n.get(old) || old; n.delete(old); n.set(tagged[k], base); }); return n; });
+      setDraft({ ...draft, items: tagged });
+    });
+    return () => { on = false; };
+  }, [sway, untagged]); // eslint-disable-line react-hooks/exhaustive-deps
   const [m, setM] = useState({ name: '', kcal: '', protein: '', carbs: '', fat: '' });
   const totals: Totals = useMemo(() => round(sum(draft.items)), [draft.items]);
 
@@ -71,7 +91,7 @@ export function MealEditor({ draft, setDraft, tips, onSave, saving, onDelete }: 
       <Card>
         <div className="pl-list">
           {draft.items.length === 0 && <p className="pl-muted" style={{ padding: '8px 0' }}>Nothing yet — add an item below.</p>}
-          {draft.items.map((it, idx) => <ItemRow key={idx} item={it} base={baseOf(it)} onChange={n => replace(idx, n)} onRemove={() => remove(idx)} />)}
+          {draft.items.map((it, idx) => <ItemRow key={idx} item={it} base={baseOf(it)} onChange={n => replace(idx, n)} onRemove={() => remove(idx)} sway={sway} />)}
         </div>
       </Card>
 
@@ -89,7 +109,7 @@ export function MealEditor({ draft, setDraft, tips, onSave, saving, onDelete }: 
             <Field label="Meal"><Input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} placeholder="Lunch" /></Field>
             <Field label="Time"><Input type="time" value={draft.time} onChange={e => setDraft({ ...draft, time: e.target.value })} /></Field>
           </div>
-          {draft.time && breaksFast(draft.time, routine) && (
+          {routine.fast && draft.time && breaksFast(draft.time, routine) && (
             <p style={{ color: 'var(--amber-2)', fontWeight: 600, fontSize: 14 }}>This is before your window (opens {clock(routine.eatOpen)}) — fast broken today.</p>
           )}
           <label className="fd-switch"><input type="checkbox" checked={draft.saveFav} onChange={e => setDraft({ ...draft, saveFav: e.target.checked })} /><Star style={{ width: 18, height: 18, color: 'var(--amber)' }} /> Save as favourite</label>

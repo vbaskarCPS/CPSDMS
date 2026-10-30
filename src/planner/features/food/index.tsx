@@ -5,6 +5,7 @@ import { AddMeal, EditMeal } from './AddMeal';
 import { History } from './History';
 import { TargetsScreen } from './Targets';
 import { Favourites } from './Favourites';
+import { SwayGuide } from './sway/SwayGuide';
 
 export { FoodTodayCard };
 
@@ -15,4 +16,5 @@ export const foodRoutes = [
   { path: '/food/history', element: <History /> },
   { path: '/food/targets', element: <TargetsScreen /> },
   { path: '/food/favourites', element: <Favourites /> },
+  { path: '/food/sway', element: <SwayGuide /> },
 ];

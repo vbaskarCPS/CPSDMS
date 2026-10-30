@@ -72,28 +72,30 @@ export function Night() {
   };
 
   const done = !!day.ticks.lightsOut;
+  const morningP = routine.profile === 'morning';
+  const bedWord = morningP ? 'In bed' : 'Lights out';
 
   return (
     <Page>
-      <Header eyebrow="Miracle Night" title={done ? 'Good night.' : 'Wind down'} back="/" save={save} />
+      <Header eyebrow={morningP ? 'Evening wind-down' : 'Miracle Night'} title={done ? 'Good night.' : 'Wind down'} back="/" save={save} />
 
       <Card accent className="night-top">
         <Moon aria-hidden />
         <div>
-          <p className="pl-eyebrow">Lights out {clock(routine.lightsOut)}</p>
+          <p className="pl-eyebrow">{bedWord} {clock(routine.lightsOut)}</p>
           <b className="night-top__big">{done ? `In bed ${clock(day.ticks.lightsOut!)}` : left > 0 ? `${fmtLeft(left)} left` : `${fmtLeft(-left)} past`}</b>
-          <small>{done ? `≈ ${sleepEstimate(day.ticks.lightsOut!, routine.wake)} until ${clock(routine.wake)}` : 'shake · unwind · review · tomorrow\'s #1'}</small>
+          <small>{done ? `≈ ${sleepEstimate(day.ticks.lightsOut!, routine.wake)} until ${clock(routine.wake)}` : morningP ? 'unwind · review · tomorrow\'s #1 · bed with Kiaan' : 'shake · unwind · review · tomorrow\'s #1'}</small>
         </div>
       </Card>
 
       {loading ? <p className="pl-muted">Loading…</p> : (
         <>
-          {/* 1 · shake */}
-          <Card className={`night-stage ${day.ticks.shake ? 'is-done' : ''}`}>
+          {/* 1 · shake (night profile only) */}
+          {!morningP && <Card className={`night-stage ${day.ticks.shake ? 'is-done' : ''}`}>
             <button type="button" className={`pl-check ${day.ticks.shake ? 'is-on' : ''}`} aria-label="Shake done" onClick={() => set(d => ({ ...d, ticks: { ...d.ticks, shake: d.ticks.shake ? undefined : nowHM() } }))}><Check /></button>
             <div className="pl-grow"><b><CupSoda aria-hidden /> Protein shake</b><small>{day.ticks.shake ? `${clock(day.ticks.shake)} · eating window closed` : 'closes the eating window'}</small></div>
             <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">Log</Link>
-          </Card>
+          </Card>}
 
           {/* 2 · unwind */}
           <Card className={`night-stage night-stage--col ${day.night.unwindEnd ? 'is-done' : ''}`}>
@@ -129,14 +131,14 @@ export function Night() {
           {/* 4 · tomorrow */}
           <Card className="pl-stack">
             <h2>Tomorrow's #1</h2>
-            <p className="pl-muted" style={{ fontSize: 13 }}>The one thing that makes tomorrow a win. It'll be waiting in tomorrow's Bed Brief.</p>
+            <p className="pl-muted" style={{ fontSize: 13 }}>The one thing that makes tomorrow a win. It'll be waiting in tomorrow's {morningP ? 'Morning' : 'Bed'} Brief.</p>
             <Input placeholder="Tomorrow I will…" value={day.night.tomorrowTop || ''} onChange={e => set(d => ({ ...d, night: { ...d.night, tomorrowTop: e.target.value } }))} onBlur={e => { if (e.target.value.trim()) void saveTomorrowTop(e.target.value.trim()); }} />
           </Card>
 
           {/* 5 · lights out */}
           {!done
-            ? <Button primary block onClick={lightsOut} style={{ minHeight: 60, fontSize: 18 }}><Moon /> Lights out</Button>
-            : <Card className="night-goodnight"><Moon aria-hidden /><div><b>Good night.</b><small>Lights out {clock(day.ticks.lightsOut!)} · up {clock(routine.wake)} with Kiaan · ≈ {sleepEstimate(day.ticks.lightsOut!, routine.wake)} sleep</small></div>
+            ? <Button primary block onClick={lightsOut} style={{ minHeight: 60, fontSize: 18 }}><Moon /> {morningP ? 'In bed with Kiaan' : 'Lights out'}</Button>
+            : <Card className="night-goodnight"><Moon aria-hidden /><div><b>Good night.</b><small>{bedWord} {clock(day.ticks.lightsOut!)} · up {clock(routine.wake)}{morningP ? '' : ' with Kiaan'} · ≈ {sleepEstimate(day.ticks.lightsOut!, routine.wake)} sleep</small></div>
                 <Button small ghost onClick={() => set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: undefined } }))}>Undo</Button></Card>}
         </>
       )}

@@ -2,9 +2,10 @@
 // Android/desktop Chrome: the install prompt. iPhone: the share-sheet steps. Hidden once installed.
 import { useEffect, useState } from 'react';
 import { Download, Share, X } from 'lucide-react';
+import { app, appId } from '../lib/app';
 
 interface BeforeInstallPromptEvent extends Event { prompt(): Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }> }
-const DISMISSED = 'vijay-planner-install-dismissed';
+const DISMISSED = `${appId()}-install-dismissed`;
 
 function isStandalone(): boolean {
   return window.matchMedia('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone === true;
@@ -39,7 +40,7 @@ export function InstallHint() {
         <Download aria-hidden style={{ color: 'var(--accent)' }} />
         <div className="pl-grow">
           <b>Add to your home screen</b>
-          <p className="pl-muted" style={{ fontSize: 13 }}>Opens as its own app, next to the CPS app.</p>
+          <p className="pl-muted" style={{ fontSize: 13 }}>{appId() === 'vijayplanner' ? 'Opens as its own app, next to the CPS app.' : 'Opens as its own app.'}</p>
         </div>
         <button className="pl-btn pl-btn--primary" style={{ minHeight: 40 }} onClick={install}>Install</button>
         <button className="pl-btn pl-btn--ghost" style={{ minHeight: 40, padding: '0 8px', border: 0 }} aria-label="Not now" onClick={dismiss}><X /></button>
@@ -50,7 +51,7 @@ export function InstallHint() {
             <h2>On iPhone</h2>
             <p>1. Tap the <Share aria-label="Share" style={{ verticalAlign: 'middle', width: 18, height: 18 }} /> <b>Share</b> button at the bottom of Safari.</p>
             <p>2. Scroll and tap <b>Add to Home Screen</b>.</p>
-            <p>3. Tap <b>Add</b>. "Planner" appears next to your other apps.</p>
+            <p>3. Tap <b>Add</b>. "{app().short}" appears next to your other apps.</p>
             <button className="pl-btn pl-btn--block" onClick={() => setShowIOS(false)}>Done</button>
           </div>
         </div>

@@ -40,3 +40,10 @@
 .fd-day small { font-size: 9px; color: var(--ink-2); }
 .fd-target-line { position: relative; }
 .fd-target-line::after { content: ''; position: absolute; left: 0; right: 0; top: var(--y); border-top: 1px dashed var(--ink-2); opacity: 0.6; pointer-events: none; }
+
+/* sway guide */
+.fd-sway { display: inline-block; width: 10px; height: 10px; border-radius: 999px; margin-right: 6px; vertical-align: middle; }
+.fd-sway--go { background: #e07aa0; } .fd-sway--ease { background: #4a90c8; }
+.fd-swaytag { display: inline-flex; align-items: center; font-weight: 600; }
+.fd-swaytag--go { color: #c2527f; } .fd-swaytag--ease { color: #3b7cb0; }
+.fd-chip--static { cursor: default; min-height: 30px; font-size: 13px; }
