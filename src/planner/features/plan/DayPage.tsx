@@ -89,7 +89,7 @@ export function DayPage() {
             <div className="pl-row">
               <label className="pl-field pl-grow"><span className="pl-label">Woke at</span>
                 <Input type="time" value={day.victory.wokeAt || ''} onChange={e => set(d => ({ ...d, victory: { ...d.victory, wokeAt: e.target.value || undefined } }))} /></label>
-              {isToday && <Link to="/plan/victory" className="pl-btn pl-btn--primary" style={{ alignSelf: 'flex-end' }}><Timer /> Start timer</Link>}
+              {isToday && <Link to="/plan/victory" className="pl-btn pl-btn--primary" style={{ alignSelf: 'flex-end', whiteSpace: 'nowrap' }}><Timer /> Start timer</Link>}
             </div>
             <div className="plan-blocks">
               {([['move', 'Move', Dumbbell], ['reflect', 'Reflect', Brain], ['grow', 'Grow', BookOpen]] as const).map(([k, label, Icon]) => (
