@@ -154,7 +154,8 @@ export const BookingsPage: React.FC = () => {
                           <td><Tag tone={STATE_TONE[mapped(b.map_state)]}>{STATE_LABEL[mapped(b.map_state)]}</Tag></td>
                           <td style={{ whiteSpace: 'nowrap' }}><b>{b.job_code || servicesCode(b.services)}</b>{b.prepaid && <div className="v2-small v2-mut">Prepaid</div>}</td>
                           <td style={{ whiteSpace: 'nowrap' }}>
-                            <span className="v2-row" style={{ gap: 6 }}><i className="dot" style={{ background: bookingColor(b) }} />{b.status === 'done' ? `Done ${shortDay(b.done_on)}` : b.status === 'cancelled' ? 'Cancelled' : last ? 'Tried' : 'Open'}</span>
+                            <span className="v2-row" style={{ gap: 6 }}><i className="dot" style={{ background: bookingColor(b) }} />{b.status === 'done' ? `Done ${shortDay(b.done_on)}` : b.status === 'cancelled' ? 'Cancelled' : last ? 'Tried' : 'Open'}
+                              {(b.round || 1) > 1 && b.status === 'open' && <Tag tone="b">2nd round</Tag>}{b.refund_requested_at && <Tag tone="a">Refund</Tag>}</span>
                             {b.status === 'done' && b.done_by_name && <div className="v2-small v2-mut">{b.done_by_name}</div>}
                             {b.status !== 'done' && last && <div className="v2-small" style={{ color: '#c2410c' }}>{attemptLine(last)}</div>}
                           </td>
@@ -273,6 +274,12 @@ export const BookingModal: React.FC<{ id: string | null; list: Pick<BookingList,
                 ))}
               </div>
             </Field>
+            {b && ((b.round || 1) > 1 || b.refund_requested_at) && (
+              <div className="v2-note" style={{ marginTop: 0 }}>
+                {(b.round || 1) > 1 && <div><b>Second round.</b> Not loaded into first-pass sessions; it comes back when the crew returns to this area.</div>}
+                {b.refund_requested_at && <div><b>Marked for refund</b> {shortDay(b.refund_requested_at.slice(0, 10))}{b.refund_note ? ` · ${b.refund_note}` : ''}</div>}
+              </div>
+            )}
             {b && (
               <div className="v2-grid2">
                 <div className="v2-card" style={{ padding: 10 }}>

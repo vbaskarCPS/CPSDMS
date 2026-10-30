@@ -3,11 +3,12 @@
 // so a rep sees the ones for businesses they're assigned; admins see all.
 import { db, must } from './client';
 
-export type Box = 'inbox' | 'unread' | 'starred' | 'sent' | 'archived' | 'unsorted';
+export type Box = 'inbox' | 'unread' | 'starred' | 'sent' | 'archived' | 'unsorted' | 'approve';
 export interface ThreadRow {
   id: string; subject: string; snippet?: string; last_at: string; last_dir: 'in' | 'out'; messages: number; unread: number;
   starred: boolean; archived: boolean; contact_email?: string; contact_name?: string; mailbox?: string;
   business_id?: string; business?: string; campaign_id?: string; campaign?: string; color?: string; zone?: string; rep?: string;
+  suggestion?: string;   // a Claude suggestion is waiting to be approved: its summary (RUN_71)
 }
 export interface Attachment { name: string; type?: string; size?: number; path: string }
 export interface Message {
@@ -104,10 +105,54 @@ export function emailState(e: { status: Message['status']; delivery?: Delivery }
   if (e.delivery === 'delivered') return { label: 'Delivered', tone: 'ok' };
   return { label: 'Sent', tone: 'mut' };
 }
-export async function mailCounts(): Promise<{ unread: number; unsorted: number }> {
-  const r = must(await db.rpc('mail_counts')) as { unread: number } | null;
-  return { unread: r?.unread || 0, unsorted: 0 };
+export async function mailCounts(): Promise<{ unread: number; unsorted: number; approve?: number }> {
+  const r = must(await db.rpc('mail_counts')) as { unread: number; approve?: number } | null;
+  return { unread: r?.unread || 0, unsorted: 0, approve: r?.approve || 0 };
 }
+
+// ───────────── Claude's suggested replies, with one-tap booking changes (RUN_71) ─────────────
+export type SuggestAction = 'none' | 'second_round' | 'cancel' | 'field_notes';
+export interface SuggestBooking {
+  id: string; linked?: boolean; can_change?: boolean; name?: string; address: string; list?: string; year?: number; job?: string;
+  status: 'open' | 'done' | 'cancelled'; round?: number; done_on?: string; prepaid?: boolean; refund_requested?: boolean; field_notes?: string;
+  plan?: { kind: string; prepaid?: boolean; cancelled?: boolean; open_bookings?: number };
+}
+export interface Suggestion {
+  id: string; message_id: string; intent: 'delay' | 'cancel' | 'instructions' | 'thanks' | 'question' | 'other'; action: SuggestAction;
+  note?: string; summary?: string; reply_subject?: string; reply_html?: string; needs_reply: boolean; confidence?: 'high' | 'medium' | 'low';
+  status: 'pending' | 'done' | 'dismissed'; applied?: SuggestAction; replied?: boolean; decided_at?: string; booking_id?: string;
+  bookings?: SuggestBooking[];
+}
+/** The latest suggestion in a conversation (or null). */
+export async function mailSuggestion(thread: string): Promise<Suggestion | null> {
+  return (must(await db.rpc('mail_suggestion', { p_thread: thread })) as Suggestion | null) || null;
+}
+/** Approve (apply the booking change), or reply only / dismiss. Send the reply first (sendMail), then this. */
+export async function decideSuggestion(id: string, p: { apply: boolean; booking?: string | null; note?: string | null; replied: boolean }):
+  Promise<{ applied?: SuggestAction; bookings?: number; refund?: boolean }> {
+  return must(await db.rpc('mail_suggestion_decide', { p_id: id, p_apply: p.apply, p_booking: p.booking || null, p_note: p.note ?? null, p_replied: p.replied })) as
+    { applied?: SuggestAction; bookings?: number; refund?: boolean };
+}
+export async function undoSuggestion(id: string): Promise<void> { must(await db.rpc('mail_suggestion_undo', { p_id: id })); }
+/** Ask Claude again about this email. */
+export async function suggestAgain(messageId: string): Promise<void> {
+  const { data, error } = await db.functions.invoke('ms-mail-ai', { body: { mode: 'suggest', message_id: messageId } });
+  if (error || !(data as { id?: string })?.id) throw new Error(await fnError(error, data));
+}
+/** What the action does, in a few words, for this booking. */
+export function actionLabel(a: SuggestAction, b?: SuggestBooking | null): string {
+  if (a === 'second_round') return 'Move to second round';
+  if (a === 'field_notes') return 'Add to field notes';
+  if (a === 'cancel') {
+    const others = Math.max(0, (b?.plan?.open_bookings || 1) - 1);
+    return b?.plan ? `Cancel ${b.plan.kind}${others ? ` and its ${others} other open booking${others === 1 ? '' : 's'}` : ''}` : 'Cancel booking';
+  }
+  return '';
+}
+/** The action in two or three words, for buttons. */
+export const actionShort = (a: SuggestAction) => (a === 'second_round' ? 'Second round' : a === 'cancel' ? 'Cancel plan' : a === 'field_notes' ? 'Add note' : '');
+/** Plain text → the reply's HTML (paragraphs, line breaks). */
+export const textToHtml = (t: string) => t.trim().split(/\n{2,}/).map(p => `<p>${p.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!)).replace(/\n/g, '<br>')}</p>`).join('');
 export interface AdminBox {
   id: string; address: string; local: string; kind: string; active: boolean; owner_id: string | null; owner: string | null;
   owner_active: boolean; aliases: string[]; conversations: number;

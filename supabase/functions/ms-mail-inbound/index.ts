@@ -10,9 +10,12 @@
 //      that contact's email, or "unsorted" for admins. "Unsubscribe" records an opt-out.
 //   3. attachments are copied into the private ms-mail bucket (in/<conversation>/<message>/<file>)
 //   4. the push function tells whoever it's for
+//   5. for a customer's email to a centre's customer mailbox, Claude suggests a reply and what to do with the booking
+//      (in the background, after answering Resend; kept for someone to approve — _shared/suggest.ts, RUN_71)
 // Deployed without JWT verification (Resend isn't signed in); the signature check stands in for it.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { DELIVERY_EVENTS, reasonOf, verify } from '../_shared/svix.ts';
+import { suggestFor } from '../_shared/suggest.ts';
 export { verify };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -113,6 +116,11 @@ Deno.serve(async req => {
       });
       clearTimeout(t);
     } catch (err) { console.error('ms-mail-inbound: notify', err instanceof Error ? err.message : err); }
+    // Claude's suggestion, in the background (it takes a few seconds; Resend shouldn't wait)
+    const suggest = Promise.all(deliveries.map(d => suggestFor(svc, d.message_id)
+      .catch(err => console.error('ms-mail-inbound: suggest', err instanceof Error ? err.message : err))));
+    const rt = (globalThis as unknown as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
+    if (rt?.waitUntil) rt.waitUntil(suggest); else await suggest;
     return json({ ok: true, deliveries: deliveries.length, attachments: saved });
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : 'Something went wrong' }, 500);
