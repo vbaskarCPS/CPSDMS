@@ -1,14 +1,19 @@
-// src/lib/littleLessons/engine.ts — how Little Lessons picks the next question and moves Kiaan along.
+// src/lib/littleLessons/engine.ts — how Little Lessons picks what's next and moves Kiaan along.
 //
-// Each subject has a position on its ladder of levels, e.g. 4.3 = level 4, with 30% of the questions
+// He plays lessons: a short run of 3–5 questions of one game from one level. Each level is a skill with a
+// deck of games; the next lesson's game is one he hasn't just played, leaning toward the ones he's played
+// least, so it keeps changing.
+//   Each subject has a position on its ladder of levels, e.g. 4.3 = level 4, with 30% of the lessons
 // already from level 5. Getting a question right first try nudges the position up (one level per
-// `perLevel` right answers, 10 by default); a miss nudges it back half as much, so the next level is
-// mixed in gradually while he's doing well and the one he's moving off is phased out. He never slips
-// below a level he has fully reached, and about one question in ten reviews an older level.
-//   Right answers on a level can only carry him part way into the next one (CARRY): to go further he has
-//   to get some of the new level's questions right too.
-// The subject for each question comes from the grown-ups' mix (e.g. 30% chess, 40% words, 30% math).
-import { LEVELS, SUBJECTS, rng, type Question, type Subject } from './levels';
+// `perLevel` right answers, times the level's size: the chess levels are big); a miss nudges it back half
+// as much, so the next level is mixed in gradually while he's doing well and the one he's moving off is
+// phased out. He never slips below a level he has fully reached, and about one lesson in ten reviews an
+// older level. Right answers on a level can only carry him part way into the next one (CARRY): to go
+// further he has to get some of the new level's questions right too.
+//   Inside a level, how many questions he's got right there (`right`) opens up harder games and, in chess,
+// brings in the next piece (who says hello first).
+// The subject for each lesson comes from the grown-ups' mix (e.g. 30% chess, 40% words, 30% math).
+import { LEVELS, SUBJECTS, gamesAt, makeQuestion, rng, type Intro, type Question, type Subject } from './levels';
 import { LESSONS } from '../littleChess/lessons';
 
 /** Set by a grown-up on the Kiaan's lessons page; saved in his account as "lessons_settings". */
@@ -26,7 +31,11 @@ export const DEFAULT_SETTINGS: LessonSettings = { mix: { chess: 30, words: 40, m
 export type LessonProgress = {
   pos: Record<Subject, number>;
   best: Record<Subject, number>;                    // the furthest whole level reached (never slips below)
-  asked: Record<string, number>;                    // questions asked per level (to take turns through a lesson)
+  asked: Record<string, number>;                    // questions asked per level
+  right: Record<string, number>;                    // questions right first try per level (how far into it he is)
+  played: Record<string, number>;                   // lessons played per "level/game"
+  last: Record<string, string>;                     // the game last played per level (not again straight away)
+  v: number;                                        // 2: three chess levels (was one per Little Chess lesson)
   told: string[];                                   // levels whose story he's heard
   applied: Partial<Record<Subject, string>>;        // the grown-up moves already applied
   days: Record<string, Partial<Record<Subject, [number, number]>>>;   // right / missed per day, last 30 days
@@ -57,33 +66,53 @@ export function readSettings(x: Partial<LessonSettings> | null | undefined): Les
   };
 }
 
-/** Where the old Little Chess progress got to: the first lesson not done becomes chess's level. */
+/** Where the old Little Chess progress got to: the first lesson not done. */
 function chessFrom(done: unknown): number {
   if (!Array.isArray(done)) return 0;
   const i = LESSONS.findIndex(l => !done.includes(l.id));
   return i < 0 ? LESSONS.length - 1 : i;
 }
+/** An old chess position (one level per Little Chess lesson: 7 naming, 8 guessing, 6 moves, 4 eating)
+ *  as the new chess level and how far into it he was. */
+export function fromOldChess(i: number): { pos: number; right: number } {
+  if (i <= 6) return { pos: 0, right: i * 3 };
+  if (i <= 14) return { pos: 0, right: Math.min(30, 18 + (i - 7) * 2) };
+  if (i <= 20) return { pos: 1, right: (i - 15) * 4 };
+  return { pos: 2, right: Math.min(20, (i - 21) * 3) };
+}
+const CHESS_IDS = ['chess:naming', 'chess:moves', 'chess:eating'];
 
 /** His saved progress, filled in (and, the first time, carried over from Little Chess). */
 export function readProgress(x: Partial<LessonProgress> | null | undefined, oldChess?: Record<string, unknown> | null): LessonProgress {
   const pos = { chess: 0, words: 0, math: 0 } as Record<Subject, number>, best = { ...pos };
   const told: string[] = Array.isArray(x?.told) ? x!.told.filter(t => typeof t === 'string') : [];
+  const obj = <T,>(v: unknown): Record<string, T> => (v && typeof v === 'object' ? { ...(v as Record<string, T>) } : {});
+  const right = obj<number>(x?.right);
+  const old = !!x && x.v !== 2;          // saved before the chess levels became three
   for (const s of SUBJECTS) {
+    if (s === 'chess' && old) continue;
     pos[s] = clampPos(s, num(x?.pos?.[s], 0));
     best[s] = clampPos(s, Math.max(Math.floor(pos[s]), num(x?.best?.[s], 0)));
   }
   let stickers: string[] = Array.isArray(x?.stickers) ? x!.stickers.filter(s => typeof s === 'string') : [];
+  const carry = (i: number) => {
+    const c = fromOldChess(i);
+    pos.chess = best.chess = c.pos;
+    right[CHESS_IDS[c.pos]] = Math.max(right[CHESS_IDS[c.pos]] || 0, c.right);
+    for (let k = 0; k < c.pos; k++) right[CHESS_IDS[k]] = Math.max(right[CHESS_IDS[k]] || 0, 30);
+  };
+  if (old) carry(Math.max(0, Math.round(num(x?.best?.chess, num(x?.pos?.chess, 0)))));
   if (!x && oldChess) {
-    // first time: pick up where Little Chess left off (its stories counted as told)
-    pos.chess = best.chess = chessFrom(oldChess.done);
-    for (let i = 0; i <= pos.chess; i++) told.push(LEVELS.chess[i].id);
+    // first time: pick up where Little Chess left off (its piece hellos counted as heard)
+    carry(chessFrom(oldChess.done));
+    for (const l of LESSONS.slice(0, chessFrom(oldChess.done) + 1)) told.push(`chess:${l.id}`);
     if (Array.isArray(oldChess.stickers)) stickers = oldChess.stickers.filter((s): s is string => typeof s === 'string');
   }
   return {
-    pos, best, told, stickers,
-    asked: x?.asked && typeof x.asked === 'object' ? { ...x.asked } : {},
-    applied: x?.applied && typeof x.applied === 'object' ? { ...x.applied } : {},
-    days: x?.days && typeof x.days === 'object' ? { ...x.days } : {},
+    pos, best, told, stickers, right, v: 2,
+    asked: obj<number>(x?.asked), played: obj<number>(x?.played), last: obj<string>(x?.last),
+    applied: obj<string>(x?.applied) as LessonProgress['applied'],
+    days: obj(x?.days) as LessonProgress['days'],
     voice: typeof x?.voice === 'boolean' ? x.voice : typeof oldChess?.voice === 'boolean' ? oldChess.voice as boolean : true,
     voiceName: typeof x?.voiceName === 'string' && x.voiceName ? x.voiceName : null,
     recorded: typeof x?.recorded === 'boolean' ? x.recorded : true,
@@ -118,21 +147,60 @@ export function pickLevel(p: LessonProgress, s: LessonSettings, subj: Subject, r
   return at;
 }
 
-/** The next question (and its level's index). */
-export function nextQuestion(p: LessonProgress, s: LessonSettings, rand: () => number = Math.random): { q: Question; index: number } {
-  const subj = pickSubject(s, rand);
-  const index = pickLevel(p, s, subj, rand);
-  const level = LEVELS[subj][index];
-  const q = level.make(rng(Math.floor(rand() * 2 ** 31)), p.asked[level.id] || 0);
-  return { q, index };
+/** A lesson: one game of one level, a few questions long, and the story cards to show first. */
+export type LessonPlan = { subject: Subject; index: number; level: string; game: string; length: number; intros: Intro[];
+  /** how far into the level he was when it started (a new chess piece waits for the next lesson, after its hello) */
+  depth: number };
+
+/** How many questions the next lesson has, with `left` to go before the sticker: 3–5, ending right on it. */
+export function lessonLength(left: number, rand: () => number): number {
+  if (left <= 5) return left;
+  if (left <= 8) return 3;
+  return 3 + Math.floor(rand() * 3);
 }
+
+/** Which game of a level next: not the one he just played there (if there's another), more likely the
+ *  ones he's played least. */
+export function pickGame(p: LessonProgress, levelId: string, games: string[], rand: () => number): string {
+  const pool = games.length > 1 ? games.filter(g => g !== p.last[levelId]) : games;
+  const w = pool.map(g => 1 / (1 + (p.played[`${levelId}/${g}`] || 0)));
+  let r = rand() * w.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < pool.length; i++) { r -= w[i]; if (r < 0) return pool[i]; }
+  return pool[pool.length - 1];
+}
+
+/** The story cards before a lesson: the level's story the first time, then any chess piece he's about to meet. */
+export function introsFor(p: LessonProgress, subj: Subject, index: number): Intro[] {
+  const l = LEVELS[subj][index];
+  return [l, ...(l.intros?.(p.right[l.id] || 0) || [])].filter(x => !p.told.includes(x.id));
+}
+
+/** The next lesson. */
+export function nextLesson(p: LessonProgress, s: LessonSettings, left: number, rand: () => number = Math.random): LessonPlan {
+  const subject = pickSubject(s, rand);
+  const index = pickLevel(p, s, subject, rand);
+  const l = LEVELS[subject][index];
+  const depth = p.right[l.id] || 0;
+  const game = pickGame(p, l.id, gamesAt(l, depth).map(g => g.id), rand);
+  return { subject, index, level: l.id, game, depth, length: lessonLength(left, rand), intros: introsFor(p, subject, index) };
+}
+
+/** A question for a lesson (made fresh each time, as hard as he's got to in the level). */
+export function lessonQuestion(plan: LessonPlan, rand: () => number = Math.random): Question {
+  return makeQuestion(LEVELS[plan.subject][plan.index], plan.game, rng(Math.floor(rand() * 2 ** 31)), plan.depth);
+}
+
+/** A lesson started: count it, and remember its game so the next one is different. */
+export const lessonStarted = (p: LessonProgress, plan: LessonPlan): LessonProgress => ({
+  ...p, last: { ...p.last, [plan.level]: plan.game }, played: { ...p.played, [`${plan.level}/${plan.game}`]: (p.played[`${plan.level}/${plan.game}`] || 0) + 1 },
+});
 
 export const today = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** After a question: right first try moves him along, a miss moves him back a little. */
 export function recordAnswer(p: LessonProgress, s: LessonSettings, subj: Subject, index: number, right: boolean, levelId: string, now = new Date()): LessonProgress {
-  const step = 1 / s.perLevel;
   const pos = p.pos[subj], at = Math.floor(pos);
+  const step = 1 / (s.perLevel * (LEVELS[subj][at]?.size || 1));
   let next = pos;
   if (index >= at) {   // only the level he's on, or the one coming in, moves him (older reviews don't)
     if (right) next = Math.max(pos, Math.min(pos + step, index + CARRY));
@@ -148,6 +216,7 @@ export function recordAnswer(p: LessonProgress, s: LessonSettings, subj: Subject
     pos: { ...p.pos, [subj]: next },
     best: { ...p.best, [subj]: Math.max(p.best[subj], Math.floor(next)) },
     asked: { ...p.asked, [levelId]: (p.asked[levelId] || 0) + 1 },
+    right: right ? { ...p.right, [levelId]: (p.right[levelId] || 0) + 1 } : p.right,
   };
 }
 
