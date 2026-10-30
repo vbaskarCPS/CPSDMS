@@ -8,6 +8,7 @@
 //   POST { token, action: 'categorize', merchants: [string], categories: [string] }
 //        → { categories: { [merchant]: category } }
 //   POST { token, action: 'reflect', context }                     → { reply }  (2–3 sentences on the day)
+//   POST { token, action: 'sway', items: [string] }               → { tags: { [item]: 'go'|'ease'|'neutral' } }  (the girl-sway food guide)
 //   POST { token, action: 'statement', text, hint? }               → { rows: [{ date, desc, amount, balance? }], period?, account_type? }
 //        (text of a bank-statement PDF, account numbers already masked by the browser)
 //
@@ -103,6 +104,19 @@ const STATEMENT_SCHEMA = {
 };
 type StatementPage = { account_type?: string; opening_balance?: number; period?: { from?: string; to?: string }; rows: { date: string; desc: string; amount: number; balance?: number }[] };
 
+const SWAY_SYSTEM = `You sort foods for the popular "girl sway" diet (a preference guide, not medical advice).
+GO (low sodium/potassium, higher calcium/magnesium): chicken (no skin), tofu, cheese, Greek yogurt, white bread, basmati/white/jasmine rice,
+white pasta, cauliflower, cabbage, romaine, iceberg lettuce, cucumbers, eggplant, zucchini, green beans, low-fat cream cheese, low-sodium
+tortillas, Mrs. Dash, unsalted butter, starfruit, dragon fruit, pears, strawberries, apples, blueberries, water, Crystal Light, black coffee.
+EASE OFF (sodium- or potassium-rich): tuna, beef, salmon, whole eggs, ham, bacon, turkey, deli meat, sausage, peanut butter, avocado, spinach,
+kale, collards, broccoli, asparagus, tomatoes, bell peppers, potatoes, sweet potatoes, carrots, peas, beets, salt, garlic, olive oil, garlic/onion
+powder, turmeric, chili powder, Italian seasoning, black pepper, hummus, pecans, chips, pretzels, chocolate, wheat pasta, chia, buckwheat,
+brown rice, millet, raisins, jerky, olives, bananas, watermelon, oranges, grapes, mangoes, cherries, pineapple, banana peppers, dairy/oat/
+coconut milk, soda, candy, ice cream, sports drinks, lemonade, lemon/lime water.
+Rule for anything else: clearly sodium- or potassium-rich → "ease"; calcium/magnesium-rich and low-sodium → "go"; unsure or mixed → "neutral".
+Return one tag per item, keyed by the item text exactly as given.`;
+const SWAY_SCHEMA = { type: 'object', properties: { tags: { type: 'object', additionalProperties: { type: 'string', enum: ['go', 'ease', 'neutral'] } } }, required: ['tags'] };
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -157,6 +171,14 @@ Deno.serve(async req => {
         if (opening === undefined && typeof r.opening_balance === 'number') opening = r.opening_balance;
       }
       return json({ rows, period, account_type: accountType, opening_balance: opening, pages: pages.length });
+    }
+    if (action === 'sway') {
+      const items = (Array.isArray(b.items) ? b.items : []).filter(i => typeof i === 'string' && i.trim()).slice(0, 60) as string[];
+      if (!items.length) return json({ tags: {} });
+      const r = await claudeJson<{ tags: Record<string, string> }>(SWAY_SYSTEM, [{ role: 'user', content: `Items:\n${items.join('\n')}` }], SWAY_SCHEMA, 1500);
+      const tags: Record<string, string> = {};
+      for (const [k, v] of Object.entries(r.tags || {})) if (v === 'go' || v === 'ease' || v === 'neutral') tags[k] = v;
+      return json({ tags });
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];

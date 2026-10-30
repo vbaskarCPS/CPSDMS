@@ -2,7 +2,8 @@
 import { supabase } from '../../lib/supabase';
 import { getPass, forgetPass, SignedOut } from './auth';
 
-export interface FoodItem { name: string; portion: string; grams?: number; kcal: number; protein: number; carbs: number; fat: number; confidence?: 'high' | 'medium' | 'low' }
+// `sway` is set by the food feature's sway guide (features/food/sway), not by the food estimate itself.
+export interface FoodItem { name: string; portion: string; grams?: number; kcal: number; protein: number; carbs: number; fat: number; confidence?: 'high' | 'medium' | 'low'; sway?: 'go' | 'ease' | 'neutral' }
 export interface FoodEstimate { items: FoodItem[]; tips?: string }
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 
@@ -39,6 +40,10 @@ export async function coach(messages: ChatMessage[], context: unknown): Promise<
 }
 export async function reflect(context: unknown): Promise<string> {
   return (await invoke<{ reply: string }>({ action: 'reflect', context })).reply;
+}
+/** The sway guide: which list each food name belongs to (for names the keyword match couldn't place). */
+export async function swayTags(items: string[]): Promise<Record<string, 'go' | 'ease' | 'neutral'>> {
+  return (await invoke<{ tags: Record<string, 'go' | 'ease' | 'neutral'> }>({ action: 'sway', items })).tags || {};
 }
 export async function categorize(merchants: string[], categories: string[]): Promise<Record<string, string>> {
   return (await invoke<{ categories: Record<string, string> }>({ action: 'categorize', merchants, categories })).categories || {};

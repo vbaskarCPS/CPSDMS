@@ -8,6 +8,8 @@ import { clock, fastState, loadRoutine, routineNow, type Routine } from '../../l
 import { Button, Card, Header, Page, Progress, Ring, useToast } from '../../ui/primitives';
 import { addDays, addTotals, DEFAULT_TARGETS, loadTargets, mealKey, mealsBetween, mealsForDay, nowTime, prettyDay, round, saveMeal, ZERO, type Meal, type Targets, type Totals } from './model';
 import { ensureShakeFavourite, fastStreak, fmtDuration } from './fasting';
+import { SwayMeter } from './sway/SwayMeter';
+import { loadSwayPrefs, swayOnNow } from './sway/prefs';
 
 const TIPS_KEY = 'vijay-planner-food-tips';
 
@@ -117,6 +119,8 @@ export function FoodToday() {
     } catch { say('Could not log the shake', 'bad'); }
     finally { setShakeBusy(false); }
   };
+  const [sway, setSway] = useState<boolean>(() => swayOnNow());
+  useEffect(() => { void loadSwayPrefs().then(p => setSway(p.on)); }, []);
   const [tips, setTips] = useState(() => { try { return localStorage.getItem(TIPS_KEY) !== '1'; } catch { return true; } });
   const dismissTips = () => { setTips(false); try { localStorage.setItem(TIPS_KEY, '1'); } catch { /* fine */ } };
   const go = (k: string) => setParams(k === dayKey() ? {} : { day: k });
@@ -149,7 +153,7 @@ export function FoodToday() {
         </Card>
       )}
 
-      {day === dayKey() && <FastCard r={r} now={now} meals={meals} onShake={() => void logShake()} shakeBusy={shakeBusy} />}
+      {r.fast && day === dayKey() && <FastCard r={r} now={now} meals={meals} onShake={() => void logShake()} shakeBusy={shakeBusy} />}
 
       <Card>
         <div className="fd-hero">
@@ -160,7 +164,7 @@ export function FoodToday() {
             <span className="pl-muted" style={{ fontSize: 13 }}>of {t.kcal} kcal</span>
           </div>
         </div>
-        <p className="pl-muted" style={{ fontSize: 13, marginTop: 10 }}>2 meals: dinner ≈ {Math.round(t.kcal * 0.7)} kcal / {Math.round(t.protein * 0.8)} g protein · shake ≈ {Math.round(t.kcal * 0.3)} kcal / {Math.round(t.protein * 0.2)} g</p>
+        {r.fast && <p className="pl-muted" style={{ fontSize: 13, marginTop: 10 }}>2 meals: dinner ≈ {Math.round(t.kcal * 0.7)} kcal / {Math.round(t.protein * 0.8)} g protein · shake ≈ {Math.round(t.kcal * 0.3)} kcal / {Math.round(t.protein * 0.2)} g</p>}
         <hr className="pl-divider" style={{ margin: '14px 0' }} />
         <div className="pl-stack" style={{ gap: 8 }}>
           <Macro label="Protein" value={totals.protein} max={t.protein} />
@@ -168,6 +172,8 @@ export function FoodToday() {
           <Macro label="Fat" value={totals.fat} max={t.fat} />
         </div>
       </Card>
+
+      {sway && <SwayMeter day={day} meals={meals} />}
 
       {tips && (
         <Card>
@@ -219,7 +225,7 @@ export function FoodTodayCard({ pass }: { pass: PlannerPass }) {
         <div className="pl-grow pl-stack" style={{ gap: 6 }}>
           <div className="pl-row"><Link to="/food" className="pl-grow" style={{ textDecoration: 'none', fontWeight: 700 }}>Food</Link><Link to="/food/add" className="pl-btn pl-btn--primary pl-btn--small"><Plus style={{ width: 16, height: 16 }} /> Add</Link></div>
           <Macro label="Protein" value={totals.protein} max={t.protein} />
-          <FastLine r={r} now={now} />
+          {r.fast && <FastLine r={r} now={now} />}
           <small className="pl-muted">{last ? `Last: ${last.name || 'Meal'} at ${last.time}` : 'Nothing logged yet today'}</small>
         </div>
       </div>

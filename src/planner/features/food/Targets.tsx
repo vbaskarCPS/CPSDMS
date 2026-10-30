@@ -1,7 +1,9 @@
 // src/planner/features/food/Targets.tsx — daily kcal and macro targets, with a quick helper.
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { getPass } from '../../lib/auth';
+import { routineNow } from '../../lib/routine';
+import { isMorning, swayOnNow } from './sway/prefs';
 import { putDoc } from '../../lib/docs';
 import { Button, Card, Field, Header, Input, Page, Segmented, useToast } from '../../ui/primitives';
 import { DEFAULT_TARGETS, loadTargets, suggestTargets, type Goal, type Targets } from './model';
@@ -28,7 +30,7 @@ export function TargetsScreen() {
 
   return (
     <Page>
-      <Header title="Targets" eyebrow="Per day · 2 meals: dinner + shake" back="/food" />
+      <Header title="Targets" eyebrow={routineNow().fast ? 'Per day · 2 meals: dinner + shake' : 'Per day'} back="/food" />
       <Card>
         <div className="pl-stack">
           <p className="pl-eyebrow">Quick helper</p>
@@ -53,6 +55,7 @@ export function TargetsScreen() {
           <Button primary block onClick={save} disabled={saving || !t.kcal || !t.protein}>{saving ? 'Saving…' : 'Save targets'}</Button>
         </div>
       </Card>
+      {isMorning() && !swayOnNow() && <p className="pl-muted" style={{ fontSize: 13, textAlign: 'center' }}>Trying for a girl? <Link to="/food/sway">Sway guide</Link></p>}
       {toast}
     </Page>
   );
