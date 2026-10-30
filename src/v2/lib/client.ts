@@ -4,6 +4,7 @@
 // it keeps a real Supabase Auth session, so row-level security sees who is signed in.
 // VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY point it at a staging branch when set.
 import { createClient } from '@supabase/supabase-js';
+import { trackedFetch } from '../../lib/offline/net';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env || {};
 const url = env.VITE_SUPABASE_URL || 'https://mipvcafqrmwxnoqmicxh.supabase.co';
@@ -12,6 +13,7 @@ const anonKey = env.VITE_SUPABASE_ANON_KEY
 
 export const db = createClient(url, anonKey, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: 'cpsdms-v2-auth' },
+  global: { fetch: trackedFetch() },   // dead zones → the phone's copy (src/lib/offline)
 });
 
 /** Managers sign in with a 5-letter username; Supabase Auth needs an email-shaped login. */

@@ -8,6 +8,7 @@ import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import { actAsLegacyRouteManager, actAsSharedViewer, legacyLiveSession, legacyRouteManagers, legacySharedWith } from '../../lib/legacy';
 import { legacyManagerId } from '../../lib/startSession';
+import { beginManagerDay } from '../../../lib/offline/fieldDay';
 import { Btn, ErrorBox, Loading } from '../../ui';
 
 const RMLogbook = React.lazy(() => import('../../../pages/Management/RMLogbook'));
@@ -21,6 +22,7 @@ export const RMMap: React.FC = () => {
 
   const state = useLoad(async () => {
     if (!centerId || !who) return { kind: 'nocenter' as const };
+    if (profile) await beginManagerDay(profile.id);   // today's map data also kept on this phone (src/lib/offline)
     const live = await legacyLiveSession(centerId);
     if (!live) return { kind: 'nosession' as const, managers: [] };
     const ok = await actAsLegacyRouteManager(centerId, who);

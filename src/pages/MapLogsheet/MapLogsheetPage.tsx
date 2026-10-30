@@ -26,6 +26,9 @@ import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
 import { getPass, workerSignOut } from '../../lib/workerPass';
 import { sessionService } from '../../lib/sessionService';
+import { fieldRead, readKey } from '../../lib/offline/cache';
+import { beginWorkerDay, endFieldDay } from '../../lib/offline/fieldDay';
+import { SyncDot } from '../../components/SyncDot';
 import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
@@ -313,6 +316,7 @@ const MapLogsheetPage: React.FC = () => {
 
   // a finished day: back to the worker dashboard when they have one (their payslips, training)
   const forceLogout = useCallback(() => {
+    void endFieldDay();
     removeStorageItem('current_user');
     navigate(getPass() ? '/app/worker?done=1' : '/');
   }, [navigate]);
@@ -375,7 +379,9 @@ const MapLogsheetPage: React.FC = () => {
       const storedWorker = getStorageItem<Worker | null>('current_user', null);
       if (!storedWorker) { navigate('/'); return; }
       const currentCc = commandCenterService.getCurrentCommandCenter();
-      if (!(await isMapWorker(storedWorker, currentCc?.id ?? null))) { navigate('/logsheet'); return; }
+      // keep today's data on this phone too, so a dead zone doesn't stop the day (src/lib/offline)
+      await beginWorkerDay(storedWorker.contractorId);
+      if (!(await fieldRead(readKey('ml.isMapWorker', [storedWorker.contractorId, currentCc?.id ?? null]), () => isMapWorker(storedWorker, currentCc?.id ?? null)))) { navigate('/logsheet'); return; }
       setWorker(storedWorker);
       setCc(currentCc);
 
@@ -427,11 +433,11 @@ const MapLogsheetPage: React.FC = () => {
       try {
         setLoadingMsg('Loading your routes…');
         const [maps, dispos, pcl, hist, other] = await Promise.all([
-          fetchRouteMaps(routeCodes),
-          fetchDispositions(routeCodes),
-          getWorkerPCL(routeCodes, cc.id).catch(err => { console.warn('[MapLogsheet] PCL load failed', err); return new Map<string, PCLClientGroup[]>(); }),
-          fetchHistoricalForRoutes(cc.id, routeCodes).catch(err => { console.warn('[MapLogsheet] historical load failed', err); return [] as HistoricalProperty[]; }),
-          getOtherServicePCL(routeCodes, cc.id).catch(err => { console.warn('[MapLogsheet] other-service PCL load failed', err); return null; }),
+          fieldRead(readKey('ml.routeMaps', [routeCodes]), () => fetchRouteMaps(routeCodes)),
+          fieldRead(readKey('ml.dispositions', [routeCodes]), () => fetchDispositions(routeCodes)),
+          fieldRead(readKey('ml.pcl', [routeCodes, cc.id]), () => getWorkerPCL(routeCodes, cc.id)).catch(err => { console.warn('[MapLogsheet] PCL load failed', err); return new Map<string, PCLClientGroup[]>(); }),
+          fieldRead(readKey('ml.historical', [cc.id, routeCodes]), () => fetchHistoricalForRoutes(cc.id, routeCodes)).catch(err => { console.warn('[MapLogsheet] historical load failed', err); return [] as HistoricalProperty[]; }),
+          fieldRead(readKey('ml.otherPcl', [routeCodes, cc.id]), () => getOtherServicePCL(routeCodes, cc.id)).catch(err => { console.warn('[MapLogsheet] other-service PCL load failed', err); return null; }),
         ]);
         if (cancelled) return;
         setRouteMaps(maps);
@@ -450,7 +456,7 @@ const MapLogsheetPage: React.FC = () => {
         // Build/fetch each route's houses in turn so progress reads sensibly.
         const all: RouteHouse[] = [];
         for (const rm of maps) {
-          const hs = await ensureRouteHouses(rm, msg => { if (!cancelled) setLoadingMsg(msg); });
+          const hs = await fieldRead(readKey('ml.houses', [rm.route_code, rm.id]), () => ensureRouteHouses(rm, msg => { if (!cancelled) setLoadingMsg(msg); }));
           if (cancelled) return;
           all.push(...hs);
           setHouses([...all]);
@@ -479,7 +485,7 @@ const MapLogsheetPage: React.FC = () => {
   useEffect(() => {
     if (!routeCodes.length) return;
     const unsub = subscribeToDispositions(routeCodes, () => {
-      fetchDispositions(routeCodes).then(setDispositions).catch(() => {});
+      fieldRead(readKey('ml.dispositions', [routeCodes]), () => fetchDispositions(routeCodes)).then(setDispositions).catch(() => {});
     });
     return () => unsub();
   }, [routeCodes]);
@@ -522,7 +528,7 @@ const MapLogsheetPage: React.FC = () => {
   useEffect(() => {
     if (!worker) return;
     let cancelled = false;
-    getPclTextedSet().then(s => { if (!cancelled) setPclTexted(s); }).catch(() => {});
+    fieldRead('ml.pclTexted', () => getPclTextedSet()).then(s => { if (!cancelled) setPclTexted(s); }).catch(() => {});
     return () => { cancelled = true; };
   }, [worker]);
 
@@ -730,7 +736,7 @@ const MapLogsheetPage: React.FC = () => {
     }
   };
 
-  const handleLogout = () => { removeStorageItem('current_user'); void workerSignOut(); navigate('/'); };
+  const handleLogout = () => { void endFieldDay(); removeStorageItem('current_user'); void workerSignOut(); navigate('/'); };
 
   // ---------------------------------------------------------------------
   // RENDER
@@ -771,6 +777,7 @@ const MapLogsheetPage: React.FC = () => {
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-white font-bold text-base whitespace-nowrap">{format(new Date(), 'EEE, MMM d')}</span>
           <SeasonPill seasonType={seasonType} />
+          <SyncDot />
         </div>
         <div className="flex items-center gap-4 shrink-0">
           <div className="flex flex-col items-center leading-none">

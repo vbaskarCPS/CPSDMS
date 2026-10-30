@@ -6,6 +6,7 @@
 // is marked Quit or Fired. Every dashboard call sends it (app_worker_* functions). Shared by the
 // old app (map logsheet, training) and the new app (/app/worker).
 import { supabase } from './supabase';
+import { endFieldDay } from './offline/fieldDay';
 
 const KEY = 'cps-worker-pass';
 
@@ -50,6 +51,7 @@ export async function workerSignIn(cn: string, secret: string): Promise<SignInRe
 export async function workerSignOut(): Promise<void> {
   const p = getPass();
   forgetPass();
+  await endFieldDay();   // signing out wipes the day kept on this phone (src/lib/offline)
   if (p) { try { await supabase.rpc('app_worker_sign_out', { p_token: p.token }); } catch { /* it expires anyway */ } }
 }
 

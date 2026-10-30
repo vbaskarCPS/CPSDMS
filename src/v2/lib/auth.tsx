@@ -1,5 +1,7 @@
 // src/v2/lib/auth.tsx — who is signed in, what they may open, and which center they're looking at.
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { endFieldDay } from '../../lib/offline/fieldDay';
+import { fieldRead, readKey } from '../../lib/offline/cache';
 import type { Session } from '@supabase/supabase-js';
 import { db, loginAddress, must } from './client';
 import type { Permission } from './permissions';
@@ -46,21 +48,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!s) { setProfile(null); setPermissions(new Set()); setCenters([]); setCenterIdState(null); setLoading(false); return; }
     try {
       const uid = s.user.id;
-      const prof = must(await db.from('app_users').select('*').eq('id', uid).maybeSingle()) as Profile | null;
+      // On a field day this is also kept on the phone, so a route manager opening the app in a dead
+      // zone stays signed in and sees their map (src/lib/offline). Office desktops: unchanged.
+      const { prof, perms, list } = await fieldRead(readKey('auth.me', [uid]), async () => {
+        const prof = must(await db.from('app_users').select('*').eq('id', uid).maybeSingle()) as Profile | null;
+        if (!prof || !prof.is_active) return { prof, perms: [] as { permission: Permission }[], list: [] as Center[] };
+        const perms = must(await db.from('user_permissions').select('permission').eq('user_id', uid)) as { permission: Permission }[];
+        const cols = 'id, display_name, region, services, cn_prefix, local_number, review_link, tax_name, tax_rate, is_active';
+        let list: Center[];
+        if (prof.is_super_admin) {
+          list = must(await db.from('command_centers').select(cols).eq('is_demo', false).order('display_name')) as Center[];
+        } else {
+          const links = must(await db.from('user_centers').select('center_id').eq('user_id', uid)) as { center_id: string }[];
+          const ids = links.map(l => l.center_id);
+          list = ids.length ? must(await db.from('command_centers').select(cols).in('id', ids).order('display_name')) as Center[] : [];
+        }
+        return { prof, perms, list };
+      });
       if (!prof || !prof.is_active) {
         await db.auth.signOut();
         setProfile(null); setLoading(false);
         return;
-      }
-      const perms = must(await db.from('user_permissions').select('permission').eq('user_id', uid)) as { permission: Permission }[];
-      const cols = 'id, display_name, region, services, cn_prefix, local_number, review_link, tax_name, tax_rate, is_active';
-      let list: Center[];
-      if (prof.is_super_admin) {
-        list = must(await db.from('command_centers').select(cols).eq('is_demo', false).order('display_name')) as Center[];
-      } else {
-        const links = must(await db.from('user_centers').select('center_id').eq('user_id', uid)) as { center_id: string }[];
-        const ids = links.map(l => l.center_id);
-        list = ids.length ? must(await db.from('command_centers').select(cols).in('id', ids).order('display_name')) as Center[] : [];
       }
       setProfile(prof);
       setPermissions(new Set(perms.map(p => p.permission)));
@@ -98,7 +106,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const { error } = await db.auth.signInWithPassword({ email: loginAddress(username), password });
       if (error) { setLoading(false); throw new Error(error.message === 'Invalid login credentials' ? 'Wrong username or password' : error.message); }
     },
-    signOut: async () => { await db.auth.signOut(); },
+    signOut: async () => { await endFieldDay(); await db.auth.signOut(); },   // also wipes a field day kept on this phone
     changePassword: async (pw) => {
       if (pw.length < 8) throw new Error('Use at least 8 characters');
       const { error } = await db.auth.updateUser({ password: pw });
