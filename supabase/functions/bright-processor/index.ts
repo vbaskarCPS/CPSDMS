@@ -136,7 +136,6 @@ const reply = (body: unknown, status = 200) =>
 const toText = (html: string) => html.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|tr|h\d|div)>/gi, '\n')
   .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*/g, '\n\n').trim();
 
-/** The Message-ID Resend gave an email; a customer's reply quotes it, which is how the reply finds its conversation. */
 /** "2026-10-30" → "Thu, Oct 30" */
 export const dayLabel = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
 const torontoToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
@@ -163,6 +162,7 @@ async function sessionDateFor(supabase: any, data: any): Promise<string> {
   return torontoToday();
 }
 
+/** The Message-ID Resend gave an email; a customer's reply quotes it, which is how the reply finds its conversation. */
 async function resendMessageId(resendId: string): Promise<string | null> {
   const key = Deno.env.get('RESEND_RECEIVING_API_KEY') || Deno.env.get('RESEND_API_KEY');
   for (const wait of [0, 1500, 4000]) {
