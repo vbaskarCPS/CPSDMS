@@ -18,3 +18,23 @@ describe('maskStatement', () => {
     expect(maskStatement('FIDO 11 PMT# R9Y8K 85.78')).toBe('FIDO 11 PMT# R9Y8K 85.78');
   });
 });
+
+import { reconcileSigns } from './pdf';
+describe('reconcileSigns', () => {
+  it('flips the rows whose sign contradicts the running balance', () => {
+    const rows = [
+      { amount: -13.55 }, { amount: 26.44 /* wrong: was a withdrawal */ }, { amount: 1480, balance: 2298.29 },
+      { amount: -9.61 }, { amount: 2947.80, balance: 5236.48 },
+    ];
+    const r = reconcileSigns(rows, 858.28);
+    expect(r.fixed).toBe(1);
+    expect(r.rows[1].amount).toBe(-26.44);
+    expect(r.rows.map(x => x.amount)).toEqual([-13.55, -26.44, 1480, -9.61, 2947.80]);
+  });
+  it('leaves consistent rows alone and copes without an opening balance', () => {
+    const rows = [{ amount: -5, balance: 95 }, { amount: -10 }, { amount: 20, balance: 105 }];
+    const r = reconcileSigns(rows);
+    expect(r.fixed).toBe(0);
+    expect(r.rows[1].amount).toBe(-10);
+  });
+});
