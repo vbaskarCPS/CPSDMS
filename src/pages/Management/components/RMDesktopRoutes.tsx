@@ -188,7 +188,7 @@ export const RouteList: React.FC<RouteListProps> = p => {
                   <div className="text-[10px] text-gray-400">{rc.prebookCount} jobs · {rc.prepayCount} prepaid · {rc.totalEQ.toFixed(1)} EQ</div>
                 </div>
                 <button
-                  onClick={e => { e.stopPropagation(); p.onAssignRoute(rc); }}
+                  data-change onClick={e => { e.stopPropagation(); p.onAssignRoute(rc); }}
                   className="flex-shrink-0 h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold"
                 >Assign</button>
               </div>
@@ -304,7 +304,7 @@ export const RoutePanel: React.FC<RoutePanelProps> = p => {
           <div className="flex-1" />
           {route && (
             <button
-              onClick={p.onAssign}
+              data-change onClick={p.onAssign}
               className={`h-8 px-3 rounded-md text-xs font-bold flex items-center gap-1.5 border ${route.isAssigned ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-gray-200' : 'bg-amber-600 hover:bg-amber-500 border-amber-400 text-white'}`}
             ><Users size={14} /> {route.isAssigned ? 'Reassign' : 'Assign'}</button>
           )}
@@ -398,7 +398,7 @@ export const RoutePanel: React.FC<RoutePanelProps> = p => {
                 <BottleCounter cart={crew.cart} saving={p.bottleSavingId === crew.cart.sessionId} onAdjust={d => p.onAdjustBottles(crew.cart, d)} />
               ) : crew.type === 'worker' ? (
                 <button
-                  onClick={() => p.onToggleUpsells(crew.card)}
+                  data-change onClick={() => p.onToggleUpsells(crew.card)}
                   className={`h-10 rounded-lg text-xs font-bold border ${crew.card.upsellsEnabled ? 'bg-green-900/40 border-green-700 text-green-300' : 'bg-gray-800 border-gray-700 text-gray-300'}`}
                 >{crew.card.upsellsEnabled ? 'Upsells ✓' : 'Upsells ✗'}</button>
               ) : <span />}

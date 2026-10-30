@@ -25,16 +25,11 @@ import { format } from 'date-fns';
 import { Loader, MapPin, X } from 'lucide-react';
 import { Worker, MasterBooking, PendingSale, HistoricalProperty, SessionTransaction } from '../../../types';
 import { sessionService } from '../../../lib/sessionService';
-import { getOtherServicePCL, getWorkerPCL, PCLClientGroup, type PclLine } from '../../../lib/pclCacheService';
+import { PCLClientGroup, type PclLine } from '../../../lib/pclCacheService';
 import {
-  SavedRouteMap, RouteHouse, HouseDisposition, HouseView,
-  fetchRouteMaps, fetchRouteHouses, fetchDispositions, fetchHistoricalForRoutes,
-  subscribeToDispositions, subscribeToPendingSales,
-  indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews, seasonJobsAsHistorical,
-  buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, OTHER_PCL_COLORS, OTHER_PCL_LABEL, placeRouteOnRoofs, tileCentre, cleanupRouteGhosts,
-  fillRouteGaps, fetchStreetChecks, StreetCheck, streetBase,
-  houseMapNumber, houseAddressLabel,
+  SavedRouteMap, RouteHouse, HouseDisposition, HouseView, subscribeToDispositions, subscribeToPendingSales, indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews, seasonJobsAsHistorical, buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, OTHER_PCL_COLORS, OTHER_PCL_LABEL, placeRouteOnRoofs, tileCentre, cleanupRouteGhosts, fillRouteGaps, fetchStreetChecks, StreetCheck, streetBase, houseMapNumber, houseAddressLabel,
 } from '../../../lib/mapLogsheetService';
+import { fetchDispositions, fetchHistoricalForRoutes, fetchRouteHouses, fetchRouteMaps, getOtherServicePCL, getWorkerPCL } from '../../../lib/offline/rmReads';   // (through the phone's copy: with no signal, the latest copy)
 import {
   CartScope, computeCounts, computeKnockEvents, computePace, computeAvgCharge, computeGoBackQueue, computeCoverage,
 } from '../../../lib/mapLogsheetStats';

@@ -176,7 +176,7 @@ const RMBookingsTab: React.FC<RMBookingsTabProps> = ({
             </div>
             <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar">
               <button
-                onClick={() => handleAssignContractor(null)}
+                data-change onClick={() => handleAssignContractor(null)}
                 className="w-full text-left px-3 py-3 text-red-400 hover:bg-red-900/10 rounded flex items-center gap-2 mb-2 text-sm"
               >
                 <AlertCircle size={16} /> Unassign
@@ -184,7 +184,7 @@ const RMBookingsTab: React.FC<RMBookingsTabProps> = ({
               {team.map((w) => (
                 <button
                   key={w.contractorId}
-                  onClick={() => handleAssignContractor(w.contractorId)}
+                  data-change onClick={() => handleAssignContractor(w.contractorId)}
                   className="w-full text-left px-3 py-2.5 hover:bg-gray-800 rounded text-sm text-gray-300 flex items-center gap-3"
                 >
                   <div className="w-6 h-6 rounded-full bg-cps-blue flex items-center justify-center text-[10px] text-white font-bold">

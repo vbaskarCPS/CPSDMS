@@ -116,9 +116,9 @@ const WorkerDriverStops: React.FC<Props> = ({ pins, workers, asSheet, focusWorke
                       <div className="text-sm text-white font-bold truncate">{s.label}</div>
                       <div className="text-[10px] text-gray-500 flex items-center gap-1"><MapPin size={10} /> show on map</div>
                     </button>
-                    <button onClick={() => move(q.stops, i, -1)} disabled={i === 0 || !!busy} className="w-9 h-9 rounded-lg flex items-center justify-center text-gray-300 hover:bg-gray-700 disabled:opacity-25" aria-label="Move up"><ArrowUp size={16} /></button>
-                    <button onClick={() => move(q.stops, i, 1)} disabled={i === q.stops.length - 1 || !!busy} className="w-9 h-9 rounded-lg flex items-center justify-center text-gray-300 hover:bg-gray-700 disabled:opacity-25" aria-label="Move down"><ArrowDown size={16} /></button>
-                    <button onClick={() => run(`del:${s.id}`, () => onDelete(s))} disabled={!!busy} className="w-9 h-9 rounded-lg flex items-center justify-center text-red-300 hover:bg-red-900/40 disabled:opacity-25" aria-label="Remove stop"><Trash2 size={15} /></button>
+                    <button data-change onClick={() => move(q.stops, i, -1)} disabled={i === 0 || !!busy} className="w-9 h-9 rounded-lg flex items-center justify-center text-gray-300 hover:bg-gray-700 disabled:opacity-25" aria-label="Move up"><ArrowUp size={16} /></button>
+                    <button data-change onClick={() => move(q.stops, i, 1)} disabled={i === q.stops.length - 1 || !!busy} className="w-9 h-9 rounded-lg flex items-center justify-center text-gray-300 hover:bg-gray-700 disabled:opacity-25" aria-label="Move down"><ArrowDown size={16} /></button>
+                    <button data-change onClick={() => run(`del:${s.id}`, () => onDelete(s))} disabled={!!busy} className="w-9 h-9 rounded-lg flex items-center justify-center text-red-300 hover:bg-red-900/40 disabled:opacity-25" aria-label="Remove stop"><Trash2 size={15} /></button>
                   </div>
                 ))}
               </div>

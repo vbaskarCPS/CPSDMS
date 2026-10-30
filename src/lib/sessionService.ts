@@ -5384,6 +5384,7 @@ cacheMethods(sessionService, 'session', [
   'getActiveLogsheetSession', 'startLogsheetSession', 'getMapPins', 'getWorkerDriverStops', 'getEmailStatus',
   'getPendingSalesForSession', 'getPendingSalesForManager', 'getAllPendingSalesForToday', 'getPendingSaleById', 'getUnassignedAsphaltForManager',
   'getUnassignedAsphaltForFloater', 'getAsphaltChildrenForParent', 'getAsphaltAssignmentsForSession', 'getAsphaltChildBySharedJobKey',
+  'getManagerLocations', 'getAllGeocodeCache',
 ]);
 
 /** A manager's saved RM map layer switches, or undefined when they've never set any. */

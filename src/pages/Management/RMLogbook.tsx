@@ -23,6 +23,8 @@ import BamboraTransactionsModal from '../../components/BamboraTransactionsModal'
 import RMAsphaltModal from '../../components/RMAsphaltModal';
 import { useRMLayout, isPhoneDevice } from './mobile/rmPhone';
 import type { RMPhoneShell } from './mobile/RMPhoneLayout';
+import { ViewOnlyNotice } from '../../components/ViewOnlyNotice';
+import { setViewOnlyWhenOffline } from '../../lib/offline/net';
 
 export interface TabStats {
   totalSteps: number;
@@ -1171,7 +1173,7 @@ const RMLogbook: React.FC = () => {
             )}
 
             <button
-              onClick={handleToggleLock}
+              data-change onClick={handleToggleLock}
               disabled={lockLoading}
               className={`flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-lg transition-all ${
                 lockLoading
@@ -1362,4 +1364,11 @@ const RMLogbook: React.FC = () => {
   );
 };
 
-export default RMLogbook;
+/** The RM map with no signal is view only: changes are refused until it's back, and it says so
+ *  (src/lib/offline/net.ts, ViewOnlyNotice). Same for a manager's own map and the floater map. */
+const RMLogbookViewOnlyOffline: React.FC = () => {
+  useEffect(() => { setViewOnlyWhenOffline(true); return () => setViewOnlyWhenOffline(false); }, []);
+  return <><ViewOnlyNotice /><RMLogbook /></>;
+};
+
+export default RMLogbookViewOnlyOffline;

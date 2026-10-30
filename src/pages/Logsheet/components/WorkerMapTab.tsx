@@ -1,6 +1,7 @@
 // src/pages/Logsheet/components/WorkerMapTab.tsx
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import mapboxgl from 'mapbox-gl';
+import { fieldMapStyle, plainMapWithoutSignal } from '../../../lib/offline/basemap';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { Loader, Navigation } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
@@ -394,10 +395,11 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
 
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
+      style: fieldMapStyle('mapbox://styles/mapbox/streets-v12'),
       center: [-79.870, 43.320],
       zoom: 13,
     });
+    plainMapWithoutSignal(map);   // no signal: a plain background, but the app's own layers still draw
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right');
 

@@ -9,6 +9,8 @@ import { sessionService } from '../lib/sessionService';
 import { trainingService } from '../lib/trainingService';
 import CreditCardModal from './CreditCardModal';
 import BamboraLiveModal from './BamboraLiveModal';
+import { isOffline } from '../lib/offline/net';
+import { NoSignalCardSheet } from './NoSignalCardSheet';
 import EtransferProtocolModal from './EtransferProtocolModal';
 import { 
   formatPhoneNumber, 
@@ -167,6 +169,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   // CC Data
   const [ccData, setCcData] = useState<{ number: string, expiry: string, cvc: string } | null>(null);
   const [showCreditModal, setShowCreditModal] = useState(false);
+  // No signal: a card can't be taken, so this sheet shows instead of the terminal (see NoSignalCardSheet).
+  const [cardNoSignal, setCardNoSignal] = useState(false);
+  const openCard = () => (isOffline() ? setCardNoSignal(true) : setShowCreditModal(true));
   const [isCreditPaid, setIsCreditPaid] = useState(false);
 
   // NEW: Live Card Processing flag (loaded from session meta, production only)
@@ -390,7 +395,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     // Live card mode → always open terminal, never auto-apply saved card
     // Manual mode → auto-apply saved card if available, else open terminal
     if (value === 'Credit Card') {
-      if (liveCardEnabled) {
+      if (isOffline()) {
+        setCardNoSignal(true);
+      } else if (liveCardEnabled) {
         setShowCreditModal(true);
       } else if (savedCard) {
         applySavedCard(savedCard);
@@ -418,7 +425,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   // Handle using a different card (opens terminal)
   const handleUseDifferentCard = () => {
     clearSavedCardUsage();
-    setShowCreditModal(true);
+    openCard();
   };
 
   useEffect(() => {
@@ -1283,7 +1290,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                     ) : (
                       <>
                         <span className="text-xs font-bold">SECURE CARD</span>
-                        <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>
+                        <button onClick={openCard} className="underline text-xs">Open Terminal</button>
                       </>
                     )}
                   </div>
@@ -1430,7 +1437,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                             <span className="text-sm font-medium">
                               Process ${splitCCAmount.toFixed(2)} on Card
                             </span>
-                            <button type="button" onClick={() => setShowCreditModal(true)} className="text-xs underline">Open Terminal</button>
+                            <button type="button" onClick={openCard} className="text-xs underline">Open Terminal</button>
                           </>
                         )}
                       </div>
@@ -1466,6 +1473,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
           </div>
         )}
       </div>
+
+      {/* No signal for a card: another method, or come back to it */}
+      {cardNoSignal && (
+        <NoSignalCardSheet
+          onOtherMethod={() => { setCardNoSignal(false); if (!isSplitPayment) setPaymentInfo(p => ({ ...p, method: '' })); }}
+          onSignalBack={() => { setCardNoSignal(false); setShowCreditModal(true); }}
+          onClose={() => setCardNoSignal(false)}
+        />
+      )}
 
       {/* Credit Card / Bambora Live Terminal */}
       {showCreditModal && (

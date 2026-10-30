@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import mapboxgl from 'mapbox-gl';
+import { fieldMapStyle, plainMapWithoutSignal } from '../../../lib/offline/basemap';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   Loader, ChevronLeft, ChevronRight, X, Users, Phone, MapPin,
@@ -27,7 +28,7 @@ import {
   SessionTransaction, RouteSplit, ManagerLocation, ManagerMapSharing,
   CRACKFILLER_LBS_PER_BOTTLE,
 } from '../../../types';
-import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
+import { PCLClientGroup } from '../../../lib/pclCacheService';
 import ContractorJobs from './ContractorJobs';
 import PendingJobModal from '../../../components/PendingJobModal';
 import type { NavDestination } from './RMNavigation';
@@ -39,8 +40,9 @@ import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
 import RoutePCLModal from './RoutePCLModal';
 import CartMapPanel from './CartMapPanel';
 import { useRouteHouseLayer } from './useRouteHouseLayer';
-import { getOtherServicePCL, type PclLine } from '../../../lib/pclCacheService';
+import { type PclLine } from '../../../lib/pclCacheService';
 import type { SavedRouteMap } from '../../../lib/mapLogsheetService';
+import { fetchDispositions, fetchMapAccessList, fetchRouteHouses, fetchTeamLocations, getOtherServicePCL, getWorkerPCL } from '../../../lib/offline/rmReads';   // (through the phone's copy: with no signal, the latest copy)
 import WorkerDriverStops, { WORKER_STOP_COLOR, workerName as driverName } from './WorkerDriverStops';
 import RMPhoneLayout, {
   RMPhoneShell, RMPhoneCtx, PhoneCrew, PhoneRouteState, PhonePinCardData, crewLabel, managerInitials, type ManagerTag,
@@ -50,9 +52,7 @@ import { MenuTiles, LayersList, PinsList, MenuSub, type OthersLayers } from '../
 import { RouteList, RoutePanel } from './RMDesktopRoutes';
 import { pendingDollarValue, primeSpeech, safeAreaTop } from '../mobile/rmPhone';
 import {
-  fetchMapAccessList, fetchRouteHouses, fetchDispositions, subscribeToDispositions,
-  indexBookings, buildHouseViews, routeHouseId, RouteHouse, HouseDisposition,
-  houseAddressLabel,
+  subscribeToDispositions, indexBookings, buildHouseViews, routeHouseId, RouteHouse, HouseDisposition, houseAddressLabel,
 } from '../../../lib/mapLogsheetService';
 import { CartScope, computeCounts, computeKnockEvents, isOnDay, isCartKnock } from '../../../lib/mapLogsheetStats';
 import { placeQuery } from '../../../lib/geoProvince';
@@ -2302,10 +2302,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       .map(w => w.contractorId);
     if (!teamIds.length) return;
     try {
-      const { data } = await supabase
-        .from('worker_locations')
-        .select('*')
-        .in('worker_id', teamIds);
+      const data = await fetchTeamLocations(teamIds);   // with no signal: where they were last seen
       if (mountedRef.current) {
         setWorkerLocations((data || []) as WorkerLocation[]);
       }
@@ -4406,7 +4403,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   useEffect(() => {
     mountedRef.current=true;
     if(!mapContainerRef.current||mapRef.current) return;
-    const map=new mapboxgl.Map({container:mapContainerRef.current,style:'mapbox://styles/mapbox/streets-v12',center:[-79.870,43.320],zoom:13});
+    const map=new mapboxgl.Map({container:mapContainerRef.current,style:fieldMapStyle('mapbox://styles/mapbox/streets-v12'),center:[-79.870,43.320],zoom:13});
+    plainMapWithoutSignal(map);   // no signal: a plain background, but the routes, houses and pins still draw
     if (layoutRef.current !== 'phone') map.addControl(new mapboxgl.NavigationControl(),'top-right');
     map.on('load',()=>{
       map.resize();
@@ -5639,7 +5637,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               <span className="text-amber-300 text-[10px] font-bold">{formatAsphaltDollars(ps.asphaltAmount)}</span>
               {ps.assignedRcSessionId && (
                 <button
-                  onClick={() => handleUnassignAsphalt(ps.id, assembleAddressFromPending(ps))}
+                  data-change onClick={() => handleUnassignAsphalt(ps.id, assembleAddressFromPending(ps))}
                   disabled={unassigningAsphaltId === ps.id}
                   className="text-[9px] bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white px-1.5 py-0.5 rounded font-bold transition-colors disabled:opacity-50"
                   title="Unassign asphalt"
@@ -5723,7 +5721,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     title="View logsheet"
                   ><FileText size={12} />Logsheet</button>
                   <button
-                    onClick={() => handleToggleUpsells(selectedWorkerForModal.worker.contractorId, selectedWorkerForModal.upsellsEnabled)}
+                    data-change onClick={() => handleToggleUpsells(selectedWorkerForModal.worker.contractorId, selectedWorkerForModal.upsellsEnabled)}
                     className={`px-2.5 py-1.5 text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors ${
                       selectedWorkerForModal.upsellsEnabled
                         ? 'bg-green-600/20 text-green-300 hover:bg-green-600 hover:text-white'
@@ -5879,7 +5877,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     bucket/route has zero assigned workers; title explains why not. */}
                 <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={handleOpenSplitModal}
+                    data-change onClick={handleOpenSplitModal}
                     disabled={!assignModalData.canSplit || assignLoading}
                     title={assignModalData.canSplit
                       ? 'Carve a new sub-bucket out of this route'
@@ -5908,7 +5906,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 {/* Unassign — only shown if there's a current assignment */}
                 {assignModalData.currentWorkerIds.length > 0 && (
                   <button
-                    onClick={() => handleAssignRoute(null)}
+                    data-change onClick={() => handleAssignRoute(null)}
                     disabled={assignLoading}
                     className="w-full text-left px-3 py-2 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-md text-red-300 text-xs font-bold disabled:opacity-50"
                   >
@@ -5936,7 +5934,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     return (
                       <button
                         key={sessionWorkerId}
-                        onClick={() => handleAssignRoute(sessionWorker.contractorId)}
+                        data-change onClick={() => handleAssignRoute(sessionWorker.contractorId)}
                         disabled={assignLoading}
                         className={`w-full text-left px-3 ${isPhone ? 'py-3.5 text-sm rounded-xl' : 'py-2.5 text-xs rounded-md'} font-medium border ${
                           isAssigned ? 'bg-blue-900/40 border-blue-700 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
@@ -5967,7 +5965,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     return (
                       <button
                         key={w.contractorId}
-                        onClick={() => handleAssignRoute(w.contractorId)}
+                        data-change onClick={() => handleAssignRoute(w.contractorId)}
                         disabled={assignLoading}
                         className={`w-full text-left px-3 ${isPhone ? 'py-3.5 text-sm rounded-xl' : 'py-2.5 text-xs rounded-md'} font-medium border ${
                           isAssigned ? 'bg-blue-900/40 border-blue-700 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
@@ -5996,7 +5994,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 {/* Transfer to other manager — only on non-split (whole-route) assignment */}
                 {!assignModalData.letter && (
                   <button
-                    onClick={openTransferModal}
+                    data-change onClick={openTransferModal}
                     disabled={assignLoading}
                     className="w-full text-left px-3 py-2 bg-purple-900/30 hover:bg-purple-900/50 border border-purple-700/50 rounded-md text-purple-300 text-xs font-bold mt-2 disabled:opacity-50"
                   >
@@ -6040,7 +6038,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 {availableManagers.map(mgr => (
                   <button
                     key={mgr.userId}
-                    onClick={() => handleTransferConfirm(mgr.userId)}
+                    data-change onClick={() => handleTransferConfirm(mgr.userId)}
                     className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700"
                   ><ArrowRight size={12} className="inline mr-1.5 text-purple-400" />{mgr.name}</button>
                 ))}
@@ -6074,7 +6072,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 {/* TEAM LOCK — lives here now (it was a header/menu button). */}
                 {shell && (
                   <button
-                    onClick={shell.onToggleLock}
+                    data-change onClick={shell.onToggleLock}
                     disabled={shell.lockLoading}
                     className={`w-full mb-3 rounded-xl px-3 py-2.5 flex items-center gap-3 text-left border ${shell.isTeamLocked ? 'bg-red-900/30 border-red-700' : 'bg-gray-800 border-gray-700'} ${shell.lockLoading ? 'opacity-60 cursor-wait' : ''}`}
                   >
@@ -6108,7 +6106,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                         cart.members.map(m => (
                           <button
                             key={m.contractorId}
-                            onClick={() => { setSelectedWorkerToMove(m); setSelectedWorkerSourceCart(cart); }}
+                            data-change onClick={() => { setSelectedWorkerToMove(m); setSelectedWorkerSourceCart(cart); }}
                             className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 flex items-center gap-2"
                           >
                             <Users size={11} className="text-gray-400" />
@@ -6123,7 +6121,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                       myTeamWorkers.map(w => (
                         <button
                           key={w.contractorId}
-                          onClick={() => { setSelectedWorkerToMove(w); setSelectedWorkerSourceCart(null); }}
+                          data-change onClick={() => { setSelectedWorkerToMove(w); setSelectedWorkerSourceCart(null); }}
                           className={`w-full text-left px-3 py-2 rounded-md text-xs font-medium border flex items-center gap-2 ${
                             isAerationWorkerModifiable(w) ? 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700' : 'bg-gray-800/40 text-gray-500 border-gray-800 cursor-not-allowed'
                           }`}
@@ -6158,7 +6156,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                             return (
                               <button
                                 key={c.sessionId}
-                                onClick={() => handleReassignWorker({ type: 'existing_cart', targetSessionId: c.sessionId, label: label || '' })}
+                                data-change onClick={() => handleReassignWorker({ type: 'existing_cart', targetSessionId: c.sessionId, label: label || '' })}
                                 disabled={reassignLoading}
                                 className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 disabled:opacity-50"
                               ><UserPlus size={11} className="inline mr-1.5 text-green-400" />{label}</button>
@@ -6166,7 +6164,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                           })}
                         {selectedWorkerSourceCart && selectedWorkerSourceCart.members.length > 1 && (
                           <button
-                            onClick={() => handleReassignWorker({ type: 'new_solo' })}
+                            data-change onClick={() => handleReassignWorker({ type: 'new_solo' })}
                             disabled={reassignLoading}
                             className="w-full text-left px-3 py-2 bg-amber-900/30 hover:bg-amber-900/50 border border-amber-700/50 rounded-md text-amber-300 text-xs font-bold disabled:opacity-50"
                           ><UserMinus size={11} className="inline mr-1.5" />Make solo cart</button>
@@ -6178,7 +6176,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                         {availableManagers.map(mgr => (
                           <button
                             key={mgr.userId}
-                            onClick={() => handleAerationTransfer(mgr.userId)}
+                            data-change onClick={() => handleAerationTransfer(mgr.userId)}
                             disabled={reassignLoading}
                             className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 disabled:opacity-50"
                           ><ArrowRight size={11} className="inline mr-1.5 text-purple-400" />{mgr.name}</button>
@@ -6199,7 +6197,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                             {availableManagers.map(m => (<option key={m.userId} value={m.userId}>{m.name}</option>))}
                           </select>
                           <button
-                            onClick={() => reassignManagerId && handleReassignWorker({ type: 'different_manager', targetManagerId: reassignManagerId })}
+                            data-change onClick={() => reassignManagerId && handleReassignWorker({ type: 'different_manager', targetManagerId: reassignManagerId })}
                             disabled={!reassignManagerId || reassignLoading}
                             className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold rounded-md disabled:opacity-50"
                           >Move</button>
@@ -6208,7 +6206,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     )}
 
                     <button
-                      onClick={handleRemoveWorkerNoShow}
+                      data-change onClick={handleRemoveWorkerNoShow}
                       disabled={reassignLoading}
                       className="w-full text-left px-3 py-2 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-md text-red-300 text-xs font-bold mt-3 disabled:opacity-50"
                     ><Trash2 size={11} className="inline mr-1.5" />Remove worker (no-show)</button>
@@ -6428,7 +6426,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                   className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white text-xs font-bold rounded-md"
                 >Cancel</button>
                 <button
-                  onClick={handleSavePin}
+                  data-change onClick={handleSavePin}
                   disabled={pinSaving || (pinVisibility === 'manager' && !pinTargetManagerId) || (pinVisibility === 'worker' && !pinTargetWorkerId)}
                   className="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-800 disabled:text-gray-500 text-white text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
                 >
@@ -6480,7 +6478,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               <div className="flex gap-2">
                 {selectedMapPin.createdBy === currentUser.userId && (
                   <button
-                    onClick={() => handleRemovePin(selectedMapPin)}
+                    data-change onClick={() => handleRemovePin(selectedMapPin)}
                     className="flex-1 px-3 py-2 bg-red-900/40 hover:bg-red-900/60 border border-red-800 text-red-200 text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
                   ><Trash2 size={12} />Remove pin</button>
                 )}

@@ -1,6 +1,8 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import { fieldRead, readKey } from '../../lib/offline/cache';
+import { isOffline } from '../../lib/offline/net';
+import { NoSignalCardSheet } from '../../components/NoSignalCardSheet';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info, Shovel, Droplets, Bookmark } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
@@ -284,6 +286,9 @@ const NewJob: React.FC = () => {
   // Credit Card Data
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
+  // No signal: a card can't be taken, so this sheet shows instead of the terminal (see NoSignalCardSheet).
+  const [cardNoSignal, setCardNoSignal] = useState(false);
+  const openCard = () => (isOffline() ? setCardNoSignal(true) : setShowCreditModal(true));
   const [ccData, setCcData] = useState<any>(null);
 
   // E-Transfer Protocol Modal
@@ -420,7 +425,7 @@ const NewJob: React.FC = () => {
       setSplitCcData(null);
     } else {
       setIsSplitPayment(false);
-      if (value === 'Credit Card') setShowCreditModal(true);
+      if (value === 'Credit Card') openCard();
       if (value === 'E-Transfer') {
         if (!etransferEmail && email) setEtransferEmail(email);
         setShowEtransferProtocol(true);
@@ -1703,7 +1708,7 @@ const NewJob: React.FC = () => {
                       {splitCcPaid ? (
                         <CheckCircle size={20}/>
                       ) : (
-                        <button type="button" onClick={() => setShowCreditModal(true)} className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-white text-xs font-bold">
+                        <button type="button" onClick={openCard} className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-white text-xs font-bold">
                           Open Terminal
                         </button>
                       )}
@@ -1715,7 +1720,7 @@ const NewJob: React.FC = () => {
               {paymentMethod === 'Credit Card' && !isSplitPayment && (
                 <div className={`mt-3 p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
                   <span className="text-sm font-medium">{isCreditPaid ? "Secured Card Info to HQ" : "Open Terminal to Secure"}</span>
-                  {isCreditPaid ? <CheckCircle size={20}/> : <button type="button" onClick={() => setShowCreditModal(true)} className="text-xs underline">Re-open Card Entry</button>}
+                  {isCreditPaid ? <CheckCircle size={20}/> : <button type="button" onClick={openCard} className="text-xs underline">Re-open Card Entry</button>}
                 </div>
               )}
             </div>
@@ -1765,6 +1770,16 @@ const NewJob: React.FC = () => {
           </div>
         </form>
       </div>
+
+      {/* No signal for a card: Save Pending (team seasons) or another method */}
+      {cardNoSignal && (
+        <NoSignalCardSheet
+          onSavePending={isTeamSeason ? () => { setCardNoSignal(false); void handleSavePending(); } : undefined}
+          onOtherMethod={() => { setCardNoSignal(false); if (!isSplitPayment) setPaymentMethod(''); }}
+          onSignalBack={() => { setCardNoSignal(false); setShowCreditModal(true); }}
+          onClose={() => setCardNoSignal(false)}
+        />
+      )}
 
       {/* Credit Card / Bambora Live Terminal */}
       {showCreditModal && (

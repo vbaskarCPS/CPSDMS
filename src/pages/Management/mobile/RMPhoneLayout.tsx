@@ -352,7 +352,7 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
       </div>
       {route && (
         <button
-          onClick={ctx.onAssign}
+          data-change onClick={ctx.onAssign}
           className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 border ${assigned ? 'bg-gray-800 border-gray-700 text-gray-200' : 'bg-amber-700 border-amber-400 text-white animate-pulse'}`}
           aria-label="Assign route"
         ><Users size={18} /></button>
@@ -496,7 +496,7 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
               <BottleCounter cart={crew.cart} saving={ctx.bottleSavingId === crew.cart.sessionId} onAdjust={d => ctx.onAdjustBottles(crew.cart, d)} />
             ) : crew.type === 'worker' ? (
               <button
-                onClick={() => ctx.onToggleUpsells(crew.card)}
+                data-change onClick={() => ctx.onToggleUpsells(crew.card)}
                 className={`h-11 rounded-xl text-sm font-bold border ${crew.card.upsellsEnabled ? 'bg-green-900/40 border-green-700 text-green-300' : 'bg-gray-800 border-gray-700 text-gray-300'}`}
               >{crew.card.upsellsEnabled ? 'Upsells ✓' : 'Upsells ✗'}</button>
             ) : <span />}
@@ -566,7 +566,7 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
             )}
             <div className="grid grid-cols-2 gap-2 mt-2.5">
               {ctx.mapPin.createdBy === ctx.currentUserId ? (
-                <button onClick={() => ctx.onRemoveMapPin(ctx.mapPin!)} className="h-11 rounded-xl bg-red-900/40 border border-red-800 text-red-200 text-sm font-bold flex items-center justify-center gap-1.5"><Trash2 size={15} /> Remove</button>
+                <button data-change onClick={() => ctx.onRemoveMapPin(ctx.mapPin!)} className="h-11 rounded-xl bg-red-900/40 border border-red-800 text-red-200 text-sm font-bold flex items-center justify-center gap-1.5"><Trash2 size={15} /> Remove</button>
               ) : <span />}
               <button onClick={() => ctx.onNavigateToMapPin(ctx.mapPin!)} className="h-11 rounded-xl bg-blue-600 text-white text-sm font-bold flex items-center justify-center gap-1.5"><Navigation2 size={15} /> Navigate</button>
             </div>
