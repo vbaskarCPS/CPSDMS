@@ -9,7 +9,7 @@
       (function () {
         var rosh = /^\/roshplanner(\/|$)/.test(location.pathname);
         var app = rosh ? 'roshplanner' : 'vijayplanner';
-        var name = rosh ? 'Rosh Planner' : 'Vijay Planner', short = rosh ? 'Rosh' : 'Planner', color = rosh ? '#2b1b3d' : '#101c3a';
+        var name = rosh ? 'Rosh Planner' : 'Vijay Planner', short = rosh ? 'Rosh' : 'Planner', color = rosh ? '#3b1f5e' : '#101c3a';
         document.documentElement.dataset.theme = rosh ? 'plum' : 'navy';
         document.title = name;
         function tag(t, attrs) { var e = document.createElement(t); for (var k in attrs) e.setAttribute(k, attrs[k]); document.head.appendChild(e); }

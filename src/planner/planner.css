@@ -20,15 +20,16 @@
   color-scheme: light;
 }
 html[data-theme="plum"] {
-  --bg: #f6f0fa;
+  /* Rosh: purple base, pink accents */
+  --bg: #fbf1f8;
   --bg-2: #ffffff;
-  --ink: #2b1b3d;
-  --ink-2: #5f4b73;
-  --line: #e4d9ee;
-  --accent: #2b1b3d;
-  --accent-ink: #f3ecff;
-  --amber: #f7b267;
-  --amber-2: #8a4b0a;
+  --ink: #3b1f5e;
+  --ink-2: #74598f;
+  --line: #ecd9ea;
+  --accent: #5b2a86;
+  --accent-ink: #fff0f7;
+  --amber: #ff6fa8;
+  --amber-2: #b8336a;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -44,15 +45,15 @@ html[data-theme="plum"] {
     color-scheme: dark;
   }
   html[data-theme="plum"] {
-    --bg: #2b1b3d;
-    --bg-2: #37264d;
-    --ink: #f3ecff;
-    --ink-2: #c2b3d6;
-    --line: #4a3763;
-    --accent: #f7b267;
-    --accent-ink: #2b1b3d;
-    --amber: #f7b267;
-    --amber-2: #ffd27a;
+    --bg: #2a1545;
+    --bg-2: #382058;
+    --ink: #fdeef7;
+    --ink-2: #cdb5d9;
+    --line: #4d2f6e;
+    --accent: #ff6fa8;
+    --accent-ink: #2a1545;
+    --amber: #ff6fa8;
+    --amber-2: #ffa3c9;
   }
 }
 * { box-sizing: border-box; }
