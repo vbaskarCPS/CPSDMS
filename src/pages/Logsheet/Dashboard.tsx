@@ -1,5 +1,5 @@
 // src/pages/Logsheet/Dashboard.tsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Trophy,
@@ -30,6 +30,7 @@ import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../../lib/localStorage';
 import { getPass, workerSignOut } from '../../lib/workerPass';
 import { beginWorkerDay, endFieldDay } from '../../lib/offline/fieldDay';
+import { onFieldFresh } from '../../lib/offline/cache';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
@@ -346,9 +347,11 @@ const Dashboard: React.FC = () => {
   };
 
   // Initial load and data fetching
+  const loadedOnce = useRef(false);
   useEffect(() => {
     const init = async () => {
-      setLoading(true);
+      if (!loadedOnce.current) setLoading(true);   // a refresh redraws in place; only the first load shows the spinner
+      loadedOnce.current = true;
 
       // Check training mode
       const trainingMode = trainingService.isTrainingMode();
@@ -509,6 +512,14 @@ const Dashboard: React.FC = () => {
       supabase.removeChannel(channel);
     };
   }, [worker?.contractorId, navigate, isTrainingMode, isRMViewMode]);
+
+  // Phone-first: the list shows the phone's copy at once; when the server's newer answer lands, redraw.
+  useEffect(() => {
+    if (isTrainingMode) return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const off = onFieldFresh(() => { if (t) clearTimeout(t); t = setTimeout(() => setRefreshKey(k => k + 1), 300); });
+    return () => { off(); if (t) clearTimeout(t); };
+  }, [isTrainingMode]);
 
   // Realtime subscription (production only)
   useEffect(() => {

@@ -128,3 +128,24 @@ describe('noticing a dead zone', () => {
     expect(isNetworkError(new Error('permission denied'))).toBe(false);
   });
 });
+
+describe('phone-first (workers)', () => {
+  it('shows the phone’s copy at once, then says when a newer answer has arrived', async () => {
+    const { setReadMode, onFieldFresh } = await import('./cache');
+    await beginDay('2026-10-30', 'w1');
+    setReadMode('phoneFirst');
+    const fresh: string[] = []; const off = onFieldFresh(k => fresh.push(k));
+    expect(await fieldRead('sales', async () => ['A'])).toEqual(['A']);           // first time: from the server
+    await new Promise(r => setTimeout(r, 20));
+    let answer: (v: string[]) => void = () => undefined;
+    const t0 = Date.now();
+    expect(await fieldRead('sales', () => new Promise<string[]>(ok => { answer = ok; }))).toEqual(['A']);   // instantly, the copy
+    expect(Date.now() - t0).toBeLessThan(200);
+    answer(['A', 'B']); await new Promise(r => setTimeout(r, 30));
+    expect(fresh).toEqual(['sales']);                                               // the screen is told to redraw
+    expect(await fieldRead('sales', async () => ['A', 'B'])).toEqual(['A', 'B']);   // and the copy is now the new one
+    await new Promise(r => setTimeout(r, 30));
+    expect(fresh).toEqual(['sales']);                                               // same answer again: no redraw
+    off(); setReadMode('serverFirst');
+  });
+});

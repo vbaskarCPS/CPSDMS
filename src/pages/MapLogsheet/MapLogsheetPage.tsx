@@ -26,7 +26,7 @@ import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
 import { getPass, workerSignOut } from '../../lib/workerPass';
 import { sessionService } from '../../lib/sessionService';
-import { fieldRead, readKey } from '../../lib/offline/cache';
+import { fieldRead, onFieldFresh, readKey } from '../../lib/offline/cache';
 import { beginWorkerDay, endFieldDay } from '../../lib/offline/fieldDay';
 import { SyncDot } from '../../components/SyncDot';
 import { trainingService } from '../../lib/trainingService';
@@ -206,6 +206,8 @@ const MapLogsheetPage: React.FC = () => {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const housesLoadedForRef = useRef<string>('');
+  // phone-first: the screen shows the phone's copy at once; when the server's newer answer lands, redraw
+  const [routesTick, setRoutesTick] = useState(0);
 
   // Lock browser page-zoom at 100% while the map is open. A two-finger pinch
   // that lands on the header or the sheet zooms the whole page instead of the
@@ -424,14 +426,14 @@ const MapLogsheetPage: React.FC = () => {
   // ---------------------------------------------------------------------
   useEffect(() => {
     if (!worker || !cc || routeCodes.length === 0) return;
-    const key = routeCodes.join(',');
+    const key = `${routeCodes.join(',')}#${routesTick}`;
     if (housesLoadedForRef.current === key) return;
     housesLoadedForRef.current = key;
 
     let cancelled = false;
     (async () => {
       try {
-        setLoadingMsg('Loading your routes…');
+        if (routesTick === 0) setLoadingMsg('Loading your routes…');   // a redraw with newer data happens quietly
         const [maps, dispos, pcl, hist, other] = await Promise.all([
           fieldRead(readKey('ml.routeMaps', [routeCodes]), () => fetchRouteMaps(routeCodes)),
           fieldRead(readKey('ml.dispositions', [routeCodes]), () => fetchDispositions(routeCodes)),
@@ -456,7 +458,7 @@ const MapLogsheetPage: React.FC = () => {
         // Build/fetch each route's houses in turn so progress reads sensibly.
         const all: RouteHouse[] = [];
         for (const rm of maps) {
-          const hs = await fieldRead(readKey('ml.houses', [rm.route_code, rm.id]), () => ensureRouteHouses(rm, msg => { if (!cancelled) setLoadingMsg(msg); }));
+          const hs = await fieldRead(readKey('ml.houses', [rm.route_code, rm.id]), () => ensureRouteHouses(rm, msg => { if (!cancelled && routesTick === 0) setLoadingMsg(msg); }));
           if (cancelled) return;
           all.push(...hs);
           setHouses([...all]);
@@ -469,7 +471,7 @@ const MapLogsheetPage: React.FC = () => {
       }
     })();
     return () => { cancelled = true; };
-  }, [routeCodes, worker, cc]);
+  }, [routeCodes, worker, cc, routesTick]);
 
   // ---------------------------------------------------------------------
   // REALTIME
@@ -481,6 +483,25 @@ const MapLogsheetPage: React.FC = () => {
     const unsubB = cc ? subscribeToPendingSales(cc.id, refresh) : () => {};
     return () => { unsubA(); unsubB(); };
   }, [worker, sessionId, seasonType, cc, loadSessionData]);
+
+  // Newer data from the server than the phone's copy the screen is showing: redraw that part.
+  useEffect(() => {
+    if (!worker || !sessionId) return;
+    let t: ReturnType<typeof setTimeout> | undefined, routesToo = false;
+    const off = onFieldFresh(key => {
+      if (key.startsWith('ml.dispositions')) {
+        fieldRead(readKey('ml.dispositions', [routeCodes]), () => fetchDispositions(routeCodes)).then(setDispositions).catch(() => {});
+        return;
+      }
+      if (key.startsWith('ml.')) routesToo = true;
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        if (routesToo) { routesToo = false; setRoutesTick(n => n + 1); }
+        loadSessionData(worker, sessionId, seasonType).catch(() => {});
+      }, 300);
+    });
+    return () => { off(); if (t) clearTimeout(t); };
+  }, [worker, sessionId, seasonType, routeCodes, loadSessionData]);
 
   useEffect(() => {
     if (!routeCodes.length) return;
