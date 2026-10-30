@@ -11,10 +11,13 @@
 //   { mode: 'booking_note', kind: 'day_before' | 'next_try', date, ids: [booking ids, ≤ 25], instruction? }
 //       one short personal paragraph per booking for the booking emails, from what we know of that customer
 //       (app_mb_booking, as the person asking) → { notes: { [id]: html } }
+//   { mode: 'suggest', message_id }   ask Claude again about a customer's email to a centre's mailbox: a reply
+//       and what to do with the booking, kept for someone to approve (RUN_71; see _shared/suggest.ts) → { id }
 // What Claude knows comes from ms_mail_context, run as the person asking (so a rep only ever gets their
 // own businesses): the rep, the business, the campaign's pitch and objections, the rep's last visits
 // there, and the conversation so far. The key lives only in the ANTHROPIC_API_KEY secret.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { suggestFor } from '../_shared/suggest.ts';
 
 const MODEL = Deno.env.get('MAIL_MODEL') || Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
 const cors = {
@@ -160,6 +163,13 @@ Deno.serve(async req => {
     });
     if (b.mode === 'template') return await writeTemplate(b, asUser, apiKey);
     if (b.mode === 'booking_note') return await bookingNotes(b as unknown as Record<string, unknown>, asUser, apiKey);
+    if (b.mode === 'suggest') {
+      const { data: ok, error: ce } = await asUser.rpc('mail_suggest_can', { p_message: b.message_id || null });
+      if (ce) return json({ error: ce.message }, 400);
+      if (!ok) return json({ error: 'Not allowed' }, 403);
+      const svc = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
+      return json({ id: await suggestFor(svc, String(b.message_id)) });
+    }
     const mode = b.mode === 'rewrite' ? 'rewrite' : 'write';
     const staff = !!(b as Record<string, unknown>).staff;
     const { data: ctx, error } = staff

@@ -7,12 +7,14 @@
 // The open conversation is ?t=<id>, the folder ?box=, the mailbox (staff, when they have several) ?mb=.
 // Sent (staff) also lists groups (RUN_70): each booking-email campaign and each session's receipts is one row,
 // opened with ?g=<key>&gb=<mailbox> — every email in it with Delivered / Bounced / Marked as spam / Didn't send.
+// Inbox (staff) shows conversations someone has written in; To approve: Claude has a suggested reply (and booking
+// change) waiting on a customer's email to a centre's mailbox (RUN_71, SuggestionCard).
 import type { LucideIcon } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Archive, ArchiveRestore, ArrowLeft, Download, Forward, Inbox as InboxIcon, Loader2, Mail, MailOpen, Paperclip, PenSquare, RefreshCw, Reply,
-  ReplyAll, Search, Send, Star, AlertTriangle, FolderInput, X, Layers,
+  ReplyAll, Search, Send, Star, AlertTriangle, FolderInput, X, Layers, Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
@@ -23,6 +25,7 @@ import {
 } from '../../lib/mail';
 import { Composer, type ComposeInit } from './Composer';
 import { PushToggle } from './PushToggle';
+import { SuggestionCard } from './SuggestionCard';
 import './mail.css';
 
 const BOXES: { key: Box; label: string; icon: LucideIcon }[] = [
@@ -77,9 +80,11 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
     if (p.t !== undefined) { if (p.t) n.set('t', p.t); else n.delete('t'); }
     setSp(n, { replace: p.t === null });
   };
-  const folders = admin && !staff ? [...BOXES, { key: 'unsorted' as Box, label: 'Unsorted', icon: FolderInput }] : BOXES;
+  const folders = admin && !staff ? [...BOXES, { key: 'unsorted' as Box, label: 'Unsorted', icon: FolderInput }]
+    : staff ? [BOXES[0], { key: 'approve' as Box, label: 'To approve', icon: Sparkles }, ...BOXES.slice(1)] : BOXES;
   const refresh = useCallback(() => setTick(x => x + 1), []);
   const unread = staff ? (mailbox?.unread ?? counts.data?.unread) : counts.data?.unread;
+  const approveN = (counts.data as { approve?: number } | undefined)?.approve || 0;
   const newMessage = (): ComposeInit => ({ key: staff ? `new:${mailbox?.id || ''}` : 'new', title: 'New message', quick, staff, mailbox_id: mailbox?.id,
     context: staff && mailbox ? `From ${mailbox.label ? `${mailbox.label} <${mailbox.address}>` : mailbox.address}` : undefined });
   const title = folders.find(f => f.key === box)?.label || 'Inbox';
@@ -90,7 +95,7 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
         <button type="button" className="compose-btn" onClick={() => setCompose(newMessage())}><PenSquare size={20} />Compose</button>
         <nav aria-label="Folders">
           {folders.map(b => {
-            const n = b.key === 'inbox' || b.key === 'unread' ? unread : b.key === 'unsorted' ? counts.data?.unsorted : 0;
+            const n = b.key === 'inbox' || b.key === 'unread' ? unread : b.key === 'unsorted' ? counts.data?.unsorted : b.key === 'approve' ? approveN : 0;
             return (
               <button key={b.key} type="button" className={box === b.key ? 'on' : ''} onClick={() => go({ box: b.key })} aria-current={box === b.key ? 'page' : undefined}>
                 <b.icon size={18} /><span>{b.label}</span>{!!n && <em>{n}</em>}</button>);
@@ -128,7 +133,7 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
               </select>)}
             <div className="boxes-sm" role="tablist">
               {folders.map(b => <button key={b.key} type="button" role="tab" aria-selected={box === b.key} className={box === b.key ? 'on' : ''} onClick={() => go({ box: b.key })}>
-                {b.label}{(b.key === 'inbox' && unread) ? <em>{unread}</em> : null}{(b.key === 'unsorted' && counts.data?.unsorted) ? <em>{counts.data.unsorted}</em> : null}</button>)}
+                {b.label}{(b.key === 'inbox' && unread) ? <em>{unread}</em> : null}{(b.key === 'unsorted' && counts.data?.unsorted) ? <em>{counts.data.unsorted}</em> : null}{(b.key === 'approve' && approveN) ? <em>{approveN}</em> : null}</button>)}
             </div>
             <div className="push-sm"><PushToggle compact /></div>
             {list.error ? <div className="empty err">{list.error instanceof Error ? list.error.message : 'Couldn’t load the mail'}</div>
@@ -168,7 +173,8 @@ const EmptyBox: React.FC<{ box: Box; search: string; staff?: boolean }> = ({ box
     <span>{search ? `Nothing matches “${search}”.`
       : box === 'inbox' ? (staff ? 'Your inbox is empty. Mail to your address lands here.' : 'No mail yet. Email a business from its card, or press Compose.')
       : box === 'unsorted' ? 'Nothing to sort. Mail that can’t be matched to a business lands here.'
-      : box === 'starred' ? 'Star a conversation to keep it here.' : 'Nothing here.'}</span>
+      : box === 'starred' ? 'Star a conversation to keep it here.'
+      : box === 'approve' ? 'Nothing to approve. When a customer writes back, Claude’s suggested reply waits here.' : 'Nothing here.'}</span>
   </div>
 );
 
@@ -183,6 +189,7 @@ const Row: React.FC<{ t: ThreadRow; admin?: boolean; staff?: boolean; on: boolea
             {t.messages > 1 && <span className="n">{t.messages}</span>}<span className="when">{mailWhen(t.last_at)}</span></span>
           <span className="l2">{t.subject || '(no subject)'}</span>
           <span className="l3">{t.snippet}</span>
+          {t.suggestion && <span className="tags"><span className="tag sugg-tag"><Sparkles size={12} />{t.suggestion}</span></span>}
           {!staff && (
             <span className="tags">
               {t.business ? <span className="tag"><i style={{ background: t.color || '#0f766e' }} />{t.business}</span> : <span className="tag warn">Unsorted</span>}
@@ -324,6 +331,7 @@ const ThreadView: React.FC<{
         </div>
         {filing && <FileUnder id={id} onDone={() => { setFiling(false); setTick(x => x + 1); onChanged(); }} />}
         <Messages messages={t.messages} meName={profile?.full_name} onReply={() => setReply('reply')} />
+        {staff && <SuggestionCard threadId={t.id} subject={t.subject || ''} replyTo={replyTo} tick={tick} onChanged={() => { setTick(x => x + 1); onChanged(); }} />}
         {!reply && !(t.opted_out && !staff) && replyTo && (
           <div className="reply-row">
             <button type="button" className="reply-btn" onClick={() => setReply('reply')}><Reply size={17} />Reply</button>
@@ -375,7 +383,7 @@ const MessageCard: React.FC<{ m: Message; meName?: string; open: boolean; last: 
         <span className="when">
           {!!m.attachments?.length && <Paperclip size={14} />}
           {m.status === 'failed' ? <span className="bad">Didn’t send</span> : m.status === 'sending' ? 'Sending…' : <span title={whenFull}>{open ? whenFull : mailWhen(m.at)}</span>}
-          {out && m.status === 'sent' && m.delivery && (() => { const st = emailState(m); return <span className={`gc ${st.tone}`} title={m.delivery_reason || undefined}>{st.label}</span>; })()}
+          {out && m.status === 'sent' && m.delivery && (open || m.delivery !== 'delivered') && (() => { const st = emailState(m); return <span className={`gc ${st.tone}`} title={m.delivery_reason || undefined}>{st.label}</span>; })()}
           {open && last && <button type="button" className="icon sm" onClick={e => { e.stopPropagation(); onReply(); }} aria-label="Reply" title="Reply"><Reply size={17} /></button>}
         </span>
       </div>
