@@ -12,6 +12,7 @@
 //   The characters act it out: whoever asks the question walks in, says it with a moving mouth, sways while
 // he thinks, jumps for joy when he gets it, and looks worried (then encourages him) after a miss. The
 // answers pop in one by one; counted things hop; word cards flip in.
+import { createPortal } from 'react-dom';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BOARD, WORD, canMove, cheers, notThereLine, oopsLine, slowLine, clipId, spokenFor, movesFrom, sentenceFor,
@@ -577,7 +578,43 @@ const Guess: React.FC<{ round: Extract<Round, { kind: 'shadow' | 'peek' }>; hint
 
 const same = (a: Sq, b: Sq) => a[0] === b[0] && a[1] === b[1];
 
-/** A small board: the piece's squares glow; tap one to move. Stars to get, apples to eat, or (show) just practise.
+// ── picking a piece up: press on it, it lifts and follows the finger, let go over a square ──
+/** `onDrop` gets where it was let go, and whether it was really carried (not just pressed). */
+function useDrag<T>(onDrop: (x: number, y: number, item: T, moved: boolean) => void) {
+  const [drag, setDrag] = useState<{ item: T; x: number; y: number } | null>(null);
+  const held = useRef<{ item: T; x0: number; y0: number } | null>(null);
+  const drop = useRef(onDrop); drop.current = onDrop;
+  const bind = (item: T, enabled = true) => (enabled ? {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.preventDefault();
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      held.current = { item, x0: e.clientX, y0: e.clientY }; setDrag({ item, x: e.clientX, y: e.clientY });
+    },
+    onPointerMove: (e: React.PointerEvent) => { if (held.current) setDrag({ item: held.current.item, x: e.clientX, y: e.clientY }); },
+    onPointerUp: (e: React.PointerEvent) => {
+      const h = held.current; held.current = null; setDrag(null);
+      if (h) drop.current(e.clientX, e.clientY, h.item, Math.hypot(e.clientX - h.x0, e.clientY - h.y0) > 14);
+    },
+    onPointerCancel: () => { held.current = null; setDrag(null); },
+    style: { touchAction: 'none' as const, cursor: 'grab', pointerEvents: 'auto' as const },
+  } : {});
+  return { drag, bind };
+}
+/** The square of a board (its bordered element) under a point on the screen. */
+function squareAt(el: HTMLElement | null, x: number, y: number, cell: number): Sq | null {
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const row = Math.floor((y - r.top - 6) / cell), col = Math.floor((x - r.left - 6) / cell);
+  return row >= 0 && row < BOARD && col >= 0 && col < BOARD ? [row, col] : null;
+}
+/** The piece in his hand: a little bigger, with a shadow, just above his finger so he can see where it goes. */
+const Lifted: React.FC<{ piece: Piece; x: number; y: number; size: number }> = ({ piece, x, y, size }) => createPortal(
+  <div className="fixed pointer-events-none" style={{ left: x - size * 0.6, top: y - size * 1.05, zIndex: 60 }}>
+    <PieceShape piece={piece} size={size * 1.2} mood="wow" style={{ filter: 'drop-shadow(0 16px 10px rgba(0,0,0,.45))' }} />
+  </div>, document.body);
+
+/** A small board: pick the piece up and drop it on a square to move (its squares glow while there's a hint).
+ *  Stars to get, apples to eat, or (show) just practise. A wrong square: it goes back, and says its rule.
  *  While he listens only the piece is out; the board comes after. */
 const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; hint: boolean; listening: boolean; onDone: () => void; onWrong: () => void }> = ({ round, hint, listening, onDone, onWrong }) => {
   const [at, setAt] = useState<Sq>(round.start);
@@ -595,6 +632,8 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
   const myColour = (round.start[0] + round.start[1]) % 2;
   const icon = round.kind === 'board' && round.mode === 'apple' ? '🍎' : '⭐';
   const act = useContext(ActCtx);
+  const boardEl = useRef<HTMLDivElement>(null);
+  const { drag, bind } = useDrag<Piece>((x, y, _p, moved) => { const sq = squareAt(boardEl.current, x, y, cell); if (moved && sq) tap(sq); });
   if (listening) return <Host who={piece} size={Math.min(280, window.innerHeight * 0.34)} />;
 
   const tap = (sq: Sq) => {
@@ -621,14 +660,14 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
   };
 
   return (
-    <div className="relative rounded-2xl overflow-hidden shadow-2xl" style={{ width: cell * BOARD, height: cell * BOARD, border: '6px solid #78350f', animation: 'll-in .35s ease-out' }}>
+    <div ref={boardEl} className="relative rounded-2xl overflow-hidden shadow-2xl" style={{ width: cell * BOARD, height: cell * BOARD, border: '6px solid #78350f', animation: 'll-in .35s ease-out' }}>
       {Array.from({ length: BOARD * BOARD }, (_, k) => {
         const sq: Sq = [Math.floor(k / BOARD), k % BOARD];
         const dark = (sq[0] + sq[1]) % 2 === 1;
         const glow = glowOn && legal.some(s => same(s, sq));
         const offColour = piece === 'bishop' && glowOn && (sq[0] + sq[1]) % 2 !== myColour;
         return (
-          <button key={k} type="button" aria-label={`Square ${sq[0] + 1}-${sq[1] + 1}`} onClick={() => tap(sq)} className="absolute"
+          <div key={k} aria-label={`Square ${sq[0] + 1}-${sq[1] + 1}`} className="absolute"
             style={{ left: sq[1] * cell, top: sq[0] * cell, width: cell, height: cell, background: dark ? DARK : LIGHT, opacity: offColour ? 0.35 : 1, transition: 'opacity .3s',
               animation: glow ? 'lc-glow 1.1s ease-in-out infinite' : undefined }} />
         );
@@ -645,11 +684,12 @@ const BoardRound: React.FC<{ round: Extract<Round, { kind: 'board' | 'show' }>; 
         <div className="absolute flex items-center justify-center pointer-events-none"
           style={{ left: gone[1] * cell, top: gone[0] * cell, width: cell, height: cell, fontSize: cell * 0.6, animation: 'lc-gone .6s ease-out forwards' }}>{icon === '🍎' ? '😋' : '✨'}</div>
       )}
-      <div className="absolute flex items-center justify-center pointer-events-none"
-        style={{ left: at[1] * cell, top: at[0] * cell, width: cell, height: cell, transition: 'left .35s ease-in-out, top .35s ease-in-out', zIndex: 5 }}>
+      <div aria-label={`Pick up the ${piece}`} className="absolute flex items-center justify-center pointer-events-none" {...bind(piece, !finished)}
+        style={{ left: at[1] * cell, top: at[0] * cell, width: cell, height: cell, transition: 'left .35s ease-in-out, top .35s ease-in-out', zIndex: 5, ...bind(piece, !finished).style }}>
         <PieceShape piece={piece} size={cell * 0.86} mood={munch ? 'munch' : finished ? 'happy' : wiggle ? 'oops' : act.talking ? 'talk' : 'idle'}
-          style={{ animation: wiggle ? 'lc-wiggle .5s' : finished ? 'lc-bounce .7s ease-out 2' : undefined }} />
+          style={{ opacity: drag ? 0.25 : 1, animation: wiggle ? 'lc-wiggle .5s' : finished ? 'lc-bounce .7s ease-out 2' : drag ? undefined : 'lc-float 2s ease-in-out infinite' }} />
       </div>
+      {drag && <Lifted piece={piece} x={drag.x} y={drag.y} size={cell * 0.86} />}
     </div>
   );
 };
@@ -768,10 +808,11 @@ function useChoice<T>(answer: T, onRight: () => void, onWrong: (t: T) => void) {
   const pick = (k: number, v: T) => { if (got || crossed.includes(k)) return; if (v === answer) { setGot(true); onRight(); } else { flag(k); onWrong(v); } };
   return { wrong, crossed, got, pick };
 }
-const PieceButton: React.FC<{ piece: Piece; k: number; size: number; right: boolean; hint: boolean; got: boolean; crossed: boolean; wiggling: boolean; onClick: () => void }> = ({ piece, k, size, right, hint, got, crossed, wiggling, onClick }) => (
-  <button type="button" aria-label={`Piece ${k + 1}`} onClick={onClick} className="relative rounded-[32px] bg-white/10 p-4"
-    style={{ animation: got && right ? 'lc-bounce .7s ease-out 2' : hint && right ? 'lc-glow 1.1s ease-in-out infinite' : `ll-boing .5s ease-out ${k * 0.12}s both`, ...wrongTile(crossed, wiggling) }}>
-    <PieceShape piece={piece} size={size} mood={got && right ? 'happy' : crossed ? 'oops' : 'idle'} />
+const PieceButton: React.FC<{ piece: Piece; k: number; size: number; right: boolean; hint: boolean; got: boolean; crossed: boolean; wiggling: boolean; onClick?: () => void;
+  /** pick it up instead of tapping it (from useDrag's bind) */ drag?: ReturnType<ReturnType<typeof useDrag<number>>['bind']>; held?: boolean }> = ({ piece, k, size, right, hint, got, crossed, wiggling, onClick, drag, held }) => (
+  <button type="button" aria-label={`Piece ${k + 1}`} onClick={onClick} className="relative rounded-[32px] bg-white/10 p-4" {...drag}
+    style={{ animation: got && right ? 'lc-bounce .7s ease-out 2' : hint && right ? 'lc-glow 1.1s ease-in-out infinite' : `ll-boing .5s ease-out ${k * 0.12}s both`, ...wrongTile(crossed, wiggling), ...drag?.style }}>
+    <PieceShape piece={piece} size={size} mood={got && right ? 'happy' : crossed ? 'oops' : 'idle'} style={{ opacity: held ? 0.25 : 1 }} />
     {crossed && <><Cross /><NameTag piece={piece} /></>}
   </button>
 );
@@ -821,8 +862,8 @@ const Gone: React.FC<Pick<Piece> & { round: Extract<ChessRound, { kind: 'gone' }
 };
 
 /** A plain 4×4 board for the chess games that don't move a piece. */
-const MiniBoard: React.FC<{ cell: number; children?: React.ReactNode; onTap?: (sq: Sq) => void; glow?: (sq: Sq) => boolean; mark?: (sq: Sq) => React.ReactNode }> = ({ cell, children, onTap, glow, mark }) => (
-  <div className="relative rounded-2xl overflow-hidden shadow-2xl" style={{ width: cell * BOARD, height: cell * BOARD, border: '6px solid #78350f', animation: 'll-in .35s ease-out' }}>
+const MiniBoard: React.FC<{ cell: number; children?: React.ReactNode; onTap?: (sq: Sq) => void; glow?: (sq: Sq) => boolean; mark?: (sq: Sq) => React.ReactNode; boardRef?: React.Ref<HTMLDivElement> }> = ({ cell, children, onTap, glow, mark, boardRef }) => (
+  <div ref={boardRef} className="relative rounded-2xl overflow-hidden shadow-2xl" style={{ width: cell * BOARD, height: cell * BOARD, border: '6px solid #78350f', animation: 'll-in .35s ease-out' }}>
     {Array.from({ length: BOARD * BOARD }, (_, k) => {
       const sq: Sq = [Math.floor(k / BOARD), k % BOARD];
       return (
@@ -839,15 +880,17 @@ const OnSquare: React.FC<{ sq: Sq; cell: number; children: React.ReactNode; z?: 
   <div className="absolute flex items-center justify-center pointer-events-none" style={{ left: sq[1] * cell, top: sq[0] * cell, width: cell, height: cell, zIndex: z, transition: 'left .35s, top .35s' }}>{children}</div>
 );
 
-/** Chess: tap every square the piece can go to (each one gets a green tick). */
+/** Chess: carry the piece to every square it can go to (each one gets a green tick; the piece hops back home). */
 const WhereRound: React.FC<{ round: Extract<ChessRound, { kind: 'where' }>; hint: boolean; listening: boolean; onDone: () => void; onWrong: () => void }> = ({ round, hint, listening, onDone, onWrong }) => {
   const legal = useMemo(() => movesFrom(round.piece, round.start), [round]);
   const [found, setFound] = useState<Sq[]>([]);
   const [bad, setBad] = useState<Sq | null>(null);
   const [wiggle, setWiggle] = useState(false);
   const act = useContext(ActCtx);
-  if (listening) return <Host who={round.piece} size={Math.min(280, window.innerHeight * 0.34)} />;
+  const boardEl = useRef<HTMLDivElement>(null);
   const cell = Math.floor(Math.min(window.innerWidth * 0.86, window.innerHeight * 0.55, 560) / BOARD);
+  const { drag, bind } = useDrag<Piece>((x, y, _p, moved) => { const sq = squareAt(boardEl.current, x, y, cell); if (moved && sq) tap(sq); });
+  if (listening) return <Host who={round.piece} size={Math.min(280, window.innerHeight * 0.34)} />;
   const done = found.length === legal.length;
   const tap = (sq: Sq) => {
     if (done || same(sq, round.start) || found.some(f => same(f, sq))) return;
@@ -863,36 +906,48 @@ const WhereRound: React.FC<{ round: Extract<ChessRound, { kind: 'where' }>; hint
   return (
     <div className="flex flex-col items-center gap-2">
       <div className="font-black text-2xl text-teal-100">{found.length} / {legal.length}</div>
-      <MiniBoard cell={cell} onTap={tap} glow={sq => hint && legal.some(l => same(l, sq)) && !found.some(f => same(f, sq))}
+      <MiniBoard cell={cell} boardRef={boardEl} glow={sq => hint && legal.some(l => same(l, sq)) && !found.some(f => same(f, sq))}
         mark={sq => found.some(f => same(f, sq)) ? <span className="font-black" style={{ fontSize: cell * 0.55, color: '#16a34a', animation: 'll-boing .4s ease-out' }}>✓</span>
           : bad && same(bad, sq) ? <span className="font-black" style={{ fontSize: cell * 0.5, color: '#ef4444' }}>✗</span> : null}>
         <OnSquare sq={round.start} cell={cell}>
-          <PieceShape piece={round.piece} size={cell * 0.86} mood={done ? 'happy' : wiggle ? 'oops' : act.talking ? 'talk' : 'idle'}
-            style={{ animation: wiggle ? 'lc-wiggle .5s' : done ? 'lc-bounce .7s ease-out 2' : undefined }} />
+          <div aria-label={`Pick up the ${round.piece}`} {...bind(round.piece, !done)}>
+            <PieceShape piece={round.piece} size={cell * 0.86} mood={done ? 'happy' : wiggle ? 'oops' : act.talking ? 'talk' : 'idle'}
+              style={{ opacity: drag ? 0.25 : 1, animation: wiggle ? 'lc-wiggle .5s' : done ? 'lc-bounce .7s ease-out 2' : drag ? undefined : 'lc-float 2s ease-in-out infinite' }} />
+          </div>
         </OnSquare>
+        {drag && <Lifted piece={round.piece} x={drag.x} y={drag.y} size={cell * 0.86} />}
       </MiniBoard>
     </div>
   );
 };
 
-/** Chess: a star (or apple) and a ? on the board — which friend can get there in one move? */
+/** Chess: a star (or apple) and a ? on the board — which friend can get there in one move? Carry that one onto the ?. */
 const WhoRound: React.FC<Pick<Piece> & { round: Extract<ChessRound, { kind: 'who' }> }> = ({ round, hint, listening, onRight, onWrong }) => {
   const c = useChoice(round.piece, onRight, onWrong);
   const cell = Math.floor(Math.min(window.innerWidth * 0.7, window.innerHeight * 0.36, 400) / BOARD);
   const icon = round.mode === 'apple' ? '🍎' : '⭐';
+  const boardEl = useRef<HTMLDivElement>(null);
+  const [showMe, setShowMe] = useState(0);
+  const { drag, bind } = useDrag<number>((x, y, k, moved) => {
+    const sq = squareAt(boardEl.current, x, y, cell);
+    if (moved && sq && same(sq, round.start)) c.pick(k, round.options[k]);
+    else setShowMe(n => n + 1);   // just pressed, or let go somewhere else: the ? bounces to show where it goes
+  });
   return (
     <div className="flex flex-col items-center">
-      <MiniBoard cell={cell}>
+      <MiniBoard cell={cell} boardRef={boardEl}>
         {!c.got && <OnSquare sq={round.target} cell={cell} z={4}><span style={{ fontSize: cell * 0.6, animation: 'lc-float 1.6s ease-in-out infinite' }}>{icon}</span></OnSquare>}
         <OnSquare sq={c.got ? round.target : round.start} cell={cell}>
           {c.got ? <PieceShape piece={round.piece} size={cell * 0.86} mood="happy" style={{ animation: 'lc-bounce .7s ease-out 2' }} />
-            : <span className="font-black rounded-full flex items-center justify-center" style={{ width: cell * 0.7, height: cell * 0.7, fontSize: cell * 0.5, background: '#fde047', color: '#134e4a' }}>?</span>}
+            : <span key={showMe} className="font-black rounded-full flex items-center justify-center" style={{ width: cell * 0.7, height: cell * 0.7, fontSize: cell * 0.5, background: '#fde047', color: '#134e4a',
+                animation: drag ? 'lc-glow 1.1s ease-in-out infinite' : showMe ? 'lc-bounce .6s ease-out 2' : undefined }}>?</span>}
         </OnSquare>
       </MiniBoard>
       <Answers listening={listening} className="flex flex-wrap justify-center gap-4 mt-4">
         {round.options.map((piece, k) => <PieceButton key={k} piece={piece} k={k} size={Math.min(110, window.innerHeight * 0.13)} right={piece === round.piece} hint={hint} got={c.got}
-          crossed={c.crossed.includes(k)} wiggling={c.wrong === k} onClick={() => c.pick(k, piece)} />)}
+          crossed={c.crossed.includes(k)} wiggling={c.wrong === k} drag={bind(k, !c.got && !c.crossed.includes(k))} held={drag?.item === k} />)}
       </Answers>
+      {drag && <Lifted piece={round.options[drag.item]} x={drag.x} y={drag.y} size={cell * 0.86} />}
     </div>
   );
 };
