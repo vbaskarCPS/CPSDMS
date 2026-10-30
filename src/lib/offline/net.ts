@@ -18,6 +18,11 @@ function set(next: NetState) {
 }
 
 export const netState = () => state;
+
+/** How many requests have failed for lack of signal (Supabase often answers "nothing" instead of an
+ *  error when that happens, so a read can tell whether its answer is real). */
+let failures = 0;
+export const failureCount = () => failures;
 export const isOffline = () => state === 'offline';
 export function onNetChange(fn: (s: NetState) => void): () => void { listeners.add(fn); return () => listeners.delete(fn); }
 
@@ -37,7 +42,7 @@ export function trackedFetch(base: typeof fetch = (...a) => fetch(...a)): typeof
       markOnline();
       return res;
     } catch (e) {
-      if (isNetworkError(e) && !(init?.signal?.aborted)) markOffline();
+      if (isNetworkError(e) && !(init?.signal?.aborted)) { failures++; markOffline(); }
       throw e;
     }
   };

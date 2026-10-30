@@ -5,6 +5,7 @@
 // Yellow comes from the outbox (workers only); route managers never have anything waiting.
 import React, { useSyncExternalStore } from 'react';
 import { netState, onNetChange } from '../lib/offline/net';
+import { onWaitingChange, waitingCount } from '../lib/offline/outbox';
 
 export type SyncColour = 'green' | 'yellow' | 'grey';
 const COLOURS: Record<SyncColour, string> = { green: '#22c55e', yellow: '#facc15', grey: '#9ca3af' };
@@ -13,8 +14,9 @@ const LABELS: Record<SyncColour, string> = { green: 'Synced', yellow: 'Waiting t
 /** Which colour, from the connection and whether anything is waiting. */
 export const syncColour = (online: boolean, waiting: number): SyncColour => (!online ? 'grey' : waiting > 0 ? 'yellow' : 'green');
 
-export const SyncDot: React.FC<{ waiting?: number; size?: number; className?: string }> = ({ waiting = 0, size = 10, className }) => {
+export const SyncDot: React.FC<{ size?: number; className?: string }> = ({ size = 10, className }) => {
   const state = useSyncExternalStore(onNetChange, netState, () => 'online' as const);
+  const waiting = useSyncExternalStore(onWaitingChange, waitingCount, () => 0);
   const colour = syncColour(state === 'online', waiting);
   return (
     <span role="status" aria-label={LABELS[colour]} title={LABELS[colour]} data-sync={colour} className={className}

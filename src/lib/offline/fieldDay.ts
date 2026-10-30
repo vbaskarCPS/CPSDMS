@@ -9,7 +9,11 @@ export function localDay(d = new Date()): string {
 }
 
 /** A worker opened today's logsheet on this phone. Their screens are phone-first (instant). */
-export const beginWorkerDay = async (contractorId: string) => { setReadMode('phoneFirst'); await beginDay(localDay(), `worker:${contractorId}`); };
+export const beginWorkerDay = async (contractorId: string) => {
+  await import('./fieldWrites');   // their saves go through the outbox (src/lib/offline/outbox.ts)
+  setReadMode('phoneFirst');
+  await beginDay(localDay(), `worker:${contractorId}`);
+};
 /** A route manager opened today's map on this phone. Server-first: they see what they just changed. */
 export const beginManagerDay = async (userId: string) => { setReadMode('serverFirst'); await beginDay(localDay(), `rm:${userId}`); };
 /** The day is over here (finished, signed out): wipe the phone's copy. */

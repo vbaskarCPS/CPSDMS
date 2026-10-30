@@ -1,5 +1,6 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect, useRef } from 'react';
+import { fieldRead, readKey } from '../../lib/offline/cache';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info, Shovel, Droplets, Bookmark } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
@@ -101,18 +102,18 @@ function buildSeasonId(region: Region, seasonType: SeasonType): string {
 // sub-object. Returns null on lookup failure so the caller can surface a user-facing
 // error message; in normal operation this should never fail (sessions are created
 // at upload time and persist for the day).
-async function fetchPartnerSessionInfo(targetSessionId: string): Promise<{
-  sessionId: string;
-  workerId: string;
-  teamWorkerIds: string[];
-  workerName: string;
-} | null> {
+type PartnerInfo = { sessionId: string; workerId: string; teamWorkerIds: string[]; workerName: string };
+/** The other cart on an asphalt job (kept on the phone too, so it works in a dead zone once it's been seen). */
+const fetchPartnerSessionInfo = (targetSessionId: string): Promise<PartnerInfo | null> =>
+  fieldRead(readKey('job.partner', [targetSessionId]), () => loadPartnerSessionInfo(targetSessionId));
+async function loadPartnerSessionInfo(targetSessionId: string): Promise<PartnerInfo | null> {
   try {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('logsheet_sessions')
       .select('id, worker_id, team_worker_ids')
       .eq('id', targetSessionId)
       .maybeSingle();
+    if (error && /fetch|network/i.test(error.message)) throw new TypeError(error.message);   // no signal: the phone's copy
     if (!data) return null;
 
     const teamWorkerIds: string[] = (data.team_worker_ids && data.team_worker_ids.length > 0)
@@ -133,6 +134,7 @@ async function fetchPartnerSessionInfo(targetSessionId: string): Promise<{
       workerName: userData?.name || primaryWorkerId,
     };
   } catch (e) {
+    if (e instanceof TypeError) throw e;
     console.warn('[NewJob] fetchPartnerSessionInfo failed:', e);
     return null;
   }

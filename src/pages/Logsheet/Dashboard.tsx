@@ -31,6 +31,7 @@ import { getStorageItem, removeStorageItem, setStorageItem } from '../../lib/loc
 import { getPass, workerSignOut } from '../../lib/workerPass';
 import { beginWorkerDay, endFieldDay } from '../../lib/offline/fieldDay';
 import { onFieldFresh } from '../../lib/offline/cache';
+import { SyncDot } from '../../components/SyncDot';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
@@ -685,6 +686,7 @@ const Dashboard: React.FC = () => {
                 <div className="flex items-center gap-2 text-white font-bold text-lg">
                   <Calendar size={18} className="text-cps-blue" />
                   {format(new Date(), 'EEE, MMM d')}
+                  {!isTrainingMode && !isRMViewMode && <SyncDot />}
                   {/* Season badge — 3-way branch: lawn_rejuv | sealing | (none for aeration) */}
                   {/* TODO: Add a 'cleaning' branch here once Central Cleaning ships. */}
                   {seasonType === 'lawn_rejuv' && (

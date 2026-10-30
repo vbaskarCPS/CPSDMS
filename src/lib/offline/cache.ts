@@ -3,7 +3,7 @@
 // screen gets the saved copy straight away; the real answer still lands in the background and is
 // saved for next time. Off a field day (office desktops) it's a plain pass-through: nothing is kept.
 import { cacheGet, cachePut, dayActive, pack, ready } from './dayStore';
-import { isNetworkError, isOffline } from './net';
+import { failureCount, isNetworkError, isOffline } from './net';
 
 /** How long a screen waits for the server before showing the phone's copy instead (server-first). */
 export const WAIT_MS = 5000;
@@ -22,30 +22,44 @@ const freshListeners = new Set<(key: string) => void>();
 /** Something on the phone was just replaced by a newer answer from the server. */
 export function onFieldFresh(fn: (key: string) => void): () => void { freshListeners.add(fn); return () => freshListeners.delete(fn); }
 const announceFresh = (key: string) => freshListeners.forEach(f => { try { f(key); } catch { /* ignore */ } });
+/** Tell the screens a part of the day changed on the phone (e.g. a sale saved to the outbox). */
+export const notifyFresh = (key: string) => announceFresh(key);
+
+/** Work saved on the phone but not yet sent is laid over what the server said (src/lib/offline/outbox). */
+type Overlay = (key: string, value: unknown) => unknown;
+let overlay: Overlay | null = null;
+export const setOverlay = (fn: Overlay | null) => { overlay = fn; };
+const withOverlay = <T,>(key: string, v: T): T => (overlay ? (overlay(key, v) as T) : v);
 
 export async function fieldRead<T>(key: string, fetcher: () => Promise<T>, waitMs = WAIT_MS): Promise<T> {
   await ready().catch(() => undefined);
   if (!dayActive()) return fetcher();
   const saved = await cacheGet<T>(key);
   const before = saved === undefined ? null : pack(saved.value);
+  // Supabase often answers "nothing" (rather than an error) when there's no signal: an answer is only
+  // trusted — saved, or shown over the phone's copy — if no request failed for lack of signal meanwhile.
+  const f0 = failureCount();
   const live = fetcher().then(async v => {
-    await cachePut(key, v);
-    if (before !== null && pack(v) !== before) announceFresh(key);   // the screen showed an older copy: redraw
-    return v;
+    const real = failureCount() === f0;
+    if (real) {
+      await cachePut(key, v);
+      if (before !== null && pack(v) !== before) announceFresh(key);   // the screen showed an older copy: redraw
+    }
+    return { v, real };
   });
 
-  if (saved === undefined) return live;              // nothing on the phone yet: wait for the server
+  if (saved === undefined) return withOverlay(key, (await live).v);   // nothing on the phone yet: wait for the server
   live.catch(() => undefined);                       // (answered later, or never: either way don't complain)
-  if (isOffline() || mode === 'phoneFirst') return saved.value;   // the phone's copy, now
+  if (isOffline() || mode === 'phoneFirst') return withOverlay(key, saved.value);   // the phone's copy, now
 
   // otherwise the server gets a few seconds; then the phone's copy
   let timer: ReturnType<typeof setTimeout> | undefined;
   const fallback = new Promise<T>(ok => { timer = setTimeout(() => ok(saved.value), waitMs); });
   try {
-    return await Promise.race([live, fallback]);
+    return withOverlay(key, await Promise.race([live.then(r => (r.real ? r.v : saved.value)), fallback]));
   } catch (e) {
     // the server failed: a connection problem → the phone's copy; a real error → say so
-    if (isNetworkError(e) || isOffline()) return saved.value;
+    if (isNetworkError(e) || isOffline()) return withOverlay(key, saved.value);
     throw e;
   } finally { if (timer) clearTimeout(timer); }
 }

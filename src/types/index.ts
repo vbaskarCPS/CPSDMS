@@ -660,6 +660,8 @@ export interface PendingSale {
 // completed driveway tx (the driveway-deferred completion path in sessionService).
 // UI callers (QuickPendingModal, NewJob walk-up) don't pass it.
 export interface PendingSaleInput {
+  /** Set on the phone when it's saved, so sending it twice (spotty signal) can't make two. */
+  clientId?: string;
   sessionId: string;
   workerId: string;
   routeCode?: string;
