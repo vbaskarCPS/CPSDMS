@@ -1,5 +1,6 @@
 // src/lib/sessionService.ts
 import { supabase } from './supabase';
+import { cacheMethods } from './offline/cache';
 import { cardColumnsForSave } from './cardSafety';
 import { USER_COLS } from './legacyColumns';
 import { upsertUsers } from './userWrites';
@@ -5348,6 +5349,20 @@ export interface MapPin {
 }
 
 export const sessionService = SessionService.getInstance();
+
+// Field days: these reads also keep a copy on the phone (encrypted, wiped after the day), so a worker
+// in a dead zone still sees their session, routes, sales and bookings. Off a field day (office
+// desktops) they behave exactly as before. See src/lib/offline.
+cacheMethods(sessionService, 'session', [
+  'getSessionSeasonType', 'getProductCostPercent', 'getTransactionByJobId', 'getDailySessionDate', 'getDailySession',
+  'getManagerMappingConfigs', 'getCommandCenterManagerContacts', 'getManagerById', 'getSessionImportMeta', 'getSessionLiveCardEnabled',
+  'getSessionNoTaxOnCash', 'getWorkerUpsellsEnabled', 'getWorkerSessionStatus', 'isWorkerLockedOut', 'getTeamLockStatus',
+  'getWorkerTeamCart', 'getTeamMembers', 'getWorkerLogsheetSession', 'getHistoricalPropertiesForRoutes', 'getRouteSplits',
+  'getRouteSplitForRoute', 'getWorkerAssignments', 'getSessionAssignments', 'getStreetsForRoute', 'getLogsheetSessions',
+  'getActiveLogsheetSession', 'startLogsheetSession', 'getMapPins', 'getWorkerDriverStops', 'getEmailStatus',
+  'getPendingSalesForSession', 'getPendingSalesForManager', 'getAllPendingSalesForToday', 'getPendingSaleById', 'getUnassignedAsphaltForManager',
+  'getUnassignedAsphaltForFloater', 'getAsphaltChildrenForParent', 'getAsphaltAssignmentsForSession', 'getAsphaltChildBySharedJobKey',
+]);
 
 /** A manager's saved RM map layer switches, or undefined when they've never set any. */
 function readMapFilters(v: unknown): ManagerMapFilters | undefined {

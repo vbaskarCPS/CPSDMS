@@ -2,13 +2,14 @@
 // The old services find "their" center through commandCenterService; point it at the
 // center picked in the new app, then load the old app's live session for that center.
 import type { DailySessionData } from '../../types';
+import { fieldRead, readKey } from '../../lib/offline/cache';
 
 export interface LegacySession { date: string; data: DailySessionData }
 
 /** Points the old services at this center. Must run before any old screen loads. */
 export async function pointLegacyAt(centerId: string): Promise<void> {
   const { commandCenterService } = await import('../../lib/commandCenterService');
-  const cc = await commandCenterService.getCommandCenterById(centerId);
+  const cc = await fieldRead(readKey('legacy.center', [centerId]), () => commandCenterService.getCommandCenterById(centerId));
   if (!cc) throw new Error('Couldn’t load this center in the current app.');
   commandCenterService.setCurrentCommandCenter(cc);
 }
@@ -40,8 +41,12 @@ export async function actAsLegacyRouteManager(centerId: string, userId: string):
   const [{ supabase }, { USER_COLS }, { setStorageItem }] = await Promise.all([
     import('../../lib/supabase'), import('../../lib/legacyColumns'), import('../../lib/localStorage'),
   ]);
-  const { data, error } = await supabase.from('users').select(USER_COLS)
-    .eq('user_id', userId).eq('role', 'RouteManager').eq('command_center_id', centerId).maybeSingle();
+  const { data, error } = await fieldRead(readKey('legacy.rm', [centerId, userId]), async () => {
+    const r = await supabase.from('users').select(USER_COLS)
+      .eq('user_id', userId).eq('role', 'RouteManager').eq('command_center_id', centerId).maybeSingle();
+    if (r.error && /fetch|network/i.test(r.error.message)) throw new TypeError(r.error.message);   // no signal: use the phone's copy
+    return { data: r.data, error: r.error };
+  });
   if (error) throw new Error(error.message);
   if (!data) return false;
   const meta = (data.metadata || {}) as Record<string, unknown>;
@@ -63,7 +68,11 @@ export async function actAsLegacyRouteManager(centerId: string, userId: string):
 export async function legacySharedWith(centerId: string, userId: string): Promise<{ access: string[]; position: string[] }> {
   await pointLegacyAt(centerId);
   const [{ supabase }, { sharedWithMe }] = await Promise.all([import('../../lib/supabase'), import('../../lib/mapShareTargets')]);
-  const { data, error } = await supabase.from('users').select('user_id, metadata').eq('role', 'RouteManager').eq('command_center_id', centerId);
+  const { data, error } = await fieldRead(readKey('legacy.shared', [centerId]), async () => {
+    const r = await supabase.from('users').select('user_id, metadata').eq('role', 'RouteManager').eq('command_center_id', centerId);
+    if (r.error && /fetch|network/i.test(r.error.message)) throw new TypeError(r.error.message);
+    return { data: r.data, error: r.error };
+  });
   if (error) throw new Error(error.message);
   return sharedWithMe((data || []).map(r => ({ userId: r.user_id as string, mapSharing: (r.metadata as { mapSharing?: { access?: string[]; position?: string[] } } | null)?.mapSharing })), userId);
 }

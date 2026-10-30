@@ -29,6 +29,7 @@ import {
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../../lib/localStorage';
 import { getPass, workerSignOut } from '../../lib/workerPass';
+import { beginWorkerDay, endFieldDay } from '../../lib/offline/fieldDay';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
@@ -320,6 +321,7 @@ const Dashboard: React.FC = () => {
   // Force logout helper
   const forceLogout = () => {
     console.log('🔒 Session locked - forcing logout');
+    void endFieldDay();
     removeStorageItem('current_user');
     if (isTrainingMode) {
       trainingService.disableTrainingMode();
@@ -399,6 +401,7 @@ const Dashboard: React.FC = () => {
         } else {
           // --- PRODUCTION MODE ---
           if (!rmViewMode) {
+            await beginWorkerDay(storedWorker.contractorId);   // today's data also kept on this phone (src/lib/offline)
             const isLockedOut = await sessionService.isWorkerLockedOut(storedWorker.contractorId);
             if (isLockedOut) {
               forceLogout();
