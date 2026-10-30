@@ -1,9 +1,11 @@
 // src/planner/features/food/MealEditor.tsx — the confirm screen: the AI's draft (or a favourite, or
 // nothing) becomes a meal only once the user has looked at every line and tapped Save.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Trash2, Plus, Star } from 'lucide-react';
 import { Button, Card, Chip, Field, Input, Sheet } from '../../ui/primitives';
 import { EXTRAS, round, scaleItem, sum, type FoodItem, type Totals } from './model';
+import { clock, loadRoutine, routineNow, type Routine } from '../../lib/routine';
+import { breaksFast } from './fasting';
 
 const STEPS = [0.5, 0.75, 1, 1.5, 2];
 
@@ -40,6 +42,8 @@ export function MealEditor({ draft, setDraft, tips, onSave, saving, onDelete }: 
   // originals for the stepper: keyed by position, captured when an item first appears
   const [bases, setBases] = useState<Map<FoodItem, FoodItem>>(() => new Map(draft.items.map(i => [i, i])));
   const [manual, setManual] = useState(false);
+  const [routine, setRoutine] = useState<Routine>(() => routineNow());
+  useEffect(() => { void loadRoutine().then(setRoutine); }, []);
   const [m, setM] = useState({ name: '', kcal: '', protein: '', carbs: '', fat: '' });
   const totals: Totals = useMemo(() => round(sum(draft.items)), [draft.items]);
 
@@ -85,6 +89,9 @@ export function MealEditor({ draft, setDraft, tips, onSave, saving, onDelete }: 
             <Field label="Meal"><Input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} placeholder="Lunch" /></Field>
             <Field label="Time"><Input type="time" value={draft.time} onChange={e => setDraft({ ...draft, time: e.target.value })} /></Field>
           </div>
+          {draft.time && breaksFast(draft.time, routine) && (
+            <p style={{ color: 'var(--amber-2)', fontWeight: 600, fontSize: 14 }}>This is before your window (opens {clock(routine.eatOpen)}) — fast broken today.</p>
+          )}
           <label className="fd-switch"><input type="checkbox" checked={draft.saveFav} onChange={e => setDraft({ ...draft, saveFav: e.target.checked })} /><Star style={{ width: 18, height: 18, color: 'var(--amber)' }} /> Save as favourite</label>
         </div>
       </Card>

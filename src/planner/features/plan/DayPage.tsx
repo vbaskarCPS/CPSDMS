@@ -1,37 +1,16 @@
-// src/planner/features/plan/DayPage.tsx — one day: Victory Hour, morning mindset, projects, people,
-// priorities, schedule, evening review and the scorecard (High Performance Planner + 5 AM Club).
+// src/planner/features/plan/DayPage.tsx — one day: the Bed Brief summary, the deep plan (projects,
+// people, schedule), and the Miracle Night summary. Any date; today links into the brief and the night.
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Check, Plus, X, Dumbbell, Brain, BookOpen, Sparkles, Timer, CalendarDays, CalendarRange } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Check, Plus, X, Sparkles, CalendarDays, CalendarRange, Sunrise, Moon } from 'lucide-react';
 import { dayKey } from '../../lib/docs';
 import { useDoc } from '../../lib/useDoc';
 import { reflect } from '../../lib/ai';
-import { Page, Header, Button, Prompt, Score, Chip, Input, useToast } from '../../ui/primitives';
+import { clock } from '../../lib/routine';
+import { Page, Header, Button, Prompt, Score, Input, useToast } from '../../ui/primitives';
 import { Section } from './Section';
 import { addDays, fmtDate, isValidDay } from './dates';
-import { dayAverage, emptyDay, normalizeDay, SCORE_KEYS, type Day, type Savers } from './types';
-
-const MORNING: { key: keyof Day['morning']; q: string }[] = [
-  { key: 'excited', q: 'One thing I can get excited about today…' },
-  { key: 'word', q: 'If one word could describe the kind of person I want to be today, it would be…' },
-  { key: 'aGame', q: 'Someone who needs me on my A-game today…' },
-  { key: 'stress', q: 'A situation that might stress me today…' },
-  { key: 'stressResponse', q: '…and how my best self would respond to it…' },
-  { key: 'appreciate', q: 'Someone I could surprise with a note, gift or sign of appreciation…' },
-  { key: 'progress', q: 'One action I could take today to demonstrate excellence or real progress…' },
-];
-const EVENING: { key: keyof Day['evening']; q: string }[] = [
-  { key: 'appreciated', q: 'A moment I really appreciated today…' },
-  { key: 'handledWell', q: 'A situation or task I handled well…' },
-  { key: 'learned', q: 'Something I realized or learned…' },
-  { key: 'better', q: 'I could have made today even better if…' },
-  { key: 'connected', q: 'Something that could have helped me feel more connected to others…' },
-  { key: 'coachNote', q: "If I was my own high-performance coach, I'd tell myself…" },
-];
-const SAVERS: { key: keyof Savers; label: string }[] = [
-  { key: 'silence', label: 'Silence' }, { key: 'affirmations', label: 'Affirmations' }, { key: 'visualization', label: 'Visualization' },
-  { key: 'exercise', label: 'Exercise' }, { key: 'reading', label: 'Reading' }, { key: 'scribing', label: 'Scribing' },
-];
+import { dayAverage, emptyDay, normalizeDay, SCORE_KEYS, type Day } from './types';
 
 const filled = (...v: string[]) => v.filter(s => s.trim()).length;
 
@@ -40,7 +19,6 @@ export function DayPage() {
   const nav = useNavigate();
   const key = isValidDay(date) ? date : dayKey();
   const isToday = key === dayKey();
-  const hour = new Date().getHours();
   const { data, update, loading, save } = useDoc<Day>('day', key, emptyDay());
   const day = useMemo(() => normalizeDay(data), [data]);
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
@@ -50,15 +28,14 @@ export function DayPage() {
   const avg = dayAverage(day.scores);
   const prioDone = day.priorities.filter(p => p.done).length;
   const prioSet = day.priorities.filter(p => p.text.trim()).length;
-  const morningN = filled(...MORNING.map(m => day.morning[m.key]));
-  const eveningN = filled(...EVENING.map(e => day.evening[e.key]));
-  const victoryN = [day.victory.move, day.victory.reflect, day.victory.grow].filter(Boolean).length;
-  const isEvening = !isToday || hour >= 17;
+  const briefN = filled(day.brief.word, day.brief.aGame, day.brief.stress, day.brief.excited) + (prioSet ? 1 : 0);
+  const reviewN = filled(day.night.review.win, day.night.review.drag, day.night.review.tomorrow);
+  const t = day.ticks;
 
   const coachNote = async () => {
     setThinking(true);
     try {
-      const reply = await reflect({ date: key, ...day });
+      const reply = await reflect({ date: key, brief: day.brief, priorities: day.priorities, ticks: day.ticks, night: day.night, scores: day.scores, projects: day.projects, people: day.people });
       set(d => ({ ...d, reflection: reply }));
     } catch (e) { showToast(e instanceof Error ? e.message : "Couldn't reach the coach", 'bad'); }
     finally { setThinking(false); }
@@ -84,35 +61,30 @@ export function DayPage() {
 
       {loading ? <p className="pl-muted">Loading…</p> : (
         <>
-          {/* ── Victory Hour ── */}
-          <Section title="Victory hour" meta={`${victoryN}/3`} done={victoryN === 3} open={!isEvening}>
-            <div className="pl-row">
-              <label className="pl-field pl-grow"><span className="pl-label">Woke at</span>
-                <Input type="time" value={day.victory.wokeAt || ''} onChange={e => set(d => ({ ...d, victory: { ...d.victory, wokeAt: e.target.value || undefined } }))} /></label>
-              {isToday && <Link to="/plan/victory" className="pl-btn pl-btn--primary" style={{ alignSelf: 'flex-end', whiteSpace: 'nowrap' }}><Timer /> Start timer</Link>}
+          {/* ── Bed Brief ── */}
+          <Section title={<span className="pl-row" style={{ gap: 8 }}><Sunrise aria-hidden style={{ width: 20, height: 20, color: 'var(--amber-2)' }} /> Bed Brief</span>}
+            meta={day.brief.finishedAt ? `done${day.brief.seconds ? ` in ${Math.round(day.brief.seconds / 60)} min` : ''}` : `${briefN}/5`} done={!!day.brief.finishedAt}>
+            {t.up && <p className="pl-muted" style={{ fontSize: 13 }}>Up at {clock(t.up)}{t.daycare ? ` · daycare ${clock(t.daycare)}` : ''}</p>}
+            <div className="plan-brief-grid">
+              <div><span className="pl-label">One word</span><b className="plan-brief-word">{day.brief.word.trim() || '—'}</b></div>
+              <div><span className="pl-label">A-game for</span><p>{day.brief.aGame.trim() || '—'}</p></div>
+              <div><span className="pl-label">Might stress me</span><p>{day.brief.stress.trim() || '—'}{day.brief.stressResponse.trim() ? <><br /><span className="pl-muted">→ {day.brief.stressResponse}</span></> : null}</p></div>
+              <div><span className="pl-label">Looking forward to</span><p>{day.brief.excited.trim() || '—'}</p></div>
             </div>
-            <div className="plan-blocks">
-              {([['move', 'Move', Dumbbell], ['reflect', 'Reflect', Brain], ['grow', 'Grow', BookOpen]] as const).map(([k, label, Icon]) => (
-                <button key={k} type="button" className={`plan-block ${day.victory[k] ? 'is-on' : ''}`} aria-pressed={day.victory[k]}
-                  onClick={() => set(d => ({ ...d, victory: { ...d.victory, [k]: !d.victory[k] } }))}><Icon aria-hidden />{label}</button>
-              ))}
-            </div>
-            <div>
-              <p className="pl-label" style={{ marginBottom: 8 }}>SAVERS</p>
-              <div className="pl-chips">
-                {SAVERS.map(s => <Chip key={s.key} on={day.victory.savers[s.key]} onClick={() => set(d => ({ ...d, victory: { ...d.victory, savers: { ...d.victory.savers, [s.key]: !d.victory.savers[s.key] } } }))}>{s.label}</Chip>)}
+            <p className="pl-label" style={{ marginTop: 4 }}>Must get done · {prioSet ? `${prioDone}/${prioSet}` : 'not set'}</p>
+            {day.priorities.map((p, i) => (
+              <div key={i} className={`plan-priority ${p.done ? 'is-done' : ''}`}>
+                <b>{i + 1}</b>
+                <Input className="pl-grow" placeholder="Must do" value={p.text} onChange={e => set(d => ({ ...d, priorities: d.priorities.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) }))} />
+                <button type="button" className={`pl-check ${p.done ? 'is-on' : ''}`} aria-label={p.done ? 'Mark not done' : 'Mark done'} onClick={() => set(d => ({ ...d, priorities: d.priorities.map((x, j) => (j === i ? { ...x, done: !x.done } : x)) }))}><Check /></button>
               </div>
-            </div>
+            ))}
+            {isToday && <Link to="/plan/brief" className="pl-btn pl-btn--small">{day.brief.finishedAt ? 'Edit brief' : 'Do the Bed Brief'}</Link>}
           </Section>
 
-          {/* ── Morning mindset ── */}
-          <Section title="Morning mindset" meta={`${morningN}/${MORNING.length}`} done={morningN === MORNING.length} open={!isEvening}>
-            {MORNING.map(m => <Prompt key={m.key} q={m.q} value={day.morning[m.key]} onChange={v => set(d => ({ ...d, morning: { ...d.morning, [m.key]: v } }))} />)}
-          </Section>
-
-          {/* ── Projects ── */}
-          <Section title="Projects" meta={`${day.projects.filter(p => p.name.trim()).length}/3`} open={!isEvening}>
-            <p className="pl-muted" style={{ fontSize: 13 }}>The three projects that matter most right now, and the next three steps on each.</p>
+          {/* ── Deep plan ── */}
+          <Section title="Deep plan" meta={`${day.projects.filter(p => p.name.trim()).length} projects${day.schedule.length ? ` · ${day.schedule.length} blocks` : ''}`} open={false}>
+            <p className="pl-muted" style={{ fontSize: 13 }}>For work hours: the three projects that matter most, the people, and the blocks of the day.</p>
             {day.projects.map((p, i) => (
               <div key={i} className="plan-project">
                 <Input className="plan-project__name" placeholder={`Project ${i + 1}`} value={p.name} onChange={e => set(d => { const projects = d.projects.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)); return { ...d, projects }; })} />
@@ -125,29 +97,9 @@ export function DayPage() {
                 </div>
               </div>
             ))}
-          </Section>
-
-          {/* ── People ── */}
-          <Section title="People" meta={filled(day.people.connect, day.people.lead) ? '✓' : undefined} open={!isEvening}>
             <Prompt q="Someone I need to connect with or reach out to today…" value={day.people.connect} onChange={v => set(d => ({ ...d, people: { ...d.people, connect: v } }))} rows={1} />
             <Prompt q="Someone I need to lead or serve well today…" value={day.people.lead} onChange={v => set(d => ({ ...d, people: { ...d.people, lead: v } }))} rows={1} />
-          </Section>
-
-          {/* ── Priorities ── */}
-          <Section title="Priorities" meta={prioSet ? `${prioDone}/${prioSet} done` : undefined} done={prioSet > 0 && prioDone === prioSet}>
-            <p className="pl-muted" style={{ fontSize: 13 }}>Three things that must get done today, no matter what.</p>
-            {day.priorities.map((p, i) => (
-              <div key={i} className={`plan-priority ${p.done ? 'is-done' : ''}`}>
-                <b>{i + 1}</b>
-                <Input className="pl-grow" placeholder="Must do" value={p.text} onChange={e => set(d => ({ ...d, priorities: d.priorities.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) }))} />
-                <button type="button" className={`pl-check ${p.done ? 'is-on' : ''}`} aria-label={p.done ? 'Mark not done' : 'Mark done'} onClick={() => set(d => ({ ...d, priorities: d.priorities.map((x, j) => (j === i ? { ...x, done: !x.done } : x)) }))}><Check /></button>
-              </div>
-            ))}
-          </Section>
-
-          {/* ── Schedule ── */}
-          <Section title="Schedule" meta={day.schedule.length ? `${day.schedule.length} blocks` : undefined} open={false}>
-            {day.schedule.length === 0 && <p className="pl-muted" style={{ fontSize: 13 }}>Block the day: when will the priorities happen?</p>}
+            <p className="pl-label">Schedule</p>
             {day.schedule.map((s, i) => (
               <div key={i} className="plan-slot">
                 <Input type="time" value={s.time} onChange={e => set(d => ({ ...d, schedule: d.schedule.map((x, j) => (j === i ? { ...x, time: e.target.value } : x)).sort((a, b) => a.time.localeCompare(b.time)) }))} />
@@ -155,24 +107,30 @@ export function DayPage() {
                 <button type="button" className="pl-btn pl-btn--ghost" aria-label="Remove" onClick={() => set(d => ({ ...d, schedule: d.schedule.filter((_, j) => j !== i) }))}><X /></button>
               </div>
             ))}
-            <Button ghost onClick={() => set(d => { const last = d.schedule[d.schedule.length - 1]; const [h] = (last?.time || '08:00').split(':').map(Number); const time = `${String(Math.min(23, (h || 8) + 1)).padStart(2, '0')}:00`; return { ...d, schedule: [...d.schedule, { time, text: '' }] }; })}><Plus /> Add block</Button>
+            <Button ghost onClick={() => set(d => { const last = d.schedule[d.schedule.length - 1]; const [h] = (last?.time || '09:00').split(':').map(Number); const time = `${String(Math.min(23, (h || 9) + 1)).padStart(2, '0')}:00`; return { ...d, schedule: [...d.schedule, { time, text: '' }] }; })}><Plus /> Add block</Button>
           </Section>
 
-          {/* ── Evening review ── */}
-          <Section title="Evening review" meta={`${eveningN}/${EVENING.length}`} done={eveningN === EVENING.length} open={isEvening}>
-            {EVENING.map(e => <Prompt key={e.key} q={e.q} value={day.evening[e.key]} onChange={v => set(d => ({ ...d, evening: { ...d.evening, [e.key]: v } }))} />)}
-          </Section>
-
-          {/* ── Scorecard ── */}
-          <Section title="Scorecard" meta={avg !== null ? `avg ${avg}` : undefined} done={avg !== null && Object.keys(day.scores).length === 6} open={isEvening}>
-            <p className="pl-muted" style={{ fontSize: 13 }}>Rate the six high-performance habits, 1–5.</p>
+          {/* ── Miracle Night ── */}
+          <Section title={<span className="pl-row" style={{ gap: 8 }}><Moon aria-hidden style={{ width: 20, height: 20, color: 'var(--accent)' }} /> Miracle Night</span>}
+            meta={t.lightsOut ? `lights out ${clock(t.lightsOut)}` : avg !== null ? `avg ${avg}` : `${reviewN}/3`} done={!!t.lightsOut} open={!isToday || new Date().getHours() >= 21 || new Date().getHours() < 4}>
+            <p className="pl-muted" style={{ fontSize: 13 }}>
+              {[t.dinner && `dinner ${clock(t.dinner)}`, t.gym && `gym ${clock(t.gym)}`, t.shake && `shake ${clock(t.shake)}`].filter(Boolean).join(' · ') || 'Dinner, gym and shake get ticked on the Today screen.'}
+            </p>
+            <Prompt q="Win of the day" value={day.night.review.win} onChange={v => set(d => ({ ...d, night: { ...d.night, review: { ...d.night.review, win: v } } }))} rows={1} />
+            <Prompt q="What dragged" value={day.night.review.drag} onChange={v => set(d => ({ ...d, night: { ...d.night, review: { ...d.night.review, drag: v } } }))} rows={1} />
+            <Prompt q="One change for tomorrow" value={day.night.review.tomorrow} onChange={v => set(d => ({ ...d, night: { ...d.night, review: { ...d.night.review, tomorrow: v } } }))} rows={1} />
+            {day.night.tomorrowTop && <p className="pl-muted" style={{ fontSize: 13 }}>Tomorrow's #1: <b>{day.night.tomorrowTop}</b></p>}
+            <hr className="pl-divider" />
+            <p className="pl-label">Scorecard, 1–5</p>
             {SCORE_KEYS.map(s => (
               <Score key={s.key} label={<span>{s.label} <span className="pl-muted" style={{ fontWeight: 400 }}>— {s.hint}</span></span>} value={day.scores[s.key]} onChange={v => set(d => ({ ...d, scores: { ...d.scores, [s.key]: v } }))} />
             ))}
-            {avg !== null && <div className="plan-avg"><b>{avg}</b><small>/ 5 today</small></div>}
-            <hr className="pl-divider" />
+            {avg !== null && <div className="plan-avg"><b>{avg}</b><small>/ 5</small></div>}
             {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
-            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another coach's note" : "Coach's note on today"}</Button>
+            <div className="pl-row" style={{ flexWrap: 'wrap' }}>
+              <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another coach's note" : "Coach's note"}</Button>
+              {isToday && <Link to="/plan/night" className="pl-btn pl-btn--primary">Open Miracle Night</Link>}
+            </div>
           </Section>
         </>
       )}

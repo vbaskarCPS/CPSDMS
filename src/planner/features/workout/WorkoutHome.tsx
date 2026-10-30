@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Play, ClipboardList, MessageCircle, Scale, History, Dumbbell } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
+import { clock, loadRoutine, routineMin, routineMinutes, routineNow, type Routine } from '../../lib/routine';
 import { Page, Header, Card, Button, Bars, Stat, Empty } from '../../ui/primitives';
 import { daysAgo, emptyWorkout, fmtDate, loadCustomExercises, loadTemplates, loadWorkouts, nextTarget, saveWorkout, startFromTemplate, todaysTemplate, weekSessions } from './store';
 import { durationMin, fmtNum, volumeOf, workoutKey, type Exercise, type Template, type Units, type Workout } from './types';
@@ -36,6 +37,7 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
   const week = weekSessions(workouts);
   const finished = workouts.filter(w => w.endedAt);
   const doneToday = finished.find(w => w.date === daysAgo(0));
+  const gymLine = useGymLine(!!doneToday, !!unfinished);
 
   const start = async (t?: Template) => {
     if (starting) return;
@@ -57,7 +59,7 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
         </Card>
       ) : tpl ? (
         <Card accent>
-          <p className="pl-eyebrow">{doneToday ? 'Another one?' : 'Today'}</p>
+          <p className="pl-eyebrow">{doneToday ? 'Another one?' : gymLine}</p>
           <h2>{tpl.name}</h2>
           <div className="wo-hero__list">
             {targets.map(({ e, s }) => (
@@ -104,6 +106,15 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
   );
 }
 
+/** "Gym · 9:00 pm with the boys", or "Late start — still counts" once it's 30 min past and nothing's logged. */
+function useGymLine(doneToday: boolean, unfinished: boolean): string {
+  const [r, setR] = useState<Routine>(() => routineNow());
+  const [, tick] = useState(0);
+  useEffect(() => { void loadRoutine().then(setR); const id = window.setInterval(() => tick(n => n + 1), 60_000); return () => window.clearInterval(id); }, []);
+  if (doneToday || unfinished) return `Gym · ${clock(r.gym)} with the boys`;
+  return routineMinutes() > routineMin(r.gym) + 30 ? 'Late start — still counts' : `Gym · ${clock(r.gym)} with the boys`;
+}
+
 /** The card on the Today screen. */
 export function WorkoutTodayCard({ pass }: { pass: PlannerPass }) {
   const nav = useNavigate();
@@ -113,6 +124,7 @@ export function WorkoutTodayCard({ pass }: { pass: PlannerPass }) {
   const tpl = useMemo(() => todaysTemplate(templates, workouts), [templates, workouts]);
   const week = weekSessions(workouts).reduce((a, b) => a + b, 0);
   const doneToday = workouts.find(w => w.endedAt && w.date === daysAgo(0));
+  const cardGymLine = useGymLine(!!doneToday, !!unfinished);
   const last = workouts.find(w => w.endedAt);
   const planned = tpl?.days?.includes(new Date().getDay());
   if (loading) return <Card><p className="pl-eyebrow">Train</p><p className="pl-muted">Loading…</p></Card>;
@@ -128,7 +140,7 @@ export function WorkoutTodayCard({ pass }: { pass: PlannerPass }) {
     <Card>
       <div className="pl-row">
         <div className="pl-grow">
-          <p className="pl-eyebrow">Train · {week} this week</p>
+          <p className="pl-eyebrow">{cardGymLine} · {week} this week</p>
           {unfinished ? <h3>{unfinished.name} in progress</h3>
             : doneToday ? <h3>Done: {doneToday.name}</h3>
             : planned && tpl ? <h3>{tpl.name}</h3>
