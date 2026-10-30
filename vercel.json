@@ -1,5 +1,6 @@
 {
     "rewrites": [
+      { "source": "/vijayplanner/:path*", "destination": "/planner.html" },
       { "source": "/(.*)", "destination": "/index.html" }
     ]
   }
