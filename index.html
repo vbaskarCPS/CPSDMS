@@ -21,6 +21,7 @@
   </head>
   <body class="bg-black font-sans">
     <div id="root"></div>
+    <script>if (/^\/vijayplanner(\/|$)/.test(location.pathname) && !sessionStorage.getItem("vp-hop")) { sessionStorage.setItem("vp-hop", "1"); location.replace("/vijayplanner/home" + location.search); }</script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
