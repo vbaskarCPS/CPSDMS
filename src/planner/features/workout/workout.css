@@ -1,0 +1,60 @@
+/* src/planner/features/workout/workout.css */
+.wo-hero__list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 14px; }
+.wo-hero__row { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; }
+.wo-hero__row span:last-child { opacity: 0.8; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.wo-ex { padding: 0; overflow: hidden; }
+.wo-ex__head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; }
+.wo-ex__head b { font-size: 16px; } .wo-ex__head small { color: var(--ink-2); display: block; font-size: 13px; }
+.wo-ex__body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.wo-set { display: grid; grid-template-columns: 24px 1fr 1fr 44px; gap: 8px; align-items: center; }
+.wo-set.is-done { opacity: 0.7; }
+.wo-set__n { font-size: 13px; color: var(--ink-2); font-weight: 600; text-align: center; }
+.wo-stepper { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); overflow: hidden; min-height: 44px; }
+.wo-stepper button { width: 36px; min-height: 44px; border: 0; background: transparent; font-size: 20px; color: var(--ink-2); cursor: pointer; flex: none; }
+.wo-stepper input { flex: 1; min-width: 0; width: 100%; border: 0; background: transparent; text-align: center; font-weight: 700; font-size: 17px; font-variant-numeric: tabular-nums; outline: none; padding: 0; }
+.wo-stepper small { position: absolute; }
+.wo-set__prev { grid-column: 2 / 4; font-size: 12px; color: var(--ink-2); margin-top: -4px; display: flex; gap: 12px; }
+.wo-rpe { grid-column: 2 / 5; display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--ink-2); }
+.wo-rpe button { min-height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2); font-size: 12px; font-weight: 600; cursor: pointer; }
+.wo-rpe button.is-on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.wo-check { width: 44px; height: 44px; border-radius: 12px; border: 2px solid var(--line); background: var(--bg-2); display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.wo-check svg { width: 22px; height: 22px; color: transparent; }
+.wo-check.is-on { background: var(--good); border-color: var(--good); } .wo-check.is-on svg { color: #fff; }
+.wo-ex__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.wo-rest { position: fixed; left: 0; right: 0; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom)); background: var(--accent); color: var(--accent-ink); padding: 10px 16px; display: flex; align-items: center; gap: 12px; z-index: 11; animation: plFade 0.2s ease-out; }
+.wo-rest__time { font-family: var(--serif); font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 84px; }
+.wo-rest__bar { position: absolute; left: 0; top: 0; height: 3px; background: var(--amber); transition: width 1s linear; }
+.wo-rest button { min-height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent-ink) 35%, transparent); background: transparent; color: inherit; font-weight: 600; cursor: pointer; }
+
+.wo-picker { max-height: 70dvh; display: flex; flex-direction: column; gap: 10px; }
+.wo-picker__list { overflow: auto; -webkit-overflow-scrolling: touch; }
+.wo-picker__group { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); padding: 10px 0 4px; }
+.wo-picker__item { display: flex; width: 100%; text-align: left; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 4px; border: 0; border-bottom: 1px solid var(--line); background: transparent; cursor: pointer; font-size: 15px; }
+.wo-picker__item small { color: var(--ink-2); font-size: 12px; }
+
+.wo-days { display: flex; gap: 6px; }
+.wo-days button { flex: 1; min-height: 36px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg-2); font-size: 13px; font-weight: 600; cursor: pointer; }
+.wo-days button.is-on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.wo-tplex { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; padding: 10px 0; border-top: 1px solid var(--line); }
+.wo-tplex__fields { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 6px; }
+.wo-tplex__fields input { min-height: 38px; padding: 0 8px; font-size: 14px; }
+.wo-tplex__fields label { font-size: 11px; color: var(--ink-2); display: flex; flex-direction: column; gap: 2px; }
+.wo-tplex__btns { display: flex; flex-direction: column; gap: 4px; }
+.wo-tplex__btns button { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg-2); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+.wo-tplex__btns svg { width: 16px; height: 16px; }
+
+.wo-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.wo-table th { text-align: left; font-size: 12px; color: var(--ink-2); font-weight: 600; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+.wo-table td { padding: 8px 4px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.wo-table td:not(:first-child), .wo-table th:not(:first-child) { text-align: right; }
+
+.wo-chat { display: flex; flex-direction: column; gap: 10px; padding-bottom: 72px; }
+.wo-chat__bar { position: fixed; left: 0; right: 0; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); padding: 8px 12px; display: flex; gap: 8px; z-index: 9; }
+.wo-chat__bar .pl-input { min-height: 44px; }
+.wo-chat__bar button { width: 44px; min-height: 44px; }
+.wo-typing { display: inline-flex; gap: 4px; align-items: center; }
+.wo-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-2); animation: woDot 1s infinite; }
+.wo-typing span:nth-child(2) { animation-delay: 0.15s; } .wo-typing span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes woDot { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
