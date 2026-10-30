@@ -137,6 +137,32 @@ const toText = (html: string) => html.replace(/<style[\s\S]*?<\/style>/gi, '').r
   .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*/g, '\n\n').trim();
 
 /** The Message-ID Resend gave an email; a customer's reply quotes it, which is how the reply finds its conversation. */
+/** "2026-10-30" → "Thu, Oct 30" */
+export const dayLabel = (d: string) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+const torontoToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
+
+/** The work session a receipt belongs to: as sent by the app, else its sale's session, else the centre's live
+ *  session, else today (Toronto). Receipts are grouped by it in the mailbox's Sent folder. */
+// deno-lint-ignore no-explicit-any
+async function sessionDateFor(supabase: any, data: any): Promise<string> {
+  const ok = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+  if (ok(data.sessionDate)) return data.sessionDate;
+  try {
+    if (data.transactionId) {
+      const { data: tx } = await supabase.from('transactions').select('session_id').eq('id', data.transactionId).maybeSingle();
+      if (tx?.session_id) {
+        const { data: ls } = await supabase.from('logsheet_sessions').select('date').eq('id', tx.session_id).maybeSingle();
+        if (ok(ls?.date)) return ls.date;
+      }
+    }
+    if (data.commandCenterId) {
+      const { data: ds } = await supabase.from('daily_sessions').select('date').eq('command_center_id', data.commandCenterId).eq('is_active', true).maybeSingle();
+      if (ok(ds?.date)) return ds.date;
+    }
+  } catch { /* fall through */ }
+  return torontoToday();
+}
+
 async function resendMessageId(resendId: string): Promise<string | null> {
   const key = Deno.env.get('RESEND_RECEIVING_API_KEY') || Deno.env.get('RESEND_API_KEY');
   for (const wait of [0, 1500, 4000]) {
@@ -267,12 +293,16 @@ serve(async req => {
     await supabase.from('email_logs').insert({ transaction_id: data.transactionId, recipient_email: data.customerEmail, email_type: templateType,
       status: 'sent', resend_message_id: result.id });
 
-    // keep it in the centre's client mailbox; never fails the receipt
+    // keep it in the centre's client mailbox, in its session's group in Sent ("Receipts · Session Thu, Oct 30");
+    // never fails the receipt
     if (box && data.customerEmail) {
       try {
         const ext = result?.id ? await resendMessageId(result.id) : null;
-        await supabase.rpc('mail_log_outbound', { p_box: box.id, p_to: String(data.customerEmail), p_subject: finalSubject,
-          p_html: emailHtml, p_text: toText(emailHtml), p_resend_id: result?.id ?? null, p_ext_id: ext });
+        const session = await sessionDateFor(supabase, data);
+        const args = { p_box: box.id, p_to: String(data.customerEmail), p_subject: finalSubject,
+          p_html: emailHtml, p_text: toText(emailHtml), p_resend_id: result?.id ?? null, p_ext_id: ext };
+        const grouped = await supabase.rpc('mail_log_outbound', { ...args, p_batch_key: `receipts:${session}`, p_batch_label: `Receipts · Session ${dayLabel(session)}` });
+        if (grouped.error) await supabase.rpc('mail_log_outbound', args);   // groups not in this database yet
       } catch (e) { console.error('bright-processor: keep in mailbox', e instanceof Error ? e.message : e); }
     }
     return reply({ success: true, messageId: result.id, templateType, from: box?.address || 'receipts@propertystars.app' });

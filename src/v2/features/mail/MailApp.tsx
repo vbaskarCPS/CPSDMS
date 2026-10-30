@@ -5,18 +5,21 @@
 //     Unsorted.
 //   • Staff email (staff): a manager's own private mailbox, ben@propertystars.app (RUN_65).
 // The open conversation is ?t=<id>, the folder ?box=, the mailbox (staff, when they have several) ?mb=.
+// Sent (staff) also lists groups (RUN_70): each booking-email campaign and each session's receipts is one row,
+// opened with ?g=<key>&gb=<mailbox> — every email in it with Delivered / Bounced / Marked as spam / Didn't send.
 import type { LucideIcon } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Archive, ArchiveRestore, ArrowLeft, Download, Forward, Inbox as InboxIcon, Loader2, Mail, MailOpen, Paperclip, PenSquare, RefreshCw, Reply,
-  ReplyAll, Search, Send, Star, AlertTriangle, FolderInput, X,
+  ReplyAll, Search, Send, Star, AlertTriangle, FolderInput, X, Layers,
 } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
   attachmentUrl, boxName, fileSize, fileThread, flagThread, htmlToText, inbox, inboxCounts, initials, mailCounts, mailInbox, mailWhen, myBoxes, reSubject,
   thread as loadThread, type Box, type Message, type ThreadRow,
+  mailGroups, mailGroup, groupWaiting, emailState, type MailGroup,
 } from '../../lib/mail';
 import { Composer, type ComposeInit } from './Composer';
 import { PushToggle } from './PushToggle';
@@ -38,6 +41,7 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
   const [sp, setSp] = useSearchParams();
   const box = (sp.get('box') as Box) || 'inbox';
   const open = sp.get('t');
+  const g = sp.get('g'), gb = sp.get('gb');
   const mb = sp.get('mb');
   const [q, setQ] = useState('');
   const [search, setSearch] = useState('');
@@ -47,6 +51,13 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
   const mailbox = staff ? (boxesList.data?.find(b => b.id === mb) || boxesList.data?.[0] || null) : null;
   const list = useLoad(() => (staff ? mailInbox(box, search, mb) : inbox(box, search)), [staff, box, search, mb, tick]);
   const counts = useLoad(() => (staff ? mailCounts() : inboxCounts()), [staff, tick]);
+  // Sent: the groups, in among the conversations by when they last sent
+  const groups = useLoad(() => (staff && box === 'sent' && !search ? mailGroups(mb) : Promise.resolve([] as MailGroup[])), [staff, box, search, mb, tick]);
+  type Item = { kind: 't'; at: string; t: ThreadRow } | { kind: 'g'; at: string; g: MailGroup };
+  const items: Item[] | undefined = !list.data ? undefined : [
+    ...list.data.map(t => ({ kind: 't' as const, at: t.last_at, t })),
+    ...(groups.data || []).map(gr => ({ kind: 'g' as const, at: gr.last_at, g: gr })),
+  ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
   useEffect(() => { const t = setInterval(() => setTick(x => x + 1), 45000); return () => clearInterval(t); }, []);
   useEffect(() => { const t = setTimeout(() => setSearch(q.trim()), 300); return () => clearTimeout(t); }, [q]);
   // ?compose=1 (the home page's Compose): open a new email once the mailbox is known
@@ -58,10 +69,11 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sp, staff, boxesList.data]);
 
-  const go = (p: { box?: Box; t?: string | null; mb?: string }) => {
+  const go = (p: { box?: Box; t?: string | null; mb?: string; g?: { key: string; box: string } | null }) => {
     const n = new URLSearchParams(sp);
-    if (p.box) { n.set('box', p.box); n.delete('t'); }
-    if (p.mb) { n.set('mb', p.mb); n.delete('t'); }
+    if (p.box) { n.set('box', p.box); n.delete('t'); n.delete('g'); n.delete('gb'); }
+    if (p.mb) { n.set('mb', p.mb); n.delete('t'); n.delete('g'); n.delete('gb'); }
+    if (p.g !== undefined) { n.delete('t'); if (p.g) { n.set('g', p.g.key); n.set('gb', p.g.box); } else { n.delete('g'); n.delete('gb'); } }
     if (p.t !== undefined) { if (p.t) n.set('t', p.t); else n.delete('t'); }
     setSp(n, { replace: p.t === null });
   };
@@ -73,7 +85,7 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
   const title = folders.find(f => f.key === box)?.label || 'Inbox';
 
   return (
-    <div className={`v2-mail v2-mail-app${open ? ' has-open' : ''}`}>
+    <div className={`v2-mail v2-mail-app${open || g ? ' has-open' : ''}`}>
       <aside className="side">
         <button type="button" className="compose-btn" onClick={() => setCompose(newMessage())}><PenSquare size={20} />Compose</button>
         <nav aria-label="Folders">
@@ -108,7 +120,7 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
           <section className="list" aria-label="Conversations">
             <div className="list-head">
               <b>{search ? `Results for “${search}”` : title}</b>
-              {!search && !!list.data?.length && <span className="mut">{list.data.length}{list.data.length >= 60 ? '+' : ''}</span>}
+              {!search && !!items?.length && <span className="mut">{items.length}{(list.data?.length || 0) >= 60 ? '+' : ''}</span>}
             </div>
             {staff && (boxesList.data?.length || 0) > 1 && (
               <select className="box-pick" value={mailbox?.id || ''} onChange={e => go({ mb: e.target.value })} aria-label="Mailbox">
@@ -121,23 +133,26 @@ export const MailApp: React.FC<{ admin?: boolean; staff?: boolean; quick?: strin
             <div className="push-sm"><PushToggle compact /></div>
             {list.error ? <div className="empty err">{list.error instanceof Error ? list.error.message : 'Couldn’t load the mail'}</div>
               : list.loading && !list.data ? <Skeleton />
-              : !list.data?.length ? <EmptyBox box={box} search={search} staff={staff} />
+              : !items?.length ? <EmptyBox box={box} search={search} staff={staff} />
               : (
                 <ul className="rows">
-                  {list.data.map(t => <Row key={t.id} t={t} admin={admin} staff={staff} on={t.id === open} onOpen={() => go({ t: t.id })}
-                    onFlag={async f => { await flagThread(t.id, f); refresh(); }} />)}
+                  {items.map(it => it.kind === 'g'
+                    ? <GroupRow key={`g:${it.g.mailbox_id}:${it.g.key}`} g={it.g} on={g === it.g.key && gb === it.g.mailbox_id} onOpen={() => go({ g: { key: it.g.key, box: it.g.mailbox_id } })} />
+                    : <Row key={it.t.id} t={it.t} admin={admin} staff={staff} on={it.t.id === open} onOpen={() => go({ t: it.t.id })}
+                        onFlag={async f => { await flagThread(it.t.id, f); refresh(); }} />)}
                 </ul>)}
           </section>
 
           <section className="reader" aria-label="Conversation">
             {open ? <ThreadView key={open} id={open} admin={admin} staff={staff} quick={quick} mailboxAddress={mailbox?.address}
                 onBack={() => go({ t: null })} onChanged={refresh} onCompose={setCompose} />
+              : g && gb ? <GroupView key={`${gb}:${g}:${tick}`} box={gb} gkey={g} onBack={() => go({ g: null })} onOpen={id => go({ t: id })} />
               : <div className="empty big"><MailOpen size={40} strokeWidth={1.4} /><span>{list.data?.length ? 'Pick a conversation to read it here.' : 'Nothing open.'}</span></div>}
           </section>
         </div>
       </div>
 
-      {!open && <button type="button" className="compose-fab" onClick={() => setCompose(newMessage())}><PenSquare size={20} />Compose</button>}
+      {!open && !g && <button type="button" className="compose-fab" onClick={() => setCompose(newMessage())}><PenSquare size={20} />Compose</button>}
       {compose && <Composer init={compose} onClose={() => setCompose(null)} onSent={id => { setCompose(null); refresh(); go({ t: id }); }} />}
     </div>
   );
@@ -183,6 +198,72 @@ const Row: React.FC<{ t: ThreadRow; admin?: boolean; staff?: boolean; on: boolea
       </span>
       <button type="button" className={`star${t.starred ? ' on' : ''}`} onClick={() => onFlag({ starred: !t.starred })} aria-label={t.starred ? 'Unstar' : 'Star'} aria-pressed={t.starred}><Star size={18} /></button>
     </li>
+  );
+};
+
+// ───────────── a group in Sent: one campaign, or one session's receipts (RUN_70) ─────────────
+const Counts: React.FC<{ g: MailGroup }> = ({ g }) => {
+  const waiting = groupWaiting(g);
+  const bits: [number, string, string][] = [
+    [g.delivered, 'delivered', 'ok'], [g.bounced, 'bounced', 'bad'], [g.complained, 'marked as spam', 'bad'],
+    [g.failed, 'didn’t send', 'bad'], [g.delayed, 'delayed', 'warn'], [g.sending + waiting, 'waiting', 'mut'],
+  ];
+  return <span className="gcounts">{bits.filter(([n]) => n > 0).map(([n, l, tone]) => <span key={l} className={`gc ${tone}`}>{n} {l}</span>)}</span>;
+};
+
+const GroupRow: React.FC<{ g: MailGroup; on: boolean; onOpen: () => void }> = ({ g, on, onOpen }) => (
+  <li className={`row group${on ? ' on' : ''}`}>
+    <button type="button" className="hit" onClick={onOpen}>
+      <span className="av grp" aria-hidden="true"><Layers size={18} /></span>
+      <span className="main">
+        <span className="l1"><span className="who">{g.label || 'Group'}</span><span className="n">{g.emails} email{g.emails === 1 ? '' : 's'}</span>
+          <span className="when">{mailWhen(g.last_at)}</span></span>
+        <span className="l2"><Counts g={g} /></span>
+      </span>
+    </button>
+  </li>
+);
+
+const GroupView: React.FC<{ box: string; gkey: string; onBack: () => void; onOpen: (threadId: string) => void }> = ({ box, gkey, onBack, onOpen }) => {
+  const list = useLoad(() => mailGroup(box, gkey), [box, gkey]);
+  const rows = list.data || [];
+  const label = rows[0]?.label || 'Group';
+  const sum: MailGroup = {
+    key: gkey, mailbox_id: box, mailbox: '', emails: rows.length, first_at: '', last_at: '',
+    delivered: rows.filter(r => r.delivery === 'delivered' && r.status === 'sent').length, delayed: rows.filter(r => r.delivery === 'delayed').length,
+    bounced: rows.filter(r => r.delivery === 'bounced').length, complained: rows.filter(r => r.delivery === 'complained').length,
+    failed: rows.filter(r => r.status === 'failed').length, sending: rows.filter(r => r.status === 'sending').length,
+  };
+  return (
+    <div className="thread group-view">
+      <div className="bar">
+        <button type="button" className="icon back" onClick={onBack} aria-label="Back to the list"><ArrowLeft size={20} /></button>
+        <span style={{ flex: 1 }} />
+      </div>
+      <div className="scroll">
+        <h2>{label}</h2>
+        {!list.loading && <div className="about"><span className="tag">{rows.length} email{rows.length === 1 ? '' : 's'}</span><Counts g={sum} /></div>}
+        {list.error ? <div className="err">{list.error instanceof Error ? list.error.message : 'Couldn’t load this group'}</div>
+          : list.loading && !list.data ? <Skeleton />
+          : (
+            <ul className="rows gemails">
+              {rows.map(e => {
+                const st = emailState(e);
+                return (
+                  <li key={e.id} className="row">
+                    <button type="button" className="hit" onClick={() => onOpen(e.thread_id)}>
+                      <Avatar name={e.contact_name} email={e.to[0]} />
+                      <span className="main">
+                        <span className="l1"><span className="who">{e.contact_name || e.to[0] || 'Unknown'}</span><span className="when">{mailWhen(e.at)}</span></span>
+                        <span className="l2">{e.contact_name && e.to[0] ? <span className="mut">{e.to.join(', ')}</span> : e.subject}</span>
+                        <span className="l3"><span className={`gc ${st.tone}`}>{st.label}</span>{(e.delivery_reason || (st.tone === 'bad' && e.error)) && <span className="why"> — {e.delivery_reason || e.error}</span>}</span>
+                      </span>
+                    </button>
+                  </li>);
+              })}
+            </ul>)}
+      </div>
+    </div>
   );
 };
 
@@ -294,6 +375,7 @@ const MessageCard: React.FC<{ m: Message; meName?: string; open: boolean; last: 
         <span className="when">
           {!!m.attachments?.length && <Paperclip size={14} />}
           {m.status === 'failed' ? <span className="bad">Didn’t send</span> : m.status === 'sending' ? 'Sending…' : <span title={whenFull}>{open ? whenFull : mailWhen(m.at)}</span>}
+          {out && m.status === 'sent' && m.delivery && (() => { const st = emailState(m); return <span className={`gc ${st.tone}`} title={m.delivery_reason || undefined}>{st.label}</span>; })()}
           {open && last && <button type="button" className="icon sm" onClick={e => { e.stopPropagation(); onReply(); }} aria-label="Reply" title="Reply"><Reply size={17} /></button>}
         </span>
       </div>

@@ -13,7 +13,11 @@ export interface Attachment { name: string; type?: string; size?: number; path: 
 export interface Message {
   id: string; dir: 'in' | 'out'; status: 'sending' | 'sent' | 'failed' | 'received'; from_email?: string; from_name?: string;
   to: string[]; cc?: string[]; subject?: string; html?: string; text?: string; attachments?: Attachment[]; at: string; error?: string; by?: string;
+  delivery?: Delivery; delivery_reason?: string; group?: string;   // what Resend said after sending; its group in Sent (RUN_70)
 }
+/** What happened to a sent email after it left: Resend's delivery events (no opens). */
+export type Delivery = 'delivered' | 'delayed' | 'bounced' | 'complained';
+export const DELIVERY_LABEL: Record<Delivery, string> = { delivered: 'Delivered', delayed: 'Delayed', bounced: 'Bounced', complained: 'Marked as spam' };
 export interface Thread {
   id: string; subject: string; contact_email?: string; contact_name?: string; starred: boolean; archived: boolean; opted_out: boolean;
   business?: { id: string; name: string; address?: string; kind?: string; phone?: string } | null;
@@ -38,6 +42,7 @@ export async function fileThread(id: string, business: string, campaign: string)
 export interface Draft {
   thread_id?: string | null; business_id?: string | null; campaign_id?: string | null;
   staff?: boolean; mailbox_id?: string | null;          // a manager's own mailbox (staff email)
+  batch_key?: string; batch_label?: string;              // one of a campaign's emails: its group in Sent (RUN_70)
   to: string[]; cc: string[]; subject: string; html: string; text: string; attachments: Attachment[];
 }
 async function fnError(e: unknown, data: unknown): Promise<string> {
@@ -71,6 +76,33 @@ export async function myBoxes(): Promise<MailBox[]> { return (must(await db.rpc(
 export async function directory(): Promise<Contact[]> { return (must(await db.rpc('mail_directory')) as Contact[]) || []; }
 export async function mailInbox(box: Box = 'inbox', search?: string, mailbox?: string | null): Promise<ThreadRow[]> {
   return (must(await db.rpc('mail_inbox', { p_box: mailbox || null, p_folder: box, p_search: search || null })) as ThreadRow[]) || [];
+}
+/** A group in a mailbox's Sent folder: one booking-email campaign, or one session's receipts. */
+export interface MailGroup {
+  key: string; label?: string; mailbox_id: string; mailbox: string; mailbox_label?: string | null;
+  emails: number; first_at: string; last_at: string;
+  delivered: number; delayed: number; bounced: number; complained: number; failed: number; sending: number;
+}
+export interface GroupEmail {
+  id: string; thread_id: string; to: string[]; contact_name?: string; subject?: string; status: Message['status']; error?: string;
+  delivery?: Delivery; delivery_reason?: string; delivery_at?: string; at: string; label?: string;
+}
+export async function mailGroups(mailbox?: string | null): Promise<MailGroup[]> {
+  return (must(await db.rpc('mail_batches', { p_box: mailbox || null })) as MailGroup[]) || [];
+}
+export async function mailGroup(box: string, key: string): Promise<GroupEmail[]> {
+  return (must(await db.rpc('mail_batch', { p_box: box, p_key: key })) as GroupEmail[]) || [];
+}
+/** Sent through, no word back yet. */
+export const groupWaiting = (g: MailGroup) => Math.max(0, g.emails - g.delivered - g.delayed - g.bounced - g.complained - g.failed - g.sending);
+/** One email's state in a few words: Didn't send / Sending… / Bounced / Marked as spam / Delayed / Delivered / Sent. */
+export function emailState(e: { status: Message['status']; delivery?: Delivery }): { label: string; tone: 'bad' | 'warn' | 'ok' | 'mut' } {
+  if (e.status === 'failed') return { label: 'Didn’t send', tone: 'bad' };
+  if (e.status === 'sending') return { label: 'Sending…', tone: 'mut' };
+  if (e.delivery === 'bounced' || e.delivery === 'complained') return { label: DELIVERY_LABEL[e.delivery], tone: 'bad' };
+  if (e.delivery === 'delayed') return { label: 'Delayed', tone: 'warn' };
+  if (e.delivery === 'delivered') return { label: 'Delivered', tone: 'ok' };
+  return { label: 'Sent', tone: 'mut' };
 }
 export async function mailCounts(): Promise<{ unread: number; unsorted: number }> {
   const r = must(await db.rpc('mail_counts')) as { unread: number } | null;
