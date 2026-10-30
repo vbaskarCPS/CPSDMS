@@ -2,11 +2,13 @@
 import { useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { signIn } from '../lib/auth';
+import { app, appBase, appId } from '../lib/app';
 
 export function Login() {
   const nav = useNavigate();
   const location = useLocation();
-  const [username, setUsername] = useState(() => { try { return localStorage.getItem('vijay-planner-username') || ''; } catch { return ''; } });
+  const userKey = `${appId()}-username`;
+  const [username, setUsername] = useState(() => { try { return localStorage.getItem(userKey) || ''; } catch { return ''; } });
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +20,7 @@ export function Login() {
     const r = await signIn(username, pin);
     setBusy(false);
     if (r.ok) {
-      try { localStorage.setItem('vijay-planner-username', username.trim()); } catch { /* fine */ }
+      try { localStorage.setItem(userKey, username.trim()); } catch { /* fine */ }
       const from = (location.state as { from?: string } | null)?.from;
       nav(from && from !== '/login' ? from : '/', { replace: true });
       return;
@@ -34,10 +36,10 @@ export function Login() {
   return (
     <form className="pl-login pl-fade" onSubmit={submit}>
       <div className="pl-stack" style={{ gap: 14 }}>
-        <img className="pl-logo" src="/vijayplanner/icon-192.png" alt="" />
+        <img className="pl-logo" src={`${appBase()}/logo.svg`} alt="" />
         <div>
-          <p className="pl-eyebrow">Vijay Planner</p>
-          <h1>Own the night.</h1>
+          <p className="pl-eyebrow">{app().name}</p>
+          <h1>{app().tagline}</h1>
         </div>
       </div>
       <div className="pl-stack">

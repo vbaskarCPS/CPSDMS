@@ -7,8 +7,8 @@
   "scope": "/vijayplanner/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0f3d3e",
-  "theme_color": "#0f3d3e",
+  "background_color": "#101c3a",
+  "theme_color": "#101c3a",
   "icons": [
     { "src": "/vijayplanner/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
     { "src": "/vijayplanner/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }

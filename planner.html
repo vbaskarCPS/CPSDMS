@@ -2,16 +2,34 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/vijayplanner/icon-192.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0f3d3e" />
-    <link rel="manifest" href="/vijayplanner/manifest.json" />
-    <link rel="apple-touch-icon" href="/vijayplanner/icon-192.png" />
+    <!-- One page, two apps: the path picks the identity (Vijay at /vijayplanner, Rosh at /roshplanner).
+         The static tags below are Vijay's, as the fallback; this runs before the manifest link exists. -->
+    <script>
+      (function () {
+        var rosh = /^\/roshplanner(\/|$)/.test(location.pathname);
+        var app = rosh ? 'roshplanner' : 'vijayplanner';
+        var name = rosh ? 'Rosh Planner' : 'Vijay Planner', short = rosh ? 'Rosh' : 'Planner', color = rosh ? '#2b1b3d' : '#101c3a';
+        document.documentElement.dataset.theme = rosh ? 'plum' : 'navy';
+        document.title = name;
+        function tag(t, attrs) { var e = document.createElement(t); for (var k in attrs) e.setAttribute(k, attrs[k]); document.head.appendChild(e); }
+        tag('link', { rel: 'manifest', href: '/' + app + '/manifest.json' });
+        tag('link', { rel: 'icon', type: 'image/svg+xml', href: '/' + app + '/logo.svg' });
+        tag('link', { rel: 'apple-touch-icon', href: '/' + app + '/icon-192.png' });
+        tag('meta', { name: 'theme-color', content: color });
+        tag('meta', { name: 'apple-mobile-web-app-title', content: short });
+        tag('meta', { name: 'description', content: name });
+      })();
+    </script>
+    <noscript>
+      <link rel="manifest" href="/vijayplanner/manifest.json" />
+      <link rel="icon" type="image/png" href="/vijayplanner/icon-192.png" />
+      <link rel="apple-touch-icon" href="/vijayplanner/icon-192.png" />
+      <meta name="theme-color" content="#101c3a" />
+    </noscript>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Planner" />
-    <meta name="description" content="Vijay's personal planner" />
     <title>Vijay Planner</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

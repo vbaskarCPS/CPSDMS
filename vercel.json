@@ -3,6 +3,9 @@
       { "source": "/vijayplanner", "destination": "/planner.html" },
       { "source": "/vijayplanner/", "destination": "/planner.html" },
       { "source": "/vijayplanner/:path*", "destination": "/planner.html" },
+      { "source": "/roshplanner", "destination": "/planner.html" },
+      { "source": "/roshplanner/", "destination": "/planner.html" },
+      { "source": "/roshplanner/:path*", "destination": "/planner.html" },
       { "source": "/(.*)", "destination": "/index.html" }
     ]
   }

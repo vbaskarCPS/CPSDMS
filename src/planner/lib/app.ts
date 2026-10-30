@@ -17,6 +17,6 @@ export const app = () => APPS[appId()];
 export const appBase = (): string => `/${appId()}`;
 
 /** The profile for a signed-in person: their setting first, else the app they opened. */
-export function profileOf(settings?: { profile?: string } | null): Profile {
+export function profileOf(settings?: { profile?: unknown } | null): Profile {
   return settings?.profile === 'morning' || settings?.profile === 'night' ? settings.profile : app().profile;
 }

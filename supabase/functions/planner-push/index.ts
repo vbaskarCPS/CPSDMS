@@ -21,12 +21,24 @@ const cors = {
 };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 
-// Same defaults as src/planner/lib/routine.ts
-interface Routine { wake: string; wakeGrace: number; briefMinutes: number; daycare: string; eatOpen: string; eatClose: string; gym: string; shake: string; unwindCap: number; lightsOut: string }
-const DEFAULT_ROUTINE: Routine = {
+// Same defaults as src/planner/lib/routine.ts (night: Vijay, morning: Rosh); the app comes from settings.app
+type Profile = 'night' | 'morning';
+type AppId = 'vijayplanner' | 'roshplanner';
+interface Routine { profile: Profile; wake: string; wakeGrace: number; briefMinutes: number; daycare: string; eatOpen: string; eatClose: string; gym: string; shake: string; unwindCap: number; lightsOut: string; stretchMin: number; meditateMin: number; workoutMin: number; kiaanUp: string; fast: boolean }
+const NIGHT_ROUTINE: Routine = {
+  profile: 'night', stretchMin: 0, meditateMin: 0, workoutMin: 0, kiaanUp: '08:30', fast: true,
   wake: '08:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
   eatOpen: '18:00', eatClose: '23:00', gym: '21:00', shake: '23:00', unwindCap: 60, lightsOut: '01:00',
 };
+const MORNING_ROUTINE: Routine = {
+  profile: 'morning', stretchMin: 10, meditateMin: 10, workoutMin: 20, kiaanUp: '08:00', fast: false,
+  wake: '05:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
+  eatOpen: '07:00', eatClose: '20:00', gym: '06:00', shake: '20:00', unwindCap: 30, lightsOut: '21:00',
+};
+interface UserSettings { app?: string; profile?: string }
+const appOf = (s: UserSettings | null | undefined): AppId => (s?.app === 'roshplanner' ? 'roshplanner' : 'vijayplanner');
+const profileOf = (s: UserSettings | null | undefined, app: AppId): Profile => (s?.profile === 'morning' || s?.profile === 'night' ? s.profile : app === 'roshplanner' ? 'morning' : 'night');
+const APP_NAME: Record<AppId, string> = { vijayplanner: 'Vijay Planner', roshplanner: 'Rosh Planner' };
 
 type Sub = { endpoint: string; p256dh: string; auth: string };
 // deno-lint-ignore no-explicit-any
@@ -92,21 +104,27 @@ function clock(hhmm: string): string {
 interface Reminder { id: string; at: number; body: string; url: string; done: (day: DayDoc) => boolean }
 interface DayDoc { brief?: { finishedAt?: string }; ticks?: Record<string, string | undefined> }
 
-function reminders(r: Routine): Reminder[] {
+function reminders(r: Routine, app: AppId): Reminder[] {
+  const u = (path: string) => `/${app}${path}`;
+  if (r.profile === 'morning') return [
+    { id: 'wake', at: routineMin(minutesOf(r.wake)), body: 'Morning. Stretch, breathe, move — then the Brief.', url: u('/plan/morning'), done: d => !!d.ticks?.up },
+    { id: 'evening', at: routineMin(minutesOf(r.lightsOut) - 30), body: 'Evening review, then bed with Kiaan.', url: u('/plan/night'), done: d => !!d.ticks?.lightsOut },
+    { id: 'bed', at: routineMin(minutesOf(r.lightsOut) - 10), body: 'Lights out.', url: u('/plan/night'), done: d => !!d.ticks?.lightsOut },
+  ];
   return [
-    { id: 'wake', at: routineMin(minutesOf(r.wake)), body: `Morning. Bed Brief — ${r.briefMinutes} minutes, from bed.`, url: '/vijayplanner/plan/brief', done: d => !!d.brief?.finishedAt },
-    { id: 'window', at: routineMin(minutesOf(r.eatOpen) - 15), body: `Eating window opens at ${clock(r.eatOpen)}. Protein first.`, url: '/vijayplanner/food', done: d => !!d.ticks?.dinner },
-    { id: 'gym', at: routineMin(minutesOf(r.gym) - 20), body: `Gym at ${clock(r.gym)} with the boys.`, url: '/vijayplanner/workout', done: d => !!d.ticks?.gym },
-    { id: 'shake', at: routineMin(minutesOf(r.shake)), body: 'Shake, then Miracle Night.', url: '/vijayplanner/plan/night', done: d => !!d.ticks?.shake },
-    { id: 'lightsOut', at: routineMin(minutesOf(r.lightsOut) - 15), body: 'Lights out in 15.', url: '/vijayplanner/plan/night', done: d => !!d.ticks?.lightsOut },
+    { id: 'wake', at: routineMin(minutesOf(r.wake)), body: `Morning. Bed Brief — ${r.briefMinutes} minutes, from bed.`, url: u('/plan/brief'), done: d => !!d.brief?.finishedAt },
+    { id: 'window', at: routineMin(minutesOf(r.eatOpen) - 15), body: `Eating window opens at ${clock(r.eatOpen)}. Protein first.`, url: u('/food'), done: d => !!d.ticks?.dinner },
+    { id: 'gym', at: routineMin(minutesOf(r.gym) - 20), body: `Gym at ${clock(r.gym)} with the boys.`, url: u('/workout'), done: d => !!d.ticks?.gym },
+    { id: 'shake', at: routineMin(minutesOf(r.shake)), body: 'Shake, then Miracle Night.', url: u('/plan/night'), done: d => !!d.ticks?.shake },
+    { id: 'lightsOut', at: routineMin(minutesOf(r.lightsOut) - 15), body: 'Lights out in 15.', url: u('/plan/night'), done: d => !!d.ticks?.lightsOut },
   ];
 }
 
 /** Which reminders fire at `now`: within [t, t+10 min) and not yet logged or already done. Pure. */
-export function dueReminders(r: Routine, now: Date, log: Record<string, string>, day: DayDoc): Reminder[] {
+export function dueReminders(r: Routine, now: Date, log: Record<string, string>, day: DayDoc, app: AppId = 'vijayplanner'): Reminder[] {
   const t = local(now);
   const nowMin = routineMin(t.h * 60 + t.min);
-  return reminders(r).filter(x => nowMin >= x.at && nowMin < x.at + 10 && !log[x.id] && !x.done(day));
+  return reminders(r, app).filter(x => nowMin >= x.at && nowMin < x.at + 10 && !log[x.id] && !x.done(day));
 }
 
 async function doc<T>(svc: Svc, userId: string, kind: string, key: string): Promise<T | null> {
@@ -129,7 +147,8 @@ Deno.serve(async req => {
       const anon = createClient(url, Deno.env.get('SUPABASE_ANON_KEY')!, { auth: { persistSession: false } });
       const { data: me, error } = await anon.rpc('planner_me', { p_token: b.token || '' });
       if (error || !me?.ok) return json({ error: 'signed_out' }, 401);
-      const r = await sendAll(svc, me.user.id, { title: 'Vijay Planner', body: 'Notifications are on.', url: '/vijayplanner/', tag: 'test', icon: '/vijayplanner/icon-192.png' });
+      const app = appOf(me.user.settings as UserSettings);
+      const r = await sendAll(svc, me.user.id, { title: APP_NAME[app], body: 'Notifications are on.', url: `/${app}/`, tag: 'test', icon: `/${app}/icon-192.png` });
       return json({ ok: true, ...r });
     }
 
@@ -141,17 +160,19 @@ Deno.serve(async req => {
       const now = new Date();
       const dayKey = plannerDayKey(now);
       let sent = 0, skipped = 0;
-      const { data: users } = await svc.from('planner_users').select('id');
-      for (const u of (users || []) as { id: string }[]) {
+      const { data: users } = await svc.from('planner_users').select('id, settings');
+      for (const u of (users || []) as { id: string; settings: UserSettings | null }[]) {
         const subs = await subsOf(svc, u.id);
         if (!subs.length) continue;
-        const routine = { ...DEFAULT_ROUTINE, ...((await doc<Partial<Routine>>(svc, u.id, 'prefs', 'routine')) || {}) };
+        const app = appOf(u.settings);
+        const profile = profileOf(u.settings, app);
+        const routine: Routine = { ...(profile === 'morning' ? MORNING_ROUTINE : NIGHT_ROUTINE), ...((await doc<Partial<Routine>>(svc, u.id, 'prefs', 'routine')) || {}), profile };
         const log = (await doc<Record<string, string>>(svc, u.id, 'pushlog', dayKey)) || {};
         const day = (await doc<DayDoc>(svc, u.id, 'day', dayKey)) || {};
-        const due = dueReminders(routine, now, log, day);
+        const due = dueReminders(routine, now, log, day, app);
         if (!due.length) { skipped++; continue; }
         for (const rem of due) {
-          const r = await sendAll(svc, u.id, { title: 'Vijay Planner', body: rem.body, url: rem.url, tag: rem.id, icon: '/vijayplanner/icon-192.png' });
+          const r = await sendAll(svc, u.id, { title: APP_NAME[app], body: rem.body, url: rem.url, tag: rem.id, icon: `/${app}/icon-192.png` });
           sent += r.sent;
           log[rem.id] = now.toISOString();
         }
