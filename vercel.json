@@ -1,5 +1,6 @@
 {
     "rewrites": [
+      { "source": "/", "has": [{ "type": "host", "value": "planner.propertystars.app" }], "destination": "/vijayplanner/" },
       { "source": "/vijayplanner", "destination": "/planner.html" },
       { "source": "/vijayplanner/", "destination": "/planner.html" },
       { "source": "/vijayplanner/:path*", "destination": "/planner.html" },

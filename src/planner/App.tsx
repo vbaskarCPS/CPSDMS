@@ -13,8 +13,9 @@ import { habitsRoutes } from './features/habits';
 import { workoutRoutes } from './features/workout';
 import { foodRoutes } from './features/food';
 import { moneyRoutes } from './features/money';
+import { cycleRoutes } from './features/cycle';
 
-const featureRoutes = [...planRoutes, ...habitsRoutes, ...workoutRoutes, ...foodRoutes, ...moneyRoutes];
+const featureRoutes = [...planRoutes, ...habitsRoutes, ...workoutRoutes, ...foodRoutes, ...moneyRoutes, ...cycleRoutes];
 
 export function PlannerApp() {
   const [pass, setPass] = useState<PlannerPass | null>(() => getPass());

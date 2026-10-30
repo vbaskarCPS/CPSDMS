@@ -33,7 +33,7 @@ const NIGHT_ROUTINE: Routine = {
 const MORNING_ROUTINE: Routine = {
   profile: 'morning', stretchMin: 10, meditateMin: 10, workoutMin: 20, kiaanUp: '08:00', fast: false,
   wake: '05:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '07:00', eatClose: '20:00', gym: '06:00', shake: '20:00', unwindCap: 30, lightsOut: '21:00',
+  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', unwindCap: 30, lightsOut: '21:00',
 };
 interface UserSettings { app?: string; profile?: string }
 const appOf = (s: UserSettings | null | undefined): AppId => (s?.app === 'roshplanner' ? 'roshplanner' : 'vijayplanner');
