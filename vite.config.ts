@@ -21,13 +21,34 @@ function precacheManifest(): Plugin {
       if (existsSync(sw)) writeFileSync(sw, readFileSync(sw, 'utf8').replace("const BUILD = 'dev';", `const BUILD = '${version}';`));
     },
     generateBundle(_opts, bundle) {
-      const files = Object.keys(bundle).filter(f => /\.(js|css|html|svg|png|woff2?)$/.test(f) && !f.endsWith('.map'));
+      // the planner (planner.html, src/planner) is its own app; the field app's phones don't keep it
+      const files = Object.keys(bundle).filter(f => /\.(js|css|html|svg|png|woff2?)$/.test(f) && !f.endsWith('.map') && !/^planner\.html$|\/planner-[^/]*\.(js|css)$/.test(f));
       const urls = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png', '/logo.svg', ...files.filter(f => f !== 'index.html').map(f => `/${f}`)];
       this.emitFile({ type: 'asset', fileName: 'precache.json', source: JSON.stringify({ version, urls: [...new Set(urls)] }) });
     },
   };
 }
 
+/** Vijay Planner (src/planner) is a second page, planner.html, served at /vijayplanner/* (vercel.json
+ *  rewrites it in production; this does the same for the dev server). Its own manifest makes it a
+ *  separate home-screen app next to the field app. */
+function plannerPage(): Plugin {
+  return {
+    name: 'cps-planner-page',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        if (req.url && /^\/vijayplanner(\/|$|\?)/.test(req.url) && !/\.\w+(\?|$)/.test(req.url)) req.url = '/planner.html';
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), precacheManifest()],
+  plugins: [react(), precacheManifest(), plannerPage()],
+  build: {
+    rollupOptions: {
+      input: { main: resolve(__dirname, 'index.html'), planner: resolve(__dirname, 'planner.html') },
+    },
+  },
 });
