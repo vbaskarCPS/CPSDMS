@@ -12,7 +12,7 @@ import type { RecurringPrefs } from '../types';
 export function Recurring() {
   const m = monthKey();
   const { months, loading } = useMoney(shiftMonth(m, -3), m);
-  const prefs = useDoc<RecurringPrefs>('prefs', 'recurringIgnore', { ignore: [] }, 300);
+  const prefs = useDoc<RecurringPrefs>('moneyprefs', 'recurringIgnore', { ignore: [] }, 300);
   const [showHidden, setShowHidden] = useState(false);
   const [toast, say] = useToast();
   const list = useMemo(() => findRecurring(months, m, showHidden ? [] : prefs.data.ignore), [months, m, prefs.data.ignore, showHidden]);

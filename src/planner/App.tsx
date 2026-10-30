@@ -2,6 +2,8 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { getPass, onPassChange, refreshMe, type PlannerPass } from './lib/auth';
+import { profileOf } from './lib/app';
+import { setProfile } from './lib/routine';
 import { Shell } from './ui/Shell';
 import { Login } from './screens/Login';
 import { Today } from './screens/Today';
@@ -19,6 +21,8 @@ export function PlannerApp() {
   const location = useLocation();
 
   useEffect(() => onPassChange(setPass), []);
+  // the routine's defaults follow the signed-in person's profile (night: Vijay, morning: Rosh)
+  useEffect(() => { setProfile(profileOf(pass?.user.settings)); }, [pass?.user.settings?.profile]); // eslint-disable-line react-hooks/exhaustive-deps
   // once per open: make sure the server still knows this pass, and pick up settings changed elsewhere
   useEffect(() => { if (pass) void refreshMe(); }, [pass?.token]); // eslint-disable-line react-hooks/exhaustive-deps
   // new page → top of it
