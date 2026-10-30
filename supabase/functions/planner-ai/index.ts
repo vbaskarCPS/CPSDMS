@@ -8,6 +8,8 @@
 //   POST { token, action: 'categorize', merchants: [string], categories: [string] }
 //        → { categories: { [merchant]: category } }
 //   POST { token, action: 'reflect', context }                     → { reply }  (2–3 sentences on the day)
+//   POST { token, action: 'statement', text, hint? }               → { rows: [{ date, desc, amount, balance? }], period?, account_type? }
+//        (text of a bank-statement PDF, account numbers already masked by the browser)
 //
 // The planner token (planner_sign_in) is checked with planner_me through the anon client; nothing runs
 // without it. Deployed without JWT verification because planner users have no Supabase account.
@@ -61,6 +63,16 @@ const REFLECT_SYSTEM = `You are a warm, direct high-performance coach reviewing 
 intentions, priorities, habits, evening answers, scores). Reply in 2–3 short sentences, second person: one thing
 to appreciate, one honest observation, one small adjustment for tomorrow. No lists, no headings, no emojis.`;
 
+const STATEMENT_SYSTEM = `You turn the text of a Canadian bank or credit-card statement (TD and similar) into transactions.
+Reply with JSON only: {"account_type":"chequing|savings|credit","period":{"from":"YYYY-MM-DD","to":"YYYY-MM-DD"},
+"rows":[{"date":"YYYY-MM-DD","desc":"","amount":0,"balance":0}]}
+Rules: one row per transaction line, in statement order. amount is NEGATIVE for money out (withdrawals, purchases,
+fees, transfers out) and POSITIVE for money in (deposits, payments received, refunds). "balance" is the running
+balance when the statement prints one on that line, else omit it. Dates often lack a year (e.g. "AUG04"): take the
+year from the statement period. Skip headings, STARTING/OPENING/CLOSING BALANCE, totals, fee summaries, addresses,
+and any line that is not a transaction. Keep desc as printed, trimmed, without the amount. Masked numbers (####)
+stay as they are. If a line's columns are ambiguous, use the running balance to decide the sign. No text outside the JSON.`;
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -98,6 +110,13 @@ Deno.serve(async req => {
     if (action === 'reflect') {
       const reply = await claude(REFLECT_SYSTEM, [{ role: 'user', content: `Today (JSON):\n${JSON.stringify(b.context ?? {}).slice(0, 12000)}` }], 400);
       return json({ reply });
+    }
+    if (action === 'statement') {
+      const text = typeof b.text === 'string' ? b.text.slice(0, 60000) : '';
+      if (!text.trim()) return json({ error: 'No text' }, 400);
+      const hint = typeof b.hint === 'string' ? b.hint : '';
+      const out = await claude(STATEMENT_SYSTEM, [{ role: 'user', content: `${hint ? `Hint: ${hint}\n\n` : ''}Statement text:\n${text}` }], 8192);
+      return json(parseJson(out));
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];

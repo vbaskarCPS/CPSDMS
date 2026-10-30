@@ -1,10 +1,11 @@
-// /money/import — a CSV from the bank → categorized transactions.
+// /money/import — a CSV or a PDF statement from the bank → categorized transactions. PDFs are read with AI.
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileUp, Info } from 'lucide-react';
 import { Page, Header, Card, Button, Field, Input, Stat, useToast, uid } from '../../../ui/primitives';
 import { useMoney } from '../useMoney';
 import { importCsv } from '../importers';
+import { importPdf } from '../importers/pdf';
 import { categorizeAll, mergeTxns, saveAccount, loadMonths } from '../lib';
 import type { Account, AccountType, Txn } from '../types';
 
@@ -17,7 +18,7 @@ export function Import() {
   const [accountId, setAccountId] = useState('');
   const [newAcc, setNewAcc] = useState<{ name: string; type: AccountType; last4: string } | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [busy, setBusy] = useState<'reading' | 'importing' | null>(null);
+  const [busy, setBusy] = useState<'reading' | 'ai' | 'importing' | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [toast, say] = useToast();
   const chosen = accountId || (live.length === 1 && !newAcc ? live[0].id : '');
@@ -31,9 +32,16 @@ export function Import() {
     setErr(null); setPreview(null); setBusy('reading');
     try {
       const accId = chosen || 'pending';
-      const text = await f.text();
-      const r = importCsv(text, accId);
-      if (!r || !r.txns.length) { setErr("Couldn't find transactions in that file. TD EasyWeb → Accounts → pick the account → Download → CSV."); return; }
+      let r: { txns: Txn[]; importer: { name: string } } | null;
+      if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf') {
+        setBusy('ai');
+        const pr = await importPdf(f, accId);
+        r = { txns: pr.txns, importer: { name: `PDF statement · AI · ${pr.pages} page${pr.pages === 1 ? '' : 's'}` } };
+        if (newAcc && !newAcc.name.trim() && pr.accountType) setNewAcc({ ...newAcc, name: pr.accountType === 'credit' ? 'Credit card' : pr.accountType === 'savings' ? 'Savings' : 'Chequing', type: pr.accountType as AccountType });
+      } else {
+        r = importCsv(await f.text(), accId);
+      }
+      if (!r || !r.txns.length) { setErr("Couldn't find transactions in that file. TD EasyWeb → Accounts → pick the account → Download → CSV, or a PDF statement from Documents."); return; }
       const dates = r.txns.map(t => t.date).sort();
       const existing = await loadMonths(dates[0].slice(0, 7), dates[dates.length - 1].slice(0, 7));
       const known = new Set(Object.values(existing).flat().map(t => t.id));
@@ -97,12 +105,12 @@ export function Import() {
       <Card className="pl-stack">
         <p className="pl-eyebrow">2 · File</p>
         <label className={`mo-file ${!accountReady ? 'pl-muted' : ''}`}>
-          <input type="file" accept=".csv,text/csv" disabled={!accountReady || busy !== null} onChange={e => void onFile(e.target.files?.[0])} />
+          <input type="file" accept=".csv,.pdf,text/csv,application/pdf" disabled={!accountReady || busy !== null} onChange={e => void onFile(e.target.files?.[0])} />
           <FileUp />
-          <b>{busy === 'reading' ? 'Reading…' : preview ? preview.fileName : 'Choose a CSV'}</b>
+          <b>{busy === 'ai' ? 'Reading the statement with AI…' : busy === 'reading' ? 'Reading…' : preview ? preview.fileName : 'Choose a CSV or PDF statement'}</b>
           <small className="pl-muted">{accountReady ? 'Tap to pick the file from your phone' : 'Pick or name an account first'}</small>
         </label>
-        <p className="pl-row pl-muted" style={{ fontSize: 13, alignItems: 'flex-start' }}><Info style={{ width: 16, height: 16, flex: 'none', marginTop: 2 }} /><span>TD EasyWeb: Accounts → the account → <b>Download</b> → CSV. Credit cards export the same way.</span></p>
+        <p className="pl-row pl-muted" style={{ fontSize: 13, alignItems: 'flex-start' }}><Info style={{ width: 16, height: 16, flex: 'none', marginTop: 2 }} /><span>TD EasyWeb: Accounts → the account → <b>Download</b> → CSV, or <b>Documents</b> → a monthly statement PDF. PDFs are read by AI (about 2¢ each); account numbers are masked before anything leaves your phone.</span></p>
         {err && <p className="pl-error">{err}</p>}
       </Card>
 

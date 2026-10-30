@@ -54,3 +54,11 @@ export async function shrinkImage(file: File, max = 1280, quality = 0.82): Promi
   const dataUrl = c.toDataURL('image/jpeg', quality);
   return { base64: dataUrl.split(',')[1], mediaType: 'image/jpeg', dataUrl };
 }
+
+export interface StatementRow { date: string; desc: string; amount: number; balance?: number }
+export interface StatementResult { rows: StatementRow[]; period?: { from: string; to: string }; account_type?: string }
+/** The text of a bank-statement PDF (already masked) → transactions. */
+export async function parseStatement(text: string, hint?: string): Promise<StatementResult> {
+  const r = await invoke<StatementResult>({ action: 'statement', text, hint });
+  return { rows: Array.isArray(r.rows) ? r.rows : [], period: r.period, account_type: r.account_type };
+}
