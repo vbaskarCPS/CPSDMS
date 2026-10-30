@@ -19,11 +19,9 @@ import type { Map as MapboxMap, GeoJSONSource } from 'mapbox-gl';
 import type { MasterBooking, PendingSale, HistoricalProperty } from '../../../types';
 import type { PCLClientGroup } from '../../../lib/pclCacheService';
 import {
-  SavedRouteMap, RouteHouse, HouseDisposition,
-  fetchRouteHouses, fetchDispositions, subscribeToDispositions,
-  indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews, seasonJobsAsHistorical,
-  buildHouseTiles, houseColor, routeHouseId, houseMapNumber, tileCentre,
+  SavedRouteMap, RouteHouse, HouseDisposition, subscribeToDispositions, indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews, seasonJobsAsHistorical, buildHouseTiles, houseColor, routeHouseId, houseMapNumber, tileCentre,
 } from '../../../lib/mapLogsheetService';
+import { fetchDispositions, fetchRouteHouses } from '../../../lib/offline/rmReads';   // (through the phone's copy: with no signal, the latest copy)
 import {
   BuildingMatch, BuildingStyle, matchHousesToBuildings, addBuildingLayers, applyBuildingStyles,
   addSliceLayers, setSliceData, removeSliceLayers, emptyBuildingMatch, buildingMatchSig, GapHouse,

@@ -76,3 +76,8 @@ export function cacheMethods<T extends object>(obj: T, prefix: string, names: (k
     (obj as Record<string, unknown>)[n] = (...args: unknown[]) => fieldRead(readKey(`${prefix}.${n}`, args), () => bound(...args));
   }
 }
+
+/** The same function, but its answers go through the phone's copy (keyed by name + arguments). */
+export function cachedFn<A extends unknown[], R>(name: string, fn: (...a: A) => Promise<R>): (...a: A) => Promise<R> {
+  return (...a: A) => fieldRead(readKey(name, a), () => fn(...a));
+}

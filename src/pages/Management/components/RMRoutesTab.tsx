@@ -944,7 +944,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
             
             <div className="space-y-1 max-h-80 overflow-y-auto custom-scrollbar pr-1">
               <button
-                onClick={() => handleAssignConfirm(null)}
+                data-change onClick={() => handleAssignConfirm(null)}
                 className="w-full text-left px-3 py-3 text-red-400 hover:bg-red-900/10 rounded flex items-center gap-2 mb-2 text-sm border border-transparent hover:border-red-900/30 transition-all"
               >
                 <AlertCircle size={16} /> Unassign {assignModalData.type === 'ROUTE' ? 'Route' : 'Job'}
@@ -969,7 +969,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                   return (
                     <button
                       key={cartId}
-                      onClick={() => handleAssignConfirm(primaryWorker.contractorId)}
+                      data-change onClick={() => handleAssignConfirm(primaryWorker.contractorId)}
                       className={`w-full text-left px-3 py-3 rounded text-sm flex items-center justify-between gap-3 transition-colors ${
                         isSelected 
                           ? selectedRowClass 
@@ -1032,7 +1032,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                   return (
                     <button
                       key={w.contractorId}
-                      onClick={() => handleAssignConfirm(w.contractorId)}
+                      data-change onClick={() => handleAssignConfirm(w.contractorId)}
                       className={`w-full text-left px-3 py-2.5 rounded text-sm flex items-center justify-between gap-3 transition-colors ${
                           isSelected 
                           ? 'bg-cps-blue/20 border border-cps-blue/50 text-white' 
@@ -1070,7 +1070,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
               <>
                 <div className="border-t border-gray-700 my-3"></div>
                 <button
-                  onClick={openTransferModal}
+                  data-change onClick={openTransferModal}
                   className="w-full px-3 py-3 text-blue-400 hover:bg-blue-900/10 rounded flex items-center gap-2 text-sm border border-transparent hover:border-blue-900/30 transition-all"
                 >
                   <Shuffle size={16} /> Transfer to Manager
@@ -1100,7 +1100,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                 return (
                   <button
                     key={manager.userId}
-                    onClick={() => handleTransferConfirm(manager.userId)}
+                    data-change onClick={() => handleTransferConfirm(manager.userId)}
                     className="w-full text-left px-3 py-3 rounded text-sm flex items-center gap-3 transition-colors text-gray-300 hover:bg-gray-800 border border-transparent hover:border-blue-900/30"
                   >
                     <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-700 flex items-center justify-center text-blue-300 font-bold text-xs">

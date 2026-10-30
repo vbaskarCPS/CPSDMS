@@ -815,7 +815,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                 UP
               </span>
               <button
-                onClick={(e) => { e.stopPropagation(); handleToggleUpsells(member.contractorId, member.upsellsEnabled !== false); }}
+                data-change onClick={(e) => { e.stopPropagation(); handleToggleUpsells(member.contractorId, member.upsellsEnabled !== false); }}
                 className={`relative inline-flex h-3 w-5 flex-shrink-0 cursor-pointer rounded-full border transition-colors duration-200 ease-in-out focus:outline-none items-center ${
                   member.upsellsEnabled !== false ? 'bg-purple-600 border-purple-600' : 'bg-gray-600 border-gray-600'
                 }`}
@@ -890,13 +890,13 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                   {!transferModeId ? (
                     <div className="flex flex-col">
                       <button
-                        onClick={() => setTransferModeId(member.contractorId)}
+                        data-change onClick={() => setTransferModeId(member.contractorId)}
                         className="flex items-center gap-2 px-3 py-2 text-xs text-blue-300 hover:bg-gray-700 text-left"
                       >
                         <ArrowRight size={14} /> Transfer Contractor
                       </button>
                       <button
-                        onClick={() => handleRemove(member.contractorId)}
+                        data-change onClick={() => handleRemove(member.contractorId)}
                         className="flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-gray-700 text-left border-t border-gray-700"
                       >
                         <Trash2 size={14} /> Remove Contractor
@@ -920,7 +920,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       </select>
                       <button
                         disabled={!selectedTransferManager}
-                        onClick={() => handleTransfer(member.contractorId)}
+                        data-change onClick={() => handleTransfer(member.contractorId)}
                         className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs py-1 rounded"
                       >
                         Confirm
@@ -989,7 +989,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             {formatAsphaltDollars(asphalt.asphaltAmount)}
           </span>
           <button
-            onClick={() => handleUnassignAsphalt(asphalt.id, address)}
+            data-change onClick={() => handleUnassignAsphalt(asphalt.id, address)}
             disabled={isUnassigning}
             title="Unassign — returns this row to the unassigned queue"
             className="flex items-center gap-1 px-2 py-1 bg-gray-700 hover:bg-red-900/40 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300 hover:text-red-300 border border-gray-600 hover:border-red-700 rounded text-[10px] font-bold transition-colors"
@@ -1256,7 +1256,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                 <span>{carts.length} cart{carts.length !== 1 ? 's' : ''} • {teamMembers.length} workers</span>
               </div>
               <button
-                onClick={openReassignModal}
+                data-change onClick={openReassignModal}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-900/30 hover:bg-orange-900/50 text-orange-300 border border-orange-700/50 text-xs font-bold transition-colors"
               >
                 <ArrowRightLeft size={13} />
@@ -1355,7 +1355,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                         return (
                           <button
                             key={member.contractorId}
-                            onClick={() => selectWorkerToMove(member, cart)}
+                            data-change onClick={() => selectWorkerToMove(member, cart)}
                             className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors text-sm ${
                               isSelected ? 'bg-orange-900/30 text-orange-200' : 'hover:bg-gray-700/50 text-gray-300'
                             }`}
@@ -1418,7 +1418,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                                 <button
                                   key={targetCart.sessionId}
                                   disabled={reassignLoading}
-                                  onClick={() => handleReassignWorker({
+                                  data-change onClick={() => handleReassignWorker({
                                     type: 'existing_cart',
                                     targetSessionId: targetCart.sessionId,
                                     label,
@@ -1450,7 +1450,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Split off</p>
                       <button
                         disabled={reassignLoading || selectedWorkerCart?.members.length === 1}
-                        onClick={() => handleReassignWorker({ type: 'new_solo' })}
+                        data-change onClick={() => handleReassignWorker({ type: 'new_solo' })}
                         className="w-full text-left px-3 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 hover:border-yellow-500 rounded-lg transition-colors flex items-center justify-between gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <div className="flex items-center gap-2">
@@ -1486,7 +1486,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                           </select>
                           <button
                             disabled={reassignLoading || !reassignManagerId}
-                            onClick={() => handleReassignWorker({ type: 'different_manager', targetManagerId: reassignManagerId })}
+                            data-change onClick={() => handleReassignWorker({ type: 'different_manager', targetManagerId: reassignManagerId })}
                             className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg text-sm font-bold transition-colors disabled:cursor-not-allowed"
                           >
                             {reassignLoading ? <Loader size={14} className="animate-spin" /> : <Shuffle size={14} />}
@@ -1501,7 +1501,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">No-show</p>
                       <button
                         disabled={reassignLoading}
-                        onClick={handleRemoveWorkerNoShow}
+                        data-change onClick={handleRemoveWorkerNoShow}
                         className="w-full text-left px-3 py-2.5 bg-gray-800 hover:bg-red-900/20 border border-gray-600 hover:border-red-700 rounded-lg transition-colors flex items-center justify-between gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <div className="flex items-center gap-2">

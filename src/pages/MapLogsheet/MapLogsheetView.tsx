@@ -12,6 +12,7 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import mapboxgl from 'mapbox-gl';
+import { fieldMapStyle, plainMapWithoutSignal } from '../../lib/offline/basemap';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { Navigation, Loader, Crosshair } from 'lucide-react';
 import { Worker } from '../../types';
@@ -319,11 +320,12 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     const restorePixelRatio = installPixelRatioCap();
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
+      style: fieldMapStyle('mapbox://styles/mapbox/streets-v12'),
       center: [-79.870, 43.320],
       zoom: 13,
       attributionControl: false,
     });
+    plainMapWithoutSignal(map);   // no signal: a plain background, but the routes, houses and pins still draw
 
     map.on('load', () => {
       map.resize();

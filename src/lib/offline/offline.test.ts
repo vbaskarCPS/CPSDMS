@@ -169,3 +169,27 @@ describe('"nothing" from Supabase in a dead zone', () => {
     off(); setReadMode('serverFirst'); markOnline();
   });
 });
+
+describe('route managers with no signal: view only', () => {
+  it('a change is refused at once (never sent); reads still go out and bring changes back', async () => {
+    const { setViewOnlyWhenOffline, onChangeBlocked, isChange } = await import('./net');
+    expect(isChange('https://x.supabase.co/rest/v1/route_splits', { method: 'PATCH' })).toBe(true);
+    expect(isChange('https://x.supabase.co/rest/v1/route_splits?select=*')).toBe(false);
+    expect(isChange('https://x.supabase.co/auth/v1/token', { method: 'POST' })).toBe(false);
+    expect(isChange('https://x.supabase.co/rest/v1/rpc/get_team', { method: 'POST' })).toBe(false);
+    let sent = 0, blocked = 0;
+    const off = onChangeBlocked(() => blocked++);
+    const f = trackedFetch(async () => { sent++; return new Response('[]'); });
+    setViewOnlyWhenOffline(true); markOffline();
+    await expect(f('https://x.supabase.co/rest/v1/route_splits', { method: 'PATCH' })).rejects.toThrow(/view only/);
+    expect([sent, blocked]).toEqual([0, 1]);
+    await f('https://x.supabase.co/rest/v1/route_splits?select=*');            // a read gets through…
+    expect(netState()).toBe('online');
+    await f('https://x.supabase.co/rest/v1/route_splits', { method: 'PATCH' });  // …so changes are back on
+    expect(sent).toBe(2);
+    setViewOnlyWhenOffline(false); markOffline();                                // workers: not view only
+    await f('https://x.supabase.co/rest/v1/pending_sales', { method: 'POST' });
+    expect(sent).toBe(3);
+    off(); markOnline();
+  });
+});

@@ -23,6 +23,8 @@ import {
 } from '../../types';
 import CreditCardModal from '../../components/CreditCardModal';
 import BamboraLiveModal from '../../components/BamboraLiveModal';
+import { isOffline } from '../../lib/offline/net';
+import { NoSignalCardSheet } from '../../components/NoSignalCardSheet';
 import EtransferProtocolModal from '../../components/EtransferProtocolModal';
 import AddContractModal from '../../components/AddContractModal';
 import {
@@ -203,6 +205,9 @@ const JobDetail: React.FC = () => {
 
   // Modals
   const [showCreditModal, setShowCreditModal] = useState(false);
+  // No signal: a card can't be taken, so this sheet shows instead of the terminal (see NoSignalCardSheet).
+  const [cardNoSignal, setCardNoSignal] = useState(false);
+  const openCard = () => (isOffline() ? setCardNoSignal(true) : setShowCreditModal(true));
   const [isCreditPaid, setIsCreditPaid] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
@@ -329,7 +334,7 @@ const JobDetail: React.FC = () => {
       setCcData(null);
     }
 
-    if (value === 'Credit Card') setShowCreditModal(true);
+    if (value === 'Credit Card') openCard();
 
     if (value === 'E-Transfer') {
       if (!etransferEmail && email) setEtransferEmail(email);
@@ -1224,7 +1229,7 @@ const JobDetail: React.FC = () => {
                   {splitCCAmount > 0 && (
                     <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
                       <span className="text-sm font-medium">{isCreditPaid ? `Card Secured for $${splitCCAmount.toFixed(2)}` : `Process $${splitCCAmount.toFixed(2)} on Card`}</span>
-                      {isCreditPaid ? <CheckCircle size={20}/> : <button type="button" onClick={() => setShowCreditModal(true)} className="text-xs underline">Open Terminal</button>}
+                      {isCreditPaid ? <CheckCircle size={20}/> : <button type="button" onClick={openCard} className="text-xs underline">Open Terminal</button>}
                     </div>
                   )}
                 </div>
@@ -1233,7 +1238,7 @@ const JobDetail: React.FC = () => {
                {paymentMethod === 'Credit Card' && !isSplitPayment && (
                    <div className={`mb-4 p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
                        <span className="text-sm font-medium">{isCreditPaid ? "Secured Card Info to HQ" : "Secure Card Info"}</span>
-                       {isCreditPaid ? <CheckCircle size={20}/> : <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>}
+                       {isCreditPaid ? <CheckCircle size={20}/> : <button onClick={openCard} className="underline text-xs">Open Terminal</button>}
                    </div>
                )}
            </div>
@@ -1273,6 +1278,16 @@ const JobDetail: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* No signal for a card: another method, or leave the job for later (it stays on the list) */}
+      {cardNoSignal && (
+        <NoSignalCardSheet
+          onOtherMethod={() => { setCardNoSignal(false); if (!isSplitPayment) setPaymentMethod(''); }}
+          onSignalBack={() => { setCardNoSignal(false); setShowCreditModal(true); }}
+          onClose={() => setCardNoSignal(false)}
+          laterLabel="Leave it for later (the job stays on your list)"
+        />
       )}
 
       {/* Credit Card / Bambora Live Terminal */}
