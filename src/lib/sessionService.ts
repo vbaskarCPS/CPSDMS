@@ -4289,7 +4289,7 @@ class SessionService {
       }
 
       const { data, error } = await supabase.functions.invoke('bright-processor', {
-        body: transactionData
+        body: { ...transactionData, sessionDate: date },   // the receipt is kept in the mailbox under this session
       });
 
       if (error) {

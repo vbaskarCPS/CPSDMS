@@ -6,6 +6,7 @@
 //      writes from what we know of them (years with us, their plan, a missed visit's reason).
 //   3. Read them all, change or untick any, then Send. They go out from the centre's customer mailbox
 //      (replies come back there) and each booking remembers it was emailed for that day, so nobody gets two.
+//      The set shows as one group in that mailbox's Sent folder, with how many were delivered or bounced.
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Mail, Send, Sparkles } from 'lucide-react';
@@ -32,6 +33,8 @@ export const BookingEmails: React.FC = () => {
   const [date, setDate] = useState(days.tomorrow);
   const [routes, setRoutes] = useState<Map<string, PlanRoute>>(new Map());
   const [drafts, setDrafts] = useState<BookingDraft[] | null>(null);
+  // this set of emails is one campaign: one group in the mailbox's Sent folder (a retry joins it)
+  const [campaign, setCampaign] = useState<string>(() => crypto.randomUUID());
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -70,6 +73,7 @@ export const BookingEmails: React.FC = () => {
         Object.assign(notes, await aiBookingNotes({ kind, date: dateFriendly(date), ids: ready.slice(i, i + 25).map(b => b.id) }));
       }
       setDrafts(ready.map(b => ({ booking: b, to: emailsOf(b), subject: '', note: notes[b.id] || '', include: true })));
+      setCampaign(crypto.randomUUID());
     } catch (e) { setError(e); } finally { setBusy(null); }
   };
   const send = async () => {
@@ -85,7 +89,8 @@ export const BookingEmails: React.FC = () => {
       next[i] = { ...d, status: 'sending' }; setDrafts([...next]);
       try {
         const e = renderDraft(template, d, date, company);
-        const r = await sendMail({ staff: true, mailbox_id: box.id, to: d.to, cc: [], subject: e.subject, html: e.html, text: e.text, attachments: [] });
+        const r = await sendMail({ staff: true, mailbox_id: box.id, to: d.to, cc: [], subject: e.subject, html: e.html, text: e.text, attachments: [],
+          batch_key: `campaign:${campaign}`, batch_label: `${KIND_LABEL[kind]} · ${dateFriendly(date)}` });
         await markEmailed(d.booking.id, kind, date, r.thread_id);
         next[i] = { ...d, status: 'sent' }; ok++;
       } catch (err) { next[i] = { ...d, status: 'failed', error: err instanceof Error ? err.message : String(err) }; bad++; }

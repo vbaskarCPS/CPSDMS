@@ -9,7 +9,7 @@
 //      quotes it back (In-Reply-To), which is how the reply finds its conversation
 // The first email in a conversation carries who it's from and how to unsubscribe (Canada's anti-spam law).
 //
-// Staff mail ({ staff: true, mailbox_id?, thread_id?, to, cc, subject, html, text, attachments }): sent as the
+// Staff mail ({ staff: true, mailbox_id?, thread_id?, to, cc, subject, html, text, attachments, batch_key?, batch_label? }): sent as the
 // manager, from their own address (ben@propertystars.app), or from a centre's shared mailbox they're a member of
 // (bcclients@propertystars.app, "Property Stars · BC Fall RJ"). mail_prepare delivers it to staff mailboxes
 // straight away (and the push function tells them); only outside addresses go through Resend.
@@ -124,6 +124,13 @@ async function sendStaff(b: Record<string, unknown>, asUser: any, apiKey: string
   });
   if (error) return json({ error: error.message }, /not allowed/i.test(error.message) ? 403 : 400);
   const p = data as StaffPrepared;
+  // part of a campaign (Send booking emails): it goes in that campaign's group in the mailbox's Sent folder,
+  // before sending, so one that doesn't send still shows there
+  if (typeof b.batch_key === 'string' && b.batch_key && b.mailbox_id) {
+    const { error: te } = await asUser.rpc('mail_tag_batch', { p_box: b.mailbox_id, p_messages: [p.message_id], p_key: b.batch_key,
+      p_label: typeof b.batch_label === 'string' ? b.batch_label : null });
+    if (te) console.error('ms-mail: group', te.message);
+  }
   const delivered = (p.delivered || []).map(d => d.message_id);
   if (!p.to.length) { await notify(delivered); return json({ ok: true, thread_id: p.thread_id, message_id: p.message_id }); }
 

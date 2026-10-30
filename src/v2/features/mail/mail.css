@@ -314,3 +314,17 @@
 .v2-mail-app .side-foot .v2-push .tx { flex-basis: calc(100% - 50px); }
 .v2-mail-app .side-foot .v2-push button { margin-left: 46px; }
 .v2-push .x { color: #444746; padding: 0 10px; }
+
+/* groups in Sent (RUN_70): a campaign or a session's receipts, with delivery counts */
+.v2-mail-app .rows .row.group .av.grp { background: #e8f0fe; color: var(--m-blue); display: grid; place-items: center; }
+.v2-mail .gcounts { display: inline-flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12.5px; }
+.v2-mail .gc { font-size: 12px; font-weight: 600; padding: 0 6px; border-radius: 4px; white-space: nowrap; }
+.v2-mail .gc.ok { color: #146c2e; background: #e6f4ea; }
+.v2-mail .gc.bad { color: var(--m-bad); background: #fce8e6; }
+.v2-mail .gc.warn { color: var(--m-warn); background: #ffefc9; }
+.v2-mail .gc.mut { color: var(--m-mut); background: #f1f3f4; }
+.v2-mail .msg .when .gc { margin-left: 6px; }
+.v2-mail .group-view .about { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.v2-mail .group-view .gemails { margin-top: 8px; border-top: 1px solid var(--m-line2); }
+.v2-mail .group-view .gemails .row .hit { padding-right: 16px; }
+.v2-mail .group-view .why { color: var(--m-mut); font-size: 12.5px; }

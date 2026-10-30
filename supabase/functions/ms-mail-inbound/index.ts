@@ -12,23 +12,11 @@
 //   4. the push function tells whoever it's for
 // Deployed without JWT verification (Resend isn't signed in); the signature check stands in for it.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { DELIVERY_EVENTS, reasonOf, verify } from '../_shared/svix.ts';
+export { verify };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const MAX_ATTACHMENT = 20 * 1024 * 1024;
-
-function b64decode(s: string): Uint8Array { const bin = atob(s); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
-function b64encode(bytes: Uint8Array): string { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); }
-function same(a: string, b: string): boolean { if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i); return d === 0; }
-
-/** Svix signature: HMAC-SHA256 over "<id>.<timestamp>.<raw body>", key = base64 part of "whsec_…", within 5 minutes. */
-export async function verify(secret: string, id: string, ts: string, body: string, sigHeader: string, now = Date.now()): Promise<boolean> {
-  if (!secret || !id || !ts || !sigHeader) return false;
-  const t = Number(ts);
-  if (!Number.isFinite(t) || Math.abs(now / 1000 - t) > 300) return false;
-  const key = await crypto.subtle.importKey('raw', b64decode(secret.replace(/^whsec_/, '')), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const mac = b64encode(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${id}.${ts}.${body}`))));
-  return sigHeader.split(' ').some(part => { const [v, sig] = part.split(','); return v === 'v1' && !!sig && same(sig, mac); });
-}
 
 /** "Ann Owner <ann@shop.ca>" → { email, name } */
 export function parseAddress(s: string | null | undefined): { email: string; name: string | null } {
@@ -54,7 +42,15 @@ Deno.serve(async req => {
     raw, req.headers.get('svix-signature') || '');
   if (!ok) return json({ error: 'Bad signature' }, 401);
   try {
-    const evt = JSON.parse(raw) as { type?: string; data?: { email_id?: string; created_at?: string } };
+    const evt = JSON.parse(raw) as { type?: string; created_at?: string; data?: Record<string, unknown> & { email_id?: string; created_at?: string } };
+    // delivery events, if this webhook is sent them too: the same as the bounce webhook (clever-worker) does
+    if (evt.type && DELIVERY_EVENTS.includes(evt.type) && evt.data?.email_id) {
+      const svc = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
+      const { data, error } = await svc.rpc('mail_delivery', { p_resend_id: evt.data.email_id, p_type: evt.type, p_reason: reasonOf(evt.data),
+        p_at: evt.created_at || evt.data.created_at || null });
+      if (error) { console.error('ms-mail-inbound: mail_delivery', error.message); return json({ error: error.message }, 500); }
+      return json({ received: true, ...(data as object) });
+    }
     if (evt.type !== 'email.received' || !evt.data?.email_id) return json({ ignored: evt.type || 'unknown' });
     // reading received mail needs a full-access key; the app's sending key may be "sending access" only
     const apiKey = Deno.env.get('RESEND_RECEIVING_API_KEY') || Deno.env.get('RESEND_API_KEY')!;
