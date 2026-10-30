@@ -1,0 +1,60 @@
+/* src/planner/features/plan/plan.css — the day page, reviews and the Victory Hour timer. */
+.plan-strip { display: flex; align-items: center; gap: 6px; }
+.plan-strip__date { flex: 1; text-align: center; }
+.plan-strip__date b { display: block; font-family: var(--serif); font-size: 18px; }
+.plan-strip__date small { color: var(--ink-2); font-size: 12px; }
+.plan-strip .pl-btn { min-height: 40px; padding: 0 10px; }
+
+.plan-section { padding: 0; overflow: hidden; }
+.plan-section__head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 14px 16px; background: transparent; border: 0; text-align: left; cursor: pointer; }
+.plan-section__head h2 { font-size: 17px; flex: 1; }
+.plan-section__head svg { width: 20px; height: 20px; color: var(--ink-2); flex: none; }
+.plan-section__meta { font-size: 12px; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+.plan-section__body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+.plan-section.is-done .plan-section__head h2 { color: var(--ink-2); }
+
+.plan-blocks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.plan-block { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 6px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-2); cursor: pointer; font-weight: 600; font-size: 14px; }
+.plan-block svg { width: 22px; height: 22px; color: var(--ink-2); }
+.plan-block.is-on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.plan-block.is-on svg { color: inherit; }
+
+.plan-project { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.plan-project__name { font-weight: 700; }
+.plan-project__steps { display: flex; flex-direction: column; gap: 6px; }
+.plan-project__step { display: flex; align-items: center; gap: 8px; }
+.plan-project__step span { width: 18px; font-size: 12px; color: var(--ink-2); text-align: right; font-weight: 600; }
+.plan-project__step input { min-height: 40px; }
+
+.plan-priority { display: flex; align-items: center; gap: 10px; }
+.plan-priority b { width: 18px; font-family: var(--serif); font-size: 18px; color: var(--ink-2); text-align: center; }
+.plan-priority.is-done input { text-decoration: line-through; color: var(--ink-2); }
+
+.plan-slot { display: flex; align-items: center; gap: 8px; }
+.plan-slot input[type=time] { width: 110px; flex: none; }
+.plan-slot .pl-btn { padding: 0 8px; border: 0; min-height: 40px; }
+
+.plan-quote { position: relative; padding: 16px 16px 16px 20px; border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 10%, transparent); border-radius: 0 12px 12px 0; font-family: var(--serif); font-size: 16px; line-height: 1.5; }
+.plan-avg { display: flex; align-items: baseline; gap: 6px; }
+.plan-avg b { font-family: var(--serif); font-size: 32px; }
+.plan-avg small { color: var(--ink-2); }
+
+.plan-timer { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 24px 16px; }
+.plan-timer__steps { display: flex; gap: 6px; width: 100%; }
+.plan-timer__steps span { flex: 1; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 12%, transparent); }
+.plan-timer__steps span.is-done { background: var(--good); }
+.plan-timer__steps span.is-now { background: var(--accent); }
+.plan-timer__do { text-align: center; color: var(--ink-2); line-height: 1.5; }
+.plan-timer__ctrl { display: flex; gap: 10px; width: 100%; }
+.plan-timer__ctrl .pl-btn { flex: 1; }
+.plan-mins { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.plan-mins input { text-align: center; }
+
+.plan-card-prio { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.plan-card-prio span { flex: 1; font-size: 15px; }
+.plan-card-prio.is-done span { text-decoration: line-through; color: var(--ink-2); }
+.plan-card-prio.is-empty span { color: var(--ink-2); font-style: italic; }
+
+.plan-list-item { display: flex; align-items: center; gap: 8px; }
+.plan-list-item .pl-btn { padding: 0 8px; border: 0; min-height: 40px; }
+.plan-areas { display: flex; flex-direction: column; gap: 12px; }
