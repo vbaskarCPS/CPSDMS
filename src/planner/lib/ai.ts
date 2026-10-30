@@ -56,9 +56,9 @@ export async function shrinkImage(file: File, max = 1280, quality = 0.82): Promi
 }
 
 export interface StatementRow { date: string; desc: string; amount: number; balance?: number }
-export interface StatementResult { rows: StatementRow[]; period?: { from: string; to: string }; account_type?: string }
+export interface StatementResult { rows: StatementRow[]; period?: { from: string; to: string }; account_type?: string; opening_balance?: number }
 /** The text of a bank-statement PDF (already masked) → transactions. */
 export async function parseStatement(text: string, hint?: string): Promise<StatementResult> {
   const r = await invoke<StatementResult>({ action: 'statement', text, hint });
-  return { rows: Array.isArray(r.rows) ? r.rows : [], period: r.period, account_type: r.account_type };
+  return { rows: Array.isArray(r.rows) ? r.rows : [], period: r.period, account_type: r.account_type, opening_balance: typeof r.opening_balance === 'number' ? r.opening_balance : undefined };
 }

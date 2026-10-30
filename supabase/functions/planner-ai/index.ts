@@ -40,6 +40,24 @@ async function claude(system: string, messages: Msg[], maxTokens = 1500): Promis
   return (data.content || []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('');
 }
 
+/** Ask for a structured answer through a forced tool call: the API guarantees the JSON matches the schema. */
+async function claudeJson<T>(system: string, messages: Msg[], schema: Record<string, unknown>, maxTokens = 4000): Promise<T> {
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
+    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages,
+      tools: [{ name: 'answer', description: 'The structured answer.', input_schema: schema }], tool_choice: { type: 'tool', name: 'answer' } }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || `Anthropic ${res.status}`);
+  if (data.stop_reason === 'max_tokens') throw new Error('The answer was too long; try a shorter statement (fewer pages).');
+  const use = (data.content || []).find((c: { type: string }) => c.type === 'tool_use');
+  if (!use) throw new Error('No structured answer');
+  return use.input as T;
+}
+
 function parseJson(text: string): unknown {
   const m = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
   if (!m) throw new Error('No JSON in reply');
@@ -63,15 +81,27 @@ const REFLECT_SYSTEM = `You are a warm, direct high-performance coach reviewing 
 intentions, priorities, habits, evening answers, scores). Reply in 2–3 short sentences, second person: one thing
 to appreciate, one honest observation, one small adjustment for tomorrow. No lists, no headings, no emojis.`;
 
-const STATEMENT_SYSTEM = `You turn the text of a Canadian bank or credit-card statement (TD and similar) into transactions.
-Reply with JSON only: {"account_type":"chequing|savings|credit","period":{"from":"YYYY-MM-DD","to":"YYYY-MM-DD"},
-"rows":[{"date":"YYYY-MM-DD","desc":"","amount":0,"balance":0}]}
+const STATEMENT_SYSTEM = `You turn the text of one page of a Canadian bank or credit-card statement (TD and similar) into transactions.
 Rules: one row per transaction line, in statement order. amount is NEGATIVE for money out (withdrawals, purchases,
 fees, transfers out) and POSITIVE for money in (deposits, payments received, refunds). "balance" is the running
 balance when the statement prints one on that line, else omit it. Dates often lack a year (e.g. "AUG04"): take the
 year from the statement period. Skip headings, STARTING/OPENING/CLOSING BALANCE, totals, fee summaries, addresses,
 and any line that is not a transaction. Keep desc as printed, trimmed, without the amount. Masked numbers (####)
-stay as they are. If a line's columns are ambiguous, use the running balance to decide the sign. No text outside the JSON.`;
+stay as they are. If a line's columns are ambiguous, use the running balance to decide the sign. If the page has no
+transactions, return an empty rows list. Columns matter: on TD deposit-account statements the order is
+Description, Withdrawals, Deposits, Date, Balance — an amount in the left money column is a withdrawal, one in the
+right money column is a deposit; the text keeps the column spacing, so use it.`;
+const STATEMENT_SCHEMA = {
+  type: 'object', properties: {
+    account_type: { type: 'string', enum: ['chequing', 'savings', 'credit', 'unknown'] },
+    opening_balance: { type: 'number', description: 'the STARTING / OPENING / PREVIOUS balance printed on this page, if any' },
+    period: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } } },
+    rows: { type: 'array', items: { type: 'object', properties: {
+      date: { type: 'string', description: 'YYYY-MM-DD' }, desc: { type: 'string' }, amount: { type: 'number' }, balance: { type: 'number' } },
+      required: ['date', 'desc', 'amount'] } },
+  }, required: ['rows'],
+};
+type StatementPage = { account_type?: string; opening_balance?: number; period?: { from?: string; to?: string }; rows: { date: string; desc: string; amount: number; balance?: number }[] };
 
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
@@ -114,9 +144,19 @@ Deno.serve(async req => {
     if (action === 'statement') {
       const text = typeof b.text === 'string' ? b.text.slice(0, 60000) : '';
       if (!text.trim()) return json({ error: 'No text' }, 400);
-      const hint = typeof b.hint === 'string' ? b.hint : '';
-      const out = await claude(STATEMENT_SYSTEM, [{ role: 'user', content: `${hint ? `Hint: ${hint}\n\n` : ''}Statement text:\n${text}` }], 8192);
-      return json(parseJson(out));
+      let hint = typeof b.hint === 'string' ? b.hint : '';
+      // page by page: short answers that never run past the output limit
+      const pages = text.split(/\n-{3,} page -{3,}\n/).map(p => p.trim()).filter(Boolean);
+      const rows: StatementPage['rows'] = [];
+      let period: StatementPage['period'] | undefined, accountType: string | undefined, opening: number | undefined;
+      for (const [i, page] of pages.entries()) {
+        const r = await claudeJson<StatementPage>(STATEMENT_SYSTEM, [{ role: 'user', content: `${hint ? `Hint: ${hint}\n\n` : ''}Page ${i + 1} of ${pages.length}:\n${page}` }], STATEMENT_SCHEMA, 8192);
+        rows.push(...(r.rows || []));
+        if (!period && r.period?.from) { period = r.period; hint = `${hint}; statement period ${r.period.from} to ${r.period.to}`.replace(/^; /, ''); }
+        if (!accountType && r.account_type && r.account_type !== 'unknown') accountType = r.account_type;
+        if (opening === undefined && typeof r.opening_balance === 'number') opening = r.opening_balance;
+      }
+      return json({ rows, period, account_type: accountType, opening_balance: opening, pages: pages.length });
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];

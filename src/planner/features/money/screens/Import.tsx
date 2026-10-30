@@ -1,5 +1,5 @@
 // /money/import — a CSV or a PDF statement from the bank → categorized transactions. PDFs are read with AI.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileUp, Info } from 'lucide-react';
 import { Page, Header, Card, Button, Field, Input, Stat, useToast, uid } from '../../../ui/primitives';
@@ -9,7 +9,7 @@ import { importPdf } from '../importers/pdf';
 import { categorizeAll, mergeTxns, saveAccount, loadMonths } from '../lib';
 import type { Account, AccountType, Txn } from '../types';
 
-type Preview = { txns: Txn[]; importer: string; from: string; to: string; counts: Record<string, number>; dupes: number; fileName: string };
+type Preview = { txns: Txn[]; importer: string; from: string; to: string; counts: Record<string, number>; dupes: number; fileName: string; note?: string };
 
 export function Import() {
   const nav = useNavigate();
@@ -21,6 +21,7 @@ export function Import() {
   const [busy, setBusy] = useState<'reading' | 'ai' | 'importing' | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [toast, say] = useToast();
+  const importing = useRef(false);   // one import per preview, whatever the button receives
   const chosen = accountId || (live.length === 1 && !newAcc ? live[0].id : '');
   // the very first import: there's no account yet, so start the form
   useEffect(() => { if (!loading && live.length === 0) setNewAcc(n => n ?? { name: 'Chequing', type: 'chequing', last4: '' }); }, [loading, live.length]);
@@ -29,14 +30,15 @@ export function Import() {
 
   async function onFile(f: File | undefined) {
     if (!f) return;
-    setErr(null); setPreview(null); setBusy('reading');
+    setErr(null); setPreview(null); setBusy('reading'); importing.current = false;
     try {
       const accId = chosen || 'pending';
-      let r: { txns: Txn[]; importer: { name: string } } | null;
+      let r: { txns: Txn[]; importer: { name: string }; note?: string } | null;
       if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf') {
         setBusy('ai');
         const pr = await importPdf(f, accId);
-        r = { txns: pr.txns, importer: { name: `PDF statement · AI · ${pr.pages} page${pr.pages === 1 ? '' : 's'}` } };
+        r = { txns: pr.txns, importer: { name: `PDF statement · AI · ${pr.pages} page${pr.pages === 1 ? '' : 's'}` },
+          note: pr.signsFixed ? `${pr.signsFixed} amount${pr.signsFixed === 1 ? '' : 's'} corrected against the running balance.` : 'Amounts reconciled with the running balance.' };
         if (newAcc && !newAcc.name.trim() && pr.accountType) setNewAcc({ ...newAcc, name: pr.accountType === 'credit' ? 'Credit card' : pr.accountType === 'savings' ? 'Savings' : 'Chequing', type: pr.accountType as AccountType });
       } else {
         r = importCsv(await f.text(), accId);
@@ -47,13 +49,14 @@ export function Import() {
       const known = new Set(Object.values(existing).flat().map(t => t.id));
       const fresh = r.txns.filter(t => !known.has(t.id));
       const { counts } = await categorizeAll(fresh, rules);
-      setPreview({ txns: fresh, importer: r.importer.name, from: dates[0], to: dates[dates.length - 1], counts, dupes: r.txns.length - fresh.length, fileName: f.name });
+      setPreview({ txns: fresh, importer: r.importer.name, from: dates[0], to: dates[dates.length - 1], counts, dupes: r.txns.length - fresh.length, fileName: f.name, note: r.note });
     } catch (e) { setErr(e instanceof Error ? e.message : 'Could not read the file'); }
     finally { setBusy(null); }
   }
 
   async function doImport() {
-    if (!preview) return;
+    if (!preview || importing.current) return;
+    importing.current = true;
     setBusy('importing'); setErr(null);
     try {
       let acc: Account | undefined = live.find(a => a.id === chosen);
@@ -69,9 +72,10 @@ export function Import() {
       if (latest?.balance !== undefined && (!acc.balanceAsOf || latest.date >= acc.balanceAsOf)) { acc.balance = latest.balance; acc.balanceAsOf = latest.date; }
       await saveAccount(acc);
       await reload();
+      setPreview(null);
       say(`Imported ${res.added} transaction${res.added === 1 ? '' : 's'}`, 'good');
       window.setTimeout(() => nav('/money'), 600);
-    } catch (e) { setErr(e instanceof Error ? e.message : 'Import failed'); }
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Import failed'); importing.current = false; }
     finally { setBusy(null); }
   }
 
@@ -125,6 +129,7 @@ export function Import() {
           </div>
           <p className="pl-muted" style={{ fontSize: 13 }}>
             Categorized: {preview.counts.rule} by your rules · {preview.counts.builtin} built-in · {preview.counts.ai} by AI · {preview.counts.other} left as Other.
+            {preview.note ? ` ${preview.note}` : ''}
           </p>
           <Button primary block disabled={busy !== null || preview.txns.length === 0} onClick={() => void doImport()}>{busy === 'importing' ? 'Importing…' : preview.txns.length === 0 ? 'Nothing new to import' : `Import ${preview.txns.length}`}</Button>
         </Card>
