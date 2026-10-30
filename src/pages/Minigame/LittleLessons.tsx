@@ -1,8 +1,9 @@
 // src/pages/Minigame/LittleLessons.tsx — Little Lessons (/minigame/lessons), Kiaan's game: chess, sight words
-// and numbers, a little at a time. There are no levels to pick: he presses PLAY and the game chooses each
-// question from the grown-ups' mix and how he's doing (src/lib/littleLessons/engine.ts), mixing in the next
-// level as he gets the current one right and phasing out the one before. The first time a level shows up,
-// its character tells a little story.
+// and numbers, a little at a time. There are no levels to pick: he presses PLAY and the game deals lessons —
+// a short run of 3–5 questions of one little game — from the grown-ups' mix and how he's doing
+// (src/lib/littleLessons/engine.ts), mixing in the next level as he gets the current one right and phasing
+// out the one before. Each level has a deck of different games, so it keeps changing. The first time a
+// level shows up its character tells a little story (and each chess piece says hello as it joins).
 //   Every instruction is a short CAPITALS sentence that the voice reads (lighting up each word). While it's
 // being read the answers aren't on screen at all, so he listens first. A wrong tap turns red with a ✗, says
 // what he tapped, and everything waits while he thinks; two quick misses get a calm "SLOW DOWN" pause, and
@@ -16,8 +17,8 @@ import {
   BOARD, WORD, canMove, cheers, notThereLine, oopsLine, slowLine, clipId, spokenFor, movesFrom, sentenceFor,
   type Piece, type Round, type Speaker, type Sq,
 } from '../../lib/littleChess/lessons';
-import { castName, chessHost, countAloud, levelById, lessonLine, lessonOops, storyLine, answerOf, type Cast, type Question, type Level } from '../../lib/littleLessons/levels';
-import { applySettings, nextQuestion, readProgress, readSettings, recordAnswer, stickerFor, type LessonProgress, type LessonSettings } from '../../lib/littleLessons/engine';
+import { castName, chessHost, countAloud, lessonLine, lessonOops, storyLine, answerOf, type Cast, type Question, type Intro, type ChessRound } from '../../lib/littleLessons/levels';
+import { applySettings, lessonQuestion, lessonStarted, nextLesson, readProgress, readSettings, recordAnswer, stickerFor, type LessonPlan, type LessonProgress, type LessonSettings } from '../../lib/littleLessons/engine';
 import type { GameProps } from './games';
 import { CHARACTER_CSS, Character, type Mood } from './chessCharacters';
 import { CastShape, LESSON_CHARACTER_CSS } from './lessonCharacters';
@@ -106,7 +107,8 @@ const CSS = `
   ${LESSON_CHARACTER_CSS}
 `;
 
-type Run = { left: number; total: number; q: Question; index: number; story: boolean };
+/** `k`: which question of the lesson this is; `left`: questions to go before the sticker. */
+type Run = { left: number; total: number; plan: LessonPlan; k: number; q: Question; intros: Intro[] };
 
 const LittleLessons: React.FC<GameProps<Partial<LessonProgress>>> = ({ progress, save, exit, player, allProgress }) => {
   useEffect(() => { const was = document.title; document.title = 'Little Lessons'; return () => { document.title = was; hush(); }; }, []);
@@ -122,20 +124,24 @@ const LittleLessons: React.FC<GameProps<Partial<LessonProgress>>> = ({ progress,
   // a grown-up changed a level while this was open (saved settings arrive with the next sign-in or reload)
   useEffect(() => { const n = applySettings(pRef.current, settings); if (n !== pRef.current) update(n); }, [settings, update]);
 
-  const ask = (left: number, total: number): Run => {
-    const { q, index } = nextQuestion(pRef.current, settings);
-    return { left, total, q, index, story: !pRef.current.told.includes(q.level) };
+  /** A new lesson (one game, a few questions), with `left` questions to go before the sticker. */
+  const lesson = (left: number, total: number): Run => {
+    const plan = nextLesson(pRef.current, settings, left);
+    update(lessonStarted(pRef.current, plan));
+    return { left, total, plan, k: 0, q: lessonQuestion(plan), intros: plan.intros };
   };
-  const start = () => setRun(ask(settings.session, settings.session));
+  const start = () => setRun(lesson(settings.session, settings.session));
   const heardStory = () => {
     if (!run) return;
-    if (!pRef.current.told.includes(run.q.level)) update({ ...pRef.current, told: [...pRef.current.told, run.q.level] });
-    setRun({ ...run, story: false });
+    const [seen, ...rest] = run.intros;
+    if (seen && !pRef.current.told.includes(seen.id)) update({ ...pRef.current, told: [...pRef.current.told, seen.id] });
+    setRun({ ...run, intros: rest });
   };
   const answered = (right: boolean) => {
     if (!run) return;
-    const next = recordAnswer(pRef.current, settings, run.q.subject, run.index, right, run.q.level);
-    if (run.left <= 1) {
+    const next = recordAnswer(pRef.current, settings, run.q.subject, run.plan.index, right, run.q.level);
+    const left = run.left - 1;
+    if (left <= 0) {
       const got = stickerFor(next);
       update({ ...next, stickers: [...next.stickers, got] });
       setRun(null); setSticker(got);
@@ -143,16 +149,16 @@ const LittleLessons: React.FC<GameProps<Partial<LessonProgress>>> = ({ progress,
       return;
     }
     update(next);
-    pRef.current = next;
-    setRun(ask(run.left - 1, run.total));
+    // the same game until the lesson's done, then a new lesson
+    setRun(run.k + 1 < run.plan.length ? { ...run, left, k: run.k + 1, q: lessonQuestion(run.plan), intros: [] } : lesson(left, run.total));
   };
 
-  const level = run ? levelById(run.q.level) : null;
+  const intro = run?.intros[0];
   return (
     <div className="min-h-screen w-full text-white select-none overflow-hidden" style={{ background: BG, fontFamily: FONT, WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>
       <style>{CSS}</style>
-      {run && level && run.story
-        ? <StoryCard key={`story-${level.id}`} level={level} voice={p.voice} onDone={heardStory} onQuit={() => { hush(); setRun(null); }} />
+      {run && intro
+        ? <StoryCard key={`story-${intro.id}`} level={intro} voice={p.voice} onDone={heardStory} onQuit={() => { hush(); setRun(null); }} />
         : run
           ? <Play key={`${run.left}-${run.q.level}`} q={run.q} at={run.total - run.left} total={run.total} name={player} voice={p.voice} onDone={answered} onQuit={() => { hush(); setRun(null); }} />
           : <Home p={p} name={player} onPlay={start} onExit={() => { hush(); exit(); }} onGrownups={() => setGrownups(true)} />}
@@ -240,7 +246,7 @@ const Grownups: React.FC<{ p: LessonProgress; onChange: (p: LessonProgress) => v
 };
 
 // ── a level's little story, the first time it shows up ──
-const StoryCard: React.FC<{ level: Level; voice: boolean; onDone: () => void; onQuit: () => void }> = ({ level, voice, onDone, onQuit }) => {
+const StoryCard: React.FC<{ level: Intro; voice: boolean; onDone: () => void; onQuit: () => void }> = ({ level, voice, onDone, onQuit }) => {
   const [ready, setReady] = useState(false);
   const [lit, setLit] = useState(-1);
   const talking = useTalking();
@@ -309,7 +315,9 @@ const Host: React.FC<{ who: Cast; size: number; enter?: boolean }> = ({ who, siz
 // ── one question ──
 type Lock = 'listen' | 'think' | 'slow' | null;
 const LOCK_ICON: Record<Exclude<Lock, null>, string> = { listen: '👂', think: '💭', slow: '🐢' };
-const isChess = (q: Question): q is Round & Question => !['sight', 'count', 'countAdd', 'countSub', 'add', 'sub'].includes(q.kind);
+/** Little Chess's own rounds (their sentences and voices come from Little Chess); every other game's come from Little Lessons. */
+const isChess = (q: Question): q is Exclude<Round, { kind: 'hello' }> & Question => ['find', 'word', 'shadow', 'peek', 'board', 'show'].includes(q.kind);
+type ChessQ = Question & ChessRound;
 
 const Play: React.FC<{ q: Question; at: number; total: number; name: string; voice: boolean; onDone: (right: boolean) => void; onQuit: () => void }> = ({ q, at, total, name, voice, onDone, onQuit }) => {
   const [lit, setLit] = useState(-1);
@@ -318,7 +326,7 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
   const [cheer, setCheer] = useState<string | null>(null);
   const [lock, setLockState] = useState<Lock>(null);
   const [poke, setPoke] = useState(0);
-  const host: Cast = isChess(q) ? chessHost(q) : q.cast;
+  const host: Cast = q.subject === 'chess' ? chessHost(q as ChessQ) : q.cast;
   const line: Line = isChess(q) ? { text: sentenceFor(q), who: host } : lessonLine(q)!;
   const [reaction, setReaction] = useState<'right' | 'wrong' | null>(null);
   const talking = useTalking();
@@ -369,8 +377,8 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
     if (misses.current.length >= 2) setHint(true);
     try { navigator.vibrate?.([30, 60, 30]); } catch { /* ignore */ }
     if (quick) { const l = slowLine(name); setFlash(l); wait('slow', SLOW, { text: l }); return; }
-    const l: Line = isChess(q)
-      ? (typeof tapped === 'string' && tapped in WORD ? { text: oopsLine(tapped as Piece), who: host } : { text: notThereLine(q.piece), who: q.piece })
+    const l: Line = q.subject === 'chess'
+      ? (typeof tapped === 'string' && tapped in WORD ? { text: oopsLine(tapped as Piece), who: host } : { text: notThereLine((q as ChessQ).piece), who: (q as ChessQ).piece })
       : lessonOops(q, tapped as number | string);
     setFlash(l.text);
     setReaction('wrong'); later(() => setReaction(r => (r === 'wrong' ? null : r)), 1300);
@@ -408,9 +416,19 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
           {q.kind === 'word' && <Word round={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
           {(q.kind === 'shadow' || q.kind === 'peek') && <Guess round={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
           {(q.kind === 'board' || q.kind === 'show') && <BoardRound round={q} hint={hint} listening={listening} onDone={won} onWrong={() => oops()} />}
+          {q.kind === 'pieceMatch' && <PieceMatch round={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
+          {q.kind === 'gone' && <Gone round={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
+          {q.kind === 'where' && <WhereRound round={q} hint={hint} listening={listening} onDone={won} onWrong={() => oops()} />}
+          {q.kind === 'who' && <WhoRound round={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
           {q.kind === 'sight' && <Sight q={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
-          {(q.kind === 'count' || q.kind === 'countAdd' || q.kind === 'countSub' || q.kind === 'add' || q.kind === 'sub') &&
+          {q.kind === 'wordMatch' && <WordMatch q={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
+          {q.kind === 'pop' && <Pop q={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
+          {q.kind === 'sentence' && <SentenceRound q={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
+          {(q.kind === 'count' || q.kind === 'countAdd' || q.kind === 'countSub' || q.kind === 'add' || q.kind === 'sub' || q.kind === 'dots' || q.kind === 'dotsAdd' || q.kind === 'gap') &&
             <Numbers q={q} hint={hint} listening={listening} voice={voice} onRight={won} onWrong={oops} />}
+          {q.kind === 'more' && <More q={q} hint={hint} listening={listening} onRight={won} onWrong={oops} />}
+          {q.kind === 'feed' && <Feed q={q} hint={hint} listening={listening} voice={voice} onRight={won} onWrong={oops} />}
+          {q.kind === 'hop' && <Hop q={q} hint={hint} listening={listening} voice={voice} onRight={won} onWrong={oops} />}
         </div>
         {/* while he thinks, taps land here and do nothing (the icon just wiggles); while listening the answers aren't out yet */}
         {lock && lock !== 'slow' && (
@@ -657,7 +675,7 @@ const Sight: React.FC<{ q: Extract<Question, { kind: 'sight' }>; hint: boolean; 
 };
 
 // ── numbers with Benny and Zip: count the things (tap each one to count it), or work out the sum ──
-type NumQ = Extract<Question, { kind: 'count' | 'countAdd' | 'countSub' | 'add' | 'sub' }>;
+type NumQ = Extract<Question, { kind: 'count' | 'countAdd' | 'countSub' | 'add' | 'sub' | 'dots' | 'dotsAdd' | 'gap' }>;
 const Things: React.FC<{ n: number; thing: string; size: number; gone?: number; counting?: boolean; voice: boolean }> = ({ n, thing, size, gone = 0, counting, voice }) => {
   const [tapped, setTapped] = useState<number[]>([]);
   const left = n - gone;
@@ -693,6 +711,7 @@ const Numbers: React.FC<{ q: NumQ; hint: boolean; listening: boolean; voice: boo
   const [got, setGot] = useState(false);
   const answer = answerOf(q) as number;
   const most = q.kind === 'count' ? q.n : q.kind === 'countAdd' ? Math.max(q.a, q.b) : q.kind === 'countSub' ? q.a : 0;
+  const die = Math.min(170, window.innerHeight * 0.22, window.innerWidth * 0.3);
   const size = Math.max(30, Math.min(most <= 5 ? 92 : 64, (window.innerWidth * 0.8) / (most > 10 ? 7 : most <= 5 ? 5 : 6.5)));
   return (
     <div className="flex flex-col items-center">
@@ -711,6 +730,13 @@ const Numbers: React.FC<{ q: NumQ; hint: boolean; listening: boolean; voice: boo
             <div className="font-black text-center" style={{ fontSize: 'clamp(64px, 14vw, 140px)', lineHeight: 1 }}>
               {q.a} <span className="text-yellow-300">{q.kind === 'add' ? '+' : '−'}</span> {q.b} <span className="text-teal-200">=</span> <span className="text-yellow-300">{got ? answer : '?'}</span>
             </div>)}
+          {q.kind === 'gap' && (
+            <div className="font-black text-center" style={{ fontSize: 'clamp(56px, 12vw, 120px)', lineHeight: 1 }}>
+              {q.a} <span className="text-yellow-300">{q.op === 'add' ? '+' : '−'}</span> <span className="inline-block rounded-2xl px-3" style={{ background: got ? 'transparent' : 'rgba(253,224,71,.25)', color: '#fde047' }}>{got ? q.b : '?'}</span> <span className="text-teal-200">=</span> {q.op === 'add' ? q.a + q.b : q.a - q.b}
+            </div>)}
+          {q.kind === 'dots' && <Dice n={q.n} size={die} />}
+          {q.kind === 'dotsAdd' && (
+            <div className="flex items-center gap-3"><Dice n={q.a} size={die * 0.8} /><span className="font-black text-5xl text-yellow-300">+</span><Dice n={q.b} size={die * 0.8} /></div>)}
         </div>
       </div>
       <Answers listening={listening} className="flex flex-wrap justify-center gap-5 mt-6">
@@ -728,6 +754,351 @@ const Numbers: React.FC<{ q: NumQ; hint: boolean; listening: boolean; voice: boo
             </button>
           );
         })}
+      </Answers>
+    </div>
+  );
+};
+
+// ── more games: each is a lesson in a level's deck ──
+type Pick<T> = { hint: boolean; listening: boolean; onRight: () => void; onWrong: (tapped: T) => void };
+/** Tapping choices: the right one wins once; a wrong one is crossed out (and says what it was). */
+function useChoice<T>(answer: T, onRight: () => void, onWrong: (t: T) => void) {
+  const [wrong, flag, crossed] = useWrong();
+  const [got, setGot] = useState(false);
+  const pick = (k: number, v: T) => { if (got || crossed.includes(k)) return; if (v === answer) { setGot(true); onRight(); } else { flag(k); onWrong(v); } };
+  return { wrong, crossed, got, pick };
+}
+const PieceButton: React.FC<{ piece: Piece; k: number; size: number; right: boolean; hint: boolean; got: boolean; crossed: boolean; wiggling: boolean; onClick: () => void }> = ({ piece, k, size, right, hint, got, crossed, wiggling, onClick }) => (
+  <button type="button" aria-label={`Piece ${k + 1}`} onClick={onClick} className="relative rounded-[32px] bg-white/10 p-4"
+    style={{ animation: got && right ? 'lc-bounce .7s ease-out 2' : hint && right ? 'lc-glow 1.1s ease-in-out infinite' : `ll-boing .5s ease-out ${k * 0.12}s both`, ...wrongTile(crossed, wiggling) }}>
+    <PieceShape piece={piece} size={size} mood={got && right ? 'happy' : crossed ? 'oops' : 'idle'} />
+    {crossed && <><Cross /><NameTag piece={piece} /></>}
+  </button>
+);
+
+/** Chess: find the same piece as the one in the golden frame. */
+const PieceMatch: React.FC<Pick<Piece> & { round: Extract<ChessRound, { kind: 'pieceMatch' }> }> = ({ round, hint, listening, onRight, onWrong }) => {
+  const c = useChoice(round.piece, onRight, onWrong);
+  const size = Math.min(140, window.innerWidth / (round.options.length + 1.5));
+  return (
+    <div className="flex flex-col items-center">
+      <div className="flex items-end gap-4">
+        <Host who={chessHost(round)} size={Math.min(150, window.innerHeight * 0.2)} />
+        <div className="rounded-[40px] px-8 py-3" style={{ background: 'rgba(253,224,71,.15)', boxShadow: 'inset 0 0 0 6px #fde047' }}>
+          <PieceShape piece={round.piece} size={Math.min(200, window.innerHeight * 0.24)} mood={c.got ? 'happy' : 'idle'} />
+        </div>
+      </div>
+      <Answers listening={listening} className="flex flex-wrap justify-center gap-4 mt-5">
+        {round.options.map((piece, k) => <PieceButton key={k} piece={piece} k={k} size={size} right={piece === round.piece} hint={hint} got={c.got}
+          crossed={c.crossed.includes(k)} wiggling={c.wrong === k} onClick={() => c.pick(k, piece)} />)}
+      </Answers>
+    </div>
+  );
+};
+
+/** Chess: the friends line up; one goes away. Who is missing? */
+const Gone: React.FC<Pick<Piece> & { round: Extract<ChessRound, { kind: 'gone' }> }> = ({ round, hint, listening, onRight, onWrong }) => {
+  const c = useChoice(round.piece, onRight, onWrong);
+  const [away, setAway] = useState(false);
+  useEffect(() => { if (listening || away) return; const t = window.setTimeout(() => setAway(true), 700); return () => window.clearTimeout(t); }, [listening, away]);
+  const size = Math.min(150, (window.innerWidth * 0.85) / (round.row.length + 0.5));
+  return (
+    <div className="flex flex-col items-center">
+      <div className="flex items-end justify-center gap-3 rounded-[40px] bg-white/10 px-6 py-4">
+        {round.row.map((piece, k) => piece === round.piece && away && !c.got
+          ? <div key={k} className="relative" style={{ width: size, height: size }}>
+              <div className="absolute inset-0" style={{ animation: 'll-flyaway 1.1s ease-in forwards' }}><PieceShape piece={piece} size={size} /></div>
+              <div className="absolute inset-0 flex items-center justify-center font-black rounded-3xl" style={{ fontSize: size * 0.6, color: '#fde047', border: '5px dashed rgba(253,224,71,.7)', animation: 'lc-pop .4s ease-out 1s both' }}>?</div>
+            </div>
+          : <div key={k} style={{ animation: piece === round.piece && c.got ? 'lc-bounce .7s ease-out 2' : `ll-boing .5s ease-out ${k * 0.15}s both` }}><PieceShape piece={piece} size={size} mood={piece === round.piece && c.got ? 'happy' : 'idle'} /></div>)}
+      </div>
+      <Answers listening={listening || !away} className="flex flex-wrap justify-center gap-4 mt-5">
+        {round.options.map((piece, k) => <PieceButton key={k} piece={piece} k={k} size={Math.min(120, size)} right={piece === round.piece} hint={hint} got={c.got}
+          crossed={c.crossed.includes(k)} wiggling={c.wrong === k} onClick={() => c.pick(k, piece)} />)}
+      </Answers>
+    </div>
+  );
+};
+
+/** A plain 4×4 board for the chess games that don't move a piece. */
+const MiniBoard: React.FC<{ cell: number; children?: React.ReactNode; onTap?: (sq: Sq) => void; glow?: (sq: Sq) => boolean; mark?: (sq: Sq) => React.ReactNode }> = ({ cell, children, onTap, glow, mark }) => (
+  <div className="relative rounded-2xl overflow-hidden shadow-2xl" style={{ width: cell * BOARD, height: cell * BOARD, border: '6px solid #78350f', animation: 'll-in .35s ease-out' }}>
+    {Array.from({ length: BOARD * BOARD }, (_, k) => {
+      const sq: Sq = [Math.floor(k / BOARD), k % BOARD];
+      return (
+        <button key={k} type="button" aria-label={`Square ${sq[0] + 1}-${sq[1] + 1}`} onClick={() => onTap?.(sq)} className="absolute flex items-center justify-center"
+          style={{ left: sq[1] * cell, top: sq[0] * cell, width: cell, height: cell, background: (sq[0] + sq[1]) % 2 ? DARK : LIGHT, animation: glow?.(sq) ? 'lc-glow 1.1s ease-in-out infinite' : undefined }}>
+          {mark?.(sq)}
+        </button>
+      );
+    })}
+    {children}
+  </div>
+);
+const OnSquare: React.FC<{ sq: Sq; cell: number; children: React.ReactNode; z?: number }> = ({ sq, cell, children, z = 5 }) => (
+  <div className="absolute flex items-center justify-center pointer-events-none" style={{ left: sq[1] * cell, top: sq[0] * cell, width: cell, height: cell, zIndex: z, transition: 'left .35s, top .35s' }}>{children}</div>
+);
+
+/** Chess: tap every square the piece can go to (each one gets a green tick). */
+const WhereRound: React.FC<{ round: Extract<ChessRound, { kind: 'where' }>; hint: boolean; listening: boolean; onDone: () => void; onWrong: () => void }> = ({ round, hint, listening, onDone, onWrong }) => {
+  const legal = useMemo(() => movesFrom(round.piece, round.start), [round]);
+  const [found, setFound] = useState<Sq[]>([]);
+  const [bad, setBad] = useState<Sq | null>(null);
+  const [wiggle, setWiggle] = useState(false);
+  const act = useContext(ActCtx);
+  if (listening) return <Host who={round.piece} size={Math.min(280, window.innerHeight * 0.34)} />;
+  const cell = Math.floor(Math.min(window.innerWidth * 0.86, window.innerHeight * 0.55, 560) / BOARD);
+  const done = found.length === legal.length;
+  const tap = (sq: Sq) => {
+    if (done || same(sq, round.start) || found.some(f => same(f, sq))) return;
+    if (!legal.some(l => same(l, sq))) {
+      setWiggle(true); window.setTimeout(() => setWiggle(false), 520);
+      setBad(sq); window.setTimeout(() => setBad(b => (b === sq ? null : b)), 2000);
+      onWrong(); return;
+    }
+    const next = [...found, sq];
+    setFound(next);
+    if (next.length === legal.length) window.setTimeout(onDone, 500);
+  };
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="font-black text-2xl text-teal-100">{found.length} / {legal.length}</div>
+      <MiniBoard cell={cell} onTap={tap} glow={sq => hint && legal.some(l => same(l, sq)) && !found.some(f => same(f, sq))}
+        mark={sq => found.some(f => same(f, sq)) ? <span className="font-black" style={{ fontSize: cell * 0.55, color: '#16a34a', animation: 'll-boing .4s ease-out' }}>✓</span>
+          : bad && same(bad, sq) ? <span className="font-black" style={{ fontSize: cell * 0.5, color: '#ef4444' }}>✗</span> : null}>
+        <OnSquare sq={round.start} cell={cell}>
+          <PieceShape piece={round.piece} size={cell * 0.86} mood={done ? 'happy' : wiggle ? 'oops' : act.talking ? 'talk' : 'idle'}
+            style={{ animation: wiggle ? 'lc-wiggle .5s' : done ? 'lc-bounce .7s ease-out 2' : undefined }} />
+        </OnSquare>
+      </MiniBoard>
+    </div>
+  );
+};
+
+/** Chess: a star (or apple) and a ? on the board — which friend can get there in one move? */
+const WhoRound: React.FC<Pick<Piece> & { round: Extract<ChessRound, { kind: 'who' }> }> = ({ round, hint, listening, onRight, onWrong }) => {
+  const c = useChoice(round.piece, onRight, onWrong);
+  const cell = Math.floor(Math.min(window.innerWidth * 0.7, window.innerHeight * 0.36, 400) / BOARD);
+  const icon = round.mode === 'apple' ? '🍎' : '⭐';
+  return (
+    <div className="flex flex-col items-center">
+      <MiniBoard cell={cell}>
+        {!c.got && <OnSquare sq={round.target} cell={cell} z={4}><span style={{ fontSize: cell * 0.6, animation: 'lc-float 1.6s ease-in-out infinite' }}>{icon}</span></OnSquare>}
+        <OnSquare sq={c.got ? round.target : round.start} cell={cell}>
+          {c.got ? <PieceShape piece={round.piece} size={cell * 0.86} mood="happy" style={{ animation: 'lc-bounce .7s ease-out 2' }} />
+            : <span className="font-black rounded-full flex items-center justify-center" style={{ width: cell * 0.7, height: cell * 0.7, fontSize: cell * 0.5, background: '#fde047', color: '#134e4a' }}>?</span>}
+        </OnSquare>
+      </MiniBoard>
+      <Answers listening={listening} className="flex flex-wrap justify-center gap-4 mt-4">
+        {round.options.map((piece, k) => <PieceButton key={k} piece={piece} k={k} size={Math.min(110, window.innerHeight * 0.13)} right={piece === round.piece} hint={hint} got={c.got}
+          crossed={c.crossed.includes(k)} wiggling={c.wrong === k} onClick={() => c.pick(k, piece)} />)}
+      </Answers>
+    </div>
+  );
+};
+
+/** Words: find the card that looks just like Ollie's. */
+const WordMatch: React.FC<Pick<string> & { q: Extract<Question, { kind: 'wordMatch' }> }> = ({ q, hint, listening, onRight, onWrong }) => {
+  const c = useChoice(q.word, onRight, onWrong);
+  return (
+    <div className="flex flex-col items-center">
+      <div className="flex items-end gap-4">
+        <Host who="ollie" size={Math.min(160, window.innerHeight * 0.2)} />
+        <div className="rounded-3xl px-10 py-3 font-black" style={{ background: '#fef9c3', color: '#042f2e', fontSize: 'clamp(48px, 9vw, 88px)', boxShadow: 'inset 0 0 0 6px #fde047', animation: 'll-flip .55s ease-out both' }}>{q.word}</div>
+      </div>
+      <Answers listening={listening} className="flex flex-wrap justify-center gap-4 mt-3">
+        {q.options.map((w, k) => <WordCard key={k} i={k} word={w} big lower wiggle={c.wrong === k} crossed={c.crossed.includes(k)} glow={(hint || c.got) && w === q.word} onClick={() => c.pick(k, w)} />)}
+      </Answers>
+    </div>
+  );
+};
+
+/** Words: bubbles float up; pop every one that says the word. */
+const Pop: React.FC<Pick<string> & { q: Extract<Question, { kind: 'pop' }> }> = ({ q, hint, listening, onRight, onWrong }) => {
+  const [wrong, flag, crossed] = useWrong();
+  const [popped, setPopped] = useState<number[]>([]);
+  const need = q.bubbles.filter(b => b === q.word).length;
+  const done = popped.length === need;
+  const size = Math.min(170, (window.innerWidth * 0.86) / 3.3, window.innerHeight * 0.2);
+  const tap = (k: number) => {
+    if (done || popped.includes(k) || crossed.includes(k)) return;
+    if (q.bubbles[k] === q.word) { const next = [...popped, k]; setPopped(next); if (next.length === need) window.setTimeout(onRight, 500); }
+    else { flag(k); onWrong(q.bubbles[k]); }
+  };
+  return (
+    <div className="flex flex-col items-center">
+      <div className="flex items-center gap-3"><Host who="ollie" size={Math.min(120, window.innerHeight * 0.15)} />
+        <div className="font-black text-3xl text-teal-100">{popped.length} / {need}</div></div>
+      <Answers listening={listening} className="grid grid-cols-3 gap-4 mt-3">
+        {q.bubbles.map((w, k) => {
+          const isPopped = popped.includes(k), x = crossed.includes(k);
+          return (
+            <button key={k} type="button" aria-label={w} onClick={() => tap(k)} className="relative rounded-full font-black flex items-center justify-center"
+              style={{ width: size, height: size, fontSize: size * (w.length > 4 ? 0.24 : 0.32), color: x ? '#b91c1c' : '#042f2e',
+                background: x ? 'radial-gradient(circle at 30% 30%, #fff, #fecaca)' : 'radial-gradient(circle at 30% 30%, #fff 0%, #bae6fd 55%, #7dd3fc 100%)',
+                boxShadow: hint && w === q.word && !isPopped ? '0 0 0 6px #fde047' : 'inset -6px -8px 16px rgba(14,116,144,.35)', opacity: x && wrong !== k ? 0.55 : 1,
+                animation: isPopped ? 'lc-gone .45s ease-out forwards' : wrong === k ? 'lc-wiggle .5s' : `ll-boing .5s ease-out ${k * 0.1}s both, lc-float ${2 + (k % 3) * 0.4}s ease-in-out ${k * 0.2}s infinite` }}>
+              {w}
+              {x && <Cross />}
+            </button>
+          );
+        })}
+      </Answers>
+    </div>
+  );
+};
+
+/** Words: Ollie reads a sentence with a word missing; find it. */
+const SentenceRound: React.FC<Pick<string> & { q: Extract<Question, { kind: 'sentence' }> }> = ({ q, hint, listening, onRight, onWrong }) => {
+  const c = useChoice(q.word, onRight, onWrong);
+  const [before, after] = q.sentence.split('_');
+  return (
+    <div className="flex flex-col items-center">
+      <div className="flex items-end gap-4"><Host who="ollie" size={Math.min(150, window.innerHeight * 0.18)} /></div>
+      <div className="mt-2 rounded-3xl bg-white/10 px-6 py-4 font-black text-center" style={{ fontSize: 'clamp(36px, 7vw, 68px)', lineHeight: 1.3 }}>
+        {before}<span className="inline-block rounded-2xl mx-1 px-4" style={{ minWidth: '2.2em', background: c.got ? '#fde047' : 'rgba(253,224,71,.2)', color: c.got ? '#134e4a' : '#fde047',
+          borderBottom: c.got ? undefined : '5px solid #fde047', animation: c.got ? 'll-boing .4s ease-out' : undefined }}>{c.got ? q.word : ' '}</span>{after}
+      </div>
+      <Answers listening={listening} className="flex flex-wrap justify-center gap-4 mt-2">
+        {q.options.map((w, k) => <WordCard key={k} i={k} word={w} big lower wiggle={c.wrong === k} crossed={c.crossed.includes(k)} glow={(hint || c.got) && w === q.word} onClick={() => c.pick(k, w)} />)}
+      </Answers>
+    </div>
+  );
+};
+
+/** Dice dots: a die's pattern up to 6, rows of five after that. */
+const PIPS: Record<number, [number, number][]> = { 1: [[1, 1]], 2: [[0, 0], [2, 2]], 3: [[0, 0], [1, 1], [2, 2]], 4: [[0, 0], [0, 2], [2, 0], [2, 2]],
+  5: [[0, 0], [0, 2], [1, 1], [2, 0], [2, 2]], 6: [[0, 0], [1, 0], [2, 0], [0, 2], [1, 2], [2, 2]] };
+const Dice: React.FC<{ n: number; size: number }> = ({ n, size }) => {
+  if (n <= 6) return (
+    <div className="relative rounded-[22%] shadow-xl" style={{ width: size, height: size, background: '#fff', animation: 'll-boing .5s ease-out both' }}>
+      {(PIPS[n] || []).map(([r, c], k) => <span key={k} className="absolute rounded-full" style={{ width: size * 0.2, height: size * 0.2, background: '#134e4a', left: size * (0.15 + c * 0.25), top: size * (0.15 + r * 0.25) }} />)}
+    </div>
+  );
+  const dot = Math.min(size * 0.17, 34);
+  return (
+    <div className="rounded-3xl p-3 shadow-xl flex flex-col gap-2" style={{ background: '#fff', animation: 'll-boing .5s ease-out both' }}>
+      {Array.from({ length: Math.ceil(n / 5) }, (_, row) => (
+        <div key={row} className="flex gap-2" style={{ marginTop: row && row % 2 === 0 ? 8 : 0 }}>
+          {Array.from({ length: 5 }, (_, c) => <span key={c} className="rounded-full" style={{ width: dot, height: dot, background: row * 5 + c < n ? '#134e4a' : '#e5e7eb' }} />)}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/** Math: two groups — tap the one with more. */
+const More: React.FC<Pick<number> & { q: Extract<Question, { kind: 'more' }> }> = ({ q, hint, listening, onRight, onWrong }) => {
+  const right = q.a > q.b ? 0 : 1;
+  const c = useChoice(right, onRight, k => onWrong(k === 0 ? q.a : q.b));
+  const most = Math.max(q.a, q.b);
+  const size = Math.max(26, Math.min(64, (window.innerWidth * 0.36) / Math.min(5, most) / 1.25));
+  return (
+    <div className="flex flex-col items-center">
+      <Host who="benny" size={Math.min(150, window.innerHeight * 0.18)} />
+      <Answers listening={listening} className="flex flex-wrap justify-center gap-5 mt-3">
+        {[q.a, q.b].map((n, k) => (
+          <div key={k} role="button" tabIndex={0} aria-label={k === 0 ? 'Left side' : 'Right side'} onClick={() => c.pick(k, k)}
+            className="relative rounded-[36px] px-4 py-5 flex items-center justify-center cursor-pointer"
+            style={{ minWidth: Math.min(300, window.innerWidth * 0.42), minHeight: 160, background: c.crossed.includes(k) ? 'rgba(239,68,68,.25)' : 'rgba(255,255,255,.12)',
+              boxShadow: c.crossed.includes(k) ? 'inset 0 0 0 5px #ef4444' : (hint || c.got) && k === right ? '0 0 0 6px #fde047' : undefined,
+              animation: c.wrong === k ? 'lc-wiggle .5s' : c.got && k === right ? 'lc-bounce .7s ease-out 2' : `ll-boing .5s ease-out ${k * 0.2}s both` }}>
+            <Things n={n} thing={q.thing} size={size} voice={false} />
+            {c.crossed.includes(k) && <Cross />}
+          </div>
+        ))}
+      </Answers>
+    </div>
+  );
+};
+
+/** A big round green "check" button (feeding Benny, hopping the frog). */
+const CheckButton: React.FC<{ onClick: () => void; glow?: boolean }> = ({ onClick, glow }) => (
+  <button type="button" aria-label="Check" onClick={onClick} className="rounded-full font-black flex items-center justify-center shadow-xl"
+    style={{ width: 110, height: 110, fontSize: 64, background: '#22c55e', color: '#fff', animation: glow ? 'lc-glow 1.1s ease-in-out infinite' : 'll-boing .4s ease-out both' }}>✓</button>
+);
+
+/** Math: give Benny exactly n — tap things into his basket (tap one in the basket to take it back), then ✓. */
+const Feed: React.FC<{ q: Extract<Question, { kind: 'feed' }>; hint: boolean; listening: boolean; voice: boolean; onRight: () => void; onWrong: (n: number) => void }> = ({ q, hint, listening, voice, onRight, onWrong }) => {
+  const [given, setGiven] = useState<number[]>([]);
+  const [got, setGot] = useState(false);
+  const size = Math.max(36, Math.min(76, (window.innerWidth * 0.8) / 6.5));
+  const give = (i: number) => { if (got || given.includes(i)) return; const next = [...given, i]; setGiven(next); talk(countAloud(next.length), voice); };
+  const back = (i: number) => { if (!got) setGiven(given.filter(x => x !== i)); };
+  const check = () => {
+    if (got) return;
+    if (given.length === q.n) { setGot(true); onRight(); } else { onWrong(given.length); setGiven([]); }
+  };
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <div className="flex items-end gap-3">
+        <Host who="benny" size={Math.min(160, window.innerHeight * 0.2)} />
+        <div className="rounded-[32px] px-4 py-3 flex flex-wrap items-center justify-center gap-1" style={{ minWidth: Math.min(360, window.innerWidth * 0.5), minHeight: size * 1.5,
+          background: 'linear-gradient(#a16207, #78350f)', boxShadow: 'inset 0 6px 0 rgba(255,255,255,.2)' }}>
+          {given.length ? given.map((i, k) => (
+            <button key={i} type="button" onClick={() => back(i)} aria-label="take it back" className="relative leading-none" style={{ fontSize: size * 0.8, animation: 'll-hop .45s ease-out' }}>
+              {q.thing}<span className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-yellow-300 text-teal-950 text-sm font-black flex items-center justify-center">{k + 1}</span>
+            </button>)) : <span className="text-yellow-100/80 font-black text-2xl px-3">🧺</span>}
+        </div>
+      </div>
+      <Answers listening={listening} className="flex flex-col items-center gap-4">
+        <div className="flex flex-wrap justify-center gap-1 max-w-[680px]">
+          {Array.from({ length: q.pile }, (_, i) => (
+            <button key={i} type="button" onClick={() => give(i)} aria-label="give it" className="leading-none"
+              style={{ fontSize: size, width: size * 1.2, height: size * 1.2, opacity: given.includes(i) ? 0.15 : 1, animation: `ll-boing .45s ease-out ${i * 0.05}s both` }}>{q.thing}</button>
+          ))}
+        </div>
+        {given.length > 0 && <CheckButton onClick={check} glow={hint && given.length === q.n} />}
+      </Answers>
+    </div>
+  );
+};
+
+/** Math: the frog on the number line — tap HOP to hop (counting each hop), then ✓ where it should land. */
+const Hop: React.FC<{ q: Extract<Question, { kind: 'hop' }>; hint: boolean; listening: boolean; voice: boolean; onRight: () => void; onWrong: (n: number) => void }> = ({ q, hint, listening, voice, onRight, onWrong }) => {
+  const [at, setAt] = useState(q.from);
+  const [hops, setHops] = useState(0);
+  const [got, setGot] = useState(false);
+  const dir = q.by >= 0 ? 1 : -1, goal = q.from + q.by;
+  const perRow = q.max > 10 ? 11 : q.max + 1;
+  const stone = Math.max(20, Math.min(70, (window.innerWidth * 0.94) / perRow - 7));
+  const hop = () => {
+    if (got) return;
+    const next = at + dir;
+    if (next < 0 || next > q.max) return;
+    setAt(next); setHops(hops + 1); talk(countAloud(hops + 1, q.cast === 'zip' ? 'zip' : 'benny'), voice);
+  };
+  const check = () => {
+    if (got) return;
+    if (at === goal) { setGot(true); onRight(); } else { onWrong(at); setAt(q.from); setHops(0); }
+  };
+  const rows = Array.from({ length: Math.ceil((q.max + 1) / perRow) }, (_, r) => Array.from({ length: Math.min(perRow, q.max + 1 - r * perRow) }, (_, c) => r * perRow + c));
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <div className="flex items-center gap-4">
+        <Host who={q.cast} size={Math.min(140, window.innerHeight * 0.17)} />
+        {q.from > 0 && <div className="font-black" style={{ fontSize: 'clamp(44px, 9vw, 84px)' }}>{q.from} <span className="text-yellow-300">{dir > 0 ? '+' : '−'}</span> {Math.abs(q.by)}</div>}
+        <div className="font-black text-3xl text-teal-100">{hops ? `${hops} 🐸` : ''}</div>
+      </div>
+      <div className="flex flex-col gap-6 mt-6">
+        {rows.map((row, r) => (
+          <div key={r} className="flex gap-1.5">
+            {row.map(n => (
+              <div key={n} className="relative flex flex-col items-center">
+                <div className="absolute flex justify-center" style={{ bottom: stone * 0.85, width: stone, fontSize: stone * 0.8, lineHeight: 1 }}>
+                  {n === at && <span style={{ animation: got ? 'lc-bounce .7s ease-out 2' : 'll-hop .45s ease-out' }} key={`${at}-${hops}`}>🐸</span>}
+                </div>
+                <div className="rounded-full font-black flex items-center justify-center" style={{ width: stone, height: stone * 0.8, fontSize: stone * 0.42,
+                  background: n === at ? '#fde047' : hint && n === goal ? '#bbf7d0' : 'rgba(255,255,255,.85)', color: '#134e4a', boxShadow: hint && n === goal ? '0 0 0 4px #22c55e' : undefined }}>{n}</div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <Answers listening={listening} className="flex items-center gap-6 mt-1">
+        <button type="button" onClick={hop} aria-label="Hop" className="rounded-full font-black flex items-center justify-center gap-2 shadow-xl px-8"
+          style={{ height: 110, fontSize: 44, background: '#fff', color: '#166534', animation: 'll-boing .4s ease-out both' }}><span style={{ fontSize: 60 }}>🐸</span>HOP</button>
+        {hops > 0 && <CheckButton onClick={check} glow={hint && at === goal} />}
       </Answers>
     </div>
   );
