@@ -37,7 +37,7 @@ export function Login() {
         <img className="pl-logo" src="/vijayplanner/icon-192.png" alt="" />
         <div>
           <p className="pl-eyebrow">Vijay Planner</p>
-          <h1>Own the morning.</h1>
+          <h1>Own the night.</h1>
         </div>
       </div>
       <div className="pl-stack">

@@ -58,3 +58,48 @@
 .plan-list-item { display: flex; align-items: center; gap: 8px; }
 .plan-list-item .pl-btn { padding: 0 8px; border: 0; min-height: 40px; }
 .plan-areas { display: flex; flex-direction: column; gap: 12px; }
+
+/* ── Bed Brief ── */
+.brief { min-height: 100dvh; display: flex; flex-direction: column; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.brief__top { display: flex; align-items: center; gap: 12px; }
+.brief__dots { flex: 1; display: flex; gap: 6px; }
+.brief__dots span { flex: 1; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 12%, transparent); }
+.brief__dots span.is-done { background: var(--good); }
+.brief__dots span.is-now { background: var(--accent); }
+.brief__clock { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 15px; color: var(--ink-2); min-width: 48px; text-align: right; }
+.brief__clock.is-amber { color: var(--amber-2); }
+.brief__clock.is-over { color: var(--bad); }
+.brief__body { flex: 1; display: flex; flex-direction: column; gap: 14px; justify-content: center; padding: 24px 0; }
+.brief__q { font-size: 30px; line-height: 1.15; }
+.brief-word { font-family: var(--serif); font-size: 28px; font-weight: 700; min-height: 64px; }
+.brief .pl-input { font-size: 17px; }
+.brief .pl-textarea { min-height: 84px; }
+.brief__foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.brief__foot .pl-btn--primary { min-width: 140px; }
+
+/* ── day page bits ── */
+.plan-brief-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+.plan-brief-grid > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.plan-brief-grid p { font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
+.plan-brief-word { font-family: var(--serif); font-size: 24px; line-height: 1.1; }
+
+/* ── Miracle Night ── */
+.night-top { display: flex; align-items: center; gap: 14px; }
+.night-top > svg { width: 36px; height: 36px; flex: none; opacity: 0.9; }
+.night-top__big { display: block; font-family: var(--serif); font-size: 28px; line-height: 1.1; }
+.night-top small { display: block; margin-top: 4px; opacity: 0.8; font-size: 13px; }
+.night-stage { display: flex; align-items: center; gap: 12px; }
+.night-stage--col { flex-direction: column; align-items: stretch; }
+.night-stage b { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.night-stage b svg { width: 18px; height: 18px; color: var(--accent); }
+.night-stage small { display: block; color: var(--ink-2); font-size: 13px; }
+.night-stage.is-done b { color: var(--ink-2); }
+.night-unwind { display: flex; align-items: baseline; gap: 10px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.night-unwind__time { font-family: var(--serif); font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.night-unwind.is-over { background: color-mix(in srgb, var(--amber) 18%, transparent); }
+.night-unwind.is-over .night-unwind__time { color: var(--amber-2); }
+.night-goodnight { display: flex; align-items: center; gap: 12px; }
+.night-goodnight > svg { width: 28px; height: 28px; color: var(--accent); flex: none; }
+.night-goodnight b { display: block; font-family: var(--serif); font-size: 20px; }
+.night-goodnight small { color: var(--ink-2); font-size: 13px; }
+.night-goodnight div { flex: 1; }

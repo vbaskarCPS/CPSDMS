@@ -10,7 +10,17 @@ export interface Evening { appreciated: string; handledWell: string; learned: st
 export type ScoreKey = 'clarity' | 'energy' | 'necessity' | 'productivity' | 'influence' | 'courage';
 export type Scores = Partial<Record<ScoreKey, number>>;
 
+/** The Bed Brief: ≤10 minutes, from bed, before getting up. Its priorities live in day.priorities. */
+export interface Brief { word: string; aGame: string; stress: string; stressResponse: string; excited: string; startedAt?: string; finishedAt?: string; seconds?: number }
+/** When each block of the routine was ticked ('HH:MM', phone time). */
+export interface Ticks { up?: string; daycare?: string; dinner?: string; gym?: string; shake?: string; lightsOut?: string }
+/** Miracle Night: unwind, the quick review, tomorrow's #1. */
+export interface Night { unwindStart?: string; unwindEnd?: string; tomorrowTop?: string; review: { win: string; drag: string; tomorrow: string } }
+
 export interface Day {
+  brief: Brief;
+  ticks: Ticks;
+  night: Night;
   victory: Victory;
   morning: Morning;
   projects: Project[];
@@ -22,6 +32,8 @@ export interface Day {
   reflection?: string;
 }
 
+export const briefDone = (d: Day): boolean => !!d.brief.finishedAt;
+
 export const SCORE_KEYS: { key: ScoreKey; label: string; hint: string }[] = [
   { key: 'clarity', label: 'Clarity', hint: 'I knew what I wanted and why' },
   { key: 'energy', label: 'Energy', hint: 'I kept my physical and mental energy up' },
@@ -32,6 +44,9 @@ export const SCORE_KEYS: { key: ScoreKey; label: string; hint: string }[] = [
 ];
 
 export const emptyDay = (): Day => ({
+  brief: { word: '', aGame: '', stress: '', stressResponse: '', excited: '' },
+  ticks: {},
+  night: { review: { win: '', drag: '', tomorrow: '' } },
   victory: { move: false, reflect: false, grow: false, savers: { silence: false, affirmations: false, visualization: false, exercise: false, reading: false, scribing: false } },
   morning: { excited: '', word: '', aGame: '', stress: '', stressResponse: '', appreciate: '', progress: '' },
   projects: [{ name: '', steps: ['', '', ''] }, { name: '', steps: ['', '', ''] }, { name: '', steps: ['', '', ''] }],
@@ -51,6 +66,9 @@ export function normalizeDay(d: Partial<Day> | null | undefined): Day {
   const priorities = Array.isArray(d.priorities) ? d.priorities.slice(0, 3) : [];
   while (priorities.length < 3) priorities.push({ text: '', done: false });
   return {
+    brief: { ...e.brief, ...(d.brief || {}) },
+    ticks: { ...(d.ticks || {}) },
+    night: { ...e.night, ...(d.night || {}), review: { ...e.night.review, ...(d.night?.review || {}) } },
     victory: { ...e.victory, ...(d.victory || {}), savers: { ...e.victory.savers, ...(d.victory?.savers || {}) } },
     morning: { ...e.morning, ...(d.morning || {}) },
     projects: projects.map(p => ({ name: p?.name || '', steps: [p?.steps?.[0] || '', p?.steps?.[1] || '', p?.steps?.[2] || ''] })),

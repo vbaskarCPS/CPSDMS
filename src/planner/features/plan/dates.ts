@@ -1,5 +1,6 @@
 // src/planner/features/plan/dates.ts — day / ISO-week / month keys and the wake streak.
 import { dayKey } from '../../lib/docs';
+import { routineMin, routineNow, type Routine } from '../../lib/routine';
 import type { Day } from './types';
 
 export const parseDay = (key: string): Date => { const [y, m, d] = key.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -26,18 +27,29 @@ export const monthRange = (d = new Date()): [string, string] => [`${monthKey(d)}
 export const shiftMonth = (d: Date, n: number): Date => new Date(d.getFullYear(), d.getMonth() + n, 1);
 
 export const nowHM = (): string => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
-const mins = (hm: string): number => { const [h, m] = hm.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
 
-/** Did this day's wake beat the target (15 min grace)? */
-export const wokeOnTime = (day: Day | undefined, target: string): boolean => !!day?.victory.wokeAt && mins(day.victory.wokeAt) <= mins(target) + 15;
+/** Up by the wake target plus the grace? (ticks.up is the time the "Up" block was ticked.) */
+export const wokeOnTime = (day: Day | undefined, r: Routine): boolean =>
+  !!day?.ticks.up && routineMin(day.ticks.up) <= routineMin(r.wake) + r.wakeGrace;
+/** Lights out by the target? 1:00 am sorts after 11 pm on the routine scale (day starts at 4 am). */
+export const lightsOutOnTime = (day: Day | undefined, r: Routine): boolean =>
+  !!day?.ticks.lightsOut && routineMin(day.ticks.lightsOut) <= routineMin(r.lightsOut);
 
-/** Consecutive on-time wakes ending today (or yesterday, if today isn't logged yet). */
-export function wakeStreak(days: Record<string, Day>, target: string): number {
+/** Consecutive days that pass `ok`, ending today (or yesterday when today isn't logged yet). */
+export function streakOf(days: Record<string, Day>, ok: (d: Day | undefined) => boolean, logged: (d: Day | undefined) => boolean): number {
   let key = dayKey();
-  if (!days[key]?.victory.wokeAt) key = addDays(key, -1);
+  if (!logged(days[key])) key = addDays(key, -1);
   let n = 0;
-  while (wokeOnTime(days[key], target)) { n++; key = addDays(key, -1); }
+  while (days[key] && ok(days[key])) { n++; key = addDays(key, -1); }
   return n;
+}
+export const wakeStreak = (days: Record<string, Day>, r: Routine = routineNow()): number => streakOf(days, d => wokeOnTime(d, r), d => !!d?.ticks.up);
+export const lightsOutStreak = (days: Record<string, Day>, r: Routine = routineNow()): number => streakOf(days, d => lightsOutOnTime(d, r), d => !!d?.ticks.lightsOut);
+
+/** Minutes between lights out and the wake target, as "7h 30m". */
+export function sleepEstimate(lightsOut: string, wake: string): string {
+  const mins = (routineMin(wake) - routineMin(lightsOut) + 1440) % 1440;
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
 }
 
 export const fmtDate = (key: string, opts: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric' }) => parseDay(key).toLocaleDateString([], opts);

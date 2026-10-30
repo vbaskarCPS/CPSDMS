@@ -4,7 +4,8 @@ import { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import { useDoc, useDocs } from '../../lib/useDoc';
 import { Page, Header, Card, Button, Prompt, Score, Input, Bars, Stat } from '../../ui/primitives';
-import { monthKey, monthRange, shiftMonth, shiftWeek, weekDays, weekKey } from './dates';
+import { clock, hhmm, routineMin, routineNow } from '../../lib/routine';
+import { lightsOutOnTime, monthKey, monthRange, shiftMonth, shiftWeek, weekDays, weekKey } from './dates';
 import { dayAverage, emptyGoals, emptyMonth, emptyWeek, LIFE_AREAS, normalizeDay, type Day, type Goals, type LifeScores, type Month, type Week } from './types';
 
 function Areas({ value, onChange }: { value: LifeScores; onChange: (v: LifeScores) => void }) {
@@ -42,9 +43,13 @@ function useDayStats(from: string, to: string) {
     const avgs = days.map(d => dayAverage(d.scores)).filter((n): n is number => n !== null);
     const prioritiesDone = days.reduce((n, d) => n + d.priorities.filter(p => p.done).length, 0);
     const prioritiesSet = days.reduce((n, d) => n + d.priorities.filter(p => p.text.trim()).length, 0);
-    const victory = days.filter(d => d.victory.move && d.victory.reflect && d.victory.grow).length;
+    const briefs = days.filter(d => !!d.brief.finishedAt).length;
+    const r = routineNow();
+    const lightsOut = days.filter(d => !!d.ticks.lightsOut);
+    const lightsOnTime = lightsOut.filter(d => lightsOutOnTime(d, r)).length;
+    const avgLightsOut = lightsOut.length ? hhmm(Math.round(lightsOut.reduce((a, d) => a + routineMin(d.ticks.lightsOut!), 0) / lightsOut.length) + 240) : null;
     const overall = avgs.length ? Math.round((avgs.reduce((a, b) => a + b, 0) / avgs.length) * 10) / 10 : null;
-    return { byKey, loading, overall, prioritiesDone, prioritiesSet, victory, logged: days.length };
+    return { byKey, loading, overall, prioritiesDone, prioritiesSet, briefs, lightsOnTime, avgLightsOut, logged: days.length };
   }, [docs, loading]);
 }
 
@@ -74,7 +79,8 @@ export function WeekReview() {
         <div className="pl-stats">
           <Stat label="Avg score" value={stats.overall ?? '—'} sub="of 5" />
           <Stat label="Priorities" value={`${stats.prioritiesDone}/${stats.prioritiesSet}`} sub="done" tone={stats.prioritiesSet > 0 && stats.prioritiesDone === stats.prioritiesSet ? 'good' : undefined} />
-          <Stat label="Victory hours" value={`${stats.victory}/7`} tone={stats.victory >= 5 ? 'good' : undefined} />
+          <Stat label="Bed Briefs" value={`${stats.briefs}/7`} tone={stats.briefs >= 5 ? 'good' : undefined} />
+          <Stat label="Lights out on time" value={`${stats.lightsOnTime}/7`} sub={stats.avgLightsOut ? `avg ${clock(stats.avgLightsOut)}` : undefined} tone={stats.lightsOnTime >= 5 ? 'good' : undefined} />
         </div>
         <Bars values={bars} max={5} labels={['M', 'T', 'W', 'T', 'F', 'S', 'S']} />
         {stats.logged === 0 && !stats.loading && <p className="pl-muted" style={{ fontSize: 13 }}>No day pages this week yet.</p>}
@@ -122,7 +128,8 @@ export function MonthReview() {
         <div className="pl-stats">
           <Stat label="Avg score" value={stats.overall ?? '—'} sub="of 5" />
           <Stat label="Priorities" value={`${stats.prioritiesDone}/${stats.prioritiesSet}`} sub="done" />
-          <Stat label="Victory hours" value={stats.victory} sub={`of ${daysIn}`} tone={stats.victory >= daysIn * 0.7 ? 'good' : undefined} />
+          <Stat label="Bed Briefs" value={stats.briefs} sub={`of ${daysIn}`} tone={stats.briefs >= daysIn * 0.7 ? 'good' : undefined} />
+          <Stat label="Lights out on time" value={stats.lightsOnTime} sub={stats.avgLightsOut ? `avg ${clock(stats.avgLightsOut)}` : `of ${daysIn}`} tone={stats.lightsOnTime >= daysIn * 0.7 ? 'good' : undefined} />
         </div>
       </Card>
 

@@ -1,13 +1,27 @@
-// src/planner/screens/Settings.tsx — units, wake time, PIN, sign out.
-import { useState, type FormEvent } from 'react';
+// src/planner/screens/Settings.tsx — my routine (the times the day runs on), units, PIN, sign out.
+import { useEffect, useState, type FormEvent } from 'react';
+import { DEFAULT_ROUTINE, loadRoutine, saveRoutine, type Routine } from '../lib/routine';
 import { Link } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import { changePin, saveSettings, signOut, type PlannerPass } from '../lib/auth';
+import { PushCard } from '../ui/PushCard';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
   const [units, setUnits] = useState<'lb' | 'kg'>(s.units === 'kg' ? 'kg' : 'lb');
-  const [wake, setWake] = useState(s.wake_time || '05:00');
+  const [routine, setRoutine] = useState<Routine>(DEFAULT_ROUTINE);
+  const [rSaving, setRSaving] = useState(false);
+  const [rSaved, setRSaved] = useState(false);
+  const [rErr, setRErr] = useState<string | null>(null);
+  useEffect(() => { void loadRoutine().then(setRoutine); }, []);
+  const r = <K extends keyof Routine>(k: K, v: Routine[K]) => { setRoutine(x => ({ ...x, [k]: v })); setRSaved(false); };
+  const saveR = async (e: FormEvent) => {
+    e.preventDefault();
+    setRSaving(true); setRErr(null);
+    try { await saveRoutine(routine); setRSaved(true); }
+    catch (x) { setRErr(x instanceof Error ? x.message : 'Could not save'); }
+    finally { setRSaving(false); }
+  };
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -19,7 +33,7 @@ export function Settings({ pass }: { pass: PlannerPass }) {
   const save = async (e: FormEvent) => {
     e.preventDefault();
     setSaving(true); setErr(null); setSaved(false);
-    try { await saveSettings({ ...s, units, wake_time: wake }); setSaved(true); }
+    try { await saveSettings({ ...s, units }); setSaved(true); }
     catch (x) { setErr(x instanceof Error ? x.message : 'Could not save'); }
     finally { setSaving(false); }
   };
@@ -39,6 +53,26 @@ export function Settings({ pass }: { pass: PlannerPass }) {
         <h1>Settings</h1>
       </header>
 
+      <form className="pl-card pl-stack" onSubmit={saveR}>
+        <h3>My routine</h3>
+        <p className="pl-muted" style={{ fontSize: 13 }}>The times the Today screen, reminders, the fast and Miracle Night run on. The planner's day rolls over at 4 am, so 1:00 am still counts as tonight.</p>
+        <div className="pl-grid-2">
+          <label className="pl-field"><span className="pl-label">Up with Kiaan</span><input className="pl-input" type="time" value={routine.wake} onChange={e => r('wake', e.target.value)} required /></label>
+          <label className="pl-field"><span className="pl-label">Grace (min)</span><input className="pl-input" type="number" min={0} max={120} value={routine.wakeGrace} onChange={e => r('wakeGrace', Number(e.target.value) || 0)} /></label>
+          <label className="pl-field"><span className="pl-label">Bed Brief (min)</span><input className="pl-input" type="number" min={1} max={60} value={routine.briefMinutes} onChange={e => r('briefMinutes', Math.max(1, Number(e.target.value) || 10))} /></label>
+          <label className="pl-field"><span className="pl-label">Kiaan → daycare</span><input className="pl-input" type="time" value={routine.daycare} onChange={e => r('daycare', e.target.value)} required /></label>
+          <label className="pl-field"><span className="pl-label">Dinner · fast ends</span><input className="pl-input" type="time" value={routine.eatOpen} onChange={e => r('eatOpen', e.target.value)} required /></label>
+          <label className="pl-field"><span className="pl-label">Gym</span><input className="pl-input" type="time" value={routine.gym} onChange={e => r('gym', e.target.value)} required /></label>
+          <label className="pl-field"><span className="pl-label">Shake · window closes</span><input className="pl-input" type="time" value={routine.shake} onChange={e => { r('shake', e.target.value); r('eatClose', e.target.value); }} required /></label>
+          <label className="pl-field"><span className="pl-label">Unwind cap (min, 0 = none)</span><input className="pl-input" type="number" min={0} max={240} value={routine.unwindCap} onChange={e => r('unwindCap', Math.max(0, Number(e.target.value) || 0))} /></label>
+          <label className="pl-field"><span className="pl-label">Lights out</span><input className="pl-input" type="time" value={routine.lightsOut} onChange={e => r('lightsOut', e.target.value)} required /></label>
+        </div>
+        {rErr && <p className="pl-error">{rErr}</p>}
+        <button className="pl-btn pl-btn--primary" disabled={rSaving}>{rSaving ? 'Saving…' : rSaved ? 'Saved' : 'Save routine'}</button>
+      </form>
+
+      <PushCard />
+
       <form className="pl-card pl-stack" onSubmit={save}>
         <label className="pl-field">
           <span className="pl-label">Weights in</span>
@@ -46,10 +80,6 @@ export function Settings({ pass }: { pass: PlannerPass }) {
             <option value="lb">Pounds (lb)</option>
             <option value="kg">Kilograms (kg)</option>
           </select>
-        </label>
-        <label className="pl-field">
-          <span className="pl-label">Wake target</span>
-          <input className="pl-input" type="time" value={wake} onChange={e => setWake(e.target.value)} required />
         </label>
         {err && <p className="pl-error">{err}</p>}
         <button className="pl-btn pl-btn--primary" disabled={saving}>{saving ? 'Saving…' : saved ? 'Saved' : 'Save'}</button>
