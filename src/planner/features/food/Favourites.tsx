@@ -5,12 +5,17 @@ import { Star, Trash2, Utensils } from 'lucide-react';
 import { getDocs, putDoc } from '../../lib/docs';
 import { Card, Empty, Header, Page, useToast } from '../../ui/primitives';
 import type { FavMeal } from './model';
+import { ensureShakeFavourite } from './fasting';
 
 export function Favourites() {
   const [favs, setFavs] = useState<FavMeal[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, show] = useToast();
-  useEffect(() => { getDocs<FavMeal>('favmeal').then(d => setFavs(d.map(x => x.data).sort((a, b) => b.uses - a.uses))).finally(() => setLoading(false)); }, []);
+  useEffect(() => {
+    getDocs<FavMeal>('favmeal')
+      .then(async d => { const list = d.map(x => x.data); const shake = await ensureShakeFavourite(list); if (!list.some(f => f.id === shake.id)) list.push(shake); setFavs(list.sort((a, b) => b.uses - a.uses)); })
+      .finally(() => setLoading(false));
+  }, []);
   const remove = async (f: FavMeal) => {
     if (!window.confirm(`Remove “${f.name}” from favourites?`)) return;
     try { await putDoc('favmeal', f.id, null); setFavs(fs => fs.filter(x => x.id !== f.id)); show('Removed'); } catch { show('Could not remove', 'bad'); }

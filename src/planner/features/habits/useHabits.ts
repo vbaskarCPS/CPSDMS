@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getDocs, putDoc, dayKey } from '../../lib/docs';
 import { addDays, type Logs } from './streak';
 import type { Habit, HabitLog, HabitMark } from './types';
+import { seedHabitsIfEmpty } from './seed';
 
 export const LOG_DAYS = 84;
 
@@ -19,7 +20,9 @@ export function useHabits() {
         getDocs<Habit>('habit'),
         getDocs<HabitLog>('habitlog', addDays(today, -(LOG_DAYS - 1)), today),
       ]);
-      setHabits(hs.map(d => ({ ...d.data, id: d.data.id || d.key })).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt.localeCompare(b.createdAt)));
+      let list = hs.map(d => ({ ...d.data, id: d.data.id || d.key }));
+      if (!list.length) list = await seedHabitsIfEmpty(list);   // first visit: the routine's four habits
+      setHabits(list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt.localeCompare(b.createdAt)));
       setLogs(Object.fromEntries(ls.map(d => [d.key, d.data || {}])));
       setError(null);
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not load'); }

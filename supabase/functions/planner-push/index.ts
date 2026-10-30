@@ -2,7 +2,7 @@
 //
 //   POST { action: 'key' }            → { publicKey }   the VAPID key the phone subscribes with (shared push_keys)
 //   POST { token, action: 'test' }    → sends "notifications are on" to every device of the planner user
-//   POST { action: 'tick' }  header x-cron-key = PLANNER_CRON_KEY  (pg_cron, every 5 minutes)
+//   POST { action: 'tick' }  header x-cron-key = planner_secrets.cron_key (or PLANNER_CRON_KEY)  (pg_cron, every 5 minutes)
 //        → sends the routine reminders that are due right now, Toronto time, once each per planner day
 //
 // Subscriptions are planner docs (kind 'push'); reminders already sent are in kind 'pushlog' (one doc per
@@ -50,7 +50,9 @@ async function subsOf(svc: Svc, userId: string): Promise<{ key: string; sub: Sub
 }
 
 async function forgetSub(svc: Svc, userId: string, key: string): Promise<void> {
-  await svc.from('planner_docs').update({ data: null, updated_at: new Date().toISOString() }).eq('user_id', userId).eq('kind', 'push').eq('key', key);
+  // PostgREST turns a JSON null into SQL NULL (the column is NOT NULL), so a gone subscription is
+  // marked instead; subsOf() skips docs without an endpoint.
+  await svc.from('planner_docs').update({ data: { gone: true, at: new Date().toISOString() }, updated_at: new Date().toISOString() }).eq('user_id', userId).eq('kind', 'push').eq('key', key);
 }
 
 async function sendAll(svc: Svc, userId: string, payload: Record<string, unknown>): Promise<{ sent: number; gone: number }> {
@@ -132,7 +134,9 @@ Deno.serve(async req => {
     }
 
     if (b.action === 'tick') {
-      const want = Deno.env.get('PLANNER_CRON_KEY') || '';
+      // the key lives in planner_secrets (service role only); pg_cron sends the same row's value
+      let want = Deno.env.get('PLANNER_CRON_KEY') || '';
+      if (!want) { const { data: k } = await svc.from('planner_secrets').select('value').eq('name', 'cron_key').maybeSingle(); want = k?.value || ''; }
       if (!want || (req.headers.get('x-cron-key') || '') !== want) return json({ error: 'Not allowed' }, 403);
       const now = new Date();
       const dayKey = plannerDayKey(now);

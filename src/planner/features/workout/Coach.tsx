@@ -4,6 +4,7 @@ import { Send, RotateCcw } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
 import { coach, type ChatMessage } from '../../lib/ai';
 import { getDoc, putDoc, dayKey } from '../../lib/docs';
+import { loadRoutine, routineNow, type Routine } from '../../lib/routine';
 import { Page, Header, Button, Chip } from '../../ui/primitives';
 import { daysAgo, loadBodyWeights, loadTemplates, loadWorkouts } from './store';
 import { e1rm, type CoachChat, type Template, type Workout } from './types';
@@ -27,6 +28,8 @@ export function Coach({ pass }: { pass: PlannerPass }) {
   const [ctx, setCtx] = useState<{ workouts: Workout[]; templates: Template[]; weights: { date: string; weight: number }[] } | null>(null);
   const end = useRef<HTMLDivElement>(null);
 
+  const [routine, setRoutine] = useState<Routine>(() => routineNow());
+  useEffect(() => { void loadRoutine().then(setRoutine); }, []);
   useEffect(() => {
     void getDoc<CoachChat>('coachchat', 'current').then(d => setMsgs(d?.messages || []));
     void Promise.all([loadWorkouts(daysAgo(28)), loadTemplates(), loadBodyWeights(daysAgo(90))]).then(([workouts, templates, weights]) => setCtx({ workouts, templates, weights }));
@@ -35,10 +38,11 @@ export function Coach({ pass }: { pass: PlannerPass }) {
 
   const context = useMemo(() => ctx && ({
     today: dayKey(), units, weekday: new Date().toLocaleDateString([], { weekday: 'long' }),
+    routine: { gym: routine.gym, eatOpen: routine.eatOpen, shake: routine.shake, lightsOut: routine.lightsOut, pattern: 'fasts until dinner, trains at night, sleeps ~1 am–8:30 am' },
     templates: ctx.templates.filter(t => !t.archived).map(t => ({ name: t.name, days: t.days, exercises: t.exercises.map(e => `${e.name} ${e.targetSets}x${e.targetReps}`) })),
     last4weeks: condense(ctx.workouts),
     bodyWeight: ctx.weights.slice(-10),
-  }), [ctx, units]);
+  }), [ctx, units, routine]);
 
   const send = async (t: string) => {
     const content = t.trim();

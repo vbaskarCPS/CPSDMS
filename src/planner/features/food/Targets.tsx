@@ -28,7 +28,7 @@ export function TargetsScreen() {
 
   return (
     <Page>
-      <Header title="Targets" eyebrow="Per day" back="/food" />
+      <Header title="Targets" eyebrow="Per day · 2 meals: dinner + shake" back="/food" />
       <Card>
         <div className="pl-stack">
           <p className="pl-eyebrow">Quick helper</p>
