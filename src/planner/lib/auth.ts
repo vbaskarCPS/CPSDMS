@@ -2,8 +2,10 @@
 // Same shape as the worker pass (src/lib/workerPass.ts); the server keeps only the token's hash
 // (supabase/migrations/20261203100000_planner.sql).
 import { supabase } from '../../lib/supabase';
+import { appId } from './app';
 
-const KEY = 'vijay-planner-pass';
+// one pass per app, so /vijayplanner and /roshplanner keep separate sign-ins on the same phone
+const KEY = appId() === 'vijayplanner' ? 'vijay-planner-pass' : `${appId()}-pass`;
 
 export interface PlannerSettings { units?: 'lb' | 'kg'; wake_time?: string; [k: string]: unknown }
 export interface PlannerUser { id: string; username: string; display_name: string; settings: PlannerSettings }
