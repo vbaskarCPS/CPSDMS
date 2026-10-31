@@ -87,3 +87,10 @@
 .wo-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; min-width: 0; }
 .wo-sides .wo-stepper button { width: 22px; font-size: 16px; }
 .wo-sides .wo-stepper input { font-size: 14px; }
+
+/* the coach's paragraph after completing a session (and last time's, shown while training) */
+.wo-review { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 14px; background: color-mix(in srgb, var(--accent) 10%, var(--bg-2)); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.wo-review svg { flex: none; margin-top: 3px; color: var(--amber-2); }
+.wo-review b { display: block; font-size: 13px; margin-bottom: 4px; }
+.wo-review p { margin: 0; font-size: 14px; line-height: 1.45; }
+.wo-review.is-waiting p { opacity: .7; font-style: italic; }

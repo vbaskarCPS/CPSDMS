@@ -17,7 +17,8 @@ export interface SetLog { weight: number; reps: number; rpe?: number; done: bool
 // Unilateral exercises (one-arm row, split squat…): reps = left side, repsR = right side, one weight.
 export interface WorkoutExercise { exerciseId: string; name: string; restSec: number; targetReps?: string; sets: SetLog[]; mode?: SetMode; note?: string; comment?: string; lastComment?: string }
 // note = the plan's cue (from the template / coach); comment = what you wrote after doing it; lastComment = the previous session's comment, shown next time
-export interface Workout { id: string; date: string; startedAt: string; endedAt?: string; templateId?: string; name: string; exercises: WorkoutExercise[]; notes?: string; prs?: string[]; discarded?: boolean }
+// review = the coach's paragraph written when the session was completed (what to do next time)
+export interface Workout { id: string; date: string; startedAt: string; endedAt?: string; templateId?: string; name: string; exercises: WorkoutExercise[]; notes?: string; prs?: string[]; discarded?: boolean; review?: string }
 
 export interface BodyWeight { weight: number }
 export interface CoachChat { messages: { role: 'user' | 'assistant'; content: string; at?: string }[] }
