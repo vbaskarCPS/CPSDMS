@@ -100,3 +100,12 @@ export async function dayPlan(library: { id: string; name: string }[], units: st
   const r = await invoke<DayPlan>({ action: 'dayplan', context, library: library.slice(0, 200), units, answers });
   return { review: String(r.review || ''), questions: Array.isArray(r.questions) ? r.questions.filter(q => q && q.id && Array.isArray(q.choices)) : [], tomorrow: { ...r.tomorrow, exercises: Array.isArray(r.tomorrow?.exercises) ? r.tomorrow.exercises : [] }, answers, madeAt: new Date().toISOString() };
 }
+
+export interface BriefHints { words: string[]; priorities: string[]; aGame: string; stress: string; stressResponse: string; excited: string; noticed?: string; madeAt?: string }
+/** Coach Claude's suggestions for each Brief question, from the whole planner. */
+export async function briefHints(units: string): Promise<BriefHints> {
+  const context = await lifeContext(units, { daysBack: 10, fullSessions: 2 });
+  const r = await invoke<BriefHints>({ action: 'briefhints', context });
+  const list = (v: unknown, n: number) => (Array.isArray(v) ? v.filter(x => typeof x === 'string' && x.trim()).slice(0, n) : []);
+  return { words: list(r.words, 3), priorities: list(r.priorities, 3), aGame: r.aGame || '', stress: r.stress || '', stressResponse: r.stressResponse || '', excited: r.excited || '', noticed: r.noticed || '', madeAt: new Date().toISOString() };
+}

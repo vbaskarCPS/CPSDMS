@@ -10,14 +10,22 @@ import { Button, useToast } from '../../ui/primitives';
 import { nowHM } from './dates';
 import { emptyDay, normalizeDay, type Day } from './types';
 import { autoMark } from '../habits/auto';
+import { briefHints, type BriefHints } from '../../lib/ai';
+import { getDoc, getDocs, putDoc } from '../../lib/docs';
+import { Sparkles } from 'lucide-react';
 
-type Step = { title: string; hint?: string; render: (d: Day, set: (fn: (d: Day) => Day) => void, focus: React.RefObject<HTMLInputElement | HTMLTextAreaElement>) => JSX.Element };
+/** Coach Claude starts suggesting once it has seen a few finished days. */
+const KNOWS_YOU_AFTER = 3;
+
+type Hints = BriefHints | null;
+type Step = { title: string; hint?: string; render: (d: Day, set: (fn: (d: Day) => Day) => void, focus: React.RefObject<HTMLInputElement | HTMLTextAreaElement>) => JSX.Element; hints?: (h: BriefHints, d: Day, set: (fn: (d: Day) => Day) => void) => { label: string; apply: () => void }[] };
 
 const setBrief = (set: (fn: (d: Day) => Day) => void, k: keyof Day['brief'], v: string) => set(d => ({ ...d, brief: { ...d.brief, [k]: v } }));
 
 const STEPS: Step[] = [
   { title: 'One word for today', hint: 'The kind of man you want to be from now until lights out.',
-    render: (d, set, focus) => <input ref={focus as React.RefObject<HTMLInputElement>} className="pl-input brief-word" placeholder="Calm · Sharp · Present…" value={d.brief.word} maxLength={24} onChange={e => setBrief(set, 'word', e.target.value)} /> },
+    render: (d, set, focus) => <input ref={focus as React.RefObject<HTMLInputElement>} className="pl-input brief-word" placeholder="Calm · Sharp · Present…" value={d.brief.word} maxLength={24} onChange={e => setBrief(set, 'word', e.target.value)} />,
+    hints: (h, _d, set) => h.words.map(w => ({ label: w, apply: () => setBrief(set, 'word', w) })) },
   { title: 'Three things that must get done', hint: 'Not a to-do list. The three that make today a win.',
     render: (d, set, focus) => (
       <div className="pl-stack">
@@ -25,17 +33,24 @@ const STEPS: Step[] = [
           <input key={i} className="pl-input" ref={i === 0 ? (focus as React.RefObject<HTMLInputElement>) : undefined} placeholder={`#${i + 1}`} value={p.text}
             onChange={e => set(x => ({ ...x, priorities: x.priorities.map((y, j) => (j === i ? { ...y, text: e.target.value } : y)) }))} />
         ))}
-      </div>) },
+      </div>),
+    hints: (h, d, set) => h.priorities.filter(p => !d.priorities.some(x => x.text.trim() === p)).map(p => ({ label: p, apply: () => set(x => { const i = x.priorities.findIndex(y => !y.text.trim()); if (i < 0) return x; return { ...x, priorities: x.priorities.map((y, j) => (j === i ? { ...y, text: p } : y)) }; }) })) },
   { title: 'Who needs me on my A-game today?', hint: 'Kiaan, Roshini, a client, the crew…',
-    render: (d, set, focus) => <textarea className="pl-input pl-textarea" ref={focus as React.RefObject<HTMLTextAreaElement>} rows={2} placeholder="Name and why" value={d.brief.aGame} onChange={e => setBrief(set, 'aGame', e.target.value)} /> },
+    render: (d, set, focus) => <textarea className="pl-input pl-textarea" ref={focus as React.RefObject<HTMLTextAreaElement>} rows={2} placeholder="Name and why" value={d.brief.aGame} onChange={e => setBrief(set, 'aGame', e.target.value)} />,
+    hints: (h, _d, set) => (h.aGame ? [{ label: h.aGame, apply: () => setBrief(set, 'aGame', h.aGame) }] : []) },
   { title: 'What might stress me — and how my best self responds', hint: 'Decide now, so it is already handled when it shows up.',
     render: (d, set, focus) => (
       <div className="pl-stack">
         <textarea className="pl-input pl-textarea" ref={focus as React.RefObject<HTMLTextAreaElement>} rows={2} placeholder="The thing that might stress me…" value={d.brief.stress} onChange={e => setBrief(set, 'stress', e.target.value)} />
         <textarea className="pl-input pl-textarea" rows={2} placeholder="…and how my best self handles it" value={d.brief.stressResponse} onChange={e => setBrief(set, 'stressResponse', e.target.value)} />
-      </div>) },
+      </div>),
+    hints: (h, _d, set) => [
+      ...(h.stress ? [{ label: h.stress, apply: () => setBrief(set, 'stress', h.stress) }] : []),
+      ...(h.stressResponse ? [{ label: `↳ ${h.stressResponse}`, apply: () => setBrief(set, 'stressResponse', h.stressResponse) }] : []),
+    ] },
   { title: "One thing I'm looking forward to", hint: 'Dinner with Kiaan, the gym with the boys, a win at work…',
-    render: (d, set, focus) => <textarea className="pl-input pl-textarea" ref={focus as React.RefObject<HTMLTextAreaElement>} rows={2} placeholder="Something good about today" value={d.brief.excited} onChange={e => setBrief(set, 'excited', e.target.value)} /> },
+    render: (d, set, focus) => <textarea className="pl-input pl-textarea" ref={focus as React.RefObject<HTMLTextAreaElement>} rows={2} placeholder="Something good about today" value={d.brief.excited} onChange={e => setBrief(set, 'excited', e.target.value)} />,
+    hints: (h, _d, set) => (h.excited ? [{ label: h.excited, apply: () => setBrief(set, 'excited', h.excited) }] : []) },
 ];
 
 const fmt = (s: number) => `${Math.floor(Math.abs(s) / 60)}:${String(Math.abs(s) % 60).padStart(2, '0')}`;
@@ -52,6 +67,26 @@ export function Brief() {
   const [toast, say] = useToast();
   const focus = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const started = useRef(false);
+  // Coach Claude's suggestions: fetched once per day in the background, only once it knows a few of your days
+  const [hints, setHints] = useState<Hints>(null);
+  const [knows, setKnows] = useState<boolean | null>(null);
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      try {
+        const cached = await getDoc<BriefHints>('briefhints', today);
+        if (cached?.madeAt) { if (on) { setHints(cached); setKnows(true); } return; }
+        const days = await getDocs<Day>('day', undefined, today);
+        const finished = days.filter(d => d.key !== today && d.data?.brief?.finishedAt).length;
+        if (!on) return;
+        if (finished < KNOWS_YOU_AFTER) { setKnows(false); return; }
+        setKnows(true);
+        const h = await briefHints('lb');
+        if (on) { setHints(h); void putDoc('briefhints', today, h); }
+      } catch { /* the brief works without suggestions */ }
+    })();
+    return () => { on = false; };
+  }, [today]);
 
   useEffect(() => { void loadRoutine().then(setRoutine); }, []);
   // first open of the day: the brief starts, and "up" is ticked
@@ -93,6 +128,17 @@ export function Brief() {
         <h1 className="brief__q">{STEPS[step].title}</h1>
         {STEPS[step].hint && <p className="pl-muted">{STEPS[step].hint}</p>}
         {loading ? <p className="pl-muted">Loading…</p> : STEPS[step].render(day, set, focus)}
+        {!loading && STEPS[step].hints && (
+          hints
+            ? (() => { const hs = STEPS[step].hints!(hints, day, set); return hs.length ? (
+                <div className="brief__hints">
+                  <p className="pl-muted" style={{ fontSize: 12, margin: '0 0 4px' }}><Sparkles size={12} aria-hidden /> Coach Claude suggests — tap to use{step === 0 && hints.noticed ? ` · ${hints.noticed}` : ''}</p>
+                  <div className="brief__chips">{hs.map(x => <button key={x.label} type="button" onClick={x.apply}>{x.label}</button>)}</div>
+                </div>) : null; })()
+            : knows === false && step === 0
+              ? <p className="pl-muted" style={{ fontSize: 12, marginTop: 10 }}><Sparkles size={12} aria-hidden /> Coach Claude will start suggesting here once it's seen a few of your days.</p>
+              : null
+        )}
       </section>
 
       <footer className="brief__foot">
