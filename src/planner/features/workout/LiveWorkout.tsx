@@ -5,7 +5,7 @@ import { ChevronDown, ChevronUp, Plus, Trophy, Trash2, Repeat2, Clock, Sparkles 
 import type { PlannerPass } from '../../lib/auth';
 import { Page, Header, Card, Button, Sheet, Stat, TextArea, useToast } from '../../ui/primitives';
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
-import { nextSetTip, stepFor } from './progression';
+import { stepFor } from './progression';
 import { coach } from '../../lib/ai';
 import { daysAgo, detectPRs, exerciseHistory, loadCustomExercises, loadWorkouts, saveWorkout } from './store';
 
@@ -62,11 +62,9 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   const tipSeq = useRef(0);
   const coachSet = (next: Workout, ei: number, si: number) => {
     const ex = next.exercises[ei];
-    const lib = findExercise(ex.exerciseId, custom);
-    const local = nextSetTip({ sets: ex.sets, si, targetReps: ex.targetReps, units, lower: lib ? isLower(lib) : false, step: lib?.defaultStep, mode: ex.mode, restSec: ex.restSec });
+    if (ex.mode === 'time') { setTip(null); return; }
     const seq = ++tipSeq.current;
-    setTip({ ei, si, text: local, ai: false });
-    if (ex.mode === 'time') return;
+    setTip({ ei, si, text: 'Coach is looking at that set…', ai: false });
     const s = ex.sets[si];
     const last = exerciseHistory(history, ex.exerciseId, 1)[0];
     const fmt = (x: SetLog) => `${x.weight} ${units} × ${x.reps}${x.rpe ? ` @RPE ${x.rpe}` : ''}`;
@@ -77,7 +75,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       ` Coach me for the ${si + 1 >= ex.sets.length ? 'next exercise / next session' : 'next set'} in ONE sentence, max 25 words: weight, reps and one form or effort cue.`;
     coach([{ role: 'user', content: msg }], { units, exercise: ex.name }).then(reply => {
       if (seq === tipSeq.current && reply) setTip({ ei, si, text: reply.replace(/\s+/g, ' ').trim(), ai: true });
-    }).catch(() => undefined);
+    }).catch(() => { if (seq === tipSeq.current) setTip(null); });
   };
 
   const persist = useCallback((next: Workout, now = false) => {
