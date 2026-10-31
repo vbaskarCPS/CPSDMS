@@ -4,6 +4,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Page, Header, Card, Button, Field, Input, TextArea, useToast, uid } from '../../ui/primitives';
 import { getDoc, getDocs, putDoc } from '../../lib/docs';
 import { emptyHabit, DAY_SHORT, type Habit } from './types';
+import { AUTO_LABELS, type AutoTrigger } from './auto';
+import { Sparkles } from 'lucide-react';
+import { planHabit } from '../../lib/ai';
+import { blocks, loadRoutine, routineNow, type Block, type Routine } from '../../lib/routine';
 
 function fmtTime(t: string): string {
   if (!t) return '';
@@ -21,16 +25,43 @@ export function HabitForm() {
   const [busy, setBusy] = useState(false);
   const [toast, say] = useToast();
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [routine, setRoutine] = useState<Routine>(routineNow());
+  const [idea, setIdea] = useState('');
+  const [planning, setPlanning] = useState(false);
+  const [coachNote, setCoachNote] = useState<string | null>(null);
+  const [existing, setExisting] = useState<string[]>([]);
+  useEffect(() => { void loadRoutine().then(setRoutine); }, []);
+  const slots: Block[] = blocks(routine);
 
   useEffect(() => {
     if (!id) {
-      getDocs<Habit>('habit').then(ds => setH(x => ({ ...x, order: ds.length }))).catch(() => undefined);
+      getDocs<Habit>('habit').then(ds => { setH(x => ({ ...x, order: ds.length })); setExisting(ds.map(d => d.data?.name).filter(Boolean)); }).catch(() => undefined);
       return;
     }
     getDoc<Habit>('habit', id).then(d => { if (d) setH({ ...emptyHabit(), ...d, cue: d.cue || { time: '', place: '' }, days: d.days?.length ? d.days : emptyHabit().days }); setLoading(false); }).catch(() => setLoading(false));
   }, [id]);
 
   const set = (patch: Partial<Habit>) => setH(x => ({ ...x, ...patch }));
+  const slotOf = (id?: string) => slots.find(s => s.id === id);
+  /** Anchor → the cue time and a stack sentence, unless the person typed their own. */
+  const setAnchor = (block: string, when: 'before' | 'after') => {
+    if (!block) { set({ anchor: undefined }); return; }
+    const s = slotOf(block);
+    const time = s ? (when === 'after' ? (s.until || s.at) : s.at) : h.cue.time;
+    set({ anchor: { block, when }, cue: { ...h.cue, time: time || h.cue.time }, stack: h.stack.trim() && !/^(after|before) /i.test(h.stack) ? h.stack : `${when === 'after' ? 'After' : 'Before'} ${s ? s.label.toLowerCase() : ''}` });
+  };
+  const plan = async () => {
+    if (!idea.trim() || planning) return;
+    setPlanning(true); setCoachNote(null);
+    try {
+      const r = await planHabit(idea.trim(), slots.map(s => ({ id: s.id, label: s.label, at: s.at, until: s.until })), existing);
+      const valid = slotOf(r.anchor?.block) ? r.anchor : undefined;
+      const auto = r.auto && (Object.keys(AUTO_LABELS) as string[]).includes(r.auto) ? (r.auto as Habit['auto']) : undefined;
+      set({ name: r.name || h.name, identity: r.identity || '', why: r.why || '', twoMinute: r.twoMinute || '', stack: r.stack || '', cue: { time: r.cue?.time || '', place: r.cue?.place || '' }, days: Array.isArray(r.days) && r.days.length ? r.days.filter(d => d >= 0 && d <= 6) : h.days, anchor: valid, auto });
+      setCoachNote(r.coach_note || null);
+    } catch (x) { say(x instanceof Error ? x.message : "Couldn't reach Coach Claude", 'bad'); }
+    finally { setPlanning(false); }
+  };
   const toggleDay = (d: number) => set({ days: h.days.includes(d) ? h.days.filter(x => x !== d) : [...h.days, d].sort() });
 
   const submit = async (e: FormEvent) => {
@@ -49,7 +80,7 @@ export function HabitForm() {
   };
 
   const intention = h.name.trim() ? <>I will <em>{h.name.trim()}</em>{h.cue.time ? <> at <em>{fmtTime(h.cue.time)}</em></> : ''}{h.cue.place.trim() ? <> in <em>{h.cue.place.trim()}</em></> : ''}.</> : null;
-  const stack = h.stack.trim() && h.name.trim() ? <>After I <em>{h.stack.trim().replace(/^after i\s+/i, '').replace(/[.,]+$/, '')}</em>, I will <em>{h.name.trim()}</em>.</> : null;
+  const stack = h.stack.trim() && h.name.trim() ? <>{/^before/i.test(h.stack.trim()) ? 'Before' : 'After'} I <em>{h.stack.trim().replace(/^(after|before)( i)?\s+/i, '').replace(/[.,]+$/, '')}</em>, I will <em>{h.name.trim()}</em>.</> : null;
 
   if (loading) return <Page><Header back="/habits" title="Habit" /><p className="pl-muted">Loading…</p></Page>;
 
@@ -57,6 +88,15 @@ export function HabitForm() {
     <Page>
       <Header back={id ? `/habits/${id}` : '/habits'} eyebrow={id ? 'Edit habit' : 'New habit'} title={id ? h.name || 'Habit' : 'Build a habit'} />
       <form className="pl-stack" style={{ gap: 16 }} onSubmit={submit}>
+        {!id && (
+          <Card accent className="pl-stack" style={{ gap: 8 }}>
+            <b><Sparkles size={16} aria-hidden style={{ verticalAlign: -2 }} /> Plan it with Coach Claude</b>
+            <p style={{ fontSize: 13, margin: 0, opacity: .85 }}>Say what you want to do. Coach Claude writes the implementation intention, picks where it stacks in your day, and fills in the rest — edit anything below.</p>
+            <TextArea rows={2} value={idea} onChange={e => setIdea(e.target.value)} placeholder="e.g. read 10 pages a day · stretch my hips · call my mum weekly · 2 L of water" style={{ background: 'color-mix(in srgb, var(--accent-ink) 12%, transparent)', color: 'inherit' }} />
+            <Button small type="button" disabled={planning || !idea.trim()} onClick={plan} style={{ background: 'var(--accent-ink)', color: 'var(--accent)', border: 0 }}>{planning ? 'Planning…' : 'Design this habit'}</Button>
+            {coachNote && <p style={{ fontSize: 13, margin: 0 }}>{coachNote}</p>}
+          </Card>
+        )}
         <Card>
           <Field label="The habit" hint="Name the action, not the outcome. “Read 1 page”, not “become a reader”.">
             <Input value={h.name} onChange={e => set({ name: e.target.value })} placeholder="e.g. Read 10 pages" required autoFocus={!id} />
@@ -70,8 +110,17 @@ export function HabitForm() {
             <Field label="Place"><Input value={h.cue.place} onChange={e => set({ cue: { ...h.cue, place: e.target.value } })} placeholder="kitchen table" /></Field>
           </div>
           {intention && <p className="hb-sentence">{intention}</p>}
-          <Field label="Stack it on a habit you already have" hint="“After I pour my coffee…”">
-            <Input value={h.stack} onChange={e => set({ stack: e.target.value })} placeholder="After I pour my morning coffee" />
+          <Field label="Stack it on your day" hint="Every habit sits before or after one slot of the routine — that slot is the trigger.">
+            <div className="pl-grid-2">
+              <select className="pl-input" value={h.anchor?.when || 'after'} onChange={e => setAnchor(h.anchor?.block || slots[0]?.id || '', e.target.value as 'before' | 'after')}><option value="after">After</option><option value="before">Before</option></select>
+              <select className="pl-input" value={h.anchor?.block || ''} onChange={e => setAnchor(e.target.value, h.anchor?.when || 'after')}>
+                <option value="">— pick a slot —</option>
+                {slots.map(s => <option key={s.id} value={s.id}>{s.label} · {fmtTime(s.at)}</option>)}
+              </select>
+            </div>
+          </Field>
+          <Field label="The stack sentence" hint="“After I [finish that], I will …”">
+            <Input value={h.stack} onChange={e => set({ stack: e.target.value })} placeholder="After I finish the Bed Brief" />
           </Field>
           {stack && <p className="hb-sentence">{stack}</p>}
           <Field label="Which days">
@@ -98,6 +147,12 @@ export function HabitForm() {
 
         <Card className="hb-law">
           <div className="hb-law__title"><span className="hb-law__n">4</span><div><h3>Make it satisfying</h3><p className="hb-law__blurb">The streak and the weekly scorecard are your reward. Never miss twice: one off day is fine, two in a row resets the chain.</p></div></div>
+          <Field label="Ticks itself when…" hint="Tie it to something the planner already records, so you never have to tick it by hand.">
+            <select className="pl-input" value={h.auto || ''} onChange={e => set({ auto: (e.target.value || undefined) as Habit['auto'] })}>
+              <option value="">I tick it by hand</option>
+              {(Object.keys(AUTO_LABELS) as AutoTrigger[]).map(k => <option key={k} value={k}>{AUTO_LABELS[k]}</option>)}
+            </select>
+          </Field>
         </Card>
 
         {toast}

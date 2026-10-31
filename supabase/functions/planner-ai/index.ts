@@ -5,6 +5,7 @@
 //        → { items: [{ name, portion, grams?, kcal, protein, carbs, fat, confidence }], tips?: string }
 //   POST { token, action: 'food_text', text }                     → same shape
 //   POST { token, action: 'coach', messages: [{ role, content }], context }   → { reply }
+//   POST { token, action: 'habit', text, blocks: [{id,label,at,until?}], existing: [string] }  → a designed habit (implementation intention + stack)
 //   POST { token, action: 'categorize', merchants: [string], categories: [string] }
 //        → { categories: { [merchant]: category } }
 //   POST { token, action: 'reflect', context }                     → { reply }  (2–3 sentences on the day)
@@ -72,14 +73,17 @@ macros in grams; kcal consistent with macros. Count cooking oil, butter, dressin
 when they are likely present even if not visible (and say so in "tips"). Photo estimates run low, so lean a little
 generous on portions. Keep "tips" to one short sentence or empty. No text outside the JSON.`;
 
-const COACH_SYSTEM = `You are a strength and conditioning coach inside a personal planner app. The user is an adult
-training for general strength, muscle and health. Be concise (phone screen): short paragraphs, specific numbers,
-no fluff. Use the training history and settings in the context to answer: suggest the next session, explain a
-plateau, adjust for soreness or time, write a weekly plan. Weights in the user's units. If something sounds like
-an injury, say to see a professional and keep the advice conservative. Never mention being an AI model.`;
+const COACH_SYSTEM = `You are Coach Claude, the personal coach inside this planner app — strength and conditioning first, but also the
+person's whole day: routine, habits, food, sleep, priorities and reviews. The context JSON is the planner's actual data:
+every logged set (weight x reps, @RPE, L/R for one-arm moves), the person's own notes per exercise and per session,
+earlier reviews and prescriptions, habits and their marks, meals, recent days and the about_me notes. Read it before
+answering and quote the real numbers and notes; never say you lack data that is in the context. Be concise (phone
+screen): short paragraphs, specific numbers, no fluff. Weights in the user's units. If something sounds like an
+injury, say to see a professional and keep the advice conservative. You are Coach Claude; don't describe yourself
+as an AI model.`;
 
-const REFLECT_SYSTEM = `You are a warm, direct high-performance coach reviewing one day of a personal planner (morning
-intentions, priorities, habits, evening answers, scores). Reply in 2–3 short sentences, second person: one thing
+const REFLECT_SYSTEM = `You are Coach Claude, a warm, direct high-performance coach reviewing one day of a personal planner (morning
+intentions, priorities, habits, evening answers, scores, meals, the workout) with the person's recent days and about_me notes for context. Reply in 2–3 short sentences, second person: one thing
 to appreciate, one honest observation, one small adjustment for tomorrow. No lists, no headings, no emojis.`;
 
 const STATEMENT_SYSTEM = `You turn the text of one page of a Canadian bank or credit-card statement (TD and similar) into transactions.
@@ -133,6 +137,24 @@ const PLAN_SCHEMA = {
       sets: { type: 'integer' }, reps: { type: 'string' }, seconds: { type: 'integer' }, restSec: { type: 'integer' }, note: { type: 'string' }, weight: { type: 'number' },
     }, required: ['name', 'mode', 'sets', 'restSec'] } },
   }, required: ['name', 'exercises'],
+};
+
+const HABIT_SYSTEM = `You are Coach Claude, a habit coach who designs habits the Atomic Habits way for a busy dad with a fixed daily routine.
+Given what the person wants to do, their day's blocks (in order, with times) and their existing habits, return ONE habit:
+- name: the action, not the outcome, small and concrete ("Read 10 pages", not "read more")
+- implementation intention: "I will [action] at [time] in [place]" — pick the time from the block you anchor to
+- anchor: the block of the routine to stack it before or after (the most natural, lowest-friction moment), with a stack sentence "After I [the thing the block ends with], I will [action]" (or "Before I …")
+- identity: "someone who …" (one line), why: one line on what it gives them in a year, twoMinute: the under-2-minute version
+- days: weekday numbers 0-6 (Sunday 0) it's due; default every day
+- auto: if the habit is literally one of these planner events, set it so it ticks itself: wake, brief, daycare, fast, dinner, gym, sauna, review, shake, lightsOut; otherwise omit.
+Keep every line short. Use the person's own words where they fit.`;
+const HABIT_SCHEMA = {
+  type: 'object', properties: {
+    name: { type: 'string' }, identity: { type: 'string' }, why: { type: 'string' }, twoMinute: { type: 'string' },
+    anchor: { type: 'object', properties: { block: { type: 'string' }, when: { type: 'string', enum: ['before', 'after'] } }, required: ['block', 'when'] },
+    stack: { type: 'string' }, cue: { type: 'object', properties: { time: { type: 'string' }, place: { type: 'string' } }, required: ['time', 'place'] },
+    days: { type: 'array', items: { type: 'integer' } }, auto: { type: 'string' }, coach_note: { type: 'string' },
+  }, required: ['name', 'identity', 'why', 'twoMinute', 'anchor', 'stack', 'cue'],
 };
 
 Deno.serve(async req => {
@@ -206,6 +228,15 @@ Deno.serve(async req => {
       const r = await claudeJson<{ name: string; exercises: unknown[]; warmup_note?: string }>(PLAN_SYSTEM,
         [{ role: 'user', content: `Units: ${units}\n\nLibrary (id — name):\n${library.map(x => `${x.id} — ${x.name}`).join('\n')}\n\nPlan:\n${text}` }], PLAN_SCHEMA, 4000);
       return json({ name: r.name, exercises: Array.isArray(r.exercises) ? r.exercises : [], warmup_note: r.warmup_note });
+    }
+    if (action === 'habit') {
+      const text = typeof b.text === 'string' ? b.text.trim().slice(0, 2000) : '';
+      if (!text) return json({ error: 'Tell me the habit first' }, 400);
+      const blocks = (Array.isArray(b.blocks) ? b.blocks : []).slice(0, 20) as { id: string; label: string; at: string; until?: string }[];
+      const existing = (Array.isArray(b.existing) ? b.existing : []).slice(0, 30) as string[];
+      const r = await claudeJson<Record<string, unknown>>(HABIT_SYSTEM,
+        [{ role: 'user', content: `My day (block id — label — time):\n${blocks.map(x => `${x.id} — ${x.label} — ${x.at}${x.until ? `–${x.until}` : ''}`).join('\n')}\n\nHabits I already have: ${existing.join('; ') || 'none'}\n\nWhat I want to do: ${text}` }], HABIT_SCHEMA, 1500);
+      return json(r);
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];

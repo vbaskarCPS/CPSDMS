@@ -60,9 +60,9 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
       ) : doneToday?.review ? (
         <Card accent>
           <p className="pl-eyebrow">Done for today · {doneToday.name} · {durationMin(doneToday)} min{doneToday.prs?.length ? ` · ${doneToday.prs.length} PR` : ''}</p>
-          <h2 style={{ marginBottom: 6 }}>Coach's plan for next time</h2>
+          <h2 style={{ marginBottom: 6 }}>Coach Claude's plan for next time</h2>
           <p style={{ fontSize: 15, lineHeight: 1.45, margin: 0 }}>{doneToday.review}</p>
-          {tpl && <p className="pl-muted" style={{ fontSize: 13, margin: '10px 0 0' }}>Next up: {tpl.name}{doneToday.next ? ` — ${Object.keys(doneToday.next).length} exercises prefilled from this` : ''}.</p>}
+          {tpl && <p className="pl-muted" style={{ fontSize: 13, margin: '10px 0 0' }}>Next up: {tpl.name}{doneToday.next ? ` — ${Object.keys(doneToday.next).length} exercises prefilled by Coach Claude` : ''}.</p>}
           <div className="pl-row" style={{ gap: 8, marginTop: 12 }}>
             <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} onClick={() => nav(`/workout/live/${doneToday.id}`, { state: { key: workoutKey(doneToday) } })}>Today's session</Button>
             {tpl && <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} disabled={starting} onClick={() => void start(tpl)}>Another one?</Button>}
@@ -96,7 +96,7 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
 
       <div className="pl-grid-2">
         <Link className="pl-tile" to="/workout/templates"><ClipboardList aria-hidden /><div><b>Templates</b><small>{templates.filter(t => !t.archived).length} plans</small></div></Link>
-        <Link className="pl-tile" to="/workout/coach"><MessageCircle aria-hidden /><div><b>Coach</b><small>Ask anything</small></div></Link>
+        <Link className="pl-tile" to="/workout/coach"><MessageCircle aria-hidden /><div><b>Coach Claude</b><small>Ask anything</small></div></Link>
         <Link className="pl-tile" to="/workout/body"><Scale aria-hidden /><div><b>Body weight</b><small>Log &amp; trend</small></div></Link>
         <Link className="pl-tile" to="/workout/history"><History aria-hidden /><div><b>History</b><small>{finished.length} sessions</small></div></Link>
       </div>

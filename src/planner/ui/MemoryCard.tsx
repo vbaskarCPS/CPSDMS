@@ -1,4 +1,4 @@
-// src/planner/ui/MemoryCard.tsx — Settings: "Tell the coach" — the dated notes every AI call sees.
+// src/planner/ui/MemoryCard.tsx — Settings: "Tell Coach Claude" — the dated notes every AI call sees.
 import { useEffect, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { addMemory, loadMemory, saveMemory, type MemoryNote } from '../lib/memory';
@@ -21,8 +21,8 @@ export function MemoryCard() {
   };
   return (
     <Card className="pl-stack">
-      <h3 style={{ margin: 0 }}><Sparkles size={16} aria-hidden style={{ verticalAlign: -2 }} /> Tell the coach</h3>
-      <p className="pl-muted" style={{ fontSize: 13, margin: 0 }}>Context the coach keeps: injuries, goals, what's going on this week, how you want to be coached. Every coaching line, session review and day reflection reads these.</p>
+      <h3 style={{ margin: 0 }}><Sparkles size={16} aria-hidden style={{ verticalAlign: -2 }} /> Tell Coach Claude</h3>
+      <p className="pl-muted" style={{ fontSize: 13, margin: 0 }}>Context Coach Claude keeps: injuries, goals, what's going on this week, how you want to be coached. Every coaching line, session review and day reflection reads these.</p>
       {notes === null ? <p className="pl-muted">Loading…</p> : notes.length === 0 ? <p className="pl-muted" style={{ fontSize: 13 }}>Nothing yet.</p> : (
         <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
           {notes.map((n, i) => (

@@ -11,6 +11,7 @@ import { daysAgo, detectPRs, exerciseHistory, loadCustomExercises, loadWorkouts,
 import { dayKey, getDoc, putDoc } from '../../lib/docs';
 import { normalizeDay, nowHM, type Day } from '../plan';
 import { routineNow } from '../../lib/routine';
+import { autoMark } from '../habits/auto';
 
 /** Sessions started before timed sets existed: a library-timed exercise with no mode becomes a timed one. */
 function normalizeModes(w: Workout): Workout {
@@ -87,7 +88,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     const ex = next.exercises[ei];
     if (ex.mode === 'time') { setTip(null); return; }
     const seq = ++tipSeq.current;
-    setTip({ ei, si, text: 'Coach is looking at that set…', ai: false });
+    setTip({ ei, si, text: 'Coach Claude is looking at that set…', ai: false });
     const s = ex.sets[si];
     const last = exerciseHistory(history, ex.exerciseId, 1)[0];
     const fmt = (x: SetLog) => `${x.weight} ${units} × ${x.reps}${x.repsR !== undefined ? ` L / ${x.repsR} R` : ''}${x.rpe ? ` @RPE ${x.rpe}` : ''}`;
@@ -183,7 +184,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       'PART 1: ONE paragraph (90-130 words, no headings, no lists) reviewing the session and telling me what to do next workout: which exercises to go up on (and by how much), which to hold or fix form on, anything my notes flag (pain, fatigue, too easy), and one thing to focus on. Speak to me directly.\n' +
       'PART 2: on its own line write PLAN: followed by a JSON array, one object per exercise, exactly these keys: {"name": the exercise name as given, "weight": number in ' + units + ' (0 for bodyweight/timed), "reps": number per set (left side for one-arm moves; omit for timed), "repsR": number (one-arm moves only), "sets": number, "seconds": number (timed moves only), "rest": seconds, "cue": one short sentence}. Respect my notes: if I said something hurt, lower or hold it; if I said it was easy, go up by a sensible step (' + (units === 'kg' ? '2.5 kg dumbbells, 5 kg barbell' : '5 lb dumbbells, 10 lb barbell') + '). No text after the JSON.\nSession (JSON):\n' + JSON.stringify(session);
     setReviewing(true);
-    coach([{ role: 'user', content: ask }], { units }).then(reply => {
+    coach([{ role: 'user', content: ask }], { units }, true).then(reply => {
       const m = reply.match(/PLAN:\s*(\[[\s\S]*\])/i);
       const review = (m ? reply.slice(0, m.index) : reply).replace(/PART 1:?/i, '').replace(/\s+/g, ' ').trim();
       const next = m ? parsePlan(m[1], done) : undefined;
@@ -206,6 +207,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
         const k = dayKey();
         const d = normalizeDay(await getDoc<Day>('day', k));
         if (!d.ticks.gym) await putDoc('day', k, { ...d, ticks: { ...d.ticks, gym: nowHM() } });
+        void autoMark('gym', true);
       } catch { /* the Today screen can be ticked by hand */ }
     })();
   };
@@ -233,7 +235,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
         title={w.name} right={!readOnly && <Button small primary onClick={finish} disabled={setsDone(w) === 0}>Finish</Button>} />
 
       {readOnly && w.prs && w.prs.length > 0 && <Card accent><div className="pl-row"><Trophy /><div><b>{w.prs.length} personal record{w.prs.length > 1 ? 's' : ''}</b><p className="pl-muted" style={{ fontSize: 13 }}>{w.prs.join(' · ')}</p></div></div></Card>}
-      {readOnly && w.review && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>Coach's review</b><p>{w.review}</p></div></div>}
+      {readOnly && w.review && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>Coach Claude's review</b><p>{w.review}</p></div></div>}
       {lastReview && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>From your last session ({new Date(lastReview.startedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })})</b><p>{lastReview.review}</p></div></div>}
 
       {w.exercises.map((ex, ei) => {
@@ -302,7 +304,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       </Card>
 
       {!readOnly && <Button block primary onClick={finish} disabled={setsDone(w) === 0}><Sparkles size={18} /> Complete workout</Button>}
-      {!readOnly && <p className="pl-muted" style={{ fontSize: 13, textAlign: 'center', margin: '-6px 0 0' }}>The coach reads every set and note and writes your plan for next time.</p>}
+      {!readOnly && <p className="pl-muted" style={{ fontSize: 13, textAlign: 'center', margin: '-6px 0 0' }}>Coach Claude reads every set and note and writes your plan for next time.</p>}
       {!readOnly && <Button block ghost danger onClick={discard}>Discard session</Button>}
       {rest && <div style={{ height: 64 }} />}
 
@@ -321,7 +323,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
               <Card accent><div className="pl-row"><Trophy /><div><b>New PR{summary.prs.length > 1 ? 's' : ''}!</b>{summary.prs.map(p => <p key={p} style={{ fontSize: 14 }}>{p}</p>)}</div></div></Card>
             ) : <p className="pl-muted">Good work. Consistency is the PR.</p>}
             {(reviewing || summary.review) && (
-              <div className={`wo-review ${reviewing && !summary.review ? 'is-waiting' : ''}`}><Sparkles size={16} aria-hidden /><div><b>Coach's review</b><p>{summary.review || 'Reading your sets and notes…'}</p></div></div>
+              <div className={`wo-review ${reviewing && !summary.review ? 'is-waiting' : ''}`}><Sparkles size={16} aria-hidden /><div><b>Coach Claude's review</b><p>{summary.review || 'Reading your sets and notes…'}</p></div></div>
             )}
             {summary.next && Object.keys(summary.next).length > 0 && <p className="pl-muted" style={{ fontSize: 13 }}>Next session is set up from this: {Object.keys(summary.next).length} exercise{Object.keys(summary.next).length > 1 ? 's' : ''} prefilled with the coach's numbers.</p>}
             {night

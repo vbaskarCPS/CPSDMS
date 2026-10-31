@@ -44,3 +44,11 @@
 .hb-days button.is-on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
 .hb-nudge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--amber-2); background: color-mix(in srgb, var(--amber) 18%, transparent); padding: 3px 9px; border-radius: 999px; }
 .hb-nudge svg { width: 12px; height: 12px; }
+
+/* habits inside their slot on Today */
+.today-slot-habits { display: grid; gap: 4px; margin: 6px 0 2px; }
+.today-slot-habit { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.today-slot-habit .pl-check { width: 24px; height: 24px; min-height: 24px; }
+.today-slot-habit a { color: inherit; text-decoration: none; }
+.today-slot-habit small { color: var(--ink-2); }
+.today-slot-habit.is-done b { text-decoration: line-through; opacity: .6; }

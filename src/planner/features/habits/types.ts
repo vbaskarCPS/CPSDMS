@@ -14,6 +14,8 @@ export interface Habit {
   createdAt: string;
   archived?: boolean;
   order: number;
+  anchor?: { block: string; when: 'before' | 'after' };   // stacked on a slot of the routine (lib/routine blocks)
+  auto?: 'wake' | 'brief' | 'daycare' | 'fast' | 'dinner' | 'gym' | 'sauna' | 'review' | 'shake' | 'lightsOut';   // ticks itself when this happens (auto.ts)
 }
 
 /** key = YYYY-MM-DD → { [habitId]: mark } */
