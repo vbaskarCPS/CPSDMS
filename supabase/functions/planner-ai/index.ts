@@ -7,6 +7,7 @@
 //   POST { token, action: 'coach', messages: [{ role, content }], context }   → { reply }
 //   POST { token, action: 'habit', text, blocks: [{id,label,at,until?}], existing: [string] }  → a designed habit (implementation intention + stack)
 //   POST { token, action: 'dayplan', context, answers?, library, units }  → { review, questions, tomorrow }  (after a session: review + tomorrow's plan)
+//   POST { token, action: 'briefhints', context }   → suggestions for each Bed/Morning Brief question (once there is history)
 //   POST { token, action: 'categorize', merchants: [string], categories: [string] }
 //        → { categories: { [merchant]: category } }
 //   POST { token, action: 'reflect', context }                     → { reply }  (2–3 sentences on the day)
@@ -187,6 +188,21 @@ const DAYPLAN_SCHEMA = {
   }, required: ['review', 'questions', 'tomorrow'],
 };
 
+const BRIEFHINTS_SYSTEM = `You are Coach Claude. It is morning; the person is about to do their Bed Brief (from bed, under ten minutes): one
+word for the day, three things that must get done, who needs them on their A-game, what might stress them and how their
+best self responds, one thing to look forward to. The context is their planner: the about_me notes, recent days (yesterday's
+review, scores, priorities done or not, "one change for tomorrow", tomorrow's #1 they wrote last night), habits, workouts
+and today's planned session, meals, the routine. Suggest, don't decide: short, specific, in their own language, drawn from
+what you actually see (carry over an unfinished priority, echo last night's "tomorrow's #1", flag the stress they named
+before, name the session on today). words: 3 single words. priorities: 3 short lines. aGame, stress, stressResponse,
+excited: one short line each. noticed: one sentence on a pattern you see in their recent days (or empty if too early).`;
+const BRIEFHINTS_SCHEMA = {
+  type: 'object', properties: {
+    words: { type: 'array', items: { type: 'string' } }, priorities: { type: 'array', items: { type: 'string' } },
+    aGame: { type: 'string' }, stress: { type: 'string' }, stressResponse: { type: 'string' }, excited: { type: 'string' }, noticed: { type: 'string' },
+  }, required: ['words', 'priorities', 'aGame', 'stress', 'stressResponse', 'excited'],
+};
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -275,6 +291,10 @@ Deno.serve(async req => {
       const ctx = JSON.stringify(b.context ?? {}).slice(0, 24000);
       const r = await claudeJson<Record<string, unknown>>(DAYPLAN_SYSTEM,
         [{ role: 'user', content: `Units: ${units}\n\nLibrary (id — name):\n${library.map(x => `${x.id} — ${x.name}`).join('\n')}\n\n${answers ? `My answers to your questions: ${JSON.stringify(answers)}\n\n` : ''}Planner (JSON):\n${ctx}` }], DAYPLAN_SCHEMA, 4000);
+      return json(r);
+    }
+    if (action === 'briefhints') {
+      const r = await claudeJson<Record<string, unknown>>(BRIEFHINTS_SYSTEM, [{ role: 'user', content: `Planner (JSON):\n${JSON.stringify(b.context ?? {}).slice(0, 24000)}` }], BRIEFHINTS_SCHEMA, 1200);
       return json(r);
     }
     if (action === 'categorize') {
