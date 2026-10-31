@@ -1,21 +1,20 @@
 // src/planner/features/workout/parts.tsx — pieces shared by the workout screens: steppers, rest timer, exercise picker.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Minus, Plus, Check, Search, Play, Pause } from 'lucide-react';
+import { Check, Search, Play, Pause } from 'lucide-react';
 import { Button, Input, Sheet, uid } from '../../ui/primitives';
 import { LIBRARY, MUSCLES, groupLabel, searchExercises } from './library';
 import { saveCustomExercise } from './store';
 import type { Exercise, Muscle, Equipment } from './types';
 
-export function Stepper({ value, step, min = 0, onChange, suffix, disabled }: { value: number; step: number; min?: number; onChange: (v: number) => void; suffix?: string; disabled?: boolean }) {
+export function Stepper({ value, min = 0, onChange, suffix, disabled }: { value: number; step?: number; min?: number; onChange: (v: number) => void; suffix?: string; disabled?: boolean }) {
+  // a plain number box: tap, type, done (the ± buttons were cramped on a phone)
   const [txt, setTxt] = useState<string | null>(null);
   const commit = () => { if (txt !== null) { const n = parseFloat(txt); if (isFinite(n)) onChange(Math.max(min, n)); setTxt(null); } };
   return (
     <div className="wo-stepper">
-      <button type="button" aria-label="less" disabled={disabled} onClick={() => onChange(Math.max(min, +(value - step).toFixed(2)))}><Minus size={18} /></button>
       <input inputMode="decimal" disabled={disabled} value={txt ?? (suffix ? `${value}${suffix}` : String(value))}
         onFocus={e => { setTxt(String(value)); requestAnimationFrame(() => e.target.select()); }}
         onChange={e => setTxt(e.target.value.replace(/[^0-9.]/g, ''))} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-      <button type="button" aria-label="more" disabled={disabled} onClick={() => onChange(+(value + step).toFixed(2))}><Plus size={18} /></button>
     </div>
   );
 }
