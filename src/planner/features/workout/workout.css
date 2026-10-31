@@ -78,3 +78,7 @@
 
 .wo-lastnote { margin: 0 0 8px; font-size: 13px; color: var(--amber-2); font-style: italic; }
 .wo-comment { margin-top: 10px; font-size: 14px; min-height: 40px; }
+
+.wo-tip { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--amber) 16%, var(--bg-2)); font-size: 14px; line-height: 1.35; }
+.wo-tip svg { flex: none; margin-top: 2px; color: var(--amber-2); }
+.wo-tip.is-ai { background: color-mix(in srgb, var(--accent) 10%, var(--bg-2)); }

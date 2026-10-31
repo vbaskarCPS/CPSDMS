@@ -64,3 +64,20 @@ describe('suggest', () => {
     expect(suggest({ ...base, history: [{ sets: [set(100, 12), set(100, 12)] }] }).weight).toBe(100);
   });
 });
+
+import { nextSetTip } from './progression';
+describe('nextSetTip', () => {
+  const base = { targetReps: '8-12', units: 'lb' as const, lower: false };
+  it('adds weight when the top of the range is easy', () => {
+    const t = nextSetTip({ ...base, si: 0, sets: [{ weight: 40, reps: 12, rpe: 7, done: true }, { weight: 40, reps: 0, done: false }] });
+    expect(t).toMatch(/add 5 lb/);
+  });
+  it('drops weight when reps fall short', () => {
+    const t = nextSetTip({ ...base, si: 0, sets: [{ weight: 100, reps: 5, done: true }, { weight: 100, reps: 0, done: false }] });
+    expect(t).toMatch(/Drop to 90 lb/);
+  });
+  it('holds when in range', () => {
+    const t = nextSetTip({ ...base, si: 1, sets: [{ weight: 40, reps: 10, done: true }, { weight: 40, reps: 10, done: true }, { weight: 40, reps: 0, done: false }] });
+    expect(t).toMatch(/Same 40 lb/);
+  });
+});
