@@ -10,7 +10,7 @@ import { useDoc } from '../lib/useDoc';
 import { blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, routineNow, type BlockId, type Routine } from '../lib/routine';
 import { InstallHint } from '../ui/InstallHint';
 import { Stat } from '../ui/primitives';
-import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, wakeStreak, type Day } from '../features/plan';
+import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, todosDone, wakeStreak, TodoList, type Day } from '../features/plan';
 import { HabitsTodayCard, SlotHabits, SlotHabitsProvider, autoMark } from '../features/habits';
 import { WorkoutTodayCard } from '../features/workout';
 import { FoodTodayCard } from '../features/food';
@@ -27,8 +27,8 @@ function greeting(h: number): string {
 
 type TickId = Exclude<BlockId, 'brief' | 'work' | 'night' | 'morning' | 'evening' | 'unwind' | 'windDown'>;
 const TICKS: Record<'night' | 'morning', TickId[]> = {
-  night: ['wake', 'daycare', 'dinner', 'gym', 'sauna', 'shake', 'lightsOut'],
-  morning: ['wake', 'kiaanUp', 'daycare', 'dinner', 'lightsOut'],
+  night: ['wake', 'dinner', 'gym', 'sauna', 'shake', 'lightsOut'],
+  morning: ['wake', 'kiaanUp', 'dinner', 'lightsOut'],
 };
 const tickKey = (id: TickId): keyof Day['ticks'] => (id === 'wake' ? 'up' : id);
 /** Consecutive days the Miracle Morning was finished. */
@@ -98,7 +98,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
     set(d => ({ ...d, ticks: { ...d.ticks, [k]: on ? nowHM() : undefined } }));
     // habits tied to this tick
     if (id === 'wake') void autoMark('wake', on);
-    else if (id === 'daycare' || id === 'gym' || id === 'sauna' || id === 'shake' || id === 'lightsOut') void autoMark(id, on);
+    else if (id === 'gym' || id === 'sauna' || id === 'shake' || id === 'lightsOut') void autoMark(id, on);
     else if (id === 'dinner') {
       void autoMark('dinner', on);
       if (routine.fast) void fastByDay(today, today, routine.eatOpen).then(k2 => autoMark('fast', on && k2[today] !== false));
@@ -106,7 +106,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
   };
   const ticked = (id: BlockId): string | undefined => {
     if (id === 'brief') return day.brief.finishedAt ? 'done' : undefined;
-    if (id === 'work') { const n = day.priorities.filter(p => p.text.trim()).length, d = day.priorities.filter(p => p.done).length; return n && d === n ? 'done' : undefined; }
+    if (id === 'work') { if (day.todos.length) return todosDone(day) ? 'done' : undefined; const n = day.priorities.filter(p => p.text.trim()).length, d = day.priorities.filter(p => p.done).length; return n && d === n ? 'done' : undefined; }
     if (id === 'night') return reviewDone(day) ? 'done' : undefined;
     if (id === 'evening') return t.lightsOut ? 'done' : undefined;
     if (id === 'unwind' || id === 'windDown') return t.lightsOut ? 'done' : undefined;
@@ -150,16 +150,20 @@ export function Today({ pass }: { pass: PlannerPass }) {
                 <b className="today-block__label">{b.label}</b>
                 {(isCur || !done) && <small className="pl-muted">{b.id === 'work' && routine.fast && !fast.eating ? `${b.blurb} · window opens ${clock(routine.eatOpen)}` : b.blurb}</small>}
 
-                {isCur && b.id === 'work' && (
+                {b.id === 'work' && (isCur || day.todos.length > 0) && (
                   <div className="today-prios">
-                    {day.priorities.map((p, j) => (
-                      <div key={j} className={`plan-card-prio ${p.done ? 'is-done' : ''} ${p.text.trim() ? '' : 'is-empty'}`}>
-                        <button type="button" className={`pl-check ${p.done ? 'is-on' : ''}`} aria-label={p.done ? 'Mark not done' : 'Mark done'} disabled={!p.text.trim()}
-                          onClick={() => set(d => ({ ...d, priorities: d.priorities.map((x, k) => (k === j ? { ...x, done: !x.done } : x)) }))}><Check /></button>
-                        <span>{p.text.trim() || (loading ? '…' : `Priority ${j + 1}`)}</span>
-                      </div>
-                    ))}
-                    {!loading && day.priorities.every(p => !p.text.trim()) && <Link to="/plan/brief" className="pl-btn pl-btn--small pl-btn--ghost">Set today's three</Link>}
+                    {day.todos.length > 0
+                      ? <><TodoList day={day} set={set} edit={false} compact /><Link to="/plan" className="pl-btn pl-btn--small pl-btn--ghost" style={{ marginTop: 6 }}>Edit the list</Link></>
+                      : <>
+                          {day.priorities.map((p, j) => (
+                            <div key={j} className={`plan-card-prio ${p.done ? 'is-done' : ''} ${p.text.trim() ? '' : 'is-empty'}`}>
+                              <button type="button" className={`pl-check ${p.done ? 'is-on' : ''}`} aria-label={p.done ? 'Mark not done' : 'Mark done'} disabled={!p.text.trim()}
+                                onClick={() => set(d => ({ ...d, priorities: d.priorities.map((x, k) => (k === j ? { ...x, done: !x.done } : x)) }))}><Check /></button>
+                              <span>{p.text.trim() || (loading ? '…' : `Priority ${j + 1}`)}</span>
+                            </div>
+                          ))}
+                          {!loading && day.priorities.every(p => !p.text.trim()) && <Link to="/plan/brief" className="pl-btn pl-btn--small pl-btn--ghost">Do the Brief → today's list</Link>}
+                        </>}
                   </div>
                 )}
 

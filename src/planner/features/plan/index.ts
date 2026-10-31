@@ -10,7 +10,9 @@ import { MonthReview, WeekReview } from './Reviews';
 
 export { PlanTodayCard } from './TodayCard';
 export { wakeStreak, lightsOutStreak, wokeOnTime, lightsOutOnTime, sleepEstimate, addDays, nowHM, streakOf } from './dates';
-export { emptyDay, normalizeDay, briefDone, reviewDone } from './types';
+export { emptyDay, normalizeDay, briefDone, reviewDone, toggleTodo, sortedTodos, todosDone } from './types';
+export type { Todo } from './types';
+export { TodoList } from './TodoList';
 export type { Day } from './types';
 
 export const planRoutes: { path: string; element: JSX.Element }[] = [
