@@ -1,8 +1,8 @@
 
 {
-  "name": "Canadian Property Stars - Digital Logsheet",
-  "short_name": "CPS Logsheet",
-  "description": "Digital Logsheet for Canadian Property Stars aeration services",
+  "name": "CPS Digital Management System",
+  "short_name": "CPS Digital Management System",
+  "description": "Canadian Property Stars Digital Management System",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
