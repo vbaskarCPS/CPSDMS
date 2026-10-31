@@ -79,6 +79,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   };
   const timedDone = (ei: number, si: number, seconds: number) => { patchSet(ei, si, { done: true, seconds }); afterSet(ei, si); };
   const setRestSec = (ei: number, restSec: number) => { if (!w) return; persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, restSec } : e)) }); };
+  const setComment = (ei: number, comment: string) => { if (!w) return; persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, comment } : e)) }); };
   const toggleDone = (ei: number, si: number) => {
     if (!w) return;
     const s = w.exercises[ei].sets[si];
@@ -160,6 +161,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
             </div>
             {isOpen && (
               <div className="wo-ex__body">
+                {ex.lastComment && <p className="wo-lastnote">Last time: {ex.lastComment}</p>}
                 {!readOnly && <div className="wo-restchips">rest {RESTS.map(r => <button key={r} type="button" className={ex.restSec === r ? 'is-on' : ''} onClick={() => setRestSec(ei, r)}>{r}s</button>)}{ex.mode === 'time' && <button type="button" className={ex.restSec === 0 ? 'is-on' : ''} onClick={() => setRestSec(ei, 0)}>none</button>}</div>}
                 {ex.mode === 'time' ? ex.sets.map((s, si) => (
                   <div key={si} className={`wo-set ${s.done ? 'is-done' : ''}`}>
@@ -190,6 +192,9 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
                     <Button small ghost danger onClick={() => removeExercise(ei)}><Trash2 size={16} /></Button>
                   </div>
                 )}
+                {readOnly
+                  ? (ex.comment ? <p className="wo-lastnote">Note: {ex.comment}</p> : null)
+                  : <TextArea rows={1} className="wo-comment" placeholder="Note for next time (felt easy, go up 5 lb; left shoulder pinched…)" value={ex.comment || ''} onChange={e => setComment(ei, e.target.value)} />}
               </div>
             )}
           </Card>

@@ -12,7 +12,8 @@ export interface TemplateExercise { exerciseId: string; name: string; targetSets
 export interface Template { id: string; name: string; days?: number[]; exercises: TemplateExercise[]; order: number; archived?: boolean }
 
 export interface SetLog { weight: number; reps: number; rpe?: number; done: boolean; prev?: { weight: number; reps: number }; seconds?: number }
-export interface WorkoutExercise { exerciseId: string; name: string; restSec: number; targetReps?: string; sets: SetLog[]; mode?: SetMode; note?: string }
+export interface WorkoutExercise { exerciseId: string; name: string; restSec: number; targetReps?: string; sets: SetLog[]; mode?: SetMode; note?: string; comment?: string; lastComment?: string }
+// note = the plan's cue (from the template / coach); comment = what you wrote after doing it; lastComment = the previous session's comment, shown next time
 export interface Workout { id: string; date: string; startedAt: string; endedAt?: string; templateId?: string; name: string; exercises: WorkoutExercise[]; notes?: string; prs?: string[]; discarded?: boolean }
 
 export interface BodyWeight { weight: number }
