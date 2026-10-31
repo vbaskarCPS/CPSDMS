@@ -216,6 +216,9 @@ they will work through from now until dinner. Rules:
 - 6–12 items, each a short imperative line in the person's own words. Give a time (HH:MM, 24h) only where the day
   really has a slot for it (drop-off, calls, appointments, the first deep-work block); leave the rest untimed.
 - Do not add the workout, shake, review or anything after dinner — those are already in the routine.
+- The message may list things that are often on this person's list (with their usual time): include the ones
+  that fit today (a weekday chore on a weekday, not on a weekend), with that time.
+- Keep the order the person would tackle them in: time-fixed items where they fall, the rest by importance.
 - note: at most a few words of why, only when useful.`;
 const TODOS_SCHEMA = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, time: { type: 'string' }, note: { type: 'string' }, priority: { type: 'integer', description: '0-2 when the item is one of the three priorities, verbatim' } }, required: ['text'] } } }, required: ['items'] };
 
@@ -316,8 +319,9 @@ Deno.serve(async req => {
     if (action === 'todos') {
       const brief = b.brief && typeof b.brief === 'object' ? b.brief : {};
       const priorities = (Array.isArray(b.priorities) ? b.priorities : []).filter(x => typeof x === 'string') as string[];
+      const frequent = (Array.isArray(b.frequent) ? b.frequent : []).filter(x => typeof x === 'string').slice(0, 12) as string[];
       const r = await claudeJson<{ items: unknown[] }>(TODOS_SYSTEM,
-        [{ role: 'user', content: `Brief answers: ${JSON.stringify(brief)}\nPriorities (0-2): ${JSON.stringify(priorities)}\n\nPlanner (JSON):\n${JSON.stringify(b.context ?? {}).slice(0, 20000)}` }], TODOS_SCHEMA, 1500);
+        [{ role: 'user', content: `Brief answers: ${JSON.stringify(brief)}\nPriorities (0-2): ${JSON.stringify(priorities)}\nOften on my list: ${frequent.join('; ') || 'nothing yet'}\n\nPlanner (JSON):\n${JSON.stringify(b.context ?? {}).slice(0, 20000)}` }], TODOS_SCHEMA, 1500);
       return json({ items: Array.isArray(r.items) ? r.items : [] });
     }
     if (action === 'categorize') {

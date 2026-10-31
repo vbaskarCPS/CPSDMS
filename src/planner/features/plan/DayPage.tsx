@@ -1,8 +1,8 @@
-// src/planner/features/plan/DayPage.tsx — one day: the Bed Brief summary, the deep plan (projects,
-// people, schedule), and the Miracle Night summary. Any date; today links into the brief and the night.
+// src/planner/features/plan/DayPage.tsx — one day: the Bed Brief summary, the to-do list, and the Miracle
+// Night summary. Any date; today links into the brief and the night.
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Check, Plus, X, Sparkles, CalendarDays, CalendarRange, Sunrise, Moon } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Check, Sparkles, CalendarDays, CalendarRange, Sunrise, Moon } from 'lucide-react';
 import { dayKey } from '../../lib/docs';
 import { useDoc } from '../../lib/useDoc';
 import { reflect } from '../../lib/ai';
@@ -12,6 +12,7 @@ import { Section } from './Section';
 import { addDays, fmtDate, isValidDay } from './dates';
 import { dayAverage, emptyDay, normalizeDay, SCORE_KEYS, type Day } from './types';
 import { TodoList } from './TodoList';
+import { useFrequentTodos } from './useFrequentTodos';
 
 const filled = (...v: string[]) => v.filter(s => s.trim()).length;
 
@@ -22,6 +23,7 @@ export function DayPage() {
   const morningP = routineNow().profile === 'morning';
   const isToday = key === dayKey();
   const { data, update, loading, loadError, save } = useDoc<Day>('day', key, emptyDay());
+  const frequent = useFrequentTodos();
   const day = useMemo(() => normalizeDay(data), [data]);
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
   const [toast, showToast] = useToast();
@@ -87,37 +89,10 @@ export function DayPage() {
 
           {/* ── Today's list ── */}
           <Section title="The list" meta={day.todos.length ? `${day.todos.filter(t => t.done).length}/${day.todos.length}` : 'from the Brief'} done={day.todos.length > 0 && day.todos.every(t => t.done)}>
-            <p className="pl-muted" style={{ fontSize: 13 }}>Brief to dinner: the day's to-do list, times optional. Coach Claude drafts it at the end of the Brief; the three priorities are always on it.</p>
-            <TodoList day={day} set={set} />
+            <p className="pl-muted" style={{ fontSize: 13 }}>Brief to dinner, in the order you'll tackle it — move items with the arrows; a time beside one is a reminder. Coach Claude drafts it at the end of the Brief; the three priorities are always on it.</p>
+            <TodoList day={day} set={set} suggestions={frequent} />
           </Section>
 
-          {/* ── Deep plan ── */}
-          <Section title="Deep plan" meta={`${day.projects.filter(p => p.name.trim()).length} projects${day.schedule.length ? ` · ${day.schedule.length} blocks` : ''}`} open={false}>
-            <p className="pl-muted" style={{ fontSize: 13 }}>For work hours: the three projects that matter most, the people, and the blocks of the day.</p>
-            {day.projects.map((p, i) => (
-              <div key={i} className="plan-project">
-                <Input className="plan-project__name" placeholder={`Project ${i + 1}`} value={p.name} onChange={e => set(d => { const projects = d.projects.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)); return { ...d, projects }; })} />
-                <div className="plan-project__steps">
-                  {p.steps.map((s, j) => (
-                    <div key={j} className="plan-project__step"><span>{j + 1}</span>
-                      <Input placeholder="Next step" value={s} onChange={e => set(d => { const projects = d.projects.map((x, k) => { if (k !== i) return x; const steps = [...x.steps] as [string, string, string]; steps[j] = e.target.value; return { ...x, steps }; }); return { ...d, projects }; })} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-            <Prompt q="Someone I need to connect with or reach out to today…" value={day.people.connect} onChange={v => set(d => ({ ...d, people: { ...d.people, connect: v } }))} rows={1} />
-            <Prompt q="Someone I need to lead or serve well today…" value={day.people.lead} onChange={v => set(d => ({ ...d, people: { ...d.people, lead: v } }))} rows={1} />
-            <p className="pl-label">Schedule</p>
-            {day.schedule.map((s, i) => (
-              <div key={i} className="plan-slot">
-                <Input type="time" value={s.time} onChange={e => set(d => ({ ...d, schedule: d.schedule.map((x, j) => (j === i ? { ...x, time: e.target.value } : x)).sort((a, b) => a.time.localeCompare(b.time)) }))} />
-                <Input className="pl-grow" placeholder="What" value={s.text} onChange={e => set(d => ({ ...d, schedule: d.schedule.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) }))} />
-                <button type="button" className="pl-btn pl-btn--ghost" aria-label="Remove" onClick={() => set(d => ({ ...d, schedule: d.schedule.filter((_, j) => j !== i) }))}><X /></button>
-              </div>
-            ))}
-            <Button ghost onClick={() => set(d => { const last = d.schedule[d.schedule.length - 1]; const [h] = (last?.time || '09:00').split(':').map(Number); const time = `${String(Math.min(23, (h || 9) + 1)).padStart(2, '0')}:00`; return { ...d, schedule: [...d.schedule, { time, text: '' }] }; })}><Plus /> Add block</Button>
-          </Section>
 
           {/* ── Miracle Night ── */}
           <Section title={<span className="pl-row" style={{ gap: 8 }}><Moon aria-hidden style={{ width: 20, height: 20, color: 'var(--accent)' }} /> {morningP ? 'Evening' : 'Miracle Night'}</span>}
