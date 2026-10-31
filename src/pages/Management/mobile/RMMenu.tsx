@@ -4,7 +4,7 @@
 // button in the stats bar) so both offer the same six tiles:
 //
 //   Team (Manage Team, with the team lock inside) · Pins (drop pins + worker
-//   driver stops) · Layers (map filters) · Card Txns · Asphalt · view switch ·
+//   driver stops) · Layers (map filters) · Card Txns · Asphalt (sealing only) · view switch ·
 //   Dashboard (the new app's home)
 //
 // Stats and Team Battle aren't tiles: Stats opens from the header (phone) or
@@ -44,12 +44,14 @@ export const MenuTiles: React.FC<{
     />
     <Tile icon={Layers} label="Layers" iconClass="text-sky-300" onClick={() => onOpenSub('layers')} />
     <Tile icon={CreditCard} label="Card Txns" iconClass="text-emerald-300" onClick={() => { onClose(); shell.onOpenTransactions(); }} />
-    <Tile
-      icon={Shovel} label="Asphalt" iconClass="text-amber-300" disabled={!shell.isSealing}
-      onClick={() => { onClose(); shell.onOpenAsphalt(); }}
-      badge={shell.isSealing && shell.unassignedAsphaltCount > 0 ? String(shell.unassignedAsphaltCount) : null}
-      badgeClass="bg-amber-500 text-black"
-    />
+    {shell.isSealing && (  /* asphalt is sealing only — hidden, not greyed, on other services */
+      <Tile
+        icon={Shovel} label="Asphalt" iconClass="text-amber-300"
+        onClick={() => { onClose(); shell.onOpenAsphalt(); }}
+        badge={shell.unassignedAsphaltCount > 0 ? String(shell.unassignedAsphaltCount) : null}
+        badgeClass="bg-amber-500 text-black"
+      />
+    )}
     {viewSwitch && (
       <Tile icon={viewSwitch.icon} label={viewSwitch.label} iconClass="text-gray-300" onClick={() => { onClose(); viewSwitch.onClick(); }} />
     )}

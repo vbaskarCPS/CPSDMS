@@ -1,4 +1,4 @@
-// src/v2/features/workerbook/TeamBoard.tsx — build teams by dragging people between carts, ramp crews and managers.
+// src/v2/features/workerbook/TeamBoard.tsx — build teams by dragging people between carts, ramp crews (sealing only) and managers.
 // With pairing on (Start session), drag a manager's name onto another manager's card to pair them for
 // the day: one shared card, whose teams and maps they manage together. ✕ on a name takes them back out.
 import React, { useState } from 'react';
@@ -19,6 +19,8 @@ interface Props {
   onAssign: (hireId: string, team: string | null) => void;
   onNewTeam: (managerId: string, kind: PlanTeam['kind'], hireId?: string) => void;
   onRamp: (team: string, ramp: boolean) => void;
+  /** Ramp crews (asphalt) are a sealing thing; false hides the Ramp switch and "New ramp crew". Default true. */
+  ramps?: boolean;
   onManager: (team: string, managerId: string) => void;
   onRemove: (team: string) => void;
   /** Shown in the pool when everyone is on a team. */
@@ -82,7 +84,7 @@ const Drop: React.FC<{ id: string; className?: string; children: React.ReactNode
   return <div ref={setNodeRef} className={`${className || ''}${isOver ? ' over' : ''}`} style={style}>{children}</div>;
 };
 
-export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, onAssign, onNewTeam, onRamp, onManager, onRemove, emptyPoolText, side, pairs, onPair, onUnpair }) => {
+export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, onAssign, onNewTeam, onRamp, onManager, onRemove, emptyPoolText, side, pairs, onPair, onUnpair, ramps = true }) => {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 6 } }),
@@ -136,7 +138,7 @@ export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, o
         {!side && <Drop id="pool" className="v2-card v2-drop">
           <div className="v2-row" style={{ marginBottom: 8 }}>
             <b>Not on a team</b><span className="v2-mut v2-small">{unassigned.length}</span>
-            <span className="v2-spacer" /><span className="v2-mut v2-small">Drag people onto a cart, a ramp crew, or a “new” box</span>
+            <span className="v2-spacer" /><span className="v2-mut v2-small">{ramps ? 'Drag people onto a cart, a ramp crew, or a “new” box' : 'Drag people onto a cart or the “new” box'}</span>
           </div>
           <div className="v2-people">
             {unassigned.sort(sortByName).map(r => <Person key={r.hire_id} row={r} />)}
@@ -168,8 +170,8 @@ export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, o
                     <Drop key={t.name} id={`team:${t.name}`} className={`v2-team v2-drop${t.kind === 'ramp' ? ' ramp' : ''}`}>
                       <div className="v2-row" style={{ gap: 6, flexWrap: 'nowrap', marginBottom: 6 }}>
                         <b className="v2-small" style={{ flex: 1 }}>{teamLabel(t)}</b>
-                        <label className="v2-row v2-small" style={{ gap: 4, flexWrap: 'nowrap' }} title="Ramp crews do the asphalt work">Ramp
-                          <Toggle on={t.kind === 'ramp'} onChange={v => onRamp(t.name, v)} label={`Ramp crew ${t.name}`} /></label>
+                        {ramps && <label className="v2-row v2-small" style={{ gap: 4, flexWrap: 'nowrap' }} title="Ramp crews do the asphalt work">Ramp
+                          <Toggle on={t.kind === 'ramp'} onChange={v => onRamp(t.name, v)} label={`Ramp crew ${t.name}`} /></label>}
                         <select className="v2-sel" style={{ padding: '2px 4px', width: 84, fontSize: 12 }} value={groupOf(t.managerId)[0]} aria-label={`Manager for ${teamLabel(t)}`}
                           onChange={e => onManager(t.name, e.target.value)}>
                           {groups.map(o => <option key={o[0].id} value={o[0].id}>{groupName(o, true)}</option>)}
@@ -187,10 +189,10 @@ export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, o
                   <button type="button" className="v2-link" onClick={() => onNewTeam(lead, 'cart')}><Plus size={14} /> New cart</button>
                   <span className="v2-mut v2-small">or drop someone here</span>
                 </Drop>
-                <Drop id={`new:${lead}:ramp`} className="v2-team v2-drop new">
+                {ramps && <Drop id={`new:${lead}:ramp`} className="v2-team v2-drop new">
                   <button type="button" className="v2-link" onClick={() => onNewTeam(lead, 'ramp')}><Truck size={14} /> New ramp crew</button>
                   <span className="v2-mut v2-small">or drop someone here</span>
-                </Drop>
+                </Drop>}
               </div>
             </Drop>
           );

@@ -230,7 +230,7 @@ export const StartSession: React.FC = () => {
               pairs={pairs} onPair={(who, withId) => setPairs(ps => pairManagers(ps, who, withId))} onUnpair={who => setPairs(ps => unpairManager(ps, who))}
               onAssign={(h, t) => setMembers(m => { const n = { ...m }; if (t) n[h] = t; else delete n[h]; return n; })}
               onNewTeam={(mid, kind, h) => { const name = nextTeamName(teams, kind); setTeams(ts => [...ts, { name, kind, managerId: mid }]); if (h) setMembers(m => ({ ...m, [h]: name })); }}
-              onRamp={setRamp}
+              onRamp={setRamp} ramps={service === 'sealing'}
               onManager={(t, mid) => setTeams(ts => ts.map(x => x.name === t ? { ...x, managerId: mid } : x))}
               onRemove={removeTeam} />
             {teams.some(t => !mgrs.some(m => m.id === t.managerId)) && (
@@ -271,7 +271,7 @@ export const StartSession: React.FC = () => {
               <div className="v2-card-h">Ready to start</div>
               <div className="v2-small" style={{ lineHeight: 1.8 }}>
                 <div><b>{routes.size}</b> routes in {new Set([...routes.values()].map(r => r.area)).size} areas</div>
-                <div><b>{teams.length}</b> teams ({teams.filter(t => t.kind === 'ramp').length} ramp crews) under {new Set(teams.map(t => t.managerId)).size} managers</div>
+                <div><b>{teams.length}</b> teams{service === 'sealing' ? ` (${teams.filter(t => t.kind === 'ramp').length} ramp crews)` : ''} under {new Set(teams.map(t => t.managerId)).size} managers</div>
                 <div><b>{showedRows.length}</b> workers showed · {roster.data.length - showedRows.length} not ticked</div>
                 {pairs.map(g => <div key={g.join('|')}>Sharing teams: <b>{g.map(id => mgrs.find(m => m.id === id)?.full_name || '?').join(' & ')}</b></div>)}
               </div>
