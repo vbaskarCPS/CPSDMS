@@ -75,3 +75,6 @@
 .wo-plan-ex { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
 .wo-plan-ex small { color: var(--ink-2); display: block; }
 .wo-msgbtns { display: flex; gap: 8px; margin: -6px 0 8px 0; }
+
+.wo-lastnote { margin: 0 0 8px; font-size: 13px; color: var(--amber-2); font-style: italic; }
+.wo-comment { margin-top: 10px; font-size: 14px; min-height: 40px; }

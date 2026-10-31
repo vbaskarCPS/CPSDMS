@@ -64,13 +64,13 @@ export const saveBodyWeight = (date: string, weight: number) => putDoc('bodyweig
 export const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return dayKey(d); };
 
 /** The done sets of one exercise in each of the last N finished sessions (newest first). */
-export function exerciseHistory(workouts: Workout[], exerciseId: string, n = 3): { date: string; sets: SetLog[] }[] {
-  const out: { date: string; sets: SetLog[] }[] = [];
+export function exerciseHistory(workouts: Workout[], exerciseId: string, n = 3): { date: string; sets: SetLog[]; comment?: string }[] {
+  const out: { date: string; sets: SetLog[]; comment?: string }[] = [];
   for (const w of workouts) {
     if (!w.endedAt) continue;
     const ex = w.exercises.find(e => e.exerciseId === exerciseId);
-    const sets = ex?.sets.filter(s => s.done && s.reps > 0) || [];
-    if (sets.length) out.push({ date: w.date, sets });
+    const sets = ex?.sets.filter(s => s.done && (s.reps > 0 || (s.seconds || 0) > 0)) || [];
+    if (sets.length || ex?.comment) out.push({ date: w.date, sets, comment: ex?.comment });
     if (out.length >= n) break;
   }
   return out;
@@ -86,17 +86,18 @@ export function startFromTemplate(tpl: Template, workouts: Workout[], units: Uni
   const now = new Date();
   const exercises: WorkoutExercise[] = tpl.exercises.map(t => {
     const mode = t.mode || (isTimed(findExercise(t.exerciseId, custom)) ? 'time' : 'reps');
+    const lastComment = exerciseHistory(workouts, t.exerciseId, 1)[0]?.comment?.trim() || undefined;
     if (mode === 'time') {
       const sec = t.targetSec || 60;
       const sets: SetLog[] = Array.from({ length: Math.max(1, t.targetSets) }, () => ({ weight: 0, reps: 0, seconds: sec, done: false }));
-      return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, mode, note: t.note, sets };
+      return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, mode, note: t.note, lastComment, sets };
     }
     const sug = nextTarget(workouts, t, units, custom);
     const last = exerciseHistory(workouts, t.exerciseId, 1)[0]?.sets || [];
     const sets: SetLog[] = Array.from({ length: Math.max(1, t.targetSets) }, (_, i) => ({
       weight: sug.weight, reps: sug.reps, done: false, prev: last[i] ? { weight: last[i].weight, reps: last[i].reps } : undefined,
     }));
-    return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, targetReps: t.targetReps, note: t.note, sets };
+    return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, targetReps: t.targetReps, note: t.note, lastComment, sets };
   });
   return { id: uid(), date: dayKey(now), startedAt: now.toISOString(), templateId: tpl.id, name: tpl.name, exercises };
 }
