@@ -91,3 +91,12 @@ export interface HabitPlan { name: string; identity: string; why: string; twoMin
 export async function planHabit(text: string, blocks: { id: string; label: string; at: string; until?: string }[], existing: string[]): Promise<HabitPlan> {
   return invoke<HabitPlan>({ action: 'habit', text, blocks, existing });
 }
+
+export interface DayPlanQuestion { id: string; text: string; choices: string[] }
+export interface DayPlan { review: string; questions: DayPlanQuestion[]; tomorrow: PlanResult & { focus: string; minutes: number; why: string }; answers?: Record<string, string>; madeAt?: string }
+/** After a session: Coach Claude's review, two questions, and tomorrow's session (with the whole planner as context). */
+export async function dayPlan(library: { id: string; name: string }[], units: string, answers?: Record<string, string>): Promise<DayPlan> {
+  const context = await lifeContext(units);
+  const r = await invoke<DayPlan>({ action: 'dayplan', context, library: library.slice(0, 200), units, answers });
+  return { review: String(r.review || ''), questions: Array.isArray(r.questions) ? r.questions.filter(q => q && q.id && Array.isArray(q.choices)) : [], tomorrow: { ...r.tomorrow, exercises: Array.isArray(r.tomorrow?.exercises) ? r.tomorrow.exercises : [] }, answers, madeAt: new Date().toISOString() };
+}

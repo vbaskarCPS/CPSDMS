@@ -124,6 +124,11 @@ export function startFromTemplate(tpl: Template, workouts: Workout[], units: Uni
 export async function planFromCoach(text: string, units: Units, custom: Exercise[] = []): Promise<{ template: Template; created: Exercise[] }> {
   const all = [...custom, ...LIBRARY];
   const r: PlanResult = await planFromText(text, all.map(e => ({ id: e.id, name: e.name })), units);
+  return templateFromPlan(r, units, custom);
+}
+/** A structured plan (from the coach chat or the day plan) → a template (unsaved) + any new custom exercises. */
+export function templateFromPlan(r: PlanResult, units: Units, custom: Exercise[] = []): { template: Template; created: Exercise[] } {
+  const all = [...custom, ...LIBRARY];
   const created: Exercise[] = [];
   const exercises: TemplateExercise[] = r.exercises.map(e => {
     let lib = e.exerciseId ? all.find(x => x.id === e.exerciseId) : undefined;
@@ -143,10 +148,13 @@ export function emptyWorkout(name = 'Workout'): Workout {
   return { id: uid(), date: dayKey(now), startedAt: now.toISOString(), name, exercises: [] };
 }
 
-/** Which template is up today: one planned for this weekday, else the one not done for longest. */
+/** Which template is up today: one Coach Claude planned for this date, else one for this weekday, else the one not done for longest. */
 export function todaysTemplate(templates: Template[], workouts: Workout[], date = new Date()): Template | null {
-  const live = templates.filter(t => !t.archived);
+  // one-off sessions planned for another date stay out of the way
+  const live = templates.filter(t => !t.archived && (!t.plannedFor || t.plannedFor === dayKey(date)));
   if (!live.length) return null;
+  const forDate = live.find(t => t.plannedFor === dayKey(date));
+  if (forDate) return forDate;
   const dow = date.getDay();
   const planned = live.filter(t => t.days?.includes(dow));
   if (planned.length) return planned[0];

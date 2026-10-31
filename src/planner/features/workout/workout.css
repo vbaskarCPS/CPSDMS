@@ -96,3 +96,12 @@
 .wo-review.is-waiting p { opacity: .7; font-style: italic; }
 
 .wo-lastnote--coach { color: var(--accent); font-style: normal; display: flex; gap: 6px; align-items: center; }
+
+/* the done panel: Coach Claude's two questions and tomorrow's session */
+.wo-qa { display: grid; gap: 10px; margin: 4px 0 12px; }
+.wo-qa__q b { display: block; font-size: 14px; margin-bottom: 6px; }
+.wo-qa__choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.wo-qa__choices button { border: 1px solid color-mix(in srgb, var(--accent-ink) 35%, transparent); background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; font-size: 13px; min-height: 34px; }
+.wo-qa__choices button.is-on { background: var(--accent-ink); color: var(--accent); border-color: var(--accent-ink); }
+.wo-tomorrow { border-top: 1px solid color-mix(in srgb, var(--accent-ink) 20%, transparent); padding-top: 10px; margin-top: 4px; }
+.wo-tomorrow .wo-hero__row span { white-space: normal; }
