@@ -5,8 +5,11 @@
 import { dayKey, getDocs } from './docs';
 import { loadRoutine, blocks } from './routine';
 import { memoryContext } from './memory';
+import { eventsOn, type CalEvent } from '../features/calendar/types';
 
 const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return dayKey(d); };
+const daysAhead = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const calDate = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const pick = <T extends object, K extends keyof T>(o: T, keys: K[]): Partial<T> => { const out: Partial<T> = {}; for (const k of keys) if (o[k] !== undefined && o[k] !== '' && o[k] !== null) out[k] = o[k]; return out; };
 
 type AnyDoc = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -17,7 +20,7 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
   const { workoutsDays = 28, fullSessions = 6, daysBack = 7 } = opts;
   const today = dayKey();
   const routine = await loadRoutine();
-  const [memory, days, habits, habitLogs, meals, workouts, templates, weights, periods, cycleLogs] = await Promise.all([
+  const [memory, days, habits, habitLogs, meals, workouts, templates, events, weights, periods, cycleLogs] = await Promise.all([
     memoryContext(),
     getDocs<AnyDoc>('day', daysAgo(daysBack), today).catch(() => []),
     getDocs<AnyDoc>('habit').catch(() => []),
@@ -25,6 +28,7 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
     getDocs<AnyDoc>('meal', `${daysAgo(daysBack)}~`, `${today}~￿`).catch(() => []),
     getDocs<AnyDoc>('workout', daysAgo(workoutsDays), `${today}~￿`).catch(() => []),
     getDocs<AnyDoc>('template').catch(() => []),
+    getDocs<AnyDoc>('event', `${daysAgo(366)}~`, `${daysAhead(14)}~\uffff`).catch(() => []),
     getDocs<AnyDoc>('bodyweight', daysAgo(90)).catch(() => []),
     routine.profile === 'morning' ? getDocs<AnyDoc>('period').catch(() => []) : Promise.resolve([]),
     routine.profile === 'morning' ? getDocs<AnyDoc>('cyclelog', daysAgo(45), today).catch(() => []) : Promise.resolve([]),
@@ -52,6 +56,7 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
     habits: activeHabits.map(h => ({ name: h.name, identity: h.identity || undefined, stack: h.stack || undefined, anchor: h.anchor, auto: h.auto, days: h.days })),
     habit_marks_last_14_days: Object.fromEntries(habitLogs.map(l => [l.key, Object.fromEntries(Object.entries(l.data || {}).map(([id, m]) => [habitNames[id] || id, m]))])),
     meals_recent: meals.map(d => d.data).filter(Boolean).map((m: AnyDoc) => ({ date: m.date, time: m.time, name: m.name, kcal: m.totals?.kcal, protein: m.totals?.protein, note: m.note || undefined })),
+    calendar_next_14_days: (() => { const evs = events.map(d => d.data as CalEvent).filter(e => e && e.title); const out: Record<string, string[]> = {}; for (let i = 0; i < 14; i++) { const date = calDate(i); const on = eventsOn(evs, date); if (on.length) out[date] = on.map(e => `${e.time ? e.time + ' ' : 'all day: '}${e.title} (${e.who})`); } return out; })(),
     workout_templates: templates.map(d => d.data).filter(t => t && !t.archived).map((t: AnyDoc) => ({ name: t.name, days: t.days, exercises: (t.exercises || []).map((e: AnyDoc) => `${e.name} ${e.targetSets}x${e.targetReps || e.targetSec + 's'}`) })),
     workout_in_progress: inProgress ? { name: inProgress.name, started: inProgress.startedAt, exercises: (inProgress.exercises || []).map((e: AnyDoc) => ({ name: e.name, sets: (e.sets || []).map((s: AnyDoc) => `${fmtSet(s)}${s.done ? '' : ' (not done)'}`), my_note: e.comment || undefined })) } : undefined,
     workouts_recent_full_then_condensed: sessions,

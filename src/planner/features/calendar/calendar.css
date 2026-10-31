@@ -1,0 +1,27 @@
+/* the shared calendar */
+.cal__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.cal__head b { font-family: var(--serif); font-size: 18px; }
+.cal__nav { border: 0; min-height: 36px; padding: 0 6px; }
+.cal__grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.cal__dow { text-align: center; font-size: 11px; color: var(--ink-2); padding: 2px 0 6px; }
+.cal__day { border: 0; background: transparent; color: inherit; border-radius: 10px; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 14px; padding: 4px 0; }
+.cal__day.is-out { color: var(--ink-2); opacity: .55; }
+.cal__day.is-today span:first-child { font-weight: 700; color: var(--accent); }
+.cal__day.is-selected { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.cal__dots { display: flex; gap: 2px; height: 5px; }
+.cal__dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.cal__dots i.is-rosh, .cal__event.is-rosh .cal__who, .cal__whochips button.is-rosh.is-on { background: #ff6fa8; }
+.cal__dots i.is-kiaan, .cal__event.is-kiaan .cal__who, .cal__whochips button.is-kiaan.is-on { background: #4fd1c5; }
+.cal__dots i.is-vijay, .cal__event.is-vijay .cal__who, .cal__whochips button.is-vijay.is-on { background: var(--accent); }
+.cal__dots i.is-both, .cal__event.is-both .cal__who, .cal__whochips button.is-both.is-on { background: #b388ff; }
+.cal__list { display: grid; gap: 6px; }
+.cal__event { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--bg-2); color: inherit; border-radius: 12px; padding: 10px 12px; }
+.cal__time { flex: none; font-size: 12px; color: var(--ink-2); min-width: 64px; }
+.cal__title { flex: 1; font-size: 15px; min-width: 0; }
+.cal__title small { color: var(--ink-2); }
+.cal__who { flex: none; font-size: 11px; font-weight: 600; color: #101c3a; padding: 2px 8px; border-radius: 999px; }
+.cal__whochips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cal__whochips button { border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; font-size: 13px; }
+.cal__whochips button.is-on { color: #101c3a; border-color: transparent; font-weight: 600; }
+.cal__line { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; }
+.cal__line small { font-size: 11px; color: var(--ink-2); }

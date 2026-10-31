@@ -21,11 +21,11 @@ function precacheManifest(): Plugin {
       if (existsSync(sw)) writeFileSync(sw, readFileSync(sw, 'utf8').replace("const BUILD = 'dev';", `const BUILD = '${version}';`));
     },
     generateBundle(_opts, bundle) {
-      // the planner (planner.html, src/planner) and the Main Street AI website (mainstreetai.html) are their own
-      // pages; the field app's phones don't keep them
+      // the planner (planner.html, src/planner) rides along so an installed planner opens offline too;
+      // the Main Street AI website (mainstreetai.html) is its own page the field app's phones don't keep
       const files = Object.keys(bundle).filter(f => /\.(js|css|html|svg|png|woff2?)$/.test(f) && !f.endsWith('.map')
-        && !/^(planner|mainstreetai)\.html$|\/(planner|mainstreetai)-[^/]*\.(js|css)$/.test(f));
-      const urls = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png', '/logo.svg', ...files.filter(f => f !== 'index.html').map(f => `/${f}`)];
+        && !/^mainstreetai\.html$|\/mainstreetai-[^/]*\.(js|css)$/.test(f));
+      const urls = ['/', '/index.html', '/planner.html', '/manifest.json', '/icon-192.png', '/icon-512.png', '/logo.svg', '/vijayplanner/manifest.json', '/vijayplanner/icon-192.png', '/roshplanner/manifest.json', '/roshplanner/icon-192.png', ...files.filter(f => f !== 'index.html').map(f => `/${f}`)];
       this.emitFile({ type: 'asset', fileName: 'precache.json', source: JSON.stringify({ version, urls: [...new Set(urls)] }) });
     },
   };
