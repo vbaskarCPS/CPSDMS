@@ -7,6 +7,18 @@ import { Page, Header, Card, Button, Sheet, Stat, TextArea, useToast } from '../
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
 import { stepFor } from './progression';
 import { daysAgo, detectPRs, exerciseHistory, loadCustomExercises, loadWorkouts, saveWorkout } from './store';
+
+/** Sessions started before timed sets existed: a library-timed exercise with no mode becomes a timed one. */
+function normalizeModes(w: Workout): Workout {
+  let changed = false;
+  const exercises = w.exercises.map(ex => {
+    if (ex.mode || !isTimed(findExercise(ex.exerciseId))) return ex;
+    changed = true;
+    const sec = ex.sets[0]?.seconds || (/plank|hang|wall/.test(ex.exerciseId) ? 45 : 300);
+    return { ...ex, mode: 'time' as const, restSec: 0, sets: ex.sets.map(s => ({ weight: 0, reps: 0, seconds: s.seconds || sec, done: s.done })) };
+  });
+  return changed ? { ...w, exercises } : w;
+}
 import { durationMin, fmtNum, fmtSec, setsDone, volumeOf, type Exercise, type SetLog, type Workout, type WorkoutExercise } from './types';
 import { CheckBig, ExercisePicker, RestTimer, Stepper, TimedSet } from './parts';
 import { useUnits } from './WorkoutHome';
@@ -34,7 +46,8 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     let on = true;
     Promise.all([loadWorkouts(daysAgo(365)), loadCustomExercises()]).then(([all, c]) => {
       if (!on) return;
-      const found = all.find(x => x.id === id) || null;
+      const raw = all.find(x => x.id === id) || null;
+      const found = raw ? normalizeModes(raw) : null;
       setW(found); latest.current = found; setHistory(all.filter(x => x.id !== id)); setCustom(c);
       if (!found) setMissing(true);
       else { const i = found.exercises.findIndex(e => e.sets.some(s => !s.done)); setOpen(i < 0 ? 0 : i); }
