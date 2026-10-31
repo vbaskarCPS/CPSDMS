@@ -1,8 +1,8 @@
 // src/planner/features/workout/parts.tsx — pieces shared by the workout screens: steppers, rest timer, exercise picker.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Minus, Plus, Check, Search } from 'lucide-react';
+import { Minus, Plus, Check, Search, Play, Pause } from 'lucide-react';
 import { Button, Input, Sheet, uid } from '../../ui/primitives';
-import { LIBRARY, MUSCLES, muscleLabel, searchExercises } from './library';
+import { LIBRARY, MUSCLES, groupLabel, searchExercises } from './library';
 import { saveCustomExercise } from './store';
 import type { Exercise, Muscle, Equipment } from './types';
 
@@ -20,7 +20,7 @@ export function Stepper({ value, step, min = 0, onChange, suffix, disabled }: { 
   );
 }
 
-function beep() {
+export function beep() {
   try {
     const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
     const ctx = new Ctx();
@@ -71,14 +71,14 @@ export function ExercisePicker({ open, onClose, onPick, custom, onCustomAdded }:
   const results = useMemo(() => searchExercises(q, custom), [q, custom]);
   const grouped = useMemo(() => {
     const g = new Map<string, Exercise[]>();
-    for (const e of results) { const k = muscleLabel(e.muscles[0]); if (!g.has(k)) g.set(k, []); g.get(k)!.push(e); }
+    for (const e of results) { const k = groupLabel(e); if (!g.has(k)) g.set(k, []); g.get(k)!.push(e); }
     return [...g.entries()];
   }, [results]);
   useEffect(() => { if (!open) { setQ(''); setAdding(false); } }, [open]);
 
   const addCustom = async () => {
     if (!name.trim()) return;
-    const e: Exercise = { id: `custom-${uid()}`, name: name.trim(), muscles: [muscle], equipment, type: equipment === 'cardio' ? 'cardio' : 'strength', defaultStep: 5, custom: true };
+    const e: Exercise = { id: `custom-${uid()}`, name: name.trim(), muscles: [muscle], equipment, type: equipment === 'cardio' ? 'cardio' : 'strength', defaultStep: 5, custom: true, timed: equipment === 'cardio' };
     await saveCustomExercise(e);
     onCustomAdded?.(e); setName(''); setAdding(false); onPick(e);
   };
@@ -110,6 +110,52 @@ export function ExercisePicker({ open, onClose, onPick, custom, onCustomAdded }:
         </div>
       )}
     </Sheet>
+  );
+}
+
+const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.max(0, Math.round(sec)) % 60).padStart(2, '0')}`;
+
+/** A timed set: a big Start button that becomes a countdown. Finishing (or "Done early") reports the seconds spent. */
+export function TimedSet({ target, done, onTarget, onDone, disabled }: { target: number; done: boolean; onTarget: (sec: number) => void; onDone: (seconds: number) => void; disabled?: boolean }) {
+  const [endsAt, setEndsAt] = useState<number | null>(null);
+  const [pausedLeft, setPausedLeft] = useState<number | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const [editing, setEditing] = useState<string | null>(null);
+  const total = useRef(target);
+  const fired = useRef(false);
+  useEffect(() => { if (!endsAt) return; const id = window.setInterval(() => setNow(Date.now()), 250); return () => window.clearInterval(id); }, [endsAt]);
+  const left = endsAt ? Math.max(0, Math.ceil((endsAt - now) / 1000)) : pausedLeft;
+  useEffect(() => {
+    if (endsAt && now >= endsAt && !fired.current) { fired.current = true; beep(); setEndsAt(null); setPausedLeft(null); onDone(total.current); }
+  }, [now, endsAt, onDone]);
+  const start = () => { fired.current = false; total.current = target; setEndsAt(Date.now() + target * 1000); setPausedLeft(null); };
+  const pause = () => { if (endsAt) { setPausedLeft(Math.max(0, Math.ceil((endsAt - Date.now()) / 1000))); setEndsAt(null); } };
+  const resume = () => { if (pausedLeft !== null) { setEndsAt(Date.now() + pausedLeft * 1000); setPausedLeft(null); } };
+  const extend = () => { total.current += 30; if (endsAt) setEndsAt(endsAt + 30000); else if (pausedLeft !== null) setPausedLeft(pausedLeft + 30); };
+  const early = () => { const spent = total.current - (left ?? 0); setEndsAt(null); setPausedLeft(null); fired.current = true; onDone(Math.max(1, spent)); };
+  const commitEdit = () => { if (editing !== null) { const m = editing.match(/^(\d+):(\d{1,2})$/); const sec = m ? Number(m[1]) * 60 + Number(m[2]) : Number(editing) * 60; if (isFinite(sec) && sec > 0) onTarget(Math.round(sec)); setEditing(null); } };
+
+  if (done) return <div className="wo-timed is-done"><span className="wo-timed__time">{mmss(target)}</span><span className="pl-muted" style={{ fontSize: 13 }}>done</span></div>;
+  const running = endsAt !== null || pausedLeft !== null;
+  if (!running) {
+    return (
+      <div className="wo-timed">
+        {editing !== null
+          ? <input className="pl-input wo-timed__edit" autoFocus value={editing} inputMode="numeric" onChange={e => setEditing(e.target.value)} onBlur={commitEdit} onKeyDown={e => { if (e.key === 'Enter') commitEdit(); }} />
+          : <button type="button" className="wo-timed__time" onClick={() => !disabled && setEditing(mmss(target))} title="Tap to change">{mmss(target)}</button>}
+        <button type="button" className="wo-timed__start" disabled={disabled} onClick={start}><Play size={18} /> Start</button>
+      </div>
+    );
+  }
+  return (
+    <div className="wo-timed is-running">
+      <span className="wo-timed__time">{mmss(left ?? 0)}</span>
+      <div className="wo-timed__btns">
+        {endsAt ? <button type="button" onClick={pause}><Pause size={16} /></button> : <button type="button" onClick={resume}><Play size={16} /></button>}
+        <button type="button" onClick={extend}>+30s</button>
+        <button type="button" onClick={early}>Done</button>
+      </div>
+    </div>
   );
 }
 

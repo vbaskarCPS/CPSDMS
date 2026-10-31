@@ -3,6 +3,9 @@ import type { Exercise, Muscle, Equipment } from './types';
 
 const ex = (id: string, name: string, muscles: Muscle[], equipment: Equipment, defaultStep?: number, type: 'strength' | 'cardio' = 'strength'): Exercise =>
   ({ id, name, muscles, equipment, type, defaultStep });
+/** A timed exercise: logged as a countdown, not weight × reps. */
+const timed = (id: string, name: string, muscles: Muscle[], equipment: Equipment = 'cardio', type: 'strength' | 'cardio' = 'cardio'): Exercise =>
+  ({ id, name, muscles, equipment, type, timed: true });
 
 export const LIBRARY: Exercise[] = [
   // chest
@@ -95,8 +98,10 @@ export const LIBRARY: Exercise[] = [
   ex('leg-press-calf', 'Leg Press Calf Raise', ['calves'], 'machine', 20),
   ex('db-calf-raise', 'Dumbbell Calf Raise', ['calves'], 'dumbbell', 5),
   // core
-  ex('plank', 'Plank', ['core'], 'bodyweight'),
-  ex('side-plank', 'Side Plank', ['core'], 'bodyweight'),
+  timed('plank', 'Plank', ['core'], 'bodyweight', 'strength'),
+  timed('side-plank', 'Side Plank', ['core'], 'bodyweight', 'strength'),
+  timed('dead-hang', 'Dead Hang', ['back', 'core'], 'bodyweight', 'strength'),
+  timed('wall-sit', 'Wall Sit', ['quads'], 'bodyweight', 'strength'),
   ex('hanging-leg-raise', 'Hanging Leg Raise', ['core'], 'bodyweight'),
   ex('hanging-knee-raise', 'Hanging Knee Raise', ['core'], 'bodyweight'),
   ex('cable-crunch', 'Cable Crunch', ['core'], 'cable', 5),
@@ -131,15 +136,22 @@ export const LIBRARY: Exercise[] = [
   ex('wall-ball', 'Wall Ball', ['full', 'quads', 'shoulders'], 'bodyweight', 2),
   ex('sled-push', 'Sled Push', ['full', 'quads', 'glutes'], 'machine', 25),
   ex('battle-ropes', 'Battle Ropes', ['full', 'cardio', 'shoulders'], 'bodyweight'),
-  // cardio (weight = minutes, reps = intensity/level — logged loosely)
+  // cardio & timed: a countdown per set
+  timed('walk', 'Walk (treadmill)', ['cardio']),
+  timed('brisk-walk', 'Brisk Walk', ['cardio']),
+  timed('bike', 'Bike', ['cardio', 'quads']),
+  timed('rower', 'Rower', ['cardio', 'back']),
+  timed('jump-rope', 'Jump Rope', ['cardio', 'calves']),
+  timed('stretch', 'Stretching', ['full'], 'bodyweight'),
+  timed('mobility', 'Mobility Flow', ['full'], 'bodyweight'),
+  // cardio (older entries: weight = minutes, reps = level — logged loosely)
   ex('treadmill', 'Treadmill', ['cardio'], 'cardio', undefined, 'cardio'),
   ex('incline-walk', 'Incline Walk', ['cardio'], 'cardio', undefined, 'cardio'),
   ex('running', 'Running (outdoor)', ['cardio'], 'cardio', undefined, 'cardio'),
   ex('cycling', 'Stationary Bike', ['cardio', 'quads'], 'cardio', undefined, 'cardio'),
   ex('rowing', 'Rowing Machine', ['cardio', 'back'], 'cardio', undefined, 'cardio'),
-  ex('elliptical', 'Elliptical', ['cardio'], 'cardio', undefined, 'cardio'),
+  timed('elliptical', 'Elliptical', ['cardio']),
   ex('stair-climber', 'Stair Climber', ['cardio', 'glutes'], 'cardio', undefined, 'cardio'),
-  ex('jump-rope', 'Jump Rope', ['cardio', 'calves'], 'cardio', undefined, 'cardio'),
   ex('assault-bike', 'Assault Bike', ['cardio', 'full'], 'cardio', undefined, 'cardio'),
   ex('swimming', 'Swimming', ['cardio', 'full'], 'cardio', undefined, 'cardio'),
   ex('walking', 'Walking', ['cardio'], 'cardio', undefined, 'cardio'),
@@ -152,6 +164,9 @@ export const MUSCLES: { id: Muscle; label: string }[] = [
   { id: 'calves', label: 'Calves' }, { id: 'core', label: 'Core' }, { id: 'full', label: 'Full body' }, { id: 'cardio', label: 'Cardio' },
 ];
 export const muscleLabel = (m: Muscle) => MUSCLES.find(x => x.id === m)?.label || m;
+/** The picker's group for an exercise: timed ones sit together. */
+export const groupLabel = (e: Exercise) => (e.timed ? 'Cardio & timed' : muscleLabel(e.muscles[0]));
+export const isTimed = (e?: Pick<Exercise, 'timed'> | null) => !!e?.timed;
 
 /** Lower-body compound lifts progress in bigger jumps. */
 export const LOWER: Muscle[] = ['quads', 'hamstrings', 'glutes'];

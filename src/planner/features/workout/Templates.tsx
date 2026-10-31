@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowDown, ArrowUp, Copy, Plus, Trash2, Archive, ArchiveRestore } from 'lucide-react';
 import { Page, Header, Card, Button, Field, Input, Empty, useToast, uid } from '../../ui/primitives';
 import { loadCustomExercises, loadTemplates, saveTemplate, WEEKDAYS } from './store';
-import type { Exercise, Template, TemplateExercise } from './types';
+import { fmtSec, type Exercise, type Template, type TemplateExercise } from './types';
 import { ExercisePicker } from './parts';
 
 export function Templates() {
@@ -86,11 +86,18 @@ export function TemplateEdit() {
           <div key={`${e.exerciseId}-${i}`} className="wo-tplex">
             <div>
               <b>{e.name}</b>
+              <div className="wo-restchips" style={{ paddingTop: 4 }}>
+                <button type="button" className={(e.mode || 'reps') === 'reps' ? 'is-on' : ''} onClick={() => updateEx(i, { mode: 'reps', targetReps: e.targetReps || '8-12' })}>Reps</button>
+                <button type="button" className={e.mode === 'time' ? 'is-on' : ''} onClick={() => updateEx(i, { mode: 'time', targetSec: e.targetSec || 300 })}>Time</button>
+              </div>
               <div className="wo-tplex__fields">
-                <label>Sets<input className="pl-input" inputMode="numeric" value={e.targetSets} onChange={x => updateEx(i, { targetSets: Math.max(1, parseInt(x.target.value) || 1) })} /></label>
-                <label>Reps<input className="pl-input" value={e.targetReps} placeholder="8-12" onChange={x => updateEx(i, { targetReps: x.target.value })} /></label>
+                <label>{e.mode === 'time' ? 'Rounds' : 'Sets'}<input className="pl-input" inputMode="numeric" value={e.targetSets} onChange={x => updateEx(i, { targetSets: Math.max(1, parseInt(x.target.value) || 1) })} /></label>
+                {e.mode === 'time'
+                  ? <label>Time (m:ss)<input className="pl-input" value={fmtSec(e.targetSec || 300)} onChange={x => { const m = x.target.value.match(/^(\d+):?(\d{0,2})$/); if (m) updateEx(i, { targetSec: Number(m[1]) * 60 + Number(m[2] || 0) }); }} /></label>
+                  : <label>Reps<input className="pl-input" value={e.targetReps} placeholder="8-12" onChange={x => updateEx(i, { targetReps: x.target.value })} /></label>}
                 <label>Rest (s)<input className="pl-input" inputMode="numeric" value={e.restSec} onChange={x => updateEx(i, { restSec: Math.max(0, parseInt(x.target.value) || 0) })} /></label>
               </div>
+              {e.note && <small className="pl-muted">{e.note}</small>}
             </div>
             <div className="wo-tplex__btns">
               <button type="button" aria-label="Up" onClick={() => move(i, -1)}><ArrowUp /></button>
@@ -108,7 +115,7 @@ export function TemplateEdit() {
       </div>
 
       <ExercisePicker open={picker} onClose={() => setPicker(false)} custom={custom} onCustomAdded={e => setCustom(c => [...c, e])}
-        onPick={e => { update({ exercises: [...t.exercises, { exerciseId: e.id, name: e.name, targetSets: 3, targetReps: e.type === 'cardio' ? '1' : '8-12', restSec: 90 }] }); setPicker(false); }} />
+        onPick={e => { update({ exercises: [...t.exercises, e.timed ? { exerciseId: e.id, name: e.name, targetSets: 1, targetReps: '', restSec: 0, mode: 'time', targetSec: e.muscles[0] === 'core' ? 45 : 300 } : { exerciseId: e.id, name: e.name, targetSets: 3, targetReps: '8-12', restSec: 90 }] }); setPicker(false); }} />
       {toast}
     </Page>
   );

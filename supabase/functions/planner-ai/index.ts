@@ -117,6 +117,24 @@ Rule for anything else: clearly sodium- or potassium-rich → "ease"; calcium/ma
 Return one tag per item, keyed by the item text exactly as given.`;
 const SWAY_SCHEMA = { type: 'object', properties: { tags: { type: 'object', additionalProperties: { type: 'string', enum: ['go', 'ease', 'neutral'] } } }, required: ['tags'] };
 
+const PLAN_SYSTEM = `You turn a coach's written workout plan into a structured session, in the order written.
+Each item: name; exerciseId = the id from the library list whose name means the same exercise (omit when none matches);
+mode 'time' for warm-up walks, bikes, rowing, stretching, planks and anything given in minutes/seconds (put the length in
+seconds), otherwise 'reps'. sets and reps as written ("2 x 8-12" → sets 2, reps "8-12"; "2 x 15" → reps "15"; per-side
+counts stay as written). restSec from the text; if not stated: 90 for compound lifts, 60 for isolation/accessory, 0 for
+warm-ups. note: the coach's cue for that exercise, under 12 words, or omit. weight only when a number is stated, in the
+user's units. A warm-up of "1 light set" of a lift is its own 'reps' item with sets 1 and note "light, ~50%".
+name: a short session name. warmup_note: one line if the text has warm-up advice that isn't an exercise.`;
+const PLAN_SCHEMA = {
+  type: 'object', properties: {
+    name: { type: 'string' }, warmup_note: { type: 'string' },
+    exercises: { type: 'array', items: { type: 'object', properties: {
+      name: { type: 'string' }, exerciseId: { type: 'string' }, mode: { type: 'string', enum: ['reps', 'time'] },
+      sets: { type: 'integer' }, reps: { type: 'string' }, seconds: { type: 'integer' }, restSec: { type: 'integer' }, note: { type: 'string' }, weight: { type: 'number' },
+    }, required: ['name', 'mode', 'sets', 'restSec'] } },
+  }, required: ['name', 'exercises'],
+};
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -179,6 +197,15 @@ Deno.serve(async req => {
       const tags: Record<string, string> = {};
       for (const [k, v] of Object.entries(r.tags || {})) if (v === 'go' || v === 'ease' || v === 'neutral') tags[k] = v;
       return json({ tags });
+    }
+    if (action === 'plan') {
+      const text = typeof b.text === 'string' ? b.text.trim().slice(0, 8000) : '';
+      if (!text) return json({ error: 'No plan text' }, 400);
+      const library = (Array.isArray(b.library) ? b.library : []).filter(x => x && typeof x.id === 'string' && typeof x.name === 'string').slice(0, 200) as { id: string; name: string }[];
+      const units = b.units === 'kg' ? 'kg' : 'lb';
+      const r = await claudeJson<{ name: string; exercises: unknown[]; warmup_note?: string }>(PLAN_SYSTEM,
+        [{ role: 'user', content: `Units: ${units}\n\nLibrary (id — name):\n${library.map(x => `${x.id} — ${x.name}`).join('\n')}\n\nPlan:\n${text}` }], PLAN_SCHEMA, 4000);
+      return json({ name: r.name, exercises: Array.isArray(r.exercises) ? r.exercises : [], warmup_note: r.warmup_note });
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];
