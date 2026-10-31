@@ -7,7 +7,8 @@ export interface Project { name: string; steps: [string, string, string] }
 export interface Priority { text: string; done: boolean }
 /** The day's to-do list, built from the Brief (the three priorities first, pi = their index) plus what Coach Claude
  *  and you add. time = optional HH:MM slot: that's the day plan. */
-export interface Todo { id: string; text: string; done: boolean; time?: string; from?: 'priority' | 'coach' | 'me'; pi?: number; note?: string }
+export interface Todo { id: string; text: string; done: boolean; time?: string; from?: 'priority' | 'coach' | 'me'; pi?: number; note?: string; must?: boolean }
+// must = highlighted as a must-do. day.priorities (used by streaks, reviews, Coach Claude) is derived from the must items: syncPriorities()
 export interface Slot { time: string; text: string }
 export interface Evening { appreciated: string; handledWell: string; learned: string; better: string; connected: string; coachNote: string }
 export type ScoreKey = 'clarity' | 'energy' | 'necessity' | 'productivity' | 'influence' | 'courage';
@@ -82,7 +83,7 @@ export function normalizeDay(d: Partial<Day> | null | undefined): Day {
     night: { ...e.night, ...(d.night || {}), review: { ...e.night.review, ...(d.night?.review || {}) } },
     victory: { ...e.victory, ...(d.victory || {}), savers: { ...e.victory.savers, ...(d.victory?.savers || {}) } },
     morning: { ...e.morning, ...(d.morning || {}) },
-    todos: Array.isArray(d.todos) ? d.todos.filter(t => t && typeof t.text === 'string').map(t => ({ ...t, id: t.id || `${t.text}-${Math.random().toString(36).slice(2, 7)}`, done: !!t.done })) : [],
+    todos: Array.isArray(d.todos) ? d.todos.filter(t => t && typeof t.text === 'string').map(t => ({ ...t, id: t.id || `${t.text}-${Math.random().toString(36).slice(2, 7)}`, done: !!t.done, must: t.must ?? (t.pi !== undefined) })) : [],
     projects: projects.map(p => ({ name: p?.name || '', steps: [p?.steps?.[0] || '', p?.steps?.[1] || '', p?.steps?.[2] || ''] })),
     people: { ...e.people, ...(d.people || {}) },
     priorities: priorities.map(p => ({ text: p?.text || '', done: !!p?.done })),
@@ -115,13 +116,20 @@ export function dayAverage(s: Scores | undefined): number | null {
   return v.length ? Math.round((v.reduce((a, b) => a + b, 0) / v.length) * 10) / 10 : null;
 }
 
-/** Tick/untick a to-do; a priority's twin follows. */
+/** day.priorities mirrors the must-do items (first three), so everything that reads priorities keeps working. */
+export function syncPriorities(d: Day): Day {
+  const must = d.todos.filter(t => t.must).slice(0, 3).map(t => ({ text: t.text.trim(), done: t.done }));
+  while (must.length < 3) must.push({ text: '', done: false });
+  return { ...d, priorities: must };
+}
+/** Tick/untick a to-do. */
 export function toggleTodo(d: Day, id: string): Day {
   const t = d.todos.find(x => x.id === id);
   if (!t) return d;
-  const done = !t.done;
-  return { ...d, todos: d.todos.map(x => (x.id === id ? { ...x, done } : x)), priorities: t.pi !== undefined ? d.priorities.map((p, i) => (i === t.pi ? { ...p, done } : p)) : d.priorities };
+  return syncPriorities({ ...d, todos: d.todos.map(x => (x.id === id ? { ...x, done: !x.done } : x)) });
 }
+/** Star/unstar a to-do as a must-do. */
+export const toggleMust = (d: Day, id: string): Day => syncPriorities({ ...d, todos: d.todos.map(x => (x.id === id ? { ...x, must: !x.must } : x)) });
 /** The list is in the order you want to tackle it (you move items); a time is a reminder of when, not a sort key. */
 export const sortedTodos = (todos: Todo[]): Todo[] => todos;
 /** Move a to-do up or down one place. */

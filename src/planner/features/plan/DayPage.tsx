@@ -7,8 +7,9 @@ import { dayKey } from '../../lib/docs';
 import { useDoc } from '../../lib/useDoc';
 import { reflect } from '../../lib/ai';
 import { clock, routineNow } from '../../lib/routine';
-import { Page, Header, Button, Prompt, Score, Input, useToast } from '../../ui/primitives';
+import { Page, Header, Button, Prompt, Score, useToast } from '../../ui/primitives';
 import { Section } from './Section';
+import { toggleTodo } from './types';
 import { addDays, fmtDate, isValidDay } from './dates';
 import { dayAverage, emptyDay, normalizeDay, SCORE_KEYS, type Day } from './types';
 import { TodoList } from './TodoList';
@@ -32,7 +33,7 @@ export function DayPage() {
   const avg = dayAverage(day.scores);
   const prioDone = day.priorities.filter(p => p.done).length;
   const prioSet = day.priorities.filter(p => p.text.trim()).length;
-  const briefN = filled(day.brief.word, day.brief.aGame, day.brief.stress, day.brief.excited) + (prioSet ? 1 : 0);
+  const briefN = filled(day.brief.word, day.brief.aGame, day.brief.stress, day.brief.excited) + (day.todos.length ? 1 : 0);
   const reviewN = filled(day.night.review.win, day.night.review.drag, day.night.review.tomorrow);
   const t = day.ticks;
 
@@ -76,12 +77,11 @@ export function DayPage() {
               <div><span className="pl-label">Might stress me</span><p>{day.brief.stress.trim() || '—'}{day.brief.stressResponse.trim() ? <><br /><span className="pl-muted">→ {day.brief.stressResponse}</span></> : null}</p></div>
               <div><span className="pl-label">Looking forward to</span><p>{day.brief.excited.trim() || '—'}</p></div>
             </div>
-            <p className="pl-label" style={{ marginTop: 4 }}>Must get done · {prioSet ? `${prioDone}/${prioSet}` : 'not set'}</p>
-            {day.priorities.map((p, i) => (
-              <div key={i} className={`plan-priority ${p.done ? 'is-done' : ''}`}>
-                <b>{i + 1}</b>
-                <Input className="pl-grow" placeholder="Must do" value={p.text} onChange={e => set(d => ({ ...d, priorities: d.priorities.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) }))} />
-                <button type="button" className={`pl-check ${p.done ? 'is-on' : ''}`} aria-label={p.done ? 'Mark not done' : 'Mark done'} onClick={() => set(d => ({ ...d, priorities: d.priorities.map((x, j) => (j === i ? { ...x, done: !x.done } : x)) }))}><Check /></button>
+            <p className="pl-label" style={{ marginTop: 4 }}>Must do · {prioSet ? `${prioDone}/${prioSet}` : 'none starred'}</p>
+            {day.todos.filter(t => t.must).map(t => (
+              <div key={t.id} className={`plan-priority ${t.done ? 'is-done' : ''}`}>
+                <b>★</b><span className="pl-grow">{t.text}</span>
+                <button type="button" className={`pl-check ${t.done ? 'is-on' : ''}`} aria-label={t.done ? 'Mark not done' : 'Mark done'} onClick={() => set(d => toggleTodo(d, t.id))}><Check /></button>
               </div>
             ))}
             {isToday && <Link to="/plan/brief" className="pl-btn pl-btn--small">{day.brief.finishedAt ? 'Edit brief' : morningP ? 'Do the Morning Brief' : 'Do the Bed Brief'}</Link>}
@@ -89,7 +89,7 @@ export function DayPage() {
 
           {/* ── Today's list ── */}
           <Section title="The list" meta={day.todos.length ? `${day.todos.filter(t => t.done).length}/${day.todos.length}` : 'from the Brief'} done={day.todos.length > 0 && day.todos.every(t => t.done)}>
-            <p className="pl-muted" style={{ fontSize: 13 }}>Brief to dinner, in the order you'll tackle it — move items with the arrows; a time beside one is a reminder. Coach Claude drafts it at the end of the Brief; the three priorities are always on it.</p>
+            <p className="pl-muted" style={{ fontSize: 13 }}>Brief to dinner, in the order you'll tackle it — move items with the arrows; a time beside one is a reminder. Coach Claude drafts it at the end of the Brief; ★ marks a must-do.</p>
             <TodoList day={day} set={set} suggestions={frequent} />
           </Section>
 
