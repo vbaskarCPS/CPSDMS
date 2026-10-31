@@ -57,6 +57,17 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
           <p className="pl-muted">Started {new Date(unfinished.startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</p>
           <Button block primary style={{ marginTop: 12, background: 'var(--accent-ink)', color: 'var(--accent)' }} onClick={() => nav(`/workout/live/${unfinished.id}`)}><Play size={18} /> Continue</Button>
         </Card>
+      ) : doneToday?.review ? (
+        <Card accent>
+          <p className="pl-eyebrow">Done for today · {doneToday.name} · {durationMin(doneToday)} min{doneToday.prs?.length ? ` · ${doneToday.prs.length} PR` : ''}</p>
+          <h2 style={{ marginBottom: 6 }}>Coach's plan for next time</h2>
+          <p style={{ fontSize: 15, lineHeight: 1.45, margin: 0 }}>{doneToday.review}</p>
+          {tpl && <p className="pl-muted" style={{ fontSize: 13, margin: '10px 0 0' }}>Next up: {tpl.name}{doneToday.next ? ` — ${Object.keys(doneToday.next).length} exercises prefilled from this` : ''}.</p>}
+          <div className="pl-row" style={{ gap: 8, marginTop: 12 }}>
+            <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} onClick={() => nav(`/workout/live/${doneToday.id}`, { state: { key: workoutKey(doneToday) } })}>Today's session</Button>
+            {tpl && <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} disabled={starting} onClick={() => void start(tpl)}>Another one?</Button>}
+          </div>
+        </Card>
       ) : tpl ? (
         <Card accent>
           <p className="pl-eyebrow">{doneToday ? 'Another one?' : gymLine}</p>

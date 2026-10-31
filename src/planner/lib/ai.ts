@@ -1,6 +1,7 @@
 // src/planner/lib/ai.ts — calls to the planner-ai edge function (supabase/functions/planner-ai).
 import { supabase } from '../../lib/supabase';
 import { getPass, forgetPass, SignedOut } from './auth';
+import { memoryContext } from './memory';
 
 // `sway` is set by the food feature's sway guide (features/food/sway), not by the food estimate itself.
 export interface FoodItem { name: string; portion: string; grams?: number; kcal: number; protein: number; carbs: number; fat: number; confidence?: 'high' | 'medium' | 'low'; sway?: 'go' | 'ease' | 'neutral' }
@@ -35,11 +36,17 @@ export async function estimateFoodPhoto(base64: string, mediaType: string, note?
 export async function estimateFoodText(text: string): Promise<FoodEstimate> {
   return clean(await invoke<FoodEstimate>({ action: 'food_text', text }));
 }
+/** The coach's memory rides along with every coach/reflect call (lib/memory.ts). */
+async function withMemory(context: unknown): Promise<unknown> {
+  const about_me = await memoryContext();
+  const base = context && typeof context === 'object' ? context as Record<string, unknown> : { context };
+  return about_me.length ? { ...base, about_me_notes_oldest_first: about_me } : base;
+}
 export async function coach(messages: ChatMessage[], context: unknown): Promise<string> {
-  return (await invoke<{ reply: string }>({ action: 'coach', messages, context })).reply;
+  return (await invoke<{ reply: string }>({ action: 'coach', messages, context: await withMemory(context) })).reply;
 }
 export async function reflect(context: unknown): Promise<string> {
-  return (await invoke<{ reply: string }>({ action: 'reflect', context })).reply;
+  return (await invoke<{ reply: string }>({ action: 'reflect', context: await withMemory(context) })).reply;
 }
 /** The sway guide: which list each food name belongs to (for names the keyword match couldn't place). */
 export async function swayTags(items: string[]): Promise<Record<string, 'go' | 'ease' | 'neutral'>> {
