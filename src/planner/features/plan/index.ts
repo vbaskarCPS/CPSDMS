@@ -10,7 +10,7 @@ import { MonthReview, WeekReview } from './Reviews';
 
 export { PlanTodayCard } from './TodayCard';
 export { wakeStreak, lightsOutStreak, wokeOnTime, lightsOutOnTime, sleepEstimate, addDays, nowHM, streakOf } from './dates';
-export { emptyDay, normalizeDay, briefDone, reviewDone, toggleTodo, sortedTodos, todosDone, moveTodo, frequentTodos } from './types';
+export { emptyDay, normalizeDay, briefDone, reviewDone, toggleTodo, toggleMust, syncPriorities, sortedTodos, todosDone, moveTodo, frequentTodos } from './types';
 export { useFrequentTodos } from './useFrequentTodos';
 export type { Todo } from './types';
 export { TodoList } from './TodoList';

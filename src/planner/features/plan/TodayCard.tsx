@@ -1,5 +1,6 @@
 // src/planner/features/plan/TodayCard.tsx — a thin "today's brief" card (the Today screen draws the
 // timeline itself; this stays for anything that still wants a compact summary).
+import { toggleTodo } from './types';
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, ChevronRight, Sunrise } from 'lucide-react';
@@ -23,13 +24,14 @@ export function PlanTodayCard(_: { pass: PlannerPass }) {
         <Link to={day.brief.finishedAt ? '/plan' : '/plan/brief'} className="pl-btn pl-btn--ghost" aria-label="Open" style={{ minHeight: 40, padding: '0 6px', border: 0 }}><ChevronRight /></Link>
       </div>
       <div>
-        {day.priorities.map((p, i) => (
-          <div key={i} className={`plan-card-prio ${p.done ? 'is-done' : ''} ${p.text.trim() ? '' : 'is-empty'}`}>
-            <button type="button" className={`pl-check ${p.done ? 'is-on' : ''}`} aria-label={p.done ? 'Mark not done' : 'Mark done'} disabled={!p.text.trim()}
-              onClick={() => update(d => { const n = normalizeDay(d); return { ...n, priorities: n.priorities.map((x, j) => (j === i ? { ...x, done: !x.done } : x)) }; })}><Check /></button>
-            <span>{p.text.trim() || (loading ? '…' : `Priority ${i + 1}`)}</span>
-          </div>
-        ))}
+        {day.todos.filter(t => t.must).length === 0
+          ? <p className="pl-muted" style={{ fontSize: 13, margin: 0 }}>{loading ? '…' : day.todos.length ? `${day.todos.filter(t => t.done).length}/${day.todos.length} on the list · nothing starred` : 'No list yet'}</p>
+          : day.todos.filter(t => t.must).map(t => (
+            <div key={t.id} className={`plan-card-prio ${t.done ? 'is-done' : ''}`}>
+              <button type="button" className={`pl-check ${t.done ? 'is-on' : ''}`} aria-label={t.done ? 'Mark not done' : 'Mark done'} onClick={() => update(d => toggleTodo(normalizeDay(d), t.id))}><Check /></button>
+              <span>★ {t.text}</span>
+            </div>
+          ))}
       </div>
     </Card>
   );

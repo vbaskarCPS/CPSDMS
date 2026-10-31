@@ -1,4 +1,5 @@
-// src/planner/features/plan/Brief.tsx — the Bed Brief: five questions from bed, under ten minutes, then today's list drafted from them.
+// src/planner/features/plan/Brief.tsx — the Bed Brief: four questions from bed, under ten minutes, then today's list
+// drafted from them (star the must-dos; they're the day's priorities).
 // One question per screen, big input, a countdown in the corner that never blocks. Saves every step.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -8,7 +9,7 @@ import { useDoc } from '../../lib/useDoc';
 import { loadRoutine, routineNow, type Routine } from '../../lib/routine';
 import { Button, useToast } from '../../ui/primitives';
 import { nowHM } from './dates';
-import { emptyDay, normalizeDay, type Day } from './types';
+import { emptyDay, normalizeDay, syncPriorities, type Day } from './types';
 import { autoMark } from '../habits/auto';
 import { briefHints, todosFromBrief, type BriefHints } from '../../lib/ai';
 import { TodoList } from './TodoList';
@@ -21,7 +22,7 @@ import { Sparkles } from 'lucide-react';
 const KNOWS_YOU_AFTER = 3;
 
 type Hints = BriefHints | null;
-type Extras = { frequent: { text: string; time?: string }[] };
+type Extras = { frequent: { text: string; time?: string }[]; coachMust: string[] };
 type Step = { title: string; hint?: string; render: (d: Day, set: (fn: (d: Day) => Day) => void, focus: React.RefObject<HTMLInputElement | HTMLTextAreaElement>, x: Extras) => JSX.Element; hints?: (h: BriefHints, d: Day, set: (fn: (d: Day) => Day) => void) => { label: string; apply: () => void }[] };
 
 const setBrief = (set: (fn: (d: Day) => Day) => void, k: keyof Day['brief'], v: string) => set(d => ({ ...d, brief: { ...d.brief, [k]: v } }));
@@ -30,15 +31,6 @@ const STEPS: Step[] = [
   { title: 'One word for today', hint: 'The kind of man you want to be from now until lights out.',
     render: (d, set, focus) => <input ref={focus as React.RefObject<HTMLInputElement>} className="pl-input brief-word" placeholder="Calm · Sharp · Present…" value={d.brief.word} maxLength={24} onChange={e => setBrief(set, 'word', e.target.value)} />,
     hints: (h, _d, set) => h.words.map(w => ({ label: w, apply: () => setBrief(set, 'word', w) })) },
-  { title: 'Three things that must get done', hint: 'Not a to-do list. The three that make today a win.',
-    render: (d, set, focus) => (
-      <div className="pl-stack">
-        {d.priorities.map((p, i) => (
-          <input key={i} className="pl-input" ref={i === 0 ? (focus as React.RefObject<HTMLInputElement>) : undefined} placeholder={`#${i + 1}`} value={p.text}
-            onChange={e => set(x => ({ ...x, priorities: x.priorities.map((y, j) => (j === i ? { ...y, text: e.target.value } : y)) }))} />
-        ))}
-      </div>),
-    hints: (h, d, set) => h.priorities.filter(p => !d.priorities.some(x => x.text.trim() === p)).map(p => ({ label: p, apply: () => set(x => { const i = x.priorities.findIndex(y => !y.text.trim()); if (i < 0) return x; return { ...x, priorities: x.priorities.map((y, j) => (j === i ? { ...y, text: p } : y)) }; }) })) },
   { title: 'Who needs me on my A-game today?', hint: 'Kiaan, Roshini, a client, the crew…',
     render: (d, set, focus) => <textarea className="pl-input pl-textarea" ref={focus as React.RefObject<HTMLTextAreaElement>} rows={2} placeholder="Name and why" value={d.brief.aGame} onChange={e => setBrief(set, 'aGame', e.target.value)} />,
     hints: (h, _d, set) => (h.aGame ? [{ label: h.aGame, apply: () => setBrief(set, 'aGame', h.aGame) }] : []) },
@@ -55,8 +47,8 @@ const STEPS: Step[] = [
   { title: "One thing I'm looking forward to", hint: 'Dinner with Kiaan, the gym with the boys, a win at work…',
     render: (d, set, focus) => <textarea className="pl-input pl-textarea" ref={focus as React.RefObject<HTMLTextAreaElement>} rows={2} placeholder="Something good about today" value={d.brief.excited} onChange={e => setBrief(set, 'excited', e.target.value)} />,
     hints: (h, _d, set) => (h.excited ? [{ label: h.excited, apply: () => setBrief(set, 'excited', h.excited) }] : []) },
-  { title: "Today's list", hint: 'From bed to dinner, this is the day. Coach Claude drafts it from your answers — tick, retime, add, remove.',
-    render: (d, set, _f, x) => <TodoList day={d} set={set} suggestions={x.frequent} /> },
+  { title: "Today's list", hint: 'From bed to dinner, this is the day. Star the must-dos; order it the way you\'ll tackle it; a time is a reminder.',
+    render: (d, set, _f, x) => <TodoList day={d} set={set} suggestions={[...x.coachMust.map(t => ({ text: t, must: true })), ...x.frequent]} /> },
 ];
 
 const fmt = (s: number) => `${Math.floor(Math.abs(s) / 60)}:${String(Math.abs(s) % 60).padStart(2, '0')}`;
@@ -114,22 +106,17 @@ export function Brief() {
   const draft = async (force = false) => {
     if (drafting) return;
     setDrafting(true);
-    const prios = day.priorities.map(p => p.text.trim());
+    const prios = day.todos.filter(t => t.must).map(t => t.text.trim());
     try {
       const items = await todosFromBrief({ word: day.brief.word, aGame: day.brief.aGame, stress: day.brief.stress, stressResponse: day.brief.stressResponse, excited: day.brief.excited }, prios, frequent.map(f => f.text + (f.time ? ` (usually ${f.time})` : '')));
       set(d => {
-        const keep = force ? d.todos.filter(t => t.from === 'me') : d.todos;
+        const keep = force ? d.todos.filter(t => t.from === 'me' || t.must) : d.todos;
         const have = new Set(keep.map(t => t.text.trim().toLowerCase()));
-        const fresh = items.filter(i => !have.has(i.text.toLowerCase())).map(i => ({ id: uid(), text: i.text, done: i.priority !== undefined ? !!d.priorities[i.priority]?.done : false, time: i.time, note: i.note, from: i.priority !== undefined ? 'priority' as const : 'coach' as const, pi: i.priority }));
-        // every non-empty priority is on the list even if Coach Claude skipped it
-        const out = [...keep, ...fresh];
-        d.priorities.forEach((p, pi) => { if (p.text.trim() && !out.some(t => t.pi === pi || t.text.trim().toLowerCase() === p.text.trim().toLowerCase())) out.unshift({ id: uid(), text: p.text.trim(), done: p.done, from: 'priority', pi }); });
-        return { ...d, todos: out };
+        const fresh = items.filter(i => !have.has(i.text.toLowerCase())).map(i => ({ id: uid(), text: i.text, done: false, time: i.time, note: i.note, from: 'coach' as const, must: i.priority !== undefined }));
+        return syncPriorities({ ...d, todos: [...keep, ...fresh] });
       });
     } catch (e) {
-      // offline or no coach: the priorities alone become the list
-      set(d => (d.todos.length ? d : { ...d, todos: d.priorities.filter(p => p.text.trim()).map((p, pi) => ({ id: uid(), text: p.text.trim(), done: p.done, from: 'priority' as const, pi })) }));
-      say(e instanceof Error ? e.message : "Couldn't reach Coach Claude — your priorities are the list", 'bad');
+      say(e instanceof Error ? e.message : "Couldn't reach Coach Claude — build the list by hand", 'bad');
     } finally { setDrafting(false); }
   };
   useEffect(() => { if (last && !loading && day.todos.length === 0) void draft(); }, [last, loading]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -159,7 +146,7 @@ export function Brief() {
         <h1 className="brief__q">{STEPS[step].title}</h1>
         {STEPS[step].hint && <p className="pl-muted">{STEPS[step].hint}</p>}
         {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
-        {loading ? <p className="pl-muted">Loading…</p> : STEPS[step].render(day, set, focus, { frequent })}
+        {loading ? <p className="pl-muted">Loading…</p> : STEPS[step].render(day, set, focus, { frequent, coachMust: hints?.priorities || [] })}
         {last && !loading && (drafting
           ? <p className="pl-muted" style={{ fontSize: 13, marginTop: 8, fontStyle: 'italic' }}><Sparkles size={12} aria-hidden /> Coach Claude is drafting the list from your answers…</p>
           : <button type="button" className="pl-btn pl-btn--small pl-btn--ghost" style={{ marginTop: 8 }} onClick={() => void draft(true)}><Sparkles size={14} /> Redraft with Coach Claude</button>)}
