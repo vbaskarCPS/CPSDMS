@@ -42,7 +42,7 @@ import CartMapPanel from './CartMapPanel';
 import { useRouteHouseLayer } from './useRouteHouseLayer';
 import { type PclLine } from '../../../lib/pclCacheService';
 import type { SavedRouteMap } from '../../../lib/mapLogsheetService';
-import { fetchDispositions, fetchMapAccessList, fetchRouteHouses, fetchTeamLocations, getOtherServicePCL, getWorkerPCL } from '../../../lib/offline/rmReads';   // (through the phone's copy: with no signal, the latest copy)
+import { fetchDispositions, fetchRouteHouses, fetchTeamLocations, getOtherServicePCL, getWorkerPCL } from '../../../lib/offline/rmReads';   // (through the phone's copy: with no signal, the latest copy)
 import WorkerDriverStops, { WORKER_STOP_COLOR, workerName as driverName } from './WorkerDriverStops';
 import RMPhoneLayout, {
   RMPhoneShell, RMPhoneCtx, PhoneCrew, PhoneRouteState, PhonePinCardData, crewLabel, managerInitials, type ManagerTag,
@@ -1184,8 +1184,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // with an individually approved contractor), tapping a cart opens a ~40%
   // panel in place of the sidebar with Today/Pace/Coverage, and the map zooms
   // to that cart's routes with their houses drawn. Everyone else keeps the
-  // centred pop-up. `mapGate` is read once from the Super Admin access lists.
-  const [mapGate, setMapGate] = useState<{ cc: boolean; contractors: Set<string> }>({ cc: false, contractors: new Set() });
+  // centred pop-up. See `cartUsesMapPanel` for who counts.
   const cartMapOpenRef = useRef(false);
   // Where the map was before a cart panel opened, so closing zooms back out.
   const viewBeforeCartRef = useRef<{ center: mapboxgl.LngLat; zoom: number } | null>(null);
@@ -1755,32 +1754,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [cartCardData, sortBy]);
 
-  // Load who's on the map logsheet (once per command centre).
-  useEffect(() => {
-    const ccId = commandCenterService.getCurrentCommandCenterId();
-    let cancelled = false;
-    (async () => {
-      try {
-        const [ccRow, list] = await Promise.all([
-          ccId
-            ? supabase.from('map_logsheet_cc_access').select('command_center_id').eq('command_center_id', ccId).maybeSingle()
-            : Promise.resolve({ data: null, error: null } as { data: any; error: any }),
-          fetchMapAccessList().catch(() => []),
-        ]);
-        if (cancelled) return;
-        setMapGate({
-          cc: !ccRow.error && !!ccRow.data,
-          contractors: new Set(list.map(e => (e.contractorId || '').toUpperCase())),
-        });
-      } catch (err) {
-        console.warn('[RMMap] map logsheet access check failed', err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
+  // Is a cart on the map logsheet? The same rule the worker's phone uses to open the map
+  // (MapLogsheetPage): the centre has digital mapping on, or the worker's manager carries a
+  // digital map. Carts that are → knock line on the card and the Today/Pace/Coverage panel;
+  // others keep the centred pop-up. (Replaces the old Super Admin access lists, which the
+  // worker side stopped using — centres missing from them lost their knock stats.)
+  const mappedManagerIds = useMemo(
+    () => new Set(allManagers.filter(m => !!m.digitalMapping).map(m => m.userId)),
+    [allManagers]);
+  const mapGate = useMemo(() => ({ cc: commandCenterService.currentHasDigitalMapping(), managers: mappedManagerIds }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mappedManagerIds]);
   const cartUsesMapPanel = (cart: CartCardData) =>
-    mapGate.cc || cart.members.some(m => mapGate.contractors.has((m.contractorId || '').toUpperCase()));
+    mapGate.cc || cart.members.some(m => !!m.assignedManagerId && mapGate.managers.has(m.assignedManagerId));
 
   // --- PHONE: who is on the route being viewed (state ②) ---
   // The crew actually assigned to the route/bucket wins; otherwise the crew the
