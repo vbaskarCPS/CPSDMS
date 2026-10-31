@@ -33,6 +33,12 @@ export function Night() {
   const unwinding = !!day.night.unwindStart && !day.night.unwindEnd;
   const unwindSec = day.night.unwindStart ? Math.floor(((day.night.unwindEnd ? new Date(day.night.unwindEnd).getTime() : now) - new Date(day.night.unwindStart).getTime()) / 1000) : 0;
   const capSec = routine.unwindCap * 60;
+  const done = !!day.ticks.lightsOut;
+  const morningP = routine.profile === 'morning';
+  // night profile: a hard stop for the unwind, with an alarm when it lands (the push reminder covers a closed app)
+  const stopIn = routineMin(routine.windDown) - routineMinutes(new Date(now));
+  const stopHit = useRef(false);
+  useEffect(() => { if (!morningP && !done && stopIn <= 0 && stopIn > -5 && !stopHit.current) { stopHit.current = true; beep(); window.setTimeout(beep, 1500); window.setTimeout(beep, 3000); } }, [stopIn, morningP, done]);
   const saunaLeft = day.night.saunaStart ? routine.saunaMin * 60 - Math.floor((now - new Date(day.night.saunaStart).getTime()) / 1000) : 0;
   const saunaHit = useRef(false);
   useEffect(() => { if (day.night.saunaStart && !day.ticks.sauna && saunaLeft <= 0 && !saunaHit.current) { saunaHit.current = true; beep(); } }, [saunaLeft, day.night.saunaStart, day.ticks.sauna]);
@@ -73,8 +79,6 @@ export function Night() {
     await flush();
   };
 
-  const done = !!day.ticks.lightsOut;
-  const morningP = routine.profile === 'morning';
   const bedWord = morningP ? 'In bed' : 'Lights out';
 
   return (
@@ -174,18 +178,18 @@ export function Night() {
             <Input placeholder="Tomorrow I will…" value={day.night.tomorrowTop || ''} onChange={e => set(d => ({ ...d, night: { ...d.night, tomorrowTop: e.target.value } }))} onBlur={e => { if (e.target.value.trim()) void saveTomorrowTop(e.target.value.trim()); }} />
           </Card>
 
-          <Card className={`night-stage night-stage--col ${day.night.unwindEnd ? 'is-done' : ''}`}>
+          <Card className={`night-stage night-stage--col ${stopIn <= 0 && !done ? 'night-stop' : ''}`}>
             <div className="pl-row">
-              <div className="pl-grow"><b><Gamepad2 aria-hidden /> Unwind</b><small>{routine.unwindCap ? `games, show, whatever — ${routine.unwindCap} min${morningP ? ', then the review' : ', then lights out'}` : morningP ? 'games, show, whatever — then the review' : 'games, show, whatever — then lights out'}</small></div>
-              {!day.night.unwindStart && <Button small primary onClick={() => set(d => ({ ...d, night: { ...d.night, unwindStart: new Date().toISOString() } }))}><Play /> Start</Button>}
-              {unwinding && <Button small onClick={() => set(d => ({ ...d, night: { ...d.night, unwindEnd: new Date().toISOString() } }))}><Square /> Done</Button>}
-            </div>
-            {day.night.unwindStart && (
-              <div className={`night-unwind ${overCap ? 'is-over' : ''}`}>
-                <span className="night-unwind__time">{fmtSec(unwindSec)}</span>
-                <span className="pl-muted">{capSec ? (overCap ? `${fmtSec(unwindSec - capSec)} over the ${routine.unwindCap} min` : `of ${routine.unwindCap} min`) : 'no cap'}{day.night.unwindEnd ? ' · done' : ''}</span>
+              <div className="pl-grow"><b><Gamepad2 aria-hidden /> {done ? 'Unwind' : stopIn > 0 ? (day.ticks.shake ? 'Good day. Go have fun.' : 'Unwind') : 'Time for bed.'}</b>
+                <small>
+                  {done ? 'done for tonight'
+                    : stopIn > 0
+                      ? (day.ticks.shake ? `Shake's down, day's done — ${reviewN === 3 ? 'review in' : 'nothing left but'} games, a show, whatever. ` : 'Games, a show, whatever — nothing to track here. ')
+                        + `I'll buzz you at ${clock(routine.windDown)} (in ${fmtLeft(stopIn)}) to start getting ready for bed.`
+                      : `${clock(routine.windDown)} was the hard stop, ${fmtLeft(-stopIn)} ago — teeth, face, phone on charge, lights out ${clock(routine.lightsOut)}.`}
+                </small>
               </div>
-            )}
+            </div>
           </Card>
 
           {!done
