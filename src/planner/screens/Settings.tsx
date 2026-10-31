@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import { changePin, saveSettings, signOut, type PlannerPass } from '../lib/auth';
 import { PushCard } from '../ui/PushCard';
+import { MemoryCard } from '../ui/MemoryCard';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
@@ -87,6 +88,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
         {rErr && <p className="pl-error">{rErr}</p>}
         <button className="pl-btn pl-btn--primary" disabled={rSaving}>{rSaving ? 'Saving…' : rSaved ? 'Saved' : 'Save routine'}</button>
       </form>
+
+      <MemoryCard />
 
       <PushCard />
 
