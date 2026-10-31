@@ -62,7 +62,7 @@ const fmt = (s: number) => `${Math.floor(Math.abs(s) / 60)}:${String(Math.abs(s)
 export function Brief() {
   const nav = useNavigate();
   const today = dayKey();
-  const { data, update, loading, flush } = useDoc<Day>('day', today, emptyDay(), 500);
+  const { data, update, loading, loadError, flush } = useDoc<Day>('day', today, emptyDay(), 500);
   const day = useMemo(() => normalizeDay(data), [data]);
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
   const [routine, setRoutine] = useState<Routine>(routineNow());
@@ -155,6 +155,7 @@ export function Brief() {
         <p className="pl-eyebrow">{routine.profile === 'morning' ? 'Morning Brief' : 'Bed Brief'} · {step + 1} of {STEPS.length}</p>
         <h1 className="brief__q">{STEPS[step].title}</h1>
         {STEPS[step].hint && <p className="pl-muted">{STEPS[step].hint}</p>}
+        {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
         {loading ? <p className="pl-muted">Loading…</p> : STEPS[step].render(day, set, focus)}
         {last && !loading && (drafting
           ? <p className="pl-muted" style={{ fontSize: 13, marginTop: 8, fontStyle: 'italic' }}><Sparkles size={12} aria-hidden /> Coach Claude is drafting the list from your answers…</p>

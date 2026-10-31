@@ -54,7 +54,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const today = dayKey();
   const [now, setNow] = useState(() => new Date());
   const [routine, setRoutine] = useState<Routine>(routineNow());
-  const { data, update, loading } = useDoc<Day>('day', today, emptyDay(), 400);
+  const { data, update, loading, loadError } = useDoc<Day>('day', today, emptyDay(), 400);
   const day = useMemo(() => normalizeDay(data), [data]);
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
   const [streaks, setStreaks] = useState<{ up: number; lights: number; fast: number | null; morning: number } | null>(null);
@@ -125,6 +125,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
         <Link to="/settings" className="pl-btn pl-btn--ghost" aria-label="Settings" style={{ minHeight: 40, padding: '0 8px', border: 0 }}><Cog /></Link>
       </header>
 
+      {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
       <div className="pl-stats today-streaks">
         <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Up on time</span>} value={streaks ? streaks.up : '–'} sub={`by ${clock(routine.wake)}`} tone={streaks && streaks.up > 0 ? 'good' : undefined} />
         <Stat label={<span className="pl-row" style={{ gap: 4 }}><Moon aria-hidden style={{ width: 14, height: 14 }} /> {isMorning ? 'In bed' : 'Lights out'}</span>} value={streaks ? streaks.lights : '–'} sub={`by ${clock(routine.lightsOut)}`} tone={streaks && streaks.lights > 0 ? 'good' : undefined} />

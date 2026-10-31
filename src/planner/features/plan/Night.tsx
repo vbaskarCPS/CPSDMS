@@ -17,7 +17,7 @@ const fmtSec = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2
 
 export function Night() {
   const today = dayKey();
-  const { data, update, loading, save, flush } = useDoc<Day>('day', today, emptyDay(), 500);
+  const { data, update, loading, loadError, save, flush } = useDoc<Day>('day', today, emptyDay(), 500);
   const day = useMemo(() => normalizeDay(data), [data]);
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
   const [routine, setRoutine] = useState<Routine>(routineNow());
@@ -98,6 +98,7 @@ export function Night() {
         </div>
       </Card>
 
+      {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
       {loading ? <p className="pl-muted">Loading…</p> : (
         <>
           {morningP ? (<>

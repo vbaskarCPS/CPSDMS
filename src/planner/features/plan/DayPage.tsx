@@ -21,7 +21,7 @@ export function DayPage() {
   const key = isValidDay(date) ? date : dayKey();
   const morningP = routineNow().profile === 'morning';
   const isToday = key === dayKey();
-  const { data, update, loading, save } = useDoc<Day>('day', key, emptyDay());
+  const { data, update, loading, loadError, save } = useDoc<Day>('day', key, emptyDay());
   const day = useMemo(() => normalizeDay(data), [data]);
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
   const [toast, showToast] = useToast();
@@ -61,6 +61,7 @@ export function DayPage() {
         {!isToday && <Button small ghost onClick={() => nav('/plan')}>Today</Button>}
       </div>
 
+      {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
       {loading ? <p className="pl-muted">Loading…</p> : (
         <>
           {/* ── Bed Brief ── */}
