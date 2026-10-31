@@ -43,6 +43,7 @@ import MapLogsheetView from './MapLogsheetView';
 import HouseSheet, { AddHouseSheet } from './HouseSheet';
 import PclOutreachSheet, { pclOutreachClients, phoneKey } from './PclOutreachSheet';
 import GallerySheet from './GallerySheet';
+import { serviceGuideFor } from '../../lib/serviceGuide';
 import MenuGrid from './MenuGrid';
 import ContactsSheet, { ContactPerson } from './ContactsSheet';
 import MapStatsTabs, { StatsTab } from './MapStatsTabs';
@@ -1077,7 +1078,7 @@ const MapLogsheetPage: React.FC = () => {
 
       {/* ── GALLERY (full screen) ── */}
       {showGallery && worker && (
-        <GallerySheet contractorId={worker.contractorId} onClose={() => setShowGallery(false)} />
+        <GallerySheet contractorId={worker.contractorId} onClose={() => setShowGallery(false)} guide={serviceGuideFor(seasonType, cc?.region)} />
       )}
 
       {/* ── MODALS ── */}
