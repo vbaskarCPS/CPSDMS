@@ -53,6 +53,17 @@
             "has": [
                 {
                     "type": "host",
+                    "value": "mainstreetai.propertystars.app"
+                }
+            ],
+            "destination": "/site/mainstreetai",
+            "permanent": false
+        },
+        {
+            "source": "/",
+            "has": [
+                {
+                    "type": "host",
                     "value": "planner.propertystars.app"
                 }
             ],
