@@ -10,7 +10,7 @@ import { useDoc } from '../lib/useDoc';
 import { blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, routineNow, type BlockId, type Routine } from '../lib/routine';
 import { InstallHint } from '../ui/InstallHint';
 import { Stat } from '../ui/primitives';
-import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, streakOf, wakeStreak, type Day } from '../features/plan';
+import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, wakeStreak, type Day } from '../features/plan';
 import { HabitsTodayCard } from '../features/habits';
 import { WorkoutTodayCard } from '../features/workout';
 import { FoodTodayCard } from '../features/food';
@@ -25,9 +25,9 @@ function greeting(h: number): string {
   return 'Good night';
 }
 
-type TickId = Exclude<BlockId, 'brief' | 'work' | 'night' | 'morning' | 'evening'>;
+type TickId = Exclude<BlockId, 'brief' | 'work' | 'night' | 'morning' | 'evening' | 'unwind'>;
 const TICKS: Record<'night' | 'morning', TickId[]> = {
-  night: ['wake', 'daycare', 'dinner', 'gym', 'shake', 'lightsOut'],
+  night: ['wake', 'daycare', 'dinner', 'gym', 'sauna', 'shake', 'lightsOut'],
   morning: ['wake', 'kiaanUp', 'daycare', 'dinner', 'lightsOut'],
 };
 const tickKey = (id: TickId): keyof Day['ticks'] => (id === 'wake' ? 'up' : id);
@@ -96,7 +96,9 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const ticked = (id: BlockId): string | undefined => {
     if (id === 'brief') return day.brief.finishedAt ? 'done' : undefined;
     if (id === 'work') { const n = day.priorities.filter(p => p.text.trim()).length, d = day.priorities.filter(p => p.done).length; return n && d === n ? 'done' : undefined; }
-    if (id === 'night' || id === 'evening') return t.lightsOut ? 'done' : undefined;
+    if (id === 'night') return reviewDone(day) ? 'done' : undefined;
+    if (id === 'evening') return t.lightsOut ? 'done' : undefined;
+    if (id === 'unwind') return day.night.unwindEnd ? 'done' : undefined;
     if (id === 'morning') return day.morningRoutine.finishedAt ? 'done' : undefined;
     return t[tickKey(id)];
   };
@@ -152,10 +154,11 @@ export function Today({ pass }: { pass: PlannerPass }) {
                 <div className="today-block__actions">
                   {canTick && <button type="button" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : isCur ? 'pl-btn--primary' : ''}`} onClick={() => tick(b.id as TickId)}>{done ? 'Undo' : b.id === 'wake' ? "I'm up" : b.id === 'lightsOut' ? (isMorning ? 'In bed' : 'Lights out') : b.id === 'kiaanUp' ? "He's up" : 'Done'}</button>}
                   {b.id === 'brief' && <Link to="/plan/brief" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : 'pl-btn--primary'}`}>{done ? 'Edit' : 'Start'} <ChevronRight /></Link>}
-                  {(b.id === 'night' || b.id === 'evening') && <Link to="/plan/night" className={`pl-btn pl-btn--small ${isCur && !done ? 'pl-btn--primary' : 'pl-btn--ghost'}`}>Open <ChevronRight /></Link>}
+                  {(b.id === 'night' || b.id === 'evening' || b.id === 'unwind') && <Link to="/plan/night" className={`pl-btn pl-btn--small ${isCur && !done ? 'pl-btn--primary' : 'pl-btn--ghost'}`}>Open <ChevronRight /></Link>}
                   {b.id === 'morning' && <Link to="/plan/morning" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : 'pl-btn--primary'}`}>{done ? 'Done' : 'Start'} <ChevronRight /></Link>}
                   {b.id === 'work' && <Link to="/plan" className="pl-btn pl-btn--small pl-btn--ghost">Day page</Link>}
                   {(b.id === 'dinner' || b.id === 'shake') && <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">+ Log</Link>}
+                  {b.id === 'sauna' && !done && <Link to="/plan/night" className={`pl-btn pl-btn--small ${isCur ? 'pl-btn--primary' : 'pl-btn--ghost'}`}>Timer <ChevronRight /></Link>}
                   {b.id === 'gym' && <Link to="/workout" className="pl-btn pl-btn--small pl-btn--ghost">Start session</Link>}
                 </div>
               </div>

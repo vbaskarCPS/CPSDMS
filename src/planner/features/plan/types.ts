@@ -13,11 +13,12 @@ export type Scores = Partial<Record<ScoreKey, number>>;
 /** The Bed Brief: ≤10 minutes, from bed, before getting up. Its priorities live in day.priorities. */
 export interface Brief { word: string; aGame: string; stress: string; stressResponse: string; excited: string; startedAt?: string; finishedAt?: string; seconds?: number }
 /** When each block of the routine was ticked ('HH:MM', phone time). */
-export interface Ticks { up?: string; kiaanUp?: string; daycare?: string; dinner?: string; gym?: string; shake?: string; lightsOut?: string }
+export interface Ticks { up?: string; kiaanUp?: string; daycare?: string; dinner?: string; gym?: string; sauna?: string; shake?: string; lightsOut?: string }
 /** Miracle Morning (morning profile): stretch → meditate → light workout, each ticked as it completes. */
 export interface MorningRoutine { stretch?: boolean; meditate?: boolean; workout?: boolean; startedAt?: string; finishedAt?: string }
 /** Miracle Night: unwind, the quick review, tomorrow's #1. */
-export interface Night { unwindStart?: string; unwindEnd?: string; tomorrowTop?: string; review: { win: string; drag: string; tomorrow: string } }
+export interface Night { saunaStart?: string; unwindStart?: string; unwindEnd?: string; tomorrowTop?: string; review: { win: string; drag: string; tomorrow: string } }
+export const reviewDone = (d: Day) => Object.values(d.night.review).every(v => v.trim());
 
 export interface Day {
   brief: Brief;

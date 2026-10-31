@@ -21,6 +21,7 @@ export interface Routine {
   eatClose: string;    // last food (the shake)
   gym: string;         // session start
   shake: string;       // post-gym protein shake
+  saunaMin: number;    // night profile: sauna after the gym, before the day review (0 = none)
   unwindCap: number;   // minutes of games/unwind before the review (0 = no cap)
   lightsOut: string;   // in bed, lights off
 }
@@ -28,12 +29,12 @@ export interface Routine {
 export const NIGHT_ROUTINE: Routine = {
   profile: 'night', stretchMin: 0, meditateMin: 0, workoutMin: 0, kiaanUp: '08:30', fast: true,
   wake: '08:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '23:00', gym: '21:00', shake: '23:00', unwindCap: 60, lightsOut: '01:00',
+  eatOpen: '18:00', eatClose: '23:00', gym: '21:00', shake: '23:00', saunaMin: 10, unwindCap: 60, lightsOut: '01:00',
 };
 export const MORNING_ROUTINE: Routine = {
   profile: 'morning', stretchMin: 10, meditateMin: 10, workoutMin: 20, kiaanUp: '08:00', fast: false,
   wake: '05:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', unwindCap: 30, lightsOut: '21:00',
+  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', saunaMin: 0, unwindCap: 30, lightsOut: '21:00',
 };
 export const DEFAULT_ROUTINE: Routine = NIGHT_ROUTINE;
 export const defaultsFor = (p: Profile): Routine => (p === 'morning' ? MORNING_ROUTINE : NIGHT_ROUTINE);
@@ -83,8 +84,12 @@ export function fastState(r: Routine, d = new Date()): { eating: boolean; openIn
   return { eating, openIn, closeIn, fastedFor };
 }
 
-export type BlockId = 'wake' | 'brief' | 'daycare' | 'work' | 'dinner' | 'gym' | 'shake' | 'night' | 'lightsOut'
+export type BlockId = 'wake' | 'brief' | 'daycare' | 'work' | 'dinner' | 'gym' | 'sauna' | 'night' | 'shake' | 'unwind' | 'lightsOut'
   | 'morning' | 'kiaanUp' | 'evening';
+/** Night profile: the day review starts this many minutes before the shake (gym → sauna → review → shake → unwind). */
+export const REVIEW_BEFORE_SHAKE = 20;
+export const reviewAt = (r: Routine) => hhmm(minutesOf(r.shake) - REVIEW_BEFORE_SHAKE);
+export const saunaAt = (r: Routine) => hhmm(minutesOf(r.shake) - REVIEW_BEFORE_SHAKE - r.saunaMin);
 export interface Block { id: BlockId; label: string; at: string; until?: string; blurb: string }
 
 /** The day as an ordered list of blocks. */
@@ -97,9 +102,11 @@ export function blocks(r: Routine): Block[] {
     { id: 'daycare', label: 'Kiaan → daycare', at: r.daycare, blurb: 'ready, fed, out the door' },
     { id: 'work', label: 'Work & handle things', at: r.daycare, until: r.eatOpen, blurb: 'fasting · water, black coffee, tea' },
     { id: 'dinner', label: 'Dinner — first meal', at: r.eatOpen, until: r.gym, blurb: 'fast ends · protein first' },
-    { id: 'gym', label: 'Gym with the boys', at: r.gym, until: r.shake, blurb: 'log the session' },
+    { id: 'gym', label: 'Gym with the boys', at: r.gym, until: r.saunaMin ? saunaAt(r) : reviewAt(r), blurb: 'log the session · Complete workout' },
+    ...(r.saunaMin ? [{ id: 'sauna' as BlockId, label: 'Sauna', at: saunaAt(r), until: reviewAt(r), blurb: `${r.saunaMin} min · think the day over` }] : []),
+    { id: 'night', label: 'Day review', at: reviewAt(r), until: r.shake, blurb: '3 lines · scorecard · tomorrow\'s #1' },
     { id: 'shake', label: 'Protein shake', at: r.shake, blurb: 'closes the eating window' },
-    { id: 'night', label: 'Miracle Night', at: r.shake, until: r.lightsOut, blurb: r.unwindCap ? `unwind ${r.unwindCap} min · review · tomorrow's #1` : 'unwind · review · tomorrow\'s #1' },
+    { id: 'unwind', label: 'Unwind', at: r.shake, until: r.lightsOut, blurb: r.unwindCap ? `games, show, whatever — ${r.unwindCap} min cap` : 'games, show, whatever' },
     { id: 'lightsOut', label: 'Lights out', at: r.lightsOut, blurb: 'phone down' },
   ];
 }

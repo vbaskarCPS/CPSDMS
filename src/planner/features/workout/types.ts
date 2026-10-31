@@ -15,10 +15,13 @@ export interface Template { id: string; name: string; days?: number[]; exercises
 
 export interface SetLog { weight: number; reps: number; rpe?: number; done: boolean; prev?: { weight: number; reps: number; repsR?: number }; seconds?: number; repsR?: number }
 // Unilateral exercises (one-arm row, split squat…): reps = left side, repsR = right side, one weight.
-export interface WorkoutExercise { exerciseId: string; name: string; restSec: number; targetReps?: string; sets: SetLog[]; mode?: SetMode; note?: string; comment?: string; lastComment?: string }
+export interface WorkoutExercise { exerciseId: string; name: string; restSec: number; targetReps?: string; sets: SetLog[]; mode?: SetMode; note?: string; comment?: string; lastComment?: string; coachCue?: string }
+// coachCue = what the coach prescribed for this exercise when the previous session was completed (the numbers are already prefilled)
 // note = the plan's cue (from the template / coach); comment = what you wrote after doing it; lastComment = the previous session's comment, shown next time
-// review = the coach's paragraph written when the session was completed (what to do next time)
-export interface Workout { id: string; date: string; startedAt: string; endedAt?: string; templateId?: string; name: string; exercises: WorkoutExercise[]; notes?: string; prs?: string[]; discarded?: boolean; review?: string }
+/** What the coach prescribed for next time, per exercise, when a session was completed. Numbers prefill the next session. */
+export interface NextRx { weight?: number; reps?: number; repsR?: number; sets?: number; seconds?: number; restSec?: number; cue?: string }
+// review = the coach's paragraph written when the session was completed; next = its per-exercise prescriptions (by exerciseId)
+export interface Workout { id: string; date: string; startedAt: string; endedAt?: string; templateId?: string; name: string; exercises: WorkoutExercise[]; notes?: string; prs?: string[]; discarded?: boolean; review?: string; next?: Record<string, NextRx> }
 
 export interface BodyWeight { weight: number }
 export interface CoachChat { messages: { role: 'user' | 'assistant'; content: string; at?: string }[] }

@@ -102,7 +102,8 @@ function clock(hhmm: string): string {
 }
 
 interface Reminder { id: string; at: number; body: string; url: string; done: (day: DayDoc) => boolean }
-interface DayDoc { brief?: { finishedAt?: string }; ticks?: Record<string, string | undefined> }
+interface DayDoc { brief?: { finishedAt?: string }; ticks?: Record<string, string | undefined>; night?: { review?: Record<string, string> } }
+const reviewDone = (d: DayDoc) => ['win', 'drag', 'tomorrow'].every(k => (d.night?.review?.[k] || '').trim());
 
 function reminders(r: Routine, app: AppId): Reminder[] {
   const u = (path: string) => `/${app}${path}`;
@@ -115,7 +116,8 @@ function reminders(r: Routine, app: AppId): Reminder[] {
     { id: 'wake', at: routineMin(minutesOf(r.wake)), body: `Morning. Bed Brief — ${r.briefMinutes} minutes, from bed.`, url: u('/plan/brief'), done: d => !!d.brief?.finishedAt },
     { id: 'window', at: routineMin(minutesOf(r.eatOpen) - 15), body: `Eating window opens at ${clock(r.eatOpen)}. Protein first.`, url: u('/food'), done: d => !!d.ticks?.dinner },
     { id: 'gym', at: routineMin(minutesOf(r.gym) - 20), body: `Gym at ${clock(r.gym)} with the boys.`, url: u('/workout'), done: d => !!d.ticks?.gym },
-    { id: 'shake', at: routineMin(minutesOf(r.shake)), body: 'Shake, then Miracle Night.', url: u('/plan/night'), done: d => !!d.ticks?.shake },
+    { id: 'review', at: routineMin(minutesOf(r.shake) - 20), body: 'Out of the sauna? Day review — 3 lines, scorecard, tomorrow\'s #1.', url: u('/plan/night'), done: d => reviewDone(d) },
+    { id: 'shake', at: routineMin(minutesOf(r.shake)), body: 'Shake, then unwind. Lights out at ' + clock(r.lightsOut) + '.', url: u('/plan/night'), done: d => !!d.ticks?.shake },
     { id: 'lightsOut', at: routineMin(minutesOf(r.lightsOut) - 15), body: 'Lights out in 15.', url: u('/plan/night'), done: d => !!d.ticks?.lightsOut },
   ];
 }
