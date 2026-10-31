@@ -8,6 +8,7 @@
 //   POST { token, action: 'habit', text, blocks: [{id,label,at,until?}], existing: [string] }  → a designed habit (implementation intention + stack)
 //   POST { token, action: 'dayplan', context, answers?, library, units }  → { review, questions, tomorrow }  (after a session: review + tomorrow's plan)
 //   POST { token, action: 'briefhints', context }   → suggestions for each Bed/Morning Brief question (once there is history)
+//   POST { token, action: 'todos', brief, priorities, context }   → { items: [{ text, time?, note? }] }  the day's to-do list from the Brief
 //   POST { token, action: 'categorize', merchants: [string], categories: [string] }
 //        → { categories: { [merchant]: category } }
 //   POST { token, action: 'reflect', context }                     → { reply }  (2–3 sentences on the day)
@@ -203,6 +204,21 @@ const BRIEFHINTS_SCHEMA = {
   }, required: ['words', 'priorities', 'aGame', 'stress', 'stressResponse', 'excited'],
 };
 
+const TODOS_SYSTEM = `You are Coach Claude. The person just finished their Bed Brief from bed; turn it into today's to-do list — the list
+they will work through from now until dinner. Rules:
+- Start with their three priorities exactly as written (keep the wording), in order. Skip empty ones.
+- Then the concrete actions the other answers imply: who needs their A-game (the specific thing to do for that person),
+  the stress they named (the one prep step that defuses it), what they look forward to (anything to arrange for it).
+- Household/logistics that the day needs: on weekdays "Kiaan → daycare" at the daycare time; on weekends there is no
+  daycare unless the person said so — it's a weekend day with Kiaan, so include what that implies, briefly.
+- Carry over last night's "tomorrow's #1" if it isn't already a priority, and any unfinished priority from yesterday
+  that still looks live. Habits anchored to the work block can be one line each.
+- 6–12 items, each a short imperative line in the person's own words. Give a time (HH:MM, 24h) only where the day
+  really has a slot for it (drop-off, calls, appointments, the first deep-work block); leave the rest untimed.
+- Do not add the workout, shake, review or anything after dinner — those are already in the routine.
+- note: at most a few words of why, only when useful.`;
+const TODOS_SCHEMA = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, time: { type: 'string' }, note: { type: 'string' }, priority: { type: 'integer', description: '0-2 when the item is one of the three priorities, verbatim' } }, required: ['text'] } } }, required: ['items'] };
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -296,6 +312,13 @@ Deno.serve(async req => {
     if (action === 'briefhints') {
       const r = await claudeJson<Record<string, unknown>>(BRIEFHINTS_SYSTEM, [{ role: 'user', content: `Planner (JSON):\n${JSON.stringify(b.context ?? {}).slice(0, 24000)}` }], BRIEFHINTS_SCHEMA, 1200);
       return json(r);
+    }
+    if (action === 'todos') {
+      const brief = b.brief && typeof b.brief === 'object' ? b.brief : {};
+      const priorities = (Array.isArray(b.priorities) ? b.priorities : []).filter(x => typeof x === 'string') as string[];
+      const r = await claudeJson<{ items: unknown[] }>(TODOS_SYSTEM,
+        [{ role: 'user', content: `Brief answers: ${JSON.stringify(brief)}\nPriorities (0-2): ${JSON.stringify(priorities)}\n\nPlanner (JSON):\n${JSON.stringify(b.context ?? {}).slice(0, 20000)}` }], TODOS_SCHEMA, 1500);
+      return json({ items: Array.isArray(r.items) ? r.items : [] });
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];

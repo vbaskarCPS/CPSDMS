@@ -5,6 +5,9 @@ export interface Victory { wokeAt?: string; move: boolean; reflect: boolean; gro
 export interface Morning { excited: string; word: string; aGame: string; stress: string; stressResponse: string; appreciate: string; progress: string }
 export interface Project { name: string; steps: [string, string, string] }
 export interface Priority { text: string; done: boolean }
+/** The day's to-do list, built from the Brief (the three priorities first, pi = their index) plus what Coach Claude
+ *  and you add. time = optional HH:MM slot: that's the day plan. */
+export interface Todo { id: string; text: string; done: boolean; time?: string; from?: 'priority' | 'coach' | 'me'; pi?: number; note?: string }
 export interface Slot { time: string; text: string }
 export interface Evening { appreciated: string; handledWell: string; learned: string; better: string; connected: string; coachNote: string }
 export type ScoreKey = 'clarity' | 'energy' | 'necessity' | 'productivity' | 'influence' | 'courage';
@@ -30,6 +33,7 @@ export interface Day {
   projects: Project[];
   people: { connect: string; lead: string };
   priorities: Priority[];
+  todos: Todo[];
   schedule: Slot[];
   evening: Evening;
   scores: Scores;
@@ -57,6 +61,7 @@ export const emptyDay = (): Day => ({
   projects: [{ name: '', steps: ['', '', ''] }, { name: '', steps: ['', '', ''] }, { name: '', steps: ['', '', ''] }],
   people: { connect: '', lead: '' },
   priorities: [{ text: '', done: false }, { text: '', done: false }, { text: '', done: false }],
+  todos: [],
   schedule: [],
   evening: { appreciated: '', handledWell: '', learned: '', better: '', connected: '', coachNote: '' },
   scores: {},
@@ -77,6 +82,7 @@ export function normalizeDay(d: Partial<Day> | null | undefined): Day {
     night: { ...e.night, ...(d.night || {}), review: { ...e.night.review, ...(d.night?.review || {}) } },
     victory: { ...e.victory, ...(d.victory || {}), savers: { ...e.victory.savers, ...(d.victory?.savers || {}) } },
     morning: { ...e.morning, ...(d.morning || {}) },
+    todos: Array.isArray(d.todos) ? d.todos.filter(t => t && typeof t.text === 'string').map(t => ({ ...t, id: t.id || `${t.text}-${Math.random().toString(36).slice(2, 7)}`, done: !!t.done })) : [],
     projects: projects.map(p => ({ name: p?.name || '', steps: [p?.steps?.[0] || '', p?.steps?.[1] || '', p?.steps?.[2] || ''] })),
     people: { ...e.people, ...(d.people || {}) },
     priorities: priorities.map(p => ({ text: p?.text || '', done: !!p?.done })),
@@ -108,3 +114,14 @@ export function dayAverage(s: Scores | undefined): number | null {
   const v = SCORE_KEYS.map(k => s?.[k.key]).filter((n): n is number => typeof n === 'number');
   return v.length ? Math.round((v.reduce((a, b) => a + b, 0) / v.length) * 10) / 10 : null;
 }
+
+/** Tick/untick a to-do; a priority's twin follows. */
+export function toggleTodo(d: Day, id: string): Day {
+  const t = d.todos.find(x => x.id === id);
+  if (!t) return d;
+  const done = !t.done;
+  return { ...d, todos: d.todos.map(x => (x.id === id ? { ...x, done } : x)), priorities: t.pi !== undefined ? d.priorities.map((p, i) => (i === t.pi ? { ...p, done } : p)) : d.priorities };
+}
+/** The list in day order: timed items by time, then the rest as listed. */
+export const sortedTodos = (todos: Todo[]): Todo[] => [...todos].sort((a, b) => (a.time && b.time ? a.time.localeCompare(b.time) : a.time ? -1 : b.time ? 1 : 0));
+export const todosDone = (d: Day) => d.todos.length > 0 && d.todos.every(t => t.done);

@@ -109,3 +109,11 @@ export async function briefHints(units: string): Promise<BriefHints> {
   const list = (v: unknown, n: number) => (Array.isArray(v) ? v.filter(x => typeof x === 'string' && x.trim()).slice(0, n) : []);
   return { words: list(r.words, 3), priorities: list(r.priorities, 3), aGame: r.aGame || '', stress: r.stress || '', stressResponse: r.stressResponse || '', excited: r.excited || '', noticed: r.noticed || '', madeAt: new Date().toISOString() };
 }
+
+export interface TodoSuggestion { text: string; time?: string; note?: string; priority?: number }
+/** The Bed Brief's answers → today's to-do list (Coach Claude, with the planner for context). */
+export async function todosFromBrief(brief: Record<string, string>, priorities: string[], units = 'lb'): Promise<TodoSuggestion[]> {
+  const context = await lifeContext(units, { daysBack: 3, fullSessions: 1, workoutsDays: 7 });
+  const r = await invoke<{ items: TodoSuggestion[] }>({ action: 'todos', brief, priorities, context });
+  return (r.items || []).filter(i => i && typeof i.text === 'string' && i.text.trim()).slice(0, 14).map(i => ({ text: i.text.trim(), time: /^\d{2}:\d{2}$/.test(i.time || '') ? i.time : undefined, note: i.note?.trim() || undefined, priority: typeof i.priority === 'number' && i.priority >= 0 && i.priority <= 2 ? i.priority : undefined }));
+}

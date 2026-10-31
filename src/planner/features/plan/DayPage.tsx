@@ -11,6 +11,7 @@ import { Page, Header, Button, Prompt, Score, Input, useToast } from '../../ui/p
 import { Section } from './Section';
 import { addDays, fmtDate, isValidDay } from './dates';
 import { dayAverage, emptyDay, normalizeDay, SCORE_KEYS, type Day } from './types';
+import { TodoList } from './TodoList';
 
 const filled = (...v: string[]) => v.filter(s => s.trim()).length;
 
@@ -81,6 +82,12 @@ export function DayPage() {
               </div>
             ))}
             {isToday && <Link to="/plan/brief" className="pl-btn pl-btn--small">{day.brief.finishedAt ? 'Edit brief' : morningP ? 'Do the Morning Brief' : 'Do the Bed Brief'}</Link>}
+          </Section>
+
+          {/* ── Today's list ── */}
+          <Section title="The list" meta={day.todos.length ? `${day.todos.filter(t => t.done).length}/${day.todos.length}` : 'from the Brief'} done={day.todos.length > 0 && day.todos.every(t => t.done)}>
+            <p className="pl-muted" style={{ fontSize: 13 }}>Brief to dinner: the day's to-do list, times optional. Coach Claude drafts it at the end of the Brief; the three priorities are always on it.</p>
+            <TodoList day={day} set={set} />
           </Section>
 
           {/* ── Deep plan ── */}

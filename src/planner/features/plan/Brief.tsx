@@ -1,4 +1,4 @@
-// src/planner/features/plan/Brief.tsx — the Bed Brief: five questions from bed, under ten minutes.
+// src/planner/features/plan/Brief.tsx — the Bed Brief: five questions from bed, under ten minutes, then today's list drafted from them.
 // One question per screen, big input, a countdown in the corner that never blocks. Saves every step.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -10,7 +10,9 @@ import { Button, useToast } from '../../ui/primitives';
 import { nowHM } from './dates';
 import { emptyDay, normalizeDay, type Day } from './types';
 import { autoMark } from '../habits/auto';
-import { briefHints, type BriefHints } from '../../lib/ai';
+import { briefHints, todosFromBrief, type BriefHints } from '../../lib/ai';
+import { TodoList } from './TodoList';
+import { uid } from '../../ui/primitives';
 import { getDoc, getDocs, putDoc } from '../../lib/docs';
 import { Sparkles } from 'lucide-react';
 
@@ -51,6 +53,8 @@ const STEPS: Step[] = [
   { title: "One thing I'm looking forward to", hint: 'Dinner with Kiaan, the gym with the boys, a win at work…',
     render: (d, set, focus) => <textarea className="pl-input pl-textarea" ref={focus as React.RefObject<HTMLTextAreaElement>} rows={2} placeholder="Something good about today" value={d.brief.excited} onChange={e => setBrief(set, 'excited', e.target.value)} />,
     hints: (h, _d, set) => (h.excited ? [{ label: h.excited, apply: () => setBrief(set, 'excited', h.excited) }] : []) },
+  { title: "Today's list", hint: 'From bed to dinner, this is the day. Coach Claude drafts it from your answers — tick, retime, add, remove.',
+    render: (d, set) => <TodoList day={d} set={set} /> },
 ];
 
 const fmt = (s: number) => `${Math.floor(Math.abs(s) / 60)}:${String(Math.abs(s) % 60).padStart(2, '0')}`;
@@ -102,13 +106,37 @@ export function Brief() {
   const startedAt = day.brief.startedAt ? new Date(day.brief.startedAt).getTime() : now;
   const left = routine.briefMinutes * 60 - Math.floor((now - startedAt) / 1000);
   const last = step === STEPS.length - 1;
+  // the last step: draft the list from the answers the first time it's opened (the priorities are always on it)
+  const [drafting, setDrafting] = useState(false);
+  const draft = async (force = false) => {
+    if (drafting) return;
+    setDrafting(true);
+    const prios = day.priorities.map(p => p.text.trim());
+    try {
+      const items = await todosFromBrief({ word: day.brief.word, aGame: day.brief.aGame, stress: day.brief.stress, stressResponse: day.brief.stressResponse, excited: day.brief.excited }, prios);
+      set(d => {
+        const keep = force ? d.todos.filter(t => t.from === 'me') : d.todos;
+        const have = new Set(keep.map(t => t.text.trim().toLowerCase()));
+        const fresh = items.filter(i => !have.has(i.text.toLowerCase())).map(i => ({ id: uid(), text: i.text, done: i.priority !== undefined ? !!d.priorities[i.priority]?.done : false, time: i.time, note: i.note, from: i.priority !== undefined ? 'priority' as const : 'coach' as const, pi: i.priority }));
+        // every non-empty priority is on the list even if Coach Claude skipped it
+        const out = [...keep, ...fresh];
+        d.priorities.forEach((p, pi) => { if (p.text.trim() && !out.some(t => t.pi === pi || t.text.trim().toLowerCase() === p.text.trim().toLowerCase())) out.unshift({ id: uid(), text: p.text.trim(), done: p.done, from: 'priority', pi }); });
+        return { ...d, todos: out };
+      });
+    } catch (e) {
+      // offline or no coach: the priorities alone become the list
+      set(d => (d.todos.length ? d : { ...d, todos: d.priorities.filter(p => p.text.trim()).map((p, pi) => ({ id: uid(), text: p.text.trim(), done: p.done, from: 'priority' as const, pi })) }));
+      say(e instanceof Error ? e.message : "Couldn't reach Coach Claude — your priorities are the list", 'bad');
+    } finally { setDrafting(false); }
+  };
+  useEffect(() => { if (last && !loading && day.todos.length === 0) void draft(); }, [last, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const finish = async () => {
     const secs = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
     set(d => ({ ...d, brief: { ...d.brief, finishedAt: new Date().toISOString(), seconds: secs } }));
     void autoMark('brief', true);
     await flush();
-    say(`Brief done in ${fmt(secs)}. Go get Kiaan.`, 'good');
+    say(`Brief done in ${fmt(secs)}. ${day.todos.length ? `${day.todos.length} on the list.` : ''} Go get Kiaan.`, 'good');
     window.setTimeout(() => nav('/'), 700);
   };
   const skip = async () => { await flush(); nav('/'); };
@@ -128,6 +156,9 @@ export function Brief() {
         <h1 className="brief__q">{STEPS[step].title}</h1>
         {STEPS[step].hint && <p className="pl-muted">{STEPS[step].hint}</p>}
         {loading ? <p className="pl-muted">Loading…</p> : STEPS[step].render(day, set, focus)}
+        {last && !loading && (drafting
+          ? <p className="pl-muted" style={{ fontSize: 13, marginTop: 8, fontStyle: 'italic' }}><Sparkles size={12} aria-hidden /> Coach Claude is drafting the list from your answers…</p>
+          : <button type="button" className="pl-btn pl-btn--small pl-btn--ghost" style={{ marginTop: 8 }} onClick={() => void draft(true)}><Sparkles size={14} /> Redraft with Coach Claude</button>)}
         {!loading && STEPS[step].hints && (
           hints
             ? (() => { const hs = STEPS[step].hints!(hints, day, set); return hs.length ? (
