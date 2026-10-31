@@ -83,3 +83,7 @@
 .wo-tip { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--amber) 16%, var(--bg-2)); font-size: 14px; line-height: 1.35; }
 .wo-tip svg { flex: none; margin-top: 2px; color: var(--amber-2); }
 .wo-tip.is-ai { background: color-mix(in srgb, var(--accent) 10%, var(--bg-2)); }
+
+.wo-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; min-width: 0; }
+.wo-sides .wo-stepper button { width: 22px; font-size: 16px; }
+.wo-sides .wo-stepper input { font-size: 14px; }

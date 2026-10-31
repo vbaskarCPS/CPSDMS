@@ -20,7 +20,7 @@ function normalizeModes(w: Workout): Workout {
   });
   return changed ? { ...w, exercises } : w;
 }
-import { durationMin, fmtNum, fmtSec, setsDone, volumeOf, type Exercise, type SetLog, type Workout, type WorkoutExercise } from './types';
+import { durationMin, fmtNum, fmtSec, isUnilateral, setsDone, volumeOf, type Exercise, type SetLog, type Workout, type WorkoutExercise } from './types';
 import { CheckBig, ExercisePicker, RestTimer, Stepper, TimedSet } from './parts';
 import { useUnits } from './WorkoutHome';
 
@@ -67,7 +67,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     setTip({ ei, si, text: 'Coach is looking at that set…', ai: false });
     const s = ex.sets[si];
     const last = exerciseHistory(history, ex.exerciseId, 1)[0];
-    const fmt = (x: SetLog) => `${x.weight} ${units} × ${x.reps}${x.rpe ? ` @RPE ${x.rpe}` : ''}`;
+    const fmt = (x: SetLog) => `${x.weight} ${units} × ${x.reps}${x.repsR !== undefined ? ` L / ${x.repsR} R` : ''}${x.rpe ? ` @RPE ${x.rpe}` : ''}`;
     const msg = `I just finished set ${si + 1} of ${ex.sets.length} of ${ex.name}: ${fmt(s)}. Target ${ex.sets.length} × ${ex.targetReps || '8-12'}, rest ${ex.restSec}s.` +
       (si > 0 ? ` Earlier sets today: ${ex.sets.slice(0, si).filter(x => x.done).map(fmt).join(', ')}.` : '') +
       (last ? ` Last session: ${last.sets.map(fmt).join(', ')}${last.comment ? ` (my note: "${last.comment}")` : ''}.` : '') +
@@ -173,6 +173,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       {w.exercises.map((ex, ei) => {
         const lib = findExercise(ex.exerciseId, custom) || LIBRARY[0];
         const step = stepFor({ units, lower: isLower(lib), defaultStep: lib.defaultStep });
+        const uni = isUnilateral(lib) || isUnilateral(ex);
         const isOpen = open === ei || readOnly;
         const doneN = ex.sets.filter(s => s.done).length;
         return (
@@ -196,11 +197,13 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
                   <div key={si} className={`wo-set ${s.done ? 'is-done' : ''}`}>
                     <div className="wo-set__n">{si + 1}</div>
                     <Stepper value={s.weight} step={step} onChange={v => patchSet(ei, si, { weight: v })} disabled={readOnly} />
-                    <Stepper value={s.reps} step={1} onChange={v => patchSet(ei, si, { reps: Math.round(v) })} disabled={readOnly} />
+                    {uni
+                      ? <div className="wo-sides"><Stepper value={s.reps} step={1} onChange={v => patchSet(ei, si, { reps: Math.round(v) })} disabled={readOnly} /><Stepper value={s.repsR ?? s.reps} step={1} onChange={v => patchSet(ei, si, { repsR: Math.round(v) })} disabled={readOnly} /></div>
+                      : <Stepper value={s.reps} step={1} onChange={v => patchSet(ei, si, { reps: Math.round(v) })} disabled={readOnly} />}
                     <CheckBig on={s.done} onClick={() => toggleDone(ei, si)} disabled={readOnly} />
                     <div className="wo-set__prev">
-                      <span>{units} × reps</span>
-                      {s.prev && <span>last: {s.prev.weight} × {s.prev.reps}</span>}
+                      <span>{units} × {uni ? 'L / R reps' : 'reps'}</span>
+                      {s.prev && <span>last: {s.prev.weight} × {s.prev.reps}{uni && s.prev.repsR !== undefined ? ` / ${s.prev.repsR}` : ''}</span>}
                       {!readOnly && ex.sets.length > 1 && <button type="button" onClick={() => removeSet(ei, si)} style={{ border: 0, background: 'none', color: 'var(--ink-2)', padding: 0, marginLeft: 'auto' }} aria-label="Remove set"><Trash2 size={14} /></button>}
                     </div>
                     {(!readOnly || s.rpe) && (

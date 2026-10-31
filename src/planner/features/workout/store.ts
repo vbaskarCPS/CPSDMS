@@ -95,7 +95,7 @@ export function startFromTemplate(tpl: Template, workouts: Workout[], units: Uni
     const sug = nextTarget(workouts, t, units, custom);
     const last = exerciseHistory(workouts, t.exerciseId, 1)[0]?.sets || [];
     const sets: SetLog[] = Array.from({ length: Math.max(1, t.targetSets) }, (_, i) => ({
-      weight: sug.weight, reps: sug.reps, done: false, prev: last[i] ? { weight: last[i].weight, reps: last[i].reps } : undefined,
+      weight: sug.weight, reps: sug.reps, done: false, prev: last[i] ? { weight: last[i].weight, reps: last[i].reps, repsR: last[i].repsR } : undefined,
     }));
     return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, targetReps: t.targetReps, note: t.note, lastComment, sets };
   });
