@@ -67,3 +67,11 @@ export async function parseStatement(text: string, hint?: string): Promise<State
   const r = await invoke<StatementResult>({ action: 'statement', text, hint });
   return { rows: Array.isArray(r.rows) ? r.rows : [], period: r.period, account_type: r.account_type, opening_balance: typeof r.opening_balance === 'number' ? r.opening_balance : undefined };
 }
+
+export interface PlanExercise { name: string; exerciseId?: string; mode: 'reps' | 'time'; sets: number; reps?: string; seconds?: number; restSec: number; note?: string; weight?: number }
+export interface PlanResult { name: string; exercises: PlanExercise[]; warmup_note?: string }
+/** A coach's written plan → structured exercises (ids from the library when they match). */
+export async function planFromText(text: string, library: { id: string; name: string }[], units: string): Promise<PlanResult> {
+  const r = await invoke<PlanResult>({ action: 'plan', text, library: library.slice(0, 200), units });
+  return { name: String(r.name || 'Coach plan'), exercises: Array.isArray(r.exercises) ? r.exercises : [], warmup_note: r.warmup_note };
+}

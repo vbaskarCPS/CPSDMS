@@ -4,14 +4,15 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronDown, ChevronUp, Plus, Trophy, Trash2, Repeat2, Clock } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
 import { Page, Header, Card, Button, Sheet, Stat, TextArea, useToast } from '../../ui/primitives';
-import { LIBRARY, findExercise, isLower } from './library';
+import { LIBRARY, findExercise, isLower, isTimed } from './library';
 import { stepFor } from './progression';
 import { daysAgo, detectPRs, exerciseHistory, loadCustomExercises, loadWorkouts, saveWorkout } from './store';
-import { durationMin, fmtNum, setsDone, volumeOf, type Exercise, type SetLog, type Workout, type WorkoutExercise } from './types';
-import { CheckBig, ExercisePicker, RestTimer, Stepper } from './parts';
+import { durationMin, fmtNum, fmtSec, setsDone, volumeOf, type Exercise, type SetLog, type Workout, type WorkoutExercise } from './types';
+import { CheckBig, ExercisePicker, RestTimer, Stepper, TimedSet } from './parts';
 import { useUnits } from './WorkoutHome';
 
 const RPES = [7, 8, 9, 10];
+const RESTS = [60, 90, 120, 180];
 
 export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   const { id } = useParams();
@@ -56,6 +57,15 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     const exercises = w.exercises.map((e, i) => i !== ei ? e : { ...e, sets: e.sets.map((s, j) => (j === si ? { ...s, ...p } : s)) });
     persist({ ...w, exercises });
   };
+  const afterSet = (ei: number, si: number) => {
+    if (!w) return;
+    const restSec = w.exercises[ei].mode === 'time' ? (w.exercises[ei].restSec || 0) : (w.exercises[ei].restSec || 90);
+    if (restSec > 0) setRest({ endsAt: Date.now() + restSec * 1000, total: restSec });
+    const ex = w.exercises[ei];
+    if (ex.sets.every((x, j) => (j === si ? true : x.done)) && ei < w.exercises.length - 1) window.setTimeout(() => setOpen(ei + 1), 400);
+  };
+  const timedDone = (ei: number, si: number, seconds: number) => { patchSet(ei, si, { done: true, seconds }); afterSet(ei, si); };
+  const setRestSec = (ei: number, restSec: number) => { if (!w) return; persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, restSec } : e)) }); };
   const toggleDone = (ei: number, si: number) => {
     if (!w) return;
     const s = w.exercises[ei].sets[si];
@@ -72,7 +82,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   const addSet = (ei: number) => {
     if (!w) return;
     const ex = w.exercises[ei]; const lastSet = ex.sets[ex.sets.length - 1];
-    const sets = [...ex.sets, { weight: lastSet?.weight ?? 0, reps: lastSet?.reps ?? 8, done: false }];
+    const sets = [...ex.sets, ex.mode === 'time' ? { weight: 0, reps: 0, seconds: lastSet?.seconds ?? 60, done: false } : { weight: lastSet?.weight ?? 0, reps: lastSet?.reps ?? 8, done: false }];
     persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, sets } : e)) });
   };
   const removeSet = (ei: number, si: number) => {
@@ -82,6 +92,11 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   const removeExercise = (ei: number) => { if (!w) return; persist({ ...w, exercises: w.exercises.filter((_, i) => i !== ei) }); setOpen(Math.max(0, ei - 1)); };
 
   const exerciseFrom = (e: Exercise, prevEx?: WorkoutExercise): WorkoutExercise => {
+    if (isTimed(e)) {
+      const n = prevEx?.sets.length || 1;
+      const sec = prevEx?.sets[0]?.seconds || (e.muscles[0] === 'core' || e.equipment === 'bodyweight' ? 45 : 300);
+      return { exerciseId: e.id, name: e.name, mode: 'time', restSec: prevEx?.restSec ?? 0, sets: Array.from({ length: n }, () => ({ weight: 0, reps: 0, seconds: sec, done: false })) };
+    }
     const last = exerciseHistory(history, e.id, 1)[0]?.sets || [];
     const n = prevEx?.sets.length || 3;
     const sets: SetLog[] = Array.from({ length: n }, (_, i) => ({ weight: last[i]?.weight ?? last[0]?.weight ?? 0, reps: last[i]?.reps ?? 8, done: false, prev: last[i] ? { weight: last[i].weight, reps: last[i].reps } : undefined }));
@@ -97,6 +112,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   const finish = () => {
     if (!w) return;
     const done: Workout = { ...w, endedAt: new Date().toISOString(), exercises: w.exercises.map(e => ({ ...e, sets: e.sets.filter(s => s.done) })).filter(e => e.sets.length) };
+    setRest(null);
     done.prs = detectPRs(done, history);
     persist(done, true); setRest(null); setSummary(done);
   };
@@ -126,12 +142,19 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
         return (
           <Card key={`${ex.exerciseId}-${ei}`} className="wo-ex">
             <div className="wo-ex__head" onClick={() => setOpen(isOpen && !readOnly ? -1 : ei)}>
-              <div className="pl-grow"><b>{ex.name}</b><small>{doneN}/{ex.sets.length} sets{ex.targetReps ? ` · ${ex.targetReps} reps` : ''} · rest {ex.restSec}s</small></div>
+              <div className="pl-grow"><b>{ex.name}</b><small>{doneN}/{ex.sets.length} {ex.mode === 'time' ? 'rounds' : 'sets'}{ex.targetReps ? ` · ${ex.targetReps} reps` : ''}{ex.mode === 'time' && ex.sets[0]?.seconds ? ` · ${fmtSec(ex.sets[0].seconds)}` : ''} · rest {ex.restSec}s{ex.note ? ` · ${ex.note}` : ''}</small></div>
               {!readOnly && (isOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />)}
             </div>
             {isOpen && (
               <div className="wo-ex__body">
-                {ex.sets.map((s, si) => (
+                {!readOnly && <div className="wo-restchips">rest {RESTS.map(r => <button key={r} type="button" className={ex.restSec === r ? 'is-on' : ''} onClick={() => setRestSec(ei, r)}>{r}s</button>)}{ex.mode === 'time' && <button type="button" className={ex.restSec === 0 ? 'is-on' : ''} onClick={() => setRestSec(ei, 0)}>none</button>}</div>}
+                {ex.mode === 'time' ? ex.sets.map((s, si) => (
+                  <div key={si} className={`wo-set ${s.done ? 'is-done' : ''}`}>
+                    <div className="wo-set__n">{si + 1}</div>
+                    <TimedSet target={s.seconds || 60} done={s.done} disabled={readOnly} onTarget={sec => patchSet(ei, si, { seconds: sec })} onDone={sec => timedDone(ei, si, sec)} />
+                    {!readOnly && ex.sets.length > 1 && <div className="wo-set__prev"><button type="button" onClick={() => removeSet(ei, si)} style={{ border: 0, background: 'none', color: 'var(--ink-2)', padding: 0, marginLeft: 'auto' }} aria-label="Remove round"><Trash2 size={14} /></button></div>}
+                  </div>
+                )) : ex.sets.map((s, si) => (
                   <div key={si} className={`wo-set ${s.done ? 'is-done' : ''}`}>
                     <div className="wo-set__n">{si + 1}</div>
                     <Stepper value={s.weight} step={step} onChange={v => patchSet(ei, si, { weight: v })} disabled={readOnly} />
@@ -149,7 +172,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
                 ))}
                 {!readOnly && (
                   <div className="wo-ex__actions">
-                    <Button small onClick={() => addSet(ei)}><Plus size={16} /> Set</Button>
+                    <Button small onClick={() => addSet(ei)}><Plus size={16} /> {ex.mode === 'time' ? 'Round' : 'Set'}</Button>
                     <Button small ghost onClick={() => setPicker({ mode: 'swap', index: ei })}><Repeat2 size={16} /> Swap</Button>
                     <Button small ghost danger onClick={() => removeExercise(ei)}><Trash2 size={16} /></Button>
                   </div>

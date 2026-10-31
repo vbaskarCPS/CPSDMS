@@ -1,9 +1,10 @@
 // src/planner/features/workout/store.ts — reading and writing the workout docs, plus the derived bits.
 import { dayKey, getDocs, putDoc, putDocs } from '../../lib/docs';
+import { planFromText, type PlanResult } from '../../lib/ai';
 import { uid } from '../../ui/primitives';
-import { LIBRARY, findExercise, isLower } from './library';
+import { LIBRARY, findExercise, isLower, isTimed } from './library';
 import { suggest, type Suggestion } from './progression';
-import { e1rm, type BodyWeight, type Exercise, type SetLog, type Template, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
+import { e1rm, type BodyWeight, type Exercise, type SetLog, type Template, type TemplateExercise, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
 
 const DEFAULT_TEMPLATES: Omit<Template, 'id' | 'order'>[] = [
   { name: 'Upper body', days: [1, 4], exercises: [
@@ -20,7 +21,7 @@ const DEFAULT_TEMPLATES: Omit<Template, 'id' | 'order'>[] = [
     { exerciseId: 'leg-press', name: 'Leg Press', targetSets: 3, targetReps: '10-12', restSec: 120 },
     { exerciseId: 'leg-curl', name: 'Lying Leg Curl', targetSets: 3, targetReps: '10-12', restSec: 90 },
     { exerciseId: 'standing-calf-raise', name: 'Standing Calf Raise', targetSets: 3, targetReps: '12-15', restSec: 60 },
-    { exerciseId: 'plank', name: 'Plank', targetSets: 3, targetReps: '45', restSec: 60, note: 'reps = seconds' },
+    { exerciseId: 'plank', name: 'Plank', targetSets: 3, targetReps: '', restSec: 60, mode: 'time', targetSec: 45 },
   ] },
   { name: 'Full body', days: [6], exercises: [
     { exerciseId: 'goblet-squat', name: 'Goblet Squat', targetSets: 3, targetReps: '10-12', restSec: 90 },
@@ -84,14 +85,38 @@ export function nextTarget(workouts: Workout[], t: { exerciseId: string; targetS
 export function startFromTemplate(tpl: Template, workouts: Workout[], units: Units, custom: Exercise[] = []): Workout {
   const now = new Date();
   const exercises: WorkoutExercise[] = tpl.exercises.map(t => {
+    const mode = t.mode || (isTimed(findExercise(t.exerciseId, custom)) ? 'time' : 'reps');
+    if (mode === 'time') {
+      const sec = t.targetSec || 60;
+      const sets: SetLog[] = Array.from({ length: Math.max(1, t.targetSets) }, () => ({ weight: 0, reps: 0, seconds: sec, done: false }));
+      return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, mode, note: t.note, sets };
+    }
     const sug = nextTarget(workouts, t, units, custom);
     const last = exerciseHistory(workouts, t.exerciseId, 1)[0]?.sets || [];
     const sets: SetLog[] = Array.from({ length: Math.max(1, t.targetSets) }, (_, i) => ({
       weight: sug.weight, reps: sug.reps, done: false, prev: last[i] ? { weight: last[i].weight, reps: last[i].reps } : undefined,
     }));
-    return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, targetReps: t.targetReps, sets };
+    return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, targetReps: t.targetReps, note: t.note, sets };
   });
   return { id: uid(), date: dayKey(now), startedAt: now.toISOString(), templateId: tpl.id, name: tpl.name, exercises };
+}
+
+/** A coach's written plan → a template (unsaved). Names the library doesn't know become custom exercises. */
+export async function planFromCoach(text: string, units: Units, custom: Exercise[] = []): Promise<{ template: Template; created: Exercise[] }> {
+  const all = [...custom, ...LIBRARY];
+  const r: PlanResult = await planFromText(text, all.map(e => ({ id: e.id, name: e.name })), units);
+  const created: Exercise[] = [];
+  const exercises: TemplateExercise[] = r.exercises.map(e => {
+    let lib = e.exerciseId ? all.find(x => x.id === e.exerciseId) : undefined;
+    if (!lib) lib = all.find(x => x.name.toLowerCase() === e.name.toLowerCase());
+    if (!lib) {
+      lib = { id: `custom-${uid()}`, name: e.name, muscles: [e.mode === 'time' ? 'cardio' : 'full'], equipment: e.mode === 'time' ? 'cardio' : 'dumbbell', type: e.mode === 'time' ? 'cardio' : 'strength', defaultStep: 5, custom: true, timed: e.mode === 'time' };
+      created.push(lib);
+    }
+    const mode = e.mode === 'time' || (lib.timed && !e.reps) ? 'time' : 'reps';
+    return { exerciseId: lib.id, name: lib.name, targetSets: Math.max(1, e.sets || 1), targetReps: mode === 'reps' ? (e.reps || '8-12') : '', restSec: Math.max(0, e.restSec ?? (mode === 'time' ? 0 : 90)), mode, targetSec: mode === 'time' ? Math.max(10, e.seconds || 60) : undefined, note: [e.note, e.weight ? `start ${e.weight} ${units}` : ''].filter(Boolean).join(' · ') || undefined };
+  });
+  return { template: { id: uid(), name: r.name || 'Coach plan', exercises, order: 99 }, created };
 }
 
 export function emptyWorkout(name = 'Workout'): Workout {
