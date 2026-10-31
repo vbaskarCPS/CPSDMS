@@ -14,6 +14,8 @@ import { workoutRoutes } from './features/workout';
 import { foodRoutes } from './features/food';
 import { moneyRoutes } from './features/money';
 import { cycleRoutes } from './features/cycle';
+import { Calendar } from './features/calendar/Calendar';
+import './features/calendar/calendar.css';
 
 const featureRoutes = [...planRoutes, ...habitsRoutes, ...workoutRoutes, ...foodRoutes, ...moneyRoutes, ...cycleRoutes];
 
@@ -42,6 +44,7 @@ export function PlannerApp() {
       <Routes>
         <Route path="/" element={<Today pass={pass} />} />
         {featureRoutes.map(r => <Route key={r.path} path={r.path} element={r.element} />)}
+        <Route path="/calendar" element={<Calendar pass={pass} />} />
         <Route path="/settings" element={<Settings pass={pass} />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

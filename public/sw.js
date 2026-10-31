@@ -75,6 +75,11 @@ self.addEventListener('fetch', e => {
         const timeout = new Promise((_, no) => setTimeout(() => no(new Error('slow')), 4000));
         return await Promise.race([net, timeout]);
       } catch {
+        // the planner (/vijayplanner, /roshplanner) is its own page: never hand it the field app's index,
+        // whose router would show "page not found"
+        if (/^\/(vijayplanner|roshplanner)(\/|$)/.test(url.pathname)) {
+          return (await fromCache('/planner.html')) || new Response('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Planner</title><body style="font-family:system-ui;background:#101c3a;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0"><div style="text-align:center"><p style="font-size:18px">No connection right now.</p><button onclick="location.reload()" style="font:inherit;padding:12px 20px;border-radius:12px;border:0;background:#ffd166;color:#101c3a;font-weight:700">Try again</button></div>', { headers: { 'Content-Type': 'text/html' } });
+        }
         return (await fromCache('/index.html')) || (await fromCache('/')) || Response.error();
       }
     })());
