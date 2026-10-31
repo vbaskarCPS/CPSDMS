@@ -38,7 +38,7 @@ export function DayPage() {
     try {
       const reply = await reflect({ date: key, brief: day.brief, priorities: day.priorities, ticks: day.ticks, night: day.night, scores: day.scores, projects: day.projects, people: day.people });
       set(d => ({ ...d, reflection: reply }));
-    } catch (e) { showToast(e instanceof Error ? e.message : "Couldn't reach the coach", 'bad'); }
+    } catch (e) { showToast(e instanceof Error ? e.message : "Couldn't reach Coach Claude", 'bad'); }
     finally { setThinking(false); }
   };
 
@@ -129,7 +129,7 @@ export function DayPage() {
             {avg !== null && <div className="plan-avg"><b>{avg}</b><small>/ 5</small></div>}
             {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
             <div className="pl-row" style={{ flexWrap: 'wrap' }}>
-              <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another coach's note" : "Coach's note"}</Button>
+              <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Coach Claude" : "Coach Claude on this day"}</Button>
               {isToday && <Link to="/plan/night" className="pl-btn pl-btn--primary">{morningP ? 'Open the evening wind-down' : 'Open Miracle Night'}</Link>}
             </div>
           </Section>

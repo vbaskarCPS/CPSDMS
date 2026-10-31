@@ -9,6 +9,7 @@ import { clock, loadRoutine, routineMin, routineMinutes, routineNow, type Routin
 import { Page, Header, Card, Button, Prompt, Score, Input, useToast } from '../../ui/primitives';
 import { addDays, nowHM, sleepEstimate } from './dates';
 import { beep } from './sound';
+import { autoMark } from '../habits/auto';
 import { dayAverage, emptyDay, normalizeDay, SCORE_KEYS, type Day } from './types';
 
 const fmtLeft = (mins: number) => (mins >= 60 ? `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m` : `${mins}m`);
@@ -50,6 +51,8 @@ export function Night() {
 
   const avg = dayAverage(day.scores);
   const reviewN = Object.values(day.night.review).filter(v => v.trim()).length;
+  const reviewWas = useRef<boolean | null>(null);
+  useEffect(() => { if (loading) return; const full = reviewN === 3; if (reviewWas.current !== null && reviewWas.current !== full) void autoMark('review', full); reviewWas.current = full; }, [reviewN, loading]);
   const prioDone = day.priorities.filter(p => p.done).length;
   const prioSet = day.priorities.filter(p => p.text.trim()).length;
 
@@ -58,7 +61,7 @@ export function Night() {
     try {
       const reply = await reflect({ date: today, brief: day.brief, priorities: day.priorities, ticks: day.ticks, night: day.night, scores: day.scores, routine });
       set(d => ({ ...d, reflection: reply }));
-    } catch (e) { say(e instanceof Error ? e.message : "Couldn't reach the coach", 'bad'); }
+    } catch (e) { say(e instanceof Error ? e.message : "Couldn't reach Coach Claude", 'bad'); }
     finally { setThinking(false); }
   };
 
@@ -76,6 +79,7 @@ export function Night() {
 
   const lightsOut = async () => {
     set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: nowHM() } }));
+    void autoMark('lightsOut', true);
     await flush();
   };
 
@@ -125,7 +129,7 @@ export function Night() {
             ))}
             {avg !== null && <div className="plan-avg"><b>{avg}</b><small>/ 5 today</small></div>}
             {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
-            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another coach's note" : "Coach's note on today"}</Button>
+            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Coach Claude" : "Coach Claude on today"}</Button>
           </Card>
 
           <Card className="pl-stack">
@@ -137,7 +141,7 @@ export function Night() {
           {!done
             ? <Button primary block onClick={lightsOut} style={{ minHeight: 60, fontSize: 18 }}><Moon /> {morningP ? 'In bed with Kiaan' : 'Lights out'}</Button>
             : <Card className="night-goodnight"><Moon aria-hidden /><div><b>Good night.</b><small>{bedWord} {clock(day.ticks.lightsOut!)} · up {clock(routine.wake)}{morningP ? '' : ' with Kiaan'} · ≈ {sleepEstimate(day.ticks.lightsOut!, routine.wake)} sleep</small></div>
-                <Button small ghost onClick={() => set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: undefined } }))}>Undo</Button></Card>}
+                <Button small ghost onClick={() => { set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: undefined } })); void autoMark('lightsOut', false); }}>Undo</Button></Card>}
           </>) : (<>
           {/* night: sauna → day review → tomorrow's #1 → unwind → lights out (the shake lives on Today) */}
 
@@ -169,7 +173,7 @@ export function Night() {
             ))}
             {avg !== null && <div className="plan-avg"><b>{avg}</b><small>/ 5 today</small></div>}
             {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
-            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another coach's note" : "Coach's note on today"}</Button>
+            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Coach Claude" : "Coach Claude on today"}</Button>
           </Card>
 
           <Card className="pl-stack">

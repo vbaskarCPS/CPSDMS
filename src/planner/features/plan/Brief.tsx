@@ -9,6 +9,7 @@ import { loadRoutine, routineNow, type Routine } from '../../lib/routine';
 import { Button, useToast } from '../../ui/primitives';
 import { nowHM } from './dates';
 import { emptyDay, normalizeDay, type Day } from './types';
+import { autoMark } from '../habits/auto';
 
 type Step = { title: string; hint?: string; render: (d: Day, set: (fn: (d: Day) => Day) => void, focus: React.RefObject<HTMLInputElement | HTMLTextAreaElement>) => JSX.Element };
 
@@ -70,6 +71,7 @@ export function Brief() {
   const finish = async () => {
     const secs = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
     set(d => ({ ...d, brief: { ...d.brief, finishedAt: new Date().toISOString(), seconds: secs } }));
+    void autoMark('brief', true);
     await flush();
     say(`Brief done in ${fmt(secs)}. Go get Kiaan.`, 'good');
     window.setTimeout(() => nav('/'), 700);

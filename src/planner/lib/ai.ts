@@ -2,6 +2,7 @@
 import { supabase } from '../../lib/supabase';
 import { getPass, forgetPass, SignedOut } from './auth';
 import { memoryContext } from './memory';
+import { lifeContext } from './lifeContext';
 
 // `sway` is set by the food feature's sway guide (features/food/sway), not by the food estimate itself.
 export interface FoodItem { name: string; portion: string; grams?: number; kcal: number; protein: number; carbs: number; fat: number; confidence?: 'high' | 'medium' | 'low'; sway?: 'go' | 'ease' | 'neutral' }
@@ -36,17 +37,19 @@ export async function estimateFoodPhoto(base64: string, mediaType: string, note?
 export async function estimateFoodText(text: string): Promise<FoodEstimate> {
   return clean(await invoke<FoodEstimate>({ action: 'food_text', text }));
 }
-/** The coach's memory rides along with every coach/reflect call (lib/memory.ts). */
-async function withMemory(context: unknown): Promise<unknown> {
-  const about_me = await memoryContext();
+/** Coach Claude's memory notes ride along with every call (lib/memory.ts); `full` adds the whole planner (lib/lifeContext.ts). */
+async function withMemory(context: unknown, full = false): Promise<unknown> {
   const base = context && typeof context === 'object' ? context as Record<string, unknown> : { context };
+  if (full) { try { return { ...(await lifeContext(String(base.units || 'lb'))), ...base }; } catch { /* fall through */ } }
+  const about_me = await memoryContext();
   return about_me.length ? { ...base, about_me_notes_oldest_first: about_me } : base;
 }
-export async function coach(messages: ChatMessage[], context: unknown): Promise<string> {
-  return (await invoke<{ reply: string }>({ action: 'coach', messages, context: await withMemory(context) })).reply;
+/** Chat / one-off coaching. `full` = send the whole planner (the chat and the session review do; set-by-set tips stay light). */
+export async function coach(messages: ChatMessage[], context: unknown, full = false): Promise<string> {
+  return (await invoke<{ reply: string }>({ action: 'coach', messages, context: await withMemory(context, full) })).reply;
 }
 export async function reflect(context: unknown): Promise<string> {
-  return (await invoke<{ reply: string }>({ action: 'reflect', context: await withMemory(context) })).reply;
+  return (await invoke<{ reply: string }>({ action: 'reflect', context: await withMemory(context, true) })).reply;
 }
 /** The sway guide: which list each food name belongs to (for names the keyword match couldn't place). */
 export async function swayTags(items: string[]): Promise<Record<string, 'go' | 'ease' | 'neutral'>> {
@@ -81,4 +84,10 @@ export interface PlanResult { name: string; exercises: PlanExercise[]; warmup_no
 export async function planFromText(text: string, library: { id: string; name: string }[], units: string): Promise<PlanResult> {
   const r = await invoke<PlanResult>({ action: 'plan', text, library: library.slice(0, 200), units });
   return { name: String(r.name || 'Coach plan'), exercises: Array.isArray(r.exercises) ? r.exercises : [], warmup_note: r.warmup_note };
+}
+
+export interface HabitPlan { name: string; identity: string; why: string; twoMinute: string; anchor: { block: string; when: 'before' | 'after' }; stack: string; cue: { time: string; place: string }; days?: number[]; auto?: string; coach_note?: string }
+/** Design a habit (implementation intention + where it stacks in the routine) from a sentence. */
+export async function planHabit(text: string, blocks: { id: string; label: string; at: string; until?: string }[], existing: string[]): Promise<HabitPlan> {
+  return invoke<HabitPlan>({ action: 'habit', text, blocks, existing });
 }

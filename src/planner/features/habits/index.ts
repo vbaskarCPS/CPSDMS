@@ -5,6 +5,8 @@ import { HabitsList } from './HabitsList';
 import { HabitForm } from './HabitForm';
 import { HabitDetail } from './HabitDetail';
 export { HabitsTodayCard } from './HabitsTodayCard';
+export { autoMark } from './auto';
+export { SlotHabits, SlotHabitsProvider } from './SlotHabits';
 
 export const habitsRoutes: { path: string; element: JSX.Element }[] = [
   { path: '/habits', element: createElement(HabitsList) },

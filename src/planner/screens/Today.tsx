@@ -11,7 +11,7 @@ import { blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, routine
 import { InstallHint } from '../ui/InstallHint';
 import { Stat } from '../ui/primitives';
 import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, wakeStreak, type Day } from '../features/plan';
-import { HabitsTodayCard } from '../features/habits';
+import { HabitsTodayCard, SlotHabits, SlotHabitsProvider, autoMark } from '../features/habits';
 import { WorkoutTodayCard } from '../features/workout';
 import { FoodTodayCard } from '../features/food';
 import { MoneyTodayCard } from '../features/money';
@@ -92,7 +92,18 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const dateLine = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
   const t = day.ticks;
 
-  const tick = (id: TickId) => set(d => { const k = tickKey(id); return { ...d, ticks: { ...d.ticks, [k]: d.ticks[k] ? undefined : nowHM() } }; });
+  const tick = (id: TickId) => {
+    const k = tickKey(id);
+    const on = !day.ticks[k];
+    set(d => ({ ...d, ticks: { ...d.ticks, [k]: on ? nowHM() : undefined } }));
+    // habits tied to this tick
+    if (id === 'wake') void autoMark('wake', on);
+    else if (id === 'daycare' || id === 'gym' || id === 'sauna' || id === 'shake' || id === 'lightsOut') void autoMark(id, on);
+    else if (id === 'dinner') {
+      void autoMark('dinner', on);
+      if (routine.fast) void fastByDay(today, today, routine.eatOpen).then(k2 => autoMark('fast', on && k2[today] !== false));
+    }
+  };
   const ticked = (id: BlockId): string | undefined => {
     if (id === 'brief') return day.brief.finishedAt ? 'done' : undefined;
     if (id === 'work') { const n = day.priorities.filter(p => p.text.trim()).length, d = day.priorities.filter(p => p.done).length; return n && d === n ? 'done' : undefined; }
@@ -104,7 +115,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
   };
 
   return (
-    <main className="pl-page pl-stack pl-fade" style={{ gap: 14 }}>
+    <SlotHabitsProvider><main className="pl-page pl-stack pl-fade" style={{ gap: 14 }}>
       <header className="pl-row">
         <div className="pl-grow">
           <p className="pl-eyebrow">{dateLine}</p>
@@ -135,6 +146,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
                   <span className="today-block__time">{clock(b.at)}{b.until ? `–${clock(b.until)}` : ''}</span>
                   {done && done !== 'done' && <span className="today-block__ticked">✓ {clock(done)}</span>}
                 </div>
+                <SlotHabits block={b.id} when="before" />
                 <b className="today-block__label">{b.label}</b>
                 {(isCur || !done) && <small className="pl-muted">{b.id === 'work' && routine.fast && !fast.eating ? `${b.blurb} · window opens ${clock(routine.eatOpen)}` : b.blurb}</small>}
 
@@ -151,6 +163,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
                   </div>
                 )}
 
+                <SlotHabits block={b.id} when="after" />
                 <div className="today-block__actions">
                   {canTick && <button type="button" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : isCur ? 'pl-btn--primary' : ''}`} onClick={() => tick(b.id as TickId)}>{done ? 'Undo' : b.id === 'wake' ? "I'm up" : b.id === 'lightsOut' ? (isMorning ? 'In bed' : 'Lights out') : b.id === 'kiaanUp' ? "He's up" : 'Done'}</button>}
                   {b.id === 'brief' && <Link to="/plan/brief" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : 'pl-btn--primary'}`}>{done ? 'Edit' : 'Start'} <ChevronRight /></Link>}
@@ -173,6 +186,6 @@ export function Today({ pass }: { pass: PlannerPass }) {
       <WorkoutTodayCard pass={pass} />
       <FoodTodayCard pass={pass} />
       <MoneyTodayCard pass={pass} />
-    </main>
+    </main></SlotHabitsProvider>
   );
 }
