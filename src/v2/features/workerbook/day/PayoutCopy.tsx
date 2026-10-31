@@ -9,7 +9,7 @@ import { useLoad } from '../../../lib/data';
 import { lineLock, listLines } from '../../../lib/payslips';
 import { closedDaySort, fullName, type Day, type RosterRow } from '../../../lib/workerbook';
 import { recalcDay } from '../../../lib/payoutEngine';
-import { isFinalized, listCarts } from '../../../lib/payoutCarts';
+import { isFinalized, listCarts, salesByManager } from '../../../lib/payoutCarts';
 import { PayoutEditor } from './PayoutEditor';
 import { Btn, ErrorBox, Loading, Tag } from '../../../ui';
 import { ContractorLink } from '../ContractorCard';
@@ -70,6 +70,17 @@ export const PayoutCopy: React.FC<{ centerId: string; region: string; date: stri
           /backfill/i.test(String(day.summary.imported_from)) ? 'the pay exactly as it was paid.' : 'the sheet’s inputs, with rates and pay worked out in the app.'}</div>}
         {note && <div className="v2-small" style={{ color: '#047857' }}>{note}</div>}
         <ErrorBox error={lines.error || error} />
+        {(carts.data || []).some(c => c.sales.length) && (() => {
+          const by = salesByManager(carts.data || []);
+          const shared = (carts.data || []).some(c => (c.manager || '').includes(' & '));
+          return (
+            <div className="v2-card v2-row" style={{ gap: 14, flexWrap: 'wrap', padding: '10px 14px' }}>
+              <b className="v2-small">Sales by manager</b>
+              {by.map(m => <span key={m.manager} className="v2-small">{m.manager} <b>{money(m.sales)}</b></span>)}
+              {shared && <span className="v2-small v2-mut">Shared teams’ sales are split evenly between their managers.</span>}
+            </div>
+          );
+        })()}
         {(lines.loading && !lines.data) || (carts.loading && !carts.data) ? <Loading /> : (carts.data || []).length > 0 ? (
           <SavedDayPayouts centerId={centerId} region={region} date={date} carts={carts.data || []} lines={lines.data || []}
             readOnly={!canEditDay} onChanged={reload} toolbar={toolbar} defaultSort={closedDaySort(day)} />

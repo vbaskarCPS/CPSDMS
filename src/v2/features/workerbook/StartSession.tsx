@@ -9,7 +9,7 @@ import { centerService, SERVICES, type Service } from '../../lib/permissions';
 import { centerAreas, routeShapes, type Area } from '../../lib/territory';
 import { getDay, listRoster, fullName, type RosterRow } from '../../lib/workerbook';
 import {
-  availableManagers, getSession, nextTeamName, openLegacySession, planProblems, startSession, writeLiveMapFromSession,
+  availableManagers, getSession, nextTeamName, openLegacySession, pairManagers, planProblems, startSession, unpairManager, writeLiveMapFromSession,
   type Plan, type PlanRoute, type PlanSettings, type PlanTeam,
 } from '../../lib/startSession';
 import { Btn, ErrorBox, Loading, Tag, Toggle } from '../../ui';
@@ -53,6 +53,8 @@ export const StartSession: React.FC = () => {
   const [routes, setRoutes] = useState<Map<string, PlanRoute>>(new Map());
   const [activeMgr, setActiveMgr] = useState('');
   const [teams, setTeams] = useState<PlanTeam[]>([]);
+  /** managers paired for today (set fresh each day, on the team board) */
+  const [pairs, setPairs] = useState<string[][]>([]);
   const [members, setMembers] = useState<Record<string, string>>({});
   const [showed, setShowed] = useState<Set<string>>(new Set());
   const [service, setService] = useState<Service>(() => centerService(center?.services));
@@ -95,7 +97,7 @@ export const StartSession: React.FC = () => {
   const plan: Plan | null = day.data && roster.data ? {
     date, seasonYear: seasonInfo.data?.season?.year || Number(date.slice(0, 4)), card,
     managers: mgrs, routes: [...routes.values()], teams, members, showed, roster: roster.data, appDaysBefore: appDays.data || {},
-    settings: { service, ...settings },
+    settings: { service, ...settings }, pairs,
   } : null;
   const problems = plan ? planProblems(plan) : [];
 
@@ -225,6 +227,7 @@ export const StartSession: React.FC = () => {
           </div>
           <div className="v2-stack">
             <TeamBoard people={showedRows} teams={teams} members={members} managers={mgrs}
+              pairs={pairs} onPair={(who, withId) => setPairs(ps => pairManagers(ps, who, withId))} onUnpair={who => setPairs(ps => unpairManager(ps, who))}
               onAssign={(h, t) => setMembers(m => { const n = { ...m }; if (t) n[h] = t; else delete n[h]; return n; })}
               onNewTeam={(mid, kind, h) => { const name = nextTeamName(teams, kind); setTeams(ts => [...ts, { name, kind, managerId: mid }]); if (h) setMembers(m => ({ ...m, [h]: name })); }}
               onRamp={setRamp}
@@ -270,6 +273,7 @@ export const StartSession: React.FC = () => {
                 <div><b>{routes.size}</b> routes in {new Set([...routes.values()].map(r => r.area)).size} areas</div>
                 <div><b>{teams.length}</b> teams ({teams.filter(t => t.kind === 'ramp').length} ramp crews) under {new Set(teams.map(t => t.managerId)).size} managers</div>
                 <div><b>{showedRows.length}</b> workers showed · {roster.data.length - showedRows.length} not ticked</div>
+                {pairs.map(g => <div key={g.join('|')}>Sharing teams: <b>{g.map(id => mgrs.find(m => m.id === id)?.full_name || '?').join(' & ')}</b></div>)}
               </div>
             </div>
             {legacyOpen.data && legacyOpen.data < date && !legacyWritten && (

@@ -19,6 +19,8 @@ import PendingJobModal from '../../../components/PendingJobModal';
 
 interface RMRoutesTabProps {
   managerId: string;
+  /** the managers this one covers today (paired or floating), themselves included */
+  coveredIds?: string[];
   routes: RouteData[];
   bookings: MasterBooking[];
   workers: Worker[];
@@ -49,6 +51,7 @@ interface RouteDisplay {
 
 const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   managerId,
+  coveredIds,
   routes,
   bookings,
   workers,
@@ -175,10 +178,11 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   // CHANGED: dependency array now includes taxRate and productCostPercent so
   // the route EQ totals recalculate when those values arrive from their fetch.
   useEffect(() => {
-    const myTeam = workers.filter((w) => w.assignedManagerId === managerId);
+    const covered = new Set<string>(coveredIds?.length ? coveredIds : [managerId]);
+    const myTeam = workers.filter((w) => covered.has(w.assignedManagerId as string));
     setContractors(myTeam);
 
-    const myRoutes = routes.filter((r) => r.managerId === managerId);
+    const myRoutes = routes.filter((r) => covered.has(r.managerId));
     const myRouteCodes = new Set(myRoutes.map(r => r.routeCode));
 
     const groupedBookings: Record<string, MasterBooking[]> = {};
@@ -241,7 +245,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
 
     setDisplayRoutes(enrichedRoutes);
 
-  }, [managerId, routes, bookings, workers, seasonType, taxRate, productCostPercent]);
+  }, [managerId, (coveredIds || []).join("|"), routes, bookings, workers, seasonType, taxRate, productCostPercent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- 2. SORTING ---
   

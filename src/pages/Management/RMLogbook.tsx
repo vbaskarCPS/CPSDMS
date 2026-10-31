@@ -486,8 +486,9 @@ const RMLogbook: React.FC = () => {
 
   const myTeamIds = useMemo(() => {
     if (!dailyData || !currentUser) return [];
+    const covered = new Set<string>([currentUser.userId, ...((currentUser.floatingFor as string[] | undefined) || [])]);
     return dailyData.workers
-      .filter(w => w.assignedManagerId === currentUser.userId)
+      .filter(w => covered.has(w.assignedManagerId as string))
       .map(w => w.contractorId);
   }, [dailyData, currentUser]);
 
@@ -1319,6 +1320,7 @@ const RMLogbook: React.FC = () => {
             {activeTab === 'routes' && (
               <RMRoutesTab
                 managerId={currentUser.userId}
+                coveredIds={[currentUser.userId, ...((currentUser.floatingFor as string[] | undefined) || [])]}
                 routes={dailyData.routes}
                 bookings={dailyData.pendingBookings}
                 workers={dailyData.workers}
