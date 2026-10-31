@@ -27,6 +27,9 @@ export function roundTo(n: number, step: number): number {
   return Math.round(n / s) * s;
 }
 
+/** The reps that count for progression: the weaker side on unilateral sets. */
+export const effReps = (s: SetLog): number => (s.repsR === undefined ? s.reps : Math.min(s.reps, s.repsR));
+
 export function suggest(opts: {
   history: SessionSets[];          // most recent first; done sets only matter
   targetReps: string;
@@ -37,26 +40,26 @@ export function suggest(opts: {
 }): Suggestion {
   const { lo, hi } = parseReps(opts.targetReps);
   const step = stepFor(opts);
-  const sessions = opts.history.map(h => h.sets.filter(s => s.done && s.reps > 0)).filter(s => s.length > 0);
+  const sessions = opts.history.map(h => h.sets.filter(s => s.done && effReps(s) > 0)).filter(s => s.length > 0);
   if (!sessions.length) return { weight: 0, reps: lo, reason: 'First time — pick a weight you can do for the low end with 2 reps in reserve.' };
 
   const last = sessions[0];
   const top = Math.max(...last.map(s => s.weight));
   const working = last.filter(s => s.weight === top);
   const setsAtTop = working.length;
-  const allHitTop = setsAtTop >= Math.max(1, Math.min(opts.targetSets, working.length)) && working.every(s => s.reps >= hi && (s.rpe === undefined || s.rpe <= 8)) && setsAtTop >= opts.targetSets;
+  const allHitTop = setsAtTop >= Math.max(1, Math.min(opts.targetSets, working.length)) && working.every(s => effReps(s) >= hi && (s.rpe === undefined || s.rpe <= 8)) && setsAtTop >= opts.targetSets;
 
   if (allHitTop) {
     return { weight: roundTo(top + step, step), reps: lo, reason: `Hit ${opts.targetSets} × ${hi} at ${top} — add ${step}.` };
   }
 
-  const missed = (sets: SetLog[]) => sets.filter(s => s.reps < lo).length >= 2;
+  const missed = (sets: SetLog[]) => sets.filter(s => effReps(s) < lo).length >= 2;
   if (sessions.length >= 2 && missed(sessions[0]) && missed(sessions[1])) {
     const w = Math.max(0, roundTo(top * 0.9, step));
     return { weight: w, reps: lo, reason: `Missed reps two sessions running — deload 10% to ${w} and build back.` };
   }
 
-  const best = Math.max(...working.map(s => s.reps));
+  const best = Math.max(...working.map(s => effReps(s)));
   return { weight: top, reps: Math.min(hi, Math.max(lo, best + 1)), reason: best >= hi ? `Repeat ${top} and make every set reach ${hi}.` : `Stay at ${top} — aim for ${Math.min(hi, best + 1)}+ reps on each set.` };
 }
 
@@ -74,9 +77,9 @@ export function nextSetTip(opts: { sets: SetLog[]; si: number; targetReps?: stri
   const rpe = s.rpe;
   const next = isLast ? 'next session' : 'next set';
   if (si === 0 && sets.length > 1 && s.weight > 0 && (sets[1]?.weight || 0) > s.weight * 1.3) return `Warm-up done. Working set next: ${sets[1].weight} ${u}, aim for ${hi} clean reps.`;
-  if (s.reps >= hi && (rpe === undefined || rpe <= 8)) return isLast ? `Hit the top of the range — add ${step} ${u} next session.` : `Easy — add ${step} ${u} for the ${next}, same ${hi} reps.`;
-  if (s.reps >= hi && rpe !== undefined && rpe >= 9.5) return `Top of the range but all-out. Hold ${s.weight} ${u}, take the full rest, aim for ${hi} again.`;
-  if (s.reps >= lo && s.reps < hi) return rpe !== undefined && rpe >= 9.5 ? `Hard set. Same weight, aim for ${s.reps} again; stop 1 rep short of failure.` : `In range. Same ${s.weight} ${u}, try for ${Math.min(hi, s.reps + 1)}–${hi} reps.`;
-  if (s.reps > 0 && s.reps < lo) return `Missed the range. Drop to ${roundTo(s.weight * 0.9, step)} ${u} for the ${next} and own ${lo}+ reps with clean form.`;
+  if (effReps(s) >= hi && (rpe === undefined || rpe <= 8)) return isLast ? `Hit the top of the range — add ${step} ${u} next session.` : `Easy — add ${step} ${u} for the ${next}, same ${hi} reps.`;
+  if (effReps(s) >= hi && rpe !== undefined && rpe >= 9.5) return `Top of the range but all-out. Hold ${s.weight} ${u}, take the full rest, aim for ${hi} again.`;
+  if (effReps(s) >= lo && effReps(s) < hi) return rpe !== undefined && rpe >= 9.5 ? `Hard set. Same weight, aim for ${effReps(s)} again; stop 1 rep short of failure.` : `In range. Same ${s.weight} ${u}, try for ${Math.min(hi, effReps(s) + 1)}–${hi} reps.`;
+  if (effReps(s) > 0 && effReps(s) < lo) return `Missed the range. Drop to ${roundTo(s.weight * 0.9, step)} ${u} for the ${next} and own ${lo}+ reps with clean form.`;
   return isLast ? 'Good work. Move on.' : `Log it and rest ${opts.restSec || 90} s.`;
 }
