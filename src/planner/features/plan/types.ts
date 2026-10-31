@@ -122,6 +122,29 @@ export function toggleTodo(d: Day, id: string): Day {
   const done = !t.done;
   return { ...d, todos: d.todos.map(x => (x.id === id ? { ...x, done } : x)), priorities: t.pi !== undefined ? d.priorities.map((p, i) => (i === t.pi ? { ...p, done } : p)) : d.priorities };
 }
-/** The list in day order: timed items by time, then the rest as listed. */
-export const sortedTodos = (todos: Todo[]): Todo[] => [...todos].sort((a, b) => (a.time && b.time ? a.time.localeCompare(b.time) : a.time ? -1 : b.time ? 1 : 0));
+/** The list is in the order you want to tackle it (you move items); a time is a reminder of when, not a sort key. */
+export const sortedTodos = (todos: Todo[]): Todo[] => todos;
+/** Move a to-do up or down one place. */
+export function moveTodo(d: Day, id: string, dir: -1 | 1): Day {
+  const i = d.todos.findIndex(t => t.id === id); const j = i + dir;
+  if (i < 0 || j < 0 || j >= d.todos.length) return d;
+  const todos = [...d.todos]; [todos[i], todos[j]] = [todos[j], todos[i]];
+  return { ...d, todos };
+}
+const normText = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+/** Things that keep showing up on past lists (2+ days), most frequent first — offered as suggestions. */
+export function frequentTodos(days: Partial<Day>[], exclude: string[] = [], min = 2, max = 8): { text: string; days: number; time?: string }[] {
+  const seen: Record<string, { text: string; days: number; times: Record<string, number> }> = {};
+  for (const d of days) {
+    const perDay = new Set<string>();
+    for (const t of d.todos || []) {
+      const k = normText(t.text); if (!k || perDay.has(k)) continue; perDay.add(k);
+      const e = seen[k] || (seen[k] = { text: t.text.trim(), days: 0, times: {} });
+      e.days++; if (t.time) e.times[t.time] = (e.times[t.time] || 0) + 1;
+    }
+  }
+  const ex = new Set(exclude.map(normText));
+  return Object.entries(seen).filter(([k, v]) => v.days >= min && !ex.has(k)).sort((a, b) => b[1].days - a[1].days).slice(0, max)
+    .map(([, v]) => { const top = Object.entries(v.times).sort((a, b) => b[1] - a[1])[0]; return { text: v.text, days: v.days, time: top && top[1] * 2 >= v.days ? top[0] : undefined }; });
+}
 export const todosDone = (d: Day) => d.todos.length > 0 && d.todos.every(t => t.done);

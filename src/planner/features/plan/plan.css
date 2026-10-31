@@ -129,3 +129,12 @@
 .todo__add .pl-input { flex: 1; min-height: 40px; }
 .todo--compact .todo__text { font-size: 14px; }
 .todo--compact .todo__row { padding: 4px 0; }
+
+.todo__move { display: flex; flex-direction: column; flex: none; }
+.todo__move button { border: 0; background: none; color: var(--ink-2); padding: 0 2px; line-height: 0; min-height: 0; height: 14px; }
+.todo__move button:disabled { opacity: .25; }
+.todo__suggest { margin-top: 10px; }
+.todo__suggest small { font-size: 12px; display: block; margin-bottom: 4px; }
+.todo__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.todo__chips button { border: 1px dashed color-mix(in srgb, var(--ink-2) 50%, transparent); background: transparent; color: inherit; border-radius: 999px; padding: 6px 11px; font-size: 13px; }
+.todo__chips em { font-style: normal; color: var(--amber-2); }

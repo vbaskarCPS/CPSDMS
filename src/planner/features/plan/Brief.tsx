@@ -12,6 +12,7 @@ import { emptyDay, normalizeDay, type Day } from './types';
 import { autoMark } from '../habits/auto';
 import { briefHints, todosFromBrief, type BriefHints } from '../../lib/ai';
 import { TodoList } from './TodoList';
+import { useFrequentTodos } from './useFrequentTodos';
 import { uid } from '../../ui/primitives';
 import { getDoc, getDocs, putDoc } from '../../lib/docs';
 import { Sparkles } from 'lucide-react';
@@ -20,7 +21,8 @@ import { Sparkles } from 'lucide-react';
 const KNOWS_YOU_AFTER = 3;
 
 type Hints = BriefHints | null;
-type Step = { title: string; hint?: string; render: (d: Day, set: (fn: (d: Day) => Day) => void, focus: React.RefObject<HTMLInputElement | HTMLTextAreaElement>) => JSX.Element; hints?: (h: BriefHints, d: Day, set: (fn: (d: Day) => Day) => void) => { label: string; apply: () => void }[] };
+type Extras = { frequent: { text: string; time?: string }[] };
+type Step = { title: string; hint?: string; render: (d: Day, set: (fn: (d: Day) => Day) => void, focus: React.RefObject<HTMLInputElement | HTMLTextAreaElement>, x: Extras) => JSX.Element; hints?: (h: BriefHints, d: Day, set: (fn: (d: Day) => Day) => void) => { label: string; apply: () => void }[] };
 
 const setBrief = (set: (fn: (d: Day) => Day) => void, k: keyof Day['brief'], v: string) => set(d => ({ ...d, brief: { ...d.brief, [k]: v } }));
 
@@ -54,7 +56,7 @@ const STEPS: Step[] = [
     render: (d, set, focus) => <textarea className="pl-input pl-textarea" ref={focus as React.RefObject<HTMLTextAreaElement>} rows={2} placeholder="Something good about today" value={d.brief.excited} onChange={e => setBrief(set, 'excited', e.target.value)} />,
     hints: (h, _d, set) => (h.excited ? [{ label: h.excited, apply: () => setBrief(set, 'excited', h.excited) }] : []) },
   { title: "Today's list", hint: 'From bed to dinner, this is the day. Coach Claude drafts it from your answers — tick, retime, add, remove.',
-    render: (d, set) => <TodoList day={d} set={set} /> },
+    render: (d, set, _f, x) => <TodoList day={d} set={set} suggestions={x.frequent} /> },
 ];
 
 const fmt = (s: number) => `${Math.floor(Math.abs(s) / 60)}:${String(Math.abs(s) % 60).padStart(2, '0')}`;
@@ -71,6 +73,7 @@ export function Brief() {
   const [toast, say] = useToast();
   const focus = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const started = useRef(false);
+  const frequent = useFrequentTodos();
   // Coach Claude's suggestions: fetched once per day in the background, only once it knows a few of your days
   const [hints, setHints] = useState<Hints>(null);
   const [knows, setKnows] = useState<boolean | null>(null);
@@ -113,7 +116,7 @@ export function Brief() {
     setDrafting(true);
     const prios = day.priorities.map(p => p.text.trim());
     try {
-      const items = await todosFromBrief({ word: day.brief.word, aGame: day.brief.aGame, stress: day.brief.stress, stressResponse: day.brief.stressResponse, excited: day.brief.excited }, prios);
+      const items = await todosFromBrief({ word: day.brief.word, aGame: day.brief.aGame, stress: day.brief.stress, stressResponse: day.brief.stressResponse, excited: day.brief.excited }, prios, frequent.map(f => f.text + (f.time ? ` (usually ${f.time})` : '')));
       set(d => {
         const keep = force ? d.todos.filter(t => t.from === 'me') : d.todos;
         const have = new Set(keep.map(t => t.text.trim().toLowerCase()));
@@ -156,7 +159,7 @@ export function Brief() {
         <h1 className="brief__q">{STEPS[step].title}</h1>
         {STEPS[step].hint && <p className="pl-muted">{STEPS[step].hint}</p>}
         {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
-        {loading ? <p className="pl-muted">Loading…</p> : STEPS[step].render(day, set, focus)}
+        {loading ? <p className="pl-muted">Loading…</p> : STEPS[step].render(day, set, focus, { frequent })}
         {last && !loading && (drafting
           ? <p className="pl-muted" style={{ fontSize: 13, marginTop: 8, fontStyle: 'italic' }}><Sparkles size={12} aria-hidden /> Coach Claude is drafting the list from your answers…</p>
           : <button type="button" className="pl-btn pl-btn--small pl-btn--ghost" style={{ marginTop: 8 }} onClick={() => void draft(true)}><Sparkles size={14} /> Redraft with Coach Claude</button>)}
