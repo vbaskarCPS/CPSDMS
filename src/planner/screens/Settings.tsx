@@ -76,7 +76,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
           {routine.fast && morningP && <label className="pl-field"><span className="pl-label">Window closes</span><input className="pl-input" type="time" value={routine.eatClose} onChange={e => r('eatClose', e.target.value)} required /></label>}
           {!morningP && <label className="pl-field"><span className="pl-label">Day review</span><input className="pl-input" type="time" value={routine.review} onChange={e => r('review', e.target.value)} required /></label>}
           {!morningP && <label className="pl-field"><span className="pl-label">Sauna after gym (min, 0 = none)</span><input className="pl-input" type="number" min={0} max={60} value={routine.saunaMin} onChange={e => r('saunaMin', Math.max(0, Number(e.target.value) || 0))} /></label>}
-          <label className="pl-field"><span className="pl-label">Unwind cap (min, 0 = none)</span><input className="pl-input" type="number" min={0} max={240} value={routine.unwindCap} onChange={e => r('unwindCap', Math.max(0, Number(e.target.value) || 0))} /></label>
+          {!morningP && <label className="pl-field"><span className="pl-label">Hard stop · teeth & bed</span><input className="pl-input" type="time" value={routine.windDown} onChange={e => r('windDown', e.target.value)} required /></label>}
+          {morningP && <label className="pl-field"><span className="pl-label">Unwind cap (min, 0 = none)</span><input className="pl-input" type="number" min={0} max={240} value={routine.unwindCap} onChange={e => r('unwindCap', Math.max(0, Number(e.target.value) || 0))} /></label>}
           <label className="pl-field"><span className="pl-label">{morningP ? 'Bed with Kiaan' : 'Lights out'}</span><input className="pl-input" type="time" value={routine.lightsOut} onChange={e => r('lightsOut', e.target.value)} required /></label>
         </div>
         <label className="pl-row" style={{ gap: 10 }}>

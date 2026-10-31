@@ -103,3 +103,6 @@
 .night-goodnight b { display: block; font-family: var(--serif); font-size: 20px; }
 .night-goodnight small { color: var(--ink-2); font-size: 13px; }
 .night-goodnight div { flex: 1; }
+
+/* the unwind's hard stop has landed */
+.night-stop { border-color: var(--bad, #e5484d); background: color-mix(in srgb, var(--bad, #e5484d) 12%, var(--bg-2)); }

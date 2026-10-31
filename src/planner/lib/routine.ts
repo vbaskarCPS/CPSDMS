@@ -23,19 +23,20 @@ export interface Routine {
   shake: string;       // post-gym protein shake
   saunaMin: number;    // night profile: sauna after the gym, before the day review (0 = none)
   review: string;      // night profile: the day review (its own time, separate from the shake)
-  unwindCap: number;   // minutes of games/unwind before the review (0 = no cap)
+  unwindCap: number;   // morning profile: minutes of games/unwind before the review (0 = no cap)
+  windDown: string;    // night profile: hard stop for the unwind — teeth, face, phone on charge, bed
   lightsOut: string;   // in bed, lights off
 }
 
 export const NIGHT_ROUTINE: Routine = {
   profile: 'night', stretchMin: 0, meditateMin: 0, workoutMin: 0, kiaanUp: '08:30', fast: true,
   wake: '08:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '23:00', gym: '21:00', shake: '23:00', saunaMin: 10, review: '22:30', unwindCap: 60, lightsOut: '01:00',
+  eatOpen: '18:00', eatClose: '23:00', gym: '21:00', shake: '23:00', saunaMin: 10, review: '22:30', unwindCap: 60, windDown: '00:45', lightsOut: '01:00',
 };
 export const MORNING_ROUTINE: Routine = {
   profile: 'morning', stretchMin: 10, meditateMin: 10, workoutMin: 20, kiaanUp: '08:00', fast: false,
   wake: '05:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', saunaMin: 0, review: '20:30', unwindCap: 30, lightsOut: '21:00',
+  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', saunaMin: 0, review: '20:30', unwindCap: 30, windDown: '20:45', lightsOut: '21:00',
 };
 export const DEFAULT_ROUTINE: Routine = NIGHT_ROUTINE;
 export const defaultsFor = (p: Profile): Routine => (p === 'morning' ? MORNING_ROUTINE : NIGHT_ROUTINE);
@@ -85,7 +86,7 @@ export function fastState(r: Routine, d = new Date()): { eating: boolean; openIn
   return { eating, openIn, closeIn, fastedFor };
 }
 
-export type BlockId = 'wake' | 'brief' | 'daycare' | 'work' | 'dinner' | 'gym' | 'sauna' | 'night' | 'shake' | 'unwind' | 'lightsOut'
+export type BlockId = 'wake' | 'brief' | 'daycare' | 'work' | 'dinner' | 'gym' | 'sauna' | 'night' | 'shake' | 'unwind' | 'windDown' | 'lightsOut'
   | 'morning' | 'kiaanUp' | 'evening';
 /** Night profile: gym → sauna → day review (r.review, its own time) → shake → unwind. */
 export const reviewAt = (r: Routine) => r.review;
@@ -106,7 +107,8 @@ export function blocks(r: Routine): Block[] {
     ...(r.saunaMin ? [{ id: 'sauna' as BlockId, label: 'Sauna', at: saunaAt(r), until: reviewAt(r), blurb: `${r.saunaMin} min · think the day over` }] : []),
     { id: 'night', label: 'Day review', at: reviewAt(r), blurb: '3 lines · scorecard · tomorrow\'s #1' },
     { id: 'shake', label: 'Protein shake', at: r.shake, blurb: 'closes the eating window' },
-    { id: 'unwind', label: 'Unwind', at: r.shake, until: r.lightsOut, blurb: r.unwindCap ? `games, show, whatever — ${r.unwindCap} min cap` : 'games, show, whatever' },
+    { id: 'unwind', label: 'Unwind', at: r.shake, until: r.windDown, blurb: `games, show, whatever — hard stop ${clock(r.windDown)}` },
+    { id: 'windDown', label: 'Teeth & bed', at: r.windDown, until: r.lightsOut, blurb: 'teeth, face, phone on charge' },
     { id: 'lightsOut', label: 'Lights out', at: r.lightsOut, blurb: 'phone down' },
   ];
 }
