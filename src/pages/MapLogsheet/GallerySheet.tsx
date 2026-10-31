@@ -10,9 +10,13 @@
 //
 // Photos come through galleryService's cache so the pitch works offline once
 // it has been opened online at least once.
+//
+// On BC lawn rejuvenation days a built-in Service guide (prices by lot size) comes first.
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, ChevronLeft, ChevronRight, Settings, Plus, ArrowUp, ArrowDown, Pencil, Trash2, Loader, ImagePlus, Images, AlertCircle } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Settings, Plus, ArrowUp, ArrowDown, Pencil, Trash2, Loader, ImagePlus, Images, AlertCircle, DollarSign } from 'lucide-react';
+import type { ServiceGuide } from '../../lib/serviceGuide';
+import ServiceGuideSheet from './ServiceGuideSheet';
 import {
   GalleryStep, GALLERY_MAX_PHOTOS,
   listGallerySteps, createGalleryStep, updateGalleryStep, deleteGalleryStep, reorderGallerySteps,
@@ -22,6 +26,8 @@ import {
 interface GallerySheetProps {
   contractorId: string;
   onClose: () => void;
+  /** the day's price guide (BC lawn rejuvenation), shown first */
+  guide?: ServiceGuide | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,11 +149,11 @@ const ZoomableImage: React.FC<{ path: string; onSwipe: (dir: -1 | 1) => void; on
 // ---------------------------------------------------------------------------
 // Sheet
 // ---------------------------------------------------------------------------
-const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) => {
+const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose, guide }) => {
   const [steps, setSteps] = useState<GalleryStep[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<'view' | 'show' | 'setup' | 'edit'>('view');
+  const [mode, setMode] = useState<'view' | 'show' | 'setup' | 'edit' | 'guide'>('view');
   const [index, setIndex] = useState(0);       // step being shown
   const [photoIdx, setPhotoIdx] = useState(0); // photo within that step
   const [chrome, setChrome] = useState(true);  // overlays visible in show mode
@@ -307,7 +313,7 @@ const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) =>
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
       {/* Header (not in show mode — that has its own overlay) */}
-      {mode !== 'show' && (
+      {mode !== 'show' && mode !== 'guide' && (
       <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-800 bg-black/95">
         <div className="flex items-center gap-2 min-w-0">
           <Images size={18} className="text-yellow-300 shrink-0" />
@@ -348,6 +354,24 @@ const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) =>
         <div className="shrink-0 mx-3 mt-2 px-3 py-2 rounded-lg bg-red-900/30 border border-red-800 text-red-200 text-xs flex items-center gap-2">
           <AlertCircle size={14} /> {error}
           <button type="button" onClick={() => setError(null)} className="ml-auto text-red-300"><X size={14} /></button>
+        </div>
+      )}
+
+      {/* ── SERVICE GUIDE ── */}
+      {mode === 'guide' && guide && <ServiceGuideSheet guide={guide} onBack={() => setMode('view')} />}
+
+      {/* the price guide card, first in the gallery */}
+      {mode === 'view' && guide && (
+        <div className="shrink-0 px-3 pt-3">
+          <button type="button" onClick={() => setMode('guide')}
+            className="w-full text-left rounded-xl bg-green-950/70 border border-green-700 active:border-yellow-400 px-4 py-3 flex items-center gap-3">
+            <span className="w-11 h-11 rounded-full bg-green-600 flex items-center justify-center shrink-0"><DollarSign size={22} className="text-white" /></span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-white font-bold text-base">Service guide</span>
+              <span className="block text-xs text-green-200">Lawn rejuvenation prices by lot size · show it at the door</span>
+            </span>
+            <ChevronRight size={20} className="text-green-300" />
+          </button>
         </div>
       )}
 
