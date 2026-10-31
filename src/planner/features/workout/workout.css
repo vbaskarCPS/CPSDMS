@@ -94,3 +94,5 @@
 .wo-review b { display: block; font-size: 13px; margin-bottom: 4px; }
 .wo-review p { margin: 0; font-size: 14px; line-height: 1.45; }
 .wo-review.is-waiting p { opacity: .7; font-style: italic; }
+
+.wo-lastnote--coach { color: var(--accent); font-style: normal; display: flex; gap: 6px; align-items: center; }

@@ -1,13 +1,16 @@
 // src/planner/features/workout/LiveWorkout.tsx — /workout/live/:id: log sets one thumb at a time. Finished sessions open read-only.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ChevronDown, ChevronUp, Plus, Trophy, Trash2, Repeat2, Clock, Sparkles } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus, Trophy, Trash2, Repeat2, Clock, Sparkles, Flame } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
 import { Page, Header, Card, Button, Sheet, Stat, TextArea, useToast } from '../../ui/primitives';
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
 import { stepFor } from './progression';
 import { coach } from '../../lib/ai';
 import { daysAgo, detectPRs, exerciseHistory, loadCustomExercises, loadWorkouts, saveWorkout } from './store';
+import { dayKey, getDoc, putDoc } from '../../lib/docs';
+import { normalizeDay, nowHM, type Day } from '../plan';
+import { routineNow } from '../../lib/routine';
 
 /** Sessions started before timed sets existed: a library-timed exercise with no mode becomes a timed one. */
 function normalizeModes(w: Workout): Workout {
@@ -20,7 +23,27 @@ function normalizeModes(w: Workout): Workout {
   });
   return changed ? { ...w, exercises } : w;
 }
-import { durationMin, fmtNum, fmtSec, isUnilateral, setsDone, volumeOf, type Exercise, type SetLog, type Workout, type WorkoutExercise } from './types';
+
+/** The coach's PLAN JSON → prescriptions keyed by exerciseId (names matched to this session's exercises). */
+function parsePlan(jsonText: string, w: Workout): Record<string, NextRx> | undefined {
+  try {
+    const arr = JSON.parse(jsonText) as Record<string, unknown>[];
+    if (!Array.isArray(arr)) return undefined;
+    const out: Record<string, NextRx> = {};
+    const n = (v: unknown) => (typeof v === 'number' && isFinite(v) && v >= 0 ? v : undefined);
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (const it of arr) {
+      const name = norm(String(it.name || ''));
+      const ex = w.exercises.find(e => norm(e.name) === name) || w.exercises.find(e => norm(e.name).includes(name) || name.includes(norm(e.name)));
+      if (!ex || !name) continue;
+      const rx: NextRx = { weight: n(it.weight), reps: n(it.reps) ? Math.round(n(it.reps)!) : undefined, repsR: n(it.repsR) ? Math.round(n(it.repsR)!) : undefined, sets: n(it.sets) ? Math.min(8, Math.max(1, Math.round(n(it.sets)!))) : undefined, seconds: ex.mode === 'time' ? n(it.seconds) : undefined, restSec: n(it.rest) ? Math.round(n(it.rest)!) : undefined, cue: typeof it.cue === 'string' ? it.cue.trim().slice(0, 160) : undefined };
+      if (ex.mode === 'time') { rx.weight = undefined; rx.reps = undefined; rx.repsR = undefined; }
+      out[ex.exerciseId] = rx;
+    }
+    return Object.keys(out).length ? out : undefined;
+  } catch { return undefined; }
+}
+import { durationMin, fmtNum, fmtSec, isUnilateral, setsDone, volumeOf, type Exercise, type NextRx, type SetLog, type Workout, type WorkoutExercise } from './types';
 import { CheckBig, ExercisePicker, RestTimer, Stepper, TimedSet } from './parts';
 import { useUnits } from './WorkoutHome';
 
@@ -156,14 +179,18 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
         return { name: e.name, plan_cue: e.note, target: e.mode === 'time' ? `${e.sets.length} × ${fmtSec(e.sets[0]?.seconds || 0)}` : `${e.sets.length} × ${e.targetReps || '8-12'}`, sets: e.sets.map(fmt), my_note: e.comment?.trim() || undefined, last_session: last ? { sets: last.sets.map(fmt), note: last.comment || undefined } : undefined };
       }),
     };
-    const ask = 'I just completed this workout. Read every set, my note on each exercise and the overall note, then write ONE paragraph (90-130 words, no headings, no lists) reviewing the session and telling me exactly what to do next workout: which exercises to go up on (and by how much), which to hold or fix form on, anything my notes flag (pain, fatigue, too easy), and one thing to focus on. Speak to me directly. Session (JSON):\n' + JSON.stringify(session);
+    const ask = 'I just completed this workout. Read every set, my note on each exercise and the overall note. Reply in two parts.\n' +
+      'PART 1: ONE paragraph (90-130 words, no headings, no lists) reviewing the session and telling me what to do next workout: which exercises to go up on (and by how much), which to hold or fix form on, anything my notes flag (pain, fatigue, too easy), and one thing to focus on. Speak to me directly.\n' +
+      'PART 2: on its own line write PLAN: followed by a JSON array, one object per exercise, exactly these keys: {"name": the exercise name as given, "weight": number in ' + units + ' (0 for bodyweight/timed), "reps": number per set (left side for one-arm moves; omit for timed), "repsR": number (one-arm moves only), "sets": number, "seconds": number (timed moves only), "rest": seconds, "cue": one short sentence}. Respect my notes: if I said something hurt, lower or hold it; if I said it was easy, go up by a sensible step (' + (units === 'kg' ? '2.5 kg dumbbells, 5 kg barbell' : '5 lb dumbbells, 10 lb barbell') + '). No text after the JSON.\nSession (JSON):\n' + JSON.stringify(session);
     setReviewing(true);
     coach([{ role: 'user', content: ask }], { units }).then(reply => {
-      const review = reply.replace(/\s+/g, ' ').trim();
+      const m = reply.match(/PLAN:\s*(\[[\s\S]*\])/i);
+      const review = (m ? reply.slice(0, m.index) : reply).replace(/PART 1:?/i, '').replace(/\s+/g, ' ').trim();
+      const next = m ? parsePlan(m[1], done) : undefined;
       if (!review) return;
       const cur = latest.current && latest.current.id === done.id ? latest.current : done;
-      const next = { ...cur, review };
-      persist(next, true); setSummary(s => (s ? { ...s, review } : s));
+      const saved = { ...cur, review, next };
+      persist(saved, true); setSummary(s => (s ? { ...s, review, next } : s));
     }).catch(() => undefined).finally(() => setReviewing(false));
   };
   const finish = () => {
@@ -173,7 +200,16 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     done.prs = detectPRs(done, history);
     persist(done, true); setSummary(done);
     reviewSession(done);
+    // the routine's gym block is done
+    void (async () => {
+      try {
+        const k = dayKey();
+        const d = normalizeDay(await getDoc<Day>('day', k));
+        if (!d.ticks.gym) await putDoc('day', k, { ...d, ticks: { ...d.ticks, gym: nowHM() } });
+      } catch { /* the Today screen can be ticked by hand */ }
+    })();
   };
+  const night = routineNow().profile === 'night';
   // last session's review, shown while training (same template first, else the latest one)
   const lastReview = useMemo(() => {
     if (!w || readOnly) return null;
@@ -214,6 +250,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
             </div>
             {isOpen && (
               <div className="wo-ex__body">
+                {ex.coachCue && <p className="wo-lastnote wo-lastnote--coach"><Sparkles size={12} aria-hidden /> Coach: {ex.coachCue}</p>}
                 {ex.lastComment && <p className="wo-lastnote">Last time: {ex.lastComment}</p>}
                 {tip && tip.ei === ei && tip.text && <div className={`wo-tip ${tip.ai ? 'is-ai' : ''}`}><Sparkles size={14} aria-hidden /> <span>{tip.text}</span></div>}
                 {!readOnly && <div className="wo-restchips">rest {RESTS.map(r => <button key={r} type="button" className={ex.restSec === r ? 'is-on' : ''} onClick={() => setRestSec(ei, r)}>{r}s</button>)}{ex.mode === 'time' && <button type="button" className={ex.restSec === 0 ? 'is-on' : ''} onClick={() => setRestSec(ei, 0)}>none</button>}</div>}
@@ -286,7 +323,10 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
             {(reviewing || summary.review) && (
               <div className={`wo-review ${reviewing && !summary.review ? 'is-waiting' : ''}`}><Sparkles size={16} aria-hidden /><div><b>Coach's review</b><p>{summary.review || 'Reading your sets and notes…'}</p></div></div>
             )}
-            <Button block primary onClick={() => nav('/workout', { replace: true })}>Done</Button>
+            {summary.next && Object.keys(summary.next).length > 0 && <p className="pl-muted" style={{ fontSize: 13 }}>Next session is set up from this: {Object.keys(summary.next).length} exercise{Object.keys(summary.next).length > 1 ? 's' : ''} prefilled with the coach's numbers.</p>}
+            {night
+              ? <><Button block primary onClick={() => nav('/plan/night', { replace: true })}><Flame size={18} /> Sauna → Day review</Button><Button block ghost onClick={() => nav('/workout', { replace: true })}>Done</Button></>
+              : <Button block primary onClick={() => nav('/workout', { replace: true })}>Done</Button>}
           </>
         )}
       </Sheet>

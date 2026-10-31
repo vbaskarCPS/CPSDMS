@@ -1,8 +1,8 @@
-// src/planner/features/plan/Night.tsx — Miracle Night: shake → unwind (capped) → quick review and
-// scorecard → tomorrow's #1 → lights out. A countdown to lights out sits at the top. Nothing blocks.
+// src/planner/features/plan/Night.tsx — Miracle Night (night profile): sauna → day review and scorecard →
+// tomorrow's #1 → shake → unwind (capped) → lights out. Morning profile: unwind → review → #1 → in bed. A countdown to lights out sits at the top. Nothing blocks.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, Moon, Gamepad2, Sparkles, Play, Square, CupSoda } from 'lucide-react';
+import { Check, Moon, Gamepad2, Sparkles, Play, Square, CupSoda, Flame } from 'lucide-react';
 import { dayKey, getDoc, putDoc } from '../../lib/docs';
 import { useDoc } from '../../lib/useDoc';
 import { reflect } from '../../lib/ai';
@@ -34,6 +34,9 @@ export function Night() {
   const unwinding = !!day.night.unwindStart && !day.night.unwindEnd;
   const unwindSec = day.night.unwindStart ? Math.floor(((day.night.unwindEnd ? new Date(day.night.unwindEnd).getTime() : now) - new Date(day.night.unwindStart).getTime()) / 1000) : 0;
   const capSec = routine.unwindCap * 60;
+  const saunaLeft = day.night.saunaStart ? routine.saunaMin * 60 - Math.floor((now - new Date(day.night.saunaStart).getTime()) / 1000) : 0;
+  const saunaHit = useRef(false);
+  useEffect(() => { if (day.night.saunaStart && !day.ticks.sauna && saunaLeft <= 0 && !saunaHit.current) { saunaHit.current = true; beep(); } }, [saunaLeft, day.night.saunaStart, day.ticks.sauna]);
   const overCap = capSec > 0 && unwindSec >= capSec;
   useEffect(() => {
     if (unwinding && overCap && !capHit.current) { capHit.current = true; beep(); }
@@ -84,23 +87,18 @@ export function Night() {
         <div>
           <p className="pl-eyebrow">{bedWord} {clock(routine.lightsOut)}</p>
           <b className="night-top__big">{done ? `In bed ${clock(day.ticks.lightsOut!)}` : left > 0 ? `${fmtLeft(left)} left` : `${fmtLeft(-left)} past`}</b>
-          <small>{done ? `≈ ${sleepEstimate(day.ticks.lightsOut!, routine.wake)} until ${clock(routine.wake)}` : morningP ? 'unwind · review · tomorrow\'s #1 · bed with Kiaan' : 'shake · unwind · review · tomorrow\'s #1'}</small>
+          <small>{done ? `≈ ${sleepEstimate(day.ticks.lightsOut!, routine.wake)} until ${clock(routine.wake)}` : morningP ? 'unwind · review · tomorrow\'s #1 · bed with Kiaan' : 'sauna · day review · shake · unwind'}</small>
         </div>
       </Card>
 
       {loading ? <p className="pl-muted">Loading…</p> : (
         <>
-          {/* 1 · shake (night profile only) */}
-          {!morningP && <Card className={`night-stage ${day.ticks.shake ? 'is-done' : ''}`}>
-            <button type="button" className={`pl-check ${day.ticks.shake ? 'is-on' : ''}`} aria-label="Shake done" onClick={() => set(d => ({ ...d, ticks: { ...d.ticks, shake: d.ticks.shake ? undefined : nowHM() } }))}><Check /></button>
-            <div className="pl-grow"><b><CupSoda aria-hidden /> Protein shake</b><small>{day.ticks.shake ? `${clock(day.ticks.shake)} · eating window closed` : 'closes the eating window'}</small></div>
-            <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">Log</Link>
-          </Card>}
+          {morningP ? (<>
+          {/* morning: unwind → review → tomorrow's #1 → in bed */}
 
-          {/* 2 · unwind */}
           <Card className={`night-stage night-stage--col ${day.night.unwindEnd ? 'is-done' : ''}`}>
             <div className="pl-row">
-              <div className="pl-grow"><b><Gamepad2 aria-hidden /> Unwind</b><small>{routine.unwindCap ? `games, show, whatever — ${routine.unwindCap} min, then the review` : 'games, show, whatever — then the review'}</small></div>
+              <div className="pl-grow"><b><Gamepad2 aria-hidden /> Unwind</b><small>{routine.unwindCap ? `games, show, whatever — ${routine.unwindCap} min${morningP ? ', then the review' : ', then lights out'}` : morningP ? 'games, show, whatever — then the review' : 'games, show, whatever — then lights out'}</small></div>
               {!day.night.unwindStart && <Button small primary onClick={() => set(d => ({ ...d, night: { ...d.night, unwindStart: new Date().toISOString() } }))}><Play /> Start</Button>}
               {unwinding && <Button small onClick={() => set(d => ({ ...d, night: { ...d.night, unwindEnd: new Date().toISOString() } }))}><Square /> Done</Button>}
             </div>
@@ -112,7 +110,6 @@ export function Night() {
             )}
           </Card>
 
-          {/* 3 · review */}
           <Card className={`pl-stack ${reviewN === 3 && avg !== null ? 'night-done' : ''}`}>
             <h2>Review <span className="pl-muted" style={{ fontSize: 13, fontWeight: 500 }}>{reviewN}/3 · {prioSet ? `${prioDone}/${prioSet} priorities done` : 'no priorities set'}</span></h2>
             <Prompt q="Win of the day" value={day.night.review.win} onChange={v => set(d => ({ ...d, night: { ...d.night, review: { ...d.night.review, win: v } } }))} rows={1} />
@@ -128,18 +125,81 @@ export function Night() {
             <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another coach's note" : "Coach's note on today"}</Button>
           </Card>
 
-          {/* 4 · tomorrow */}
           <Card className="pl-stack">
             <h2>Tomorrow's #1</h2>
             <p className="pl-muted" style={{ fontSize: 13 }}>The one thing that makes tomorrow a win. It'll be waiting in tomorrow's {morningP ? 'Morning' : 'Bed'} Brief.</p>
             <Input placeholder="Tomorrow I will…" value={day.night.tomorrowTop || ''} onChange={e => set(d => ({ ...d, night: { ...d.night, tomorrowTop: e.target.value } }))} onBlur={e => { if (e.target.value.trim()) void saveTomorrowTop(e.target.value.trim()); }} />
           </Card>
 
-          {/* 5 · lights out */}
           {!done
             ? <Button primary block onClick={lightsOut} style={{ minHeight: 60, fontSize: 18 }}><Moon /> {morningP ? 'In bed with Kiaan' : 'Lights out'}</Button>
             : <Card className="night-goodnight"><Moon aria-hidden /><div><b>Good night.</b><small>{bedWord} {clock(day.ticks.lightsOut!)} · up {clock(routine.wake)}{morningP ? '' : ' with Kiaan'} · ≈ {sleepEstimate(day.ticks.lightsOut!, routine.wake)} sleep</small></div>
                 <Button small ghost onClick={() => set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: undefined } }))}>Undo</Button></Card>}
+          </>) : (<>
+          {/* night: gym → sauna → day review → tomorrow's #1 → shake → unwind → lights out */}
+
+          {routine.saunaMin > 0 && (
+          <Card className={`night-stage night-stage--col ${day.ticks.sauna ? 'is-done' : ''}`}>
+            <div className="pl-row">
+              <button type="button" className={`pl-check ${day.ticks.sauna ? 'is-on' : ''}`} aria-label="Sauna done" onClick={() => set(d => ({ ...d, ticks: { ...d.ticks, sauna: d.ticks.sauna ? undefined : nowHM() } }))}><Check /></button>
+              <div className="pl-grow"><b><Flame aria-hidden /> Sauna</b><small>{day.ticks.sauna ? `${clock(day.ticks.sauna)} · done` : `${routine.saunaMin} min after the gym · think the day over, then the review`}</small></div>
+              {!day.night.saunaStart && !day.ticks.sauna && <Button small primary onClick={() => set(d => ({ ...d, night: { ...d.night, saunaStart: new Date().toISOString() } }))}><Play /> Start</Button>}
+            </div>
+            {day.night.saunaStart && !day.ticks.sauna && (
+              <div className={`night-unwind ${saunaLeft <= 0 ? 'is-over' : ''}`}>
+                <span className="night-unwind__time">{saunaLeft > 0 ? fmtSec(saunaLeft) : fmtSec(-saunaLeft)}</span>
+                <span className="pl-muted">{saunaLeft > 0 ? 'left' : 'over — out you get'}</span>
+              </div>
+            )}
+          </Card>
+          )}
+
+          <Card className={`pl-stack ${reviewN === 3 && avg !== null ? 'night-done' : ''}`}>
+            <h2>Review <span className="pl-muted" style={{ fontSize: 13, fontWeight: 500 }}>{reviewN}/3 · {prioSet ? `${prioDone}/${prioSet} priorities done` : 'no priorities set'}</span></h2>
+            <Prompt q="Win of the day" value={day.night.review.win} onChange={v => set(d => ({ ...d, night: { ...d.night, review: { ...d.night.review, win: v } } }))} rows={1} />
+            <Prompt q="What dragged" value={day.night.review.drag} onChange={v => set(d => ({ ...d, night: { ...d.night, review: { ...d.night.review, drag: v } } }))} rows={1} />
+            <Prompt q="One change for tomorrow" value={day.night.review.tomorrow} onChange={v => set(d => ({ ...d, night: { ...d.night, review: { ...d.night.review, tomorrow: v } } }))} rows={1} />
+            <hr className="pl-divider" />
+            <p className="pl-label">Scorecard, 1–5</p>
+            {SCORE_KEYS.map(s => (
+              <Score key={s.key} label={<span>{s.label} <span className="pl-muted" style={{ fontWeight: 400 }}>— {s.hint}</span></span>} value={day.scores[s.key]} onChange={v => set(d => ({ ...d, scores: { ...d.scores, [s.key]: v } }))} />
+            ))}
+            {avg !== null && <div className="plan-avg"><b>{avg}</b><small>/ 5 today</small></div>}
+            {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
+            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another coach's note" : "Coach's note on today"}</Button>
+          </Card>
+
+          <Card className="pl-stack">
+            <h2>Tomorrow's #1</h2>
+            <p className="pl-muted" style={{ fontSize: 13 }}>The one thing that makes tomorrow a win. It'll be waiting in tomorrow's {morningP ? 'Morning' : 'Bed'} Brief.</p>
+            <Input placeholder="Tomorrow I will…" value={day.night.tomorrowTop || ''} onChange={e => set(d => ({ ...d, night: { ...d.night, tomorrowTop: e.target.value } }))} onBlur={e => { if (e.target.value.trim()) void saveTomorrowTop(e.target.value.trim()); }} />
+          </Card>
+
+          <Card className={`night-stage ${day.ticks.shake ? 'is-done' : ''}`}>
+            <button type="button" className={`pl-check ${day.ticks.shake ? 'is-on' : ''}`} aria-label="Shake done" onClick={() => set(d => ({ ...d, ticks: { ...d.ticks, shake: d.ticks.shake ? undefined : nowHM() } }))}><Check /></button>
+            <div className="pl-grow"><b><CupSoda aria-hidden /> Protein shake</b><small>{day.ticks.shake ? `${clock(day.ticks.shake)} · eating window closed` : 'closes the eating window'}</small></div>
+            <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">Log</Link>
+          </Card>
+
+          <Card className={`night-stage night-stage--col ${day.night.unwindEnd ? 'is-done' : ''}`}>
+            <div className="pl-row">
+              <div className="pl-grow"><b><Gamepad2 aria-hidden /> Unwind</b><small>{routine.unwindCap ? `games, show, whatever — ${routine.unwindCap} min${morningP ? ', then the review' : ', then lights out'}` : morningP ? 'games, show, whatever — then the review' : 'games, show, whatever — then lights out'}</small></div>
+              {!day.night.unwindStart && <Button small primary onClick={() => set(d => ({ ...d, night: { ...d.night, unwindStart: new Date().toISOString() } }))}><Play /> Start</Button>}
+              {unwinding && <Button small onClick={() => set(d => ({ ...d, night: { ...d.night, unwindEnd: new Date().toISOString() } }))}><Square /> Done</Button>}
+            </div>
+            {day.night.unwindStart && (
+              <div className={`night-unwind ${overCap ? 'is-over' : ''}`}>
+                <span className="night-unwind__time">{fmtSec(unwindSec)}</span>
+                <span className="pl-muted">{capSec ? (overCap ? `${fmtSec(unwindSec - capSec)} over the ${routine.unwindCap} min` : `of ${routine.unwindCap} min`) : 'no cap'}{day.night.unwindEnd ? ' · done' : ''}</span>
+              </div>
+            )}
+          </Card>
+
+          {!done
+            ? <Button primary block onClick={lightsOut} style={{ minHeight: 60, fontSize: 18 }}><Moon /> {morningP ? 'In bed with Kiaan' : 'Lights out'}</Button>
+            : <Card className="night-goodnight"><Moon aria-hidden /><div><b>Good night.</b><small>{bedWord} {clock(day.ticks.lightsOut!)} · up {clock(routine.wake)}{morningP ? '' : ' with Kiaan'} · ≈ {sleepEstimate(day.ticks.lightsOut!, routine.wake)} sleep</small></div>
+                <Button small ghost onClick={() => set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: undefined } }))}>Undo</Button></Card>}
+          </>)}
         </>
       )}
       {toast}

@@ -4,7 +4,7 @@ import { planFromText, type PlanResult } from '../../lib/ai';
 import { uid } from '../../ui/primitives';
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
 import { suggest, type Suggestion } from './progression';
-import { e1rm, type BodyWeight, type Exercise, type SetLog, type Template, type TemplateExercise, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
+import { e1rm, type BodyWeight, type Exercise, type NextRx, type SetLog, type Template, type TemplateExercise, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
 
 const DEFAULT_TEMPLATES: Omit<Template, 'id' | 'order'>[] = [
   { name: 'Upper body', days: [1, 4], exercises: [
@@ -81,23 +81,41 @@ export function nextTarget(workouts: Workout[], t: { exerciseId: string; targetS
   return suggest({ history: exerciseHistory(workouts, t.exerciseId), targetReps: t.targetReps, targetSets: t.targetSets, units, lower: isLower(ex), defaultStep: ex.defaultStep });
 }
 
-/** Build a session from a template, prefilled with the suggested weights and last time's numbers. */
+/** The coach's prescription for an exercise from the most recent completed session that has one (within 45 days). */
+export function nextRx(workouts: Workout[], exerciseId: string): NextRx | undefined {
+  const cutoff = daysAgo(45);
+  for (const w of workouts) {
+    if (!w.endedAt || w.date < cutoff) continue;
+    const rx = w.next?.[exerciseId];
+    if (rx) return rx;
+    if (w.exercises.some(e => e.exerciseId === exerciseId)) return undefined;   // did it since, with no prescription → don't reach further back
+  }
+  return undefined;
+}
+
+/** Build a session from a template: the coach's prescription from last time when there is one, else the
+ *  progression rule's suggestion; last time's numbers alongside. */
 export function startFromTemplate(tpl: Template, workouts: Workout[], units: Units, custom: Exercise[] = []): Workout {
   const now = new Date();
   const exercises: WorkoutExercise[] = tpl.exercises.map(t => {
     const mode = t.mode || (isTimed(findExercise(t.exerciseId, custom)) ? 'time' : 'reps');
     const lastComment = exerciseHistory(workouts, t.exerciseId, 1)[0]?.comment?.trim() || undefined;
+    const rx = nextRx(workouts, t.exerciseId);
+    const n = Math.max(1, rx?.sets || t.targetSets);
+    const restSec = rx?.restSec || t.restSec;
+    const coachCue = rx?.cue?.trim() || undefined;
     if (mode === 'time') {
-      const sec = t.targetSec || 60;
-      const sets: SetLog[] = Array.from({ length: Math.max(1, t.targetSets) }, () => ({ weight: 0, reps: 0, seconds: sec, done: false }));
-      return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, mode, note: t.note, lastComment, sets };
+      const sec = rx?.seconds || t.targetSec || 60;
+      const sets: SetLog[] = Array.from({ length: n }, () => ({ weight: 0, reps: 0, seconds: sec, done: false }));
+      return { exerciseId: t.exerciseId, name: t.name, restSec, mode, note: t.note, lastComment, coachCue, sets };
     }
     const sug = nextTarget(workouts, t, units, custom);
     const last = exerciseHistory(workouts, t.exerciseId, 1)[0]?.sets || [];
-    const sets: SetLog[] = Array.from({ length: Math.max(1, t.targetSets) }, (_, i) => ({
-      weight: sug.weight, reps: sug.reps, done: false, prev: last[i] ? { weight: last[i].weight, reps: last[i].reps, repsR: last[i].repsR } : undefined,
+    const weight = rx?.weight ?? sug.weight, reps = rx?.reps ?? sug.reps;
+    const sets: SetLog[] = Array.from({ length: n }, (_, i) => ({
+      weight, reps, repsR: rx?.repsR, done: false, prev: last[i] ? { weight: last[i].weight, reps: last[i].reps, repsR: last[i].repsR } : undefined,
     }));
-    return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, targetReps: t.targetReps, note: t.note, lastComment, sets };
+    return { exerciseId: t.exerciseId, name: t.name, restSec, targetReps: rx?.reps ? String(rx.reps) : t.targetReps, note: t.note, lastComment, coachCue, sets };
   });
   return { id: uid(), date: dayKey(now), startedAt: now.toISOString(), templateId: tpl.id, name: tpl.name, exercises };
 }
