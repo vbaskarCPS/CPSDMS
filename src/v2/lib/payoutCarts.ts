@@ -180,7 +180,7 @@ export function cartsFromSession(input: { sessions: Row[]; transactions: Row[]; 
       };
     });
     const lead = users.get(String(s.worker_id));
-    const manager = lead?.metadata?.assignedManagerId ? users.get(String(lead.metadata.assignedManagerId))?.name || null : null;
+    const manager = cartManager(users, lead?.metadata?.assignedManagerId);
     const sales: CartSale[] = tx.map(t => ({
       route_code: t.customer_snapshot?.routeCode || null, address: t.customer_snapshot?.address || null,
       client_name: `${t.customer_snapshot?.firstName || ''} ${t.customer_snapshot?.lastName || ''}`.trim() || null,
@@ -240,4 +240,27 @@ export async function handOffDay(centerId: string, date: string): Promise<{ cart
   await saveDay(centerId, date, live.carts, live.lines);
   must(await db.rpc('app_handoff_day', { p_center: centerId, p_day: date }));
   return { carts: live.carts.length, open: live.carts.filter(c => !isFinalized(c)).length };
+}
+
+/**
+ * Who a cart is credited to: its team's manager, or, when managers were paired for the day, every
+ * partner ("Franklyn Mitchell & Jovan Chung"), in name order.
+ */
+export function cartManager(users: Map<string, { name?: string; metadata?: { pairedWith?: unknown } }>, managerId: unknown): string | null {
+  if (!managerId) return null;
+  const m = users.get(String(managerId));
+  if (!m?.name) return null;
+  const partners = Array.isArray(m.metadata?.pairedWith) ? (m.metadata!.pairedWith as unknown[]).map(id => users.get(String(id))?.name).filter((n): n is string => !!n) : [];
+  return [m.name, ...partners].sort((a, b) => a.localeCompare(b)).join(' & ');
+}
+
+/** Each manager's sales from these carts; a cart credited to paired managers is split evenly between them. */
+export function salesByManager(carts: { manager: string | null; sales: { price: number }[] }[]): { manager: string; sales: number }[] {
+  const out = new Map<string, number>();
+  for (const c of carts) {
+    const names = (c.manager || '').split(' & ').map(x => x.trim()).filter(Boolean);
+    const gross = c.sales.reduce((t, x) => t + (Number(x.price) || 0), 0);
+    for (const n of names.length ? names : ['No manager']) out.set(n, (out.get(n) || 0) + gross / (names.length || 1));
+  }
+  return [...out.entries()].map(([manager, sales]) => ({ manager, sales: Math.round(sales * 100) / 100 })).sort((a, b) => b.sales - a.sales);
 }

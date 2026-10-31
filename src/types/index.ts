@@ -156,6 +156,11 @@ export interface ManagementUser {
   // sees all routes/bookings/workers/locations for everyone in this list, plus
   // their own. Stored in users.metadata.floatingFor. Absent/empty = not floating.
   floatingFor?: string[];
+  // --- PAIRED MANAGERS ---
+  // The other managers this one shares the management of their teams with today (Start session's
+  // team board). Each partner also floats for the others (above) and has all the group's maps.
+  // Their carts are credited to all of them, the sales split evenly. Stored in users.metadata.pairedWith.
+  pairedWith?: string[];
   // --- PER-MANAGER DIGITAL MAPPING (Sealing, non-mapping CCs) ---
   // Present = this manager is digitally mapped for the session. See
   // ManagerMappingConfig. Stored in users.metadata.digitalMapping.

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildLegacySession, legacyManagerId, mappingsFor, nextTeamName, planProblems, formatPhone, type Plan } from './startSession';
+import { buildLegacySession, groupOf, legacyManagerId, mappingsFor, nextTeamName, pairManagers, planProblems, formatPhone, unpairManager, type Plan } from './startSession';
+import { cartManager, salesByManager } from './payoutCarts';
 import { defaultRateCard } from './rateCard';
 import type { RosterRow } from './workerbook';
 
@@ -109,5 +110,55 @@ describe('Alumni rate on the live map counts app days too', () => {
     const plan = basePlan();
     expect(kyle(plan).alumniRate).toBe(0);                                         // 28 days: under 50
     expect(kyle({ ...plan, appDaysBefore: { h3: 22 } }).alumniRate).toBe(0.25);   // 28 + 22 = 50
+  });
+});
+
+describe('paired managers', () => {
+  const dana = { id: 'u-dana', full_name: 'Dana Lee', username: 'leeda', phone: null };
+  it('pairs by dragging one onto another, and splits again', () => {
+    let p = pairManagers([], 'u-chad', 'u-cheryl');
+    expect(p).toEqual([['u-cheryl', 'u-chad']]);
+    p = pairManagers(p, 'u-dana', 'u-chad');                   // onto anyone in the pair joins the group
+    expect(p).toEqual([['u-cheryl', 'u-chad', 'u-dana']]);
+    expect(groupOf(p, 'u-dana')).toEqual(['u-cheryl', 'u-chad', 'u-dana']);
+    expect(groupOf(p, 'u-nobody')).toEqual(['u-nobody']);
+    expect(unpairManager(p, 'u-chad')).toEqual([['u-cheryl', 'u-dana']]);
+    expect(unpairManager(unpairManager(p, 'u-chad'), 'u-dana')).toEqual([]);   // one left on their own is no longer a pair
+    expect(pairManagers(p, 'u-chad', 'u-cheryl')).toBe(p);                      // already together
+  });
+  it('gives each partner the group’s maps, and lets them see each other’s team (floater)', () => {
+    const plan = { ...basePlan(), managers: [cheryl, chad, dana], pairs: [['u-cheryl', 'u-chad']] };
+    const { data } = buildLegacySession(plan, CENTER);
+    const ch = data.managers.find(m => m.name === 'Cheryl Merrick')!, cs = data.managers.find(m => m.name === 'Chad Stevens')!;
+    expect(ch.floatingFor).toEqual(['rm_chadstevens']);
+    expect(cs.pairedWith).toEqual(['rm_cherylmerrick']);
+    expect(ch.digitalMappings!.map(m => m.areaName).sort()).toEqual(['GLEN ABBEY #1', 'WEST OAKS TRAILS #2']);
+    expect(cs.digitalMappings!.map(m => m.areaName).sort()).toEqual(['GLEN ABBEY #1', 'WEST OAKS TRAILS #2']);
+    expect(data.managers.some(m => m.name === 'Dana Lee')).toBe(false);          // not on the day
+    // a partner with nothing in their own name still comes on the day
+    const solo = buildLegacySession({ ...plan, teams: plan.teams.map(t => ({ ...t, managerId: 'u-cheryl' })), routes: plan.routes.map(r => ({ ...r, managerId: 'u-cheryl' })) }, CENTER);
+    expect(solo.data.managers.map(m => m.name).sort()).toEqual(['Chad Stevens', 'Cheryl Merrick']);
+  });
+  it('a paired manager who isn’t available stops Start', () => {
+    expect(planProblems({ ...basePlan(), pairs: [['u-cheryl', 'u-gone']] }).some(e => e.includes('paired manager'))).toBe(true);
+  });
+});
+
+describe('shared teams’ sales', () => {
+  it('credits a shared cart to every partner, and splits its sales evenly', () => {
+    const users = new Map<string, { name?: string; metadata?: { pairedWith?: unknown } }>([
+      ['rm_jovanchung', { name: 'Jovan Chung', metadata: { pairedWith: ['rm_franklynmitchell'] } }],
+      ['rm_franklynmitchell', { name: 'Franklyn Mitchell', metadata: { pairedWith: ['rm_jovanchung'] } }],
+      ['rm_solo', { name: 'Sam Solo' }],
+    ]);
+    expect(cartManager(users, 'rm_jovanchung')).toBe('Franklyn Mitchell & Jovan Chung');
+    expect(cartManager(users, 'rm_solo')).toBe('Sam Solo');
+    expect(cartManager(users, null)).toBeNull();
+    const by = salesByManager([
+      { manager: 'Franklyn Mitchell & Jovan Chung', sales: [{ price: 300 }, { price: 101 }] },
+      { manager: 'Sam Solo', sales: [{ price: 150 }] },
+      { manager: 'Jovan Chung', sales: [{ price: 50 }] },
+    ]);
+    expect(by).toEqual([{ manager: 'Jovan Chung', sales: 250.5 }, { manager: 'Franklyn Mitchell', sales: 200.5 }, { manager: 'Sam Solo', sales: 150 }]);
   });
 });
