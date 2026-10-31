@@ -1,6 +1,24 @@
 {
     "rewrites": [
         {
+            "source": "/(.*)",
+            "has": [
+                {
+                    "type": "host",
+                    "value": "mainstreetai.propertystars.app"
+                }
+            ],
+            "destination": "/mainstreetai.html"
+        },
+        {
+            "source": "/site/mainstreetai",
+            "destination": "/mainstreetai.html"
+        },
+        {
+            "source": "/site/mainstreetai/",
+            "destination": "/mainstreetai.html"
+        },
+        {
             "source": "/vijayplanner",
             "destination": "/planner.html"
         },
