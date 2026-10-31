@@ -6,6 +6,7 @@
 //   POST { token, action: 'food_text', text }                     → same shape
 //   POST { token, action: 'coach', messages: [{ role, content }], context }   → { reply }
 //   POST { token, action: 'habit', text, blocks: [{id,label,at,until?}], existing: [string] }  → a designed habit (implementation intention + stack)
+//   POST { token, action: 'dayplan', context, answers?, library, units }  → { review, questions, tomorrow }  (after a session: review + tomorrow's plan)
 //   POST { token, action: 'categorize', merchants: [string], categories: [string] }
 //        → { categories: { [merchant]: category } }
 //   POST { token, action: 'reflect', context }                     → { reply }  (2–3 sentences on the day)
@@ -157,6 +158,35 @@ const HABIT_SCHEMA = {
   }, required: ['name', 'identity', 'why', 'twoMinute', 'anchor', 'stack', 'cue'],
 };
 
+const DAYPLAN_SYSTEM = `You are Coach Claude. The person just completed today's workout (it is in the context with every set and note,
+along with recent sessions, habits, meals, days and the about_me notes — read the about_me notes first: they hold the
+training goals, health limits and session length). Produce:
+1. review: one or two short paragraphs (120-200 words total, no lists/headings) reviewing today's session using the real
+   numbers and notes, then what tomorrow's session is and why it fits the goals (everyday habit, no overtraining, strength
+   a couple of days a week, beginner HIIT for the lungs, mobility, hips/knees). Speak to the person directly.
+2. questions: exactly 2 short multiple-choice questions whose answers would change tomorrow's plan (e.g. how the hips/knees
+   feel, energy/sleep, time available, what they feel like). 3-4 choices each, a few words per choice. When answers are
+   provided in the message, return an empty questions list and fold the answers into the plan.
+3. tomorrow: a complete session for tomorrow, 40-70 minutes: name (short, with the focus), focus (strength | hiit |
+   mobility | mixed | active-recovery), minutes, why (one line), exercises in order with the same fields as a plan:
+   name, exerciseId from the library when one matches, mode 'time' for walks/bike/intervals/holds/flows (seconds), else
+   'reps' with sets, reps, restSec, a short note, and a starting weight in the user's units when it applies. Beginner
+   HIIT = short work intervals with generous rest (e.g. 20s on / 40s off, 8-10 rounds) on bike/rower/walk-run; mobility =
+   hip/knee-friendly flows and holds; never load painful joints. Keep the person's session length.`;
+const DAYPLAN_SCHEMA = {
+  type: 'object', properties: {
+    review: { type: 'string' },
+    questions: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' }, choices: { type: 'array', items: { type: 'string' } } }, required: ['id', 'text', 'choices'] } },
+    tomorrow: { type: 'object', properties: {
+      name: { type: 'string' }, focus: { type: 'string', enum: ['strength', 'hiit', 'mobility', 'mixed', 'active-recovery'] }, minutes: { type: 'integer' }, why: { type: 'string' },
+      exercises: { type: 'array', items: { type: 'object', properties: {
+        name: { type: 'string' }, exerciseId: { type: 'string' }, mode: { type: 'string', enum: ['reps', 'time'] },
+        sets: { type: 'integer' }, reps: { type: 'string' }, seconds: { type: 'integer' }, restSec: { type: 'integer' }, note: { type: 'string' }, weight: { type: 'number' },
+      }, required: ['name', 'mode', 'sets', 'restSec'] } },
+    }, required: ['name', 'focus', 'minutes', 'why', 'exercises'] },
+  }, required: ['review', 'questions', 'tomorrow'],
+};
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -236,6 +266,15 @@ Deno.serve(async req => {
       const existing = (Array.isArray(b.existing) ? b.existing : []).slice(0, 30) as string[];
       const r = await claudeJson<Record<string, unknown>>(HABIT_SYSTEM,
         [{ role: 'user', content: `My day (block id — label — time):\n${blocks.map(x => `${x.id} — ${x.label} — ${x.at}${x.until ? `–${x.until}` : ''}`).join('\n')}\n\nHabits I already have: ${existing.join('; ') || 'none'}\n\nWhat I want to do: ${text}` }], HABIT_SCHEMA, 1500);
+      return json(r);
+    }
+    if (action === 'dayplan') {
+      const library = (Array.isArray(b.library) ? b.library : []).filter(x => x && typeof x.id === 'string' && typeof x.name === 'string').slice(0, 200) as { id: string; name: string }[];
+      const units = b.units === 'kg' ? 'kg' : 'lb';
+      const answers = b.answers && typeof b.answers === 'object' ? b.answers as Record<string, string> : null;
+      const ctx = JSON.stringify(b.context ?? {}).slice(0, 24000);
+      const r = await claudeJson<Record<string, unknown>>(DAYPLAN_SYSTEM,
+        [{ role: 'user', content: `Units: ${units}\n\nLibrary (id — name):\n${library.map(x => `${x.id} — ${x.name}`).join('\n')}\n\n${answers ? `My answers to your questions: ${JSON.stringify(answers)}\n\n` : ''}Planner (JSON):\n${ctx}` }], DAYPLAN_SCHEMA, 4000);
       return json(r);
     }
     if (action === 'categorize') {

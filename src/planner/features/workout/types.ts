@@ -11,7 +11,8 @@ export const isUnilateral = (e?: { name?: string; unilateral?: boolean } | null)
 export type SetMode = 'reps' | 'time';
 
 export interface TemplateExercise { exerciseId: string; name: string; targetSets: number; targetReps: string; restSec: number; note?: string; mode?: SetMode; targetSec?: number }
-export interface Template { id: string; name: string; days?: number[]; exercises: TemplateExercise[]; order: number; archived?: boolean }
+// plannedFor = a one-off session Coach Claude set up for that date (YYYY-MM-DD); it's today's pick on that day
+export interface Template { id: string; name: string; days?: number[]; exercises: TemplateExercise[]; order: number; archived?: boolean; plannedFor?: string; focus?: string; minutes?: number }
 
 export interface SetLog { weight: number; reps: number; rpe?: number; done: boolean; prev?: { weight: number; reps: number; repsR?: number }; seconds?: number; repsR?: number }
 // Unilateral exercises (one-arm row, split squat…): reps = left side, repsR = right side, one weight.
