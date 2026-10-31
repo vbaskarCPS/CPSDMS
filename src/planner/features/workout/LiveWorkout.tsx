@@ -145,13 +145,41 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     setPicker(null);
   };
 
+  // the coach's paragraph about the session and the next one, written from every set and note
+  const [reviewing, setReviewing] = useState(false);
+  const reviewSession = (done: Workout) => {
+    const fmt = (x: SetLog) => (x.seconds && !x.reps ? fmtSec(x.seconds) : `${x.weight}×${x.reps}${x.repsR !== undefined ? `/${x.repsR}` : ''}${x.rpe ? `@${x.rpe}` : ''}`);
+    const session = {
+      name: done.name, minutes: durationMin(done), units, prs: done.prs, overall_note: done.notes || undefined,
+      exercises: done.exercises.map(e => {
+        const last = exerciseHistory(history, e.exerciseId, 1)[0];
+        return { name: e.name, plan_cue: e.note, target: e.mode === 'time' ? `${e.sets.length} × ${fmtSec(e.sets[0]?.seconds || 0)}` : `${e.sets.length} × ${e.targetReps || '8-12'}`, sets: e.sets.map(fmt), my_note: e.comment?.trim() || undefined, last_session: last ? { sets: last.sets.map(fmt), note: last.comment || undefined } : undefined };
+      }),
+    };
+    const ask = 'I just completed this workout. Read every set, my note on each exercise and the overall note, then write ONE paragraph (90-130 words, no headings, no lists) reviewing the session and telling me exactly what to do next workout: which exercises to go up on (and by how much), which to hold or fix form on, anything my notes flag (pain, fatigue, too easy), and one thing to focus on. Speak to me directly. Session (JSON):\n' + JSON.stringify(session);
+    setReviewing(true);
+    coach([{ role: 'user', content: ask }], { units }).then(reply => {
+      const review = reply.replace(/\s+/g, ' ').trim();
+      if (!review) return;
+      const cur = latest.current && latest.current.id === done.id ? latest.current : done;
+      const next = { ...cur, review };
+      persist(next, true); setSummary(s => (s ? { ...s, review } : s));
+    }).catch(() => undefined).finally(() => setReviewing(false));
+  };
   const finish = () => {
     if (!w) return;
     const done: Workout = { ...w, endedAt: new Date().toISOString(), exercises: w.exercises.map(e => ({ ...e, sets: e.sets.filter(s => s.done) })).filter(e => e.sets.length) };
     setRest(null);
     done.prs = detectPRs(done, history);
-    persist(done, true); setRest(null); setSummary(done);
+    persist(done, true); setSummary(done);
+    reviewSession(done);
   };
+  // last session's review, shown while training (same template first, else the latest one)
+  const lastReview = useMemo(() => {
+    if (!w || readOnly) return null;
+    const fin = history.filter(x => x.endedAt && !x.discarded && x.review).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+    return fin.find(x => x.templateId && x.templateId === w.templateId) || fin[0] || null;
+  }, [w, history, readOnly]);
   const discard = () => {
     if (!w || !confirm('Discard this session?')) return;
     window.clearTimeout(timer.current); latest.current = null;
@@ -169,6 +197,8 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
         title={w.name} right={!readOnly && <Button small primary onClick={finish} disabled={setsDone(w) === 0}>Finish</Button>} />
 
       {readOnly && w.prs && w.prs.length > 0 && <Card accent><div className="pl-row"><Trophy /><div><b>{w.prs.length} personal record{w.prs.length > 1 ? 's' : ''}</b><p className="pl-muted" style={{ fontSize: 13 }}>{w.prs.join(' · ')}</p></div></div></Card>}
+      {readOnly && w.review && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>Coach's review</b><p>{w.review}</p></div></div>}
+      {lastReview && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>From your last session ({new Date(lastReview.startedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })})</b><p>{lastReview.review}</p></div></div>}
 
       {w.exercises.map((ex, ei) => {
         const lib = findExercise(ex.exerciseId, custom) || LIBRARY[0];
@@ -234,6 +264,8 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
         <TextArea value={w.notes || ''} readOnly={readOnly} placeholder="How did it go? Sleep, energy, tweaks…" onChange={e => persist({ ...w, notes: e.target.value })} />
       </Card>
 
+      {!readOnly && <Button block primary onClick={finish} disabled={setsDone(w) === 0}><Sparkles size={18} /> Complete workout</Button>}
+      {!readOnly && <p className="pl-muted" style={{ fontSize: 13, textAlign: 'center', margin: '-6px 0 0' }}>The coach reads every set and note and writes your plan for next time.</p>}
       {!readOnly && <Button block ghost danger onClick={discard}>Discard session</Button>}
       {rest && <div style={{ height: 64 }} />}
 
@@ -251,6 +283,9 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
             {summary.prs && summary.prs.length > 0 ? (
               <Card accent><div className="pl-row"><Trophy /><div><b>New PR{summary.prs.length > 1 ? 's' : ''}!</b>{summary.prs.map(p => <p key={p} style={{ fontSize: 14 }}>{p}</p>)}</div></div></Card>
             ) : <p className="pl-muted">Good work. Consistency is the PR.</p>}
+            {(reviewing || summary.review) && (
+              <div className={`wo-review ${reviewing && !summary.review ? 'is-waiting' : ''}`}><Sparkles size={16} aria-hidden /><div><b>Coach's review</b><p>{summary.review || 'Reading your sets and notes…'}</p></div></div>
+            )}
             <Button block primary onClick={() => nav('/workout', { replace: true })}>Done</Button>
           </>
         )}
