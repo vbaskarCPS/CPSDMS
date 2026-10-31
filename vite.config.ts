@@ -21,8 +21,10 @@ function precacheManifest(): Plugin {
       if (existsSync(sw)) writeFileSync(sw, readFileSync(sw, 'utf8').replace("const BUILD = 'dev';", `const BUILD = '${version}';`));
     },
     generateBundle(_opts, bundle) {
-      // the planner (planner.html, src/planner) is its own app; the field app's phones don't keep it
-      const files = Object.keys(bundle).filter(f => /\.(js|css|html|svg|png|woff2?)$/.test(f) && !f.endsWith('.map') && !/^planner\.html$|\/planner-[^/]*\.(js|css)$/.test(f));
+      // the planner (planner.html, src/planner) and the Main Street AI website (mainstreetai.html) are their own
+      // pages; the field app's phones don't keep them
+      const files = Object.keys(bundle).filter(f => /\.(js|css|html|svg|png|woff2?)$/.test(f) && !f.endsWith('.map')
+        && !/^(planner|mainstreetai)\.html$|\/(planner|mainstreetai)-[^/]*\.(js|css)$/.test(f));
       const urls = ['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png', '/logo.svg', ...files.filter(f => f !== 'index.html').map(f => `/${f}`)];
       this.emitFile({ type: 'asset', fileName: 'precache.json', source: JSON.stringify({ version, urls: [...new Set(urls)] }) });
     },
@@ -35,6 +37,8 @@ function precacheManifest(): Plugin {
 function plannerPage(): Plugin {
   const rewrite = (req: { url?: string }, _res: unknown, next: () => void) => {
     if (req.url && /^\/(vijayplanner|roshplanner)(\/|$|\?)/.test(req.url) && !/\.\w+(\?|$)/.test(req.url)) req.url = '/planner.html';
+    // the Main Street AI website (mainstreetai.propertystars.app in production; /site/mainstreetai anywhere)
+    else if (req.url && /^\/site\/mainstreetai\/?(\?|$)/.test(req.url)) req.url = '/mainstreetai.html';
     next();
   };
   return {
@@ -48,7 +52,7 @@ export default defineConfig({
   plugins: [react(), precacheManifest(), plannerPage()],
   build: {
     rollupOptions: {
-      input: { main: resolve(__dirname, 'index.html'), planner: resolve(__dirname, 'planner.html') },
+      input: { main: resolve(__dirname, 'index.html'), planner: resolve(__dirname, 'planner.html'), mainstreetai: resolve(__dirname, 'mainstreetai.html') },
     },
   },
 });
