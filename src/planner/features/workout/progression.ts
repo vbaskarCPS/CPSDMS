@@ -59,3 +59,24 @@ export function suggest(opts: {
   const best = Math.max(...working.map(s => s.reps));
   return { weight: top, reps: Math.min(hi, Math.max(lo, best + 1)), reason: best >= hi ? `Repeat ${top} and make every set reach ${hi}.` : `Stay at ${top} — aim for ${Math.min(hi, best + 1)}+ reps on each set.` };
 }
+
+/** One line for the NEXT set, from the set just done: reps vs the target range, RPE, and what came before.
+ *  Instant and local; the coach (AI) may replace it a moment later. */
+export function nextSetTip(opts: { sets: SetLog[]; si: number; targetReps?: string; units: Units; lower: boolean; step?: number; mode?: 'reps' | 'time'; restSec?: number }): string {
+  const { sets, si, units, mode } = opts;
+  const s = sets[si];
+  const isLast = si >= sets.length - 1;
+  if (mode === 'time') return isLast ? 'Done. Shake it out, next exercise.' : 'Same pace next round — steady breathing.';
+  if (!s || !s.done) return '';
+  const { lo, hi } = parseReps(opts.targetReps || '8-12');
+  const step = stepFor({ units, lower: opts.lower, defaultStep: opts.step });
+  const u = units;
+  const rpe = s.rpe;
+  const next = isLast ? 'next session' : 'next set';
+  if (si === 0 && sets.length > 1 && s.weight > 0 && (sets[1]?.weight || 0) > s.weight * 1.3) return `Warm-up done. Working set next: ${sets[1].weight} ${u}, aim for ${hi} clean reps.`;
+  if (s.reps >= hi && (rpe === undefined || rpe <= 8)) return isLast ? `Hit the top of the range — add ${step} ${u} next session.` : `Easy — add ${step} ${u} for the ${next}, same ${hi} reps.`;
+  if (s.reps >= hi && rpe !== undefined && rpe >= 9.5) return `Top of the range but all-out. Hold ${s.weight} ${u}, take the full rest, aim for ${hi} again.`;
+  if (s.reps >= lo && s.reps < hi) return rpe !== undefined && rpe >= 9.5 ? `Hard set. Same weight, aim for ${s.reps} again; stop 1 rep short of failure.` : `In range. Same ${s.weight} ${u}, try for ${Math.min(hi, s.reps + 1)}–${hi} reps.`;
+  if (s.reps > 0 && s.reps < lo) return `Missed the range. Drop to ${roundTo(s.weight * 0.9, step)} ${u} for the ${next} and own ${lo}+ reps with clean form.`;
+  return isLast ? 'Good work. Move on.' : `Log it and rest ${opts.restSec || 90} s.`;
+}

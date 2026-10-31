@@ -1,11 +1,12 @@
 // src/planner/features/workout/LiveWorkout.tsx — /workout/live/:id: log sets one thumb at a time. Finished sessions open read-only.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ChevronDown, ChevronUp, Plus, Trophy, Trash2, Repeat2, Clock } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus, Trophy, Trash2, Repeat2, Clock, Sparkles } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
 import { Page, Header, Card, Button, Sheet, Stat, TextArea, useToast } from '../../ui/primitives';
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
-import { stepFor } from './progression';
+import { nextSetTip, stepFor } from './progression';
+import { coach } from '../../lib/ai';
 import { daysAgo, detectPRs, exerciseHistory, loadCustomExercises, loadWorkouts, saveWorkout } from './store';
 
 /** Sessions started before timed sets existed: a library-timed exercise with no mode becomes a timed one. */
@@ -56,6 +57,28 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   }, [id]);
 
   const readOnly = !!w?.endedAt;
+  // coaching for the next set: an instant local line, then the coach's own line when it arrives
+  const [tip, setTip] = useState<{ ei: number; si: number; text: string; ai: boolean } | null>(null);
+  const tipSeq = useRef(0);
+  const coachSet = (next: Workout, ei: number, si: number) => {
+    const ex = next.exercises[ei];
+    const lib = findExercise(ex.exerciseId, custom);
+    const local = nextSetTip({ sets: ex.sets, si, targetReps: ex.targetReps, units, lower: lib ? isLower(lib) : false, step: lib?.defaultStep, mode: ex.mode, restSec: ex.restSec });
+    const seq = ++tipSeq.current;
+    setTip({ ei, si, text: local, ai: false });
+    if (ex.mode === 'time') return;
+    const s = ex.sets[si];
+    const last = exerciseHistory(history, ex.exerciseId, 1)[0];
+    const fmt = (x: SetLog) => `${x.weight} ${units} × ${x.reps}${x.rpe ? ` @RPE ${x.rpe}` : ''}`;
+    const msg = `I just finished set ${si + 1} of ${ex.sets.length} of ${ex.name}: ${fmt(s)}. Target ${ex.sets.length} × ${ex.targetReps || '8-12'}, rest ${ex.restSec}s.` +
+      (si > 0 ? ` Earlier sets today: ${ex.sets.slice(0, si).filter(x => x.done).map(fmt).join(', ')}.` : '') +
+      (last ? ` Last session: ${last.sets.map(fmt).join(', ')}${last.comment ? ` (my note: "${last.comment}")` : ''}.` : '') +
+      (ex.note ? ` Plan cue: ${ex.note}.` : '') +
+      ` Coach me for the ${si + 1 >= ex.sets.length ? 'next exercise / next session' : 'next set'} in ONE sentence, max 25 words: weight, reps and one form or effort cue.`;
+    coach([{ role: 'user', content: msg }], { units, exercise: ex.name }).then(reply => {
+      if (seq === tipSeq.current && reply) setTip({ ei, si, text: reply.replace(/\s+/g, ' ').trim(), ai: true });
+    }).catch(() => undefined);
+  };
 
   const persist = useCallback((next: Workout, now = false) => {
     latest.current = next; setW(next);
@@ -77,7 +100,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     const ex = w.exercises[ei];
     if (ex.sets.every((x, j) => (j === si ? true : x.done)) && ei < w.exercises.length - 1) window.setTimeout(() => setOpen(ei + 1), 400);
   };
-  const timedDone = (ei: number, si: number, seconds: number) => { patchSet(ei, si, { done: true, seconds }); afterSet(ei, si); };
+  const timedDone = (ei: number, si: number, seconds: number) => { patchSet(ei, si, { done: true, seconds }); afterSet(ei, si); if (w) coachSet({ ...w, exercises: w.exercises.map((e, i) => i !== ei ? e : { ...e, sets: e.sets.map((x, j) => (j === si ? { ...x, done: true, seconds } : x)) }) }, ei, si); };
   const setRestSec = (ei: number, restSec: number) => { if (!w) return; persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, restSec } : e)) }); };
   const setComment = (ei: number, comment: string) => { if (!w) return; persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, comment } : e)) }); };
   const toggleDone = (ei: number, si: number) => {
@@ -86,6 +109,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     const done = !s.done;
     patchSet(ei, si, { done });
     if (done) {
+      coachSet({ ...w, exercises: w.exercises.map((e, i) => i !== ei ? e : { ...e, sets: e.sets.map((x, j) => (j === si ? { ...x, done: true } : x)) }) }, ei, si);
       const restSec = w.exercises[ei].restSec || 90;
       setRest({ endsAt: Date.now() + restSec * 1000, total: restSec });
       // move on when the exercise is complete
@@ -162,6 +186,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
             {isOpen && (
               <div className="wo-ex__body">
                 {ex.lastComment && <p className="wo-lastnote">Last time: {ex.lastComment}</p>}
+                {tip && tip.ei === ei && tip.text && <div className={`wo-tip ${tip.ai ? 'is-ai' : ''}`}><Sparkles size={14} aria-hidden /> <span>{tip.text}</span></div>}
                 {!readOnly && <div className="wo-restchips">rest {RESTS.map(r => <button key={r} type="button" className={ex.restSec === r ? 'is-on' : ''} onClick={() => setRestSec(ei, r)}>{r}s</button>)}{ex.mode === 'time' && <button type="button" className={ex.restSec === 0 ? 'is-on' : ''} onClick={() => setRestSec(ei, 0)}>none</button>}</div>}
                 {ex.mode === 'time' ? ex.sets.map((s, si) => (
                   <div key={si} className={`wo-set ${s.done ? 'is-done' : ''}`}>
