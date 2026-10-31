@@ -25,7 +25,27 @@ export interface Plan {
   roster: RosterRow[]; settings: PlanSettings;
   /** days each hire showed in the app before this date (added to their days before the app) */
   appDaysBefore?: Record<string, number>;
+  /** managers paired for the day (manager ids, 2+ to a group): they share their teams and maps */
+  pairs?: string[][];
 }
+
+/** The managers sharing with this one today (them included), or just them. */
+export const groupOf = (pairs: string[][] | undefined, id: string): string[] => (pairs || []).find(g => g.includes(id)) || [id];
+
+/**
+ * Pair manager `who` with `target` (and whoever `target` is already paired with). `who` leaves any
+ * group they were in; a group left with one manager is no longer a group.
+ */
+export function pairManagers(pairs: string[][], who: string, target: string): string[][] {
+  if (who === target) return pairs;
+  const into = groupOf(pairs, target);
+  if (into.includes(who)) return pairs;
+  const rest = pairs.map(g => g.filter(id => id !== who)).filter(g => g.length > 1 && !g.includes(target));
+  return [...rest, [...into, who]];
+}
+/** Take one manager out of their group. */
+export const unpairManager = (pairs: string[][], who: string): string[][] =>
+  pairs.map(g => g.filter(id => id !== who)).filter(g => g.length > 1);
 
 export const SERVICE_HAT: Record<Service, HatCode> = { aeration: 'AER', lawn_rejuv: 'RJ', sealing: 'SE', cleaning: 'CL' };
 
@@ -65,6 +85,7 @@ export function planProblems(p: Plan): string[] {
   const empty = p.teams.filter(t => !showed.some(r => p.members[r.hire_id] === t.name));
   if (empty.length) errs.push(`Team${empty.length > 1 ? 's' : ''} with nobody in ${empty.length > 1 ? 'them' : 'it'}: ${empty.map(t => t.name).join(', ')}`);
   const mgrIds = new Set(p.managers.map(m => m.id));
+  if ((p.pairs || []).some(g => g.some(id => !mgrIds.has(id)))) errs.push('A paired manager isn’t available that day: split them first.');
   if (p.teams.some(t => !mgrIds.has(t.managerId))) errs.push('Every team needs a manager who is available that day.');
   if (p.routes.some(r => !mgrIds.has(r.managerId))) errs.push('Every route needs a manager who is available that day.');
   return errs;
@@ -75,13 +96,19 @@ export function buildLegacySession(p: Plan, centerId: string): { data: DailySess
   const hat = SERVICE_HAT[p.settings.service];
   const teamByName = new Map(p.teams.map(t => [t.name, t]));
   const mgrById = new Map(p.managers.map(m => [m.id, m]));
-  const usedMgrIds = new Set([...p.teams.map(t => t.managerId), ...p.routes.map(r => r.managerId)]);
+  // a paired manager is on the day even with nothing in their own name: the group's teams and maps are theirs too
+  const usedMgrIds = new Set([...p.teams.map(t => t.managerId), ...p.routes.map(r => r.managerId)].flatMap(id => groupOf(p.pairs, id)));
 
   const managers: ManagementUser[] = p.managers.filter(m => usedMgrIds.has(m.id)).map(m => {
-    const maps = mappingsFor(p.routes.filter(r => r.managerId === m.id));
+    const group = groupOf(p.pairs, m.id);
+    // every partner gets all the group's maps (so their workers' map logsheets show them all) and sees
+    // the partners' workers, routes and bookings on the RM map (the floater setup)
+    const maps = mappingsFor(p.routes.filter(r => group.includes(r.managerId)));
+    const partners = group.filter(id => id !== m.id).map(id => legacyManagerId(mgrById.get(id)?.full_name || id));
     return {
       userId: legacyManagerId(m.full_name), username: m.username, name: m.full_name, phone: formatPhone(m.phone),
-      role: 'RouteManager', commandCenterId: centerId, floatingFor: [],
+      role: 'RouteManager', commandCenterId: centerId, floatingFor: partners,
+      ...(partners.length ? { pairedWith: partners } : {}),
       digitalMapping: maps[0], digitalMappings: maps,
     };
   });
@@ -179,7 +206,8 @@ export async function startSession(p: Plan, dayId: string, centerId: string, _op
   const showedIds = p.roster.filter(r => p.showed.has(r.hire_id)).map(r => r.hire_id);
   const sessionId = must(await db.rpc('app_start_session', {
     p_day: dayId,
-    p_settings: p.settings,
+    // the day's pairs are kept with the session's settings (so the live map can be rebuilt with them)
+    p_settings: p.pairs?.length ? { ...p.settings, pairs: p.pairs } : p.settings,
     p_routes: p.routes.map(r => ({ code: r.code, area: r.area, manager_id: r.managerId })),
     p_teams: p.teams.map(t => ({ name: t.name, kind: t.kind, manager_id: t.managerId, hire_ids: showedIds.filter(h => p.members[h] === t.name) })),
     p_showed: showedIds,
@@ -247,15 +275,16 @@ interface SessionRecord {
  */
 export async function writeLiveMapFromSession(dayId: string, centerId: string, date: string, card: RateCardData, seasonYear: number): Promise<void> {
   const s = must(await db.from('sessions').select('settings, routes, teams').eq('day_id', dayId).single()) as SessionRecord;
+  const { pairs, ...settings } = s.settings as PlanSettings & { pairs?: string[][] };
   const { listRoster } = await import('./workerbook');
   const roster = await listRoster(dayId);
-  const ids = [...new Set([...s.routes.map(r => r.manager_id), ...s.teams.map(t => t.manager_id)])];
+  const ids = [...new Set([...s.routes.map(r => r.manager_id), ...s.teams.map(t => t.manager_id), ...(pairs || []).flat()])];
   const managers = must(await db.from('app_users').select('id, full_name, username, phone').in('id', ids)) as PlanManager[];
   const members: Record<string, string> = {};
   const showed = new Set<string>();
   for (const t of s.teams) for (const h of t.hire_ids) { members[h] = t.name; showed.add(h); }
   const plan: Plan = {
-    date, seasonYear, card, managers, roster, settings: s.settings, members, showed,
+    date, seasonYear, card, managers, roster, settings, members, showed, pairs,
     routes: s.routes.map(r => ({ code: r.code, area: r.area, number: parseInt(r.code.replace(/^\D+/, ''), 10) || 0, managerId: r.manager_id })),
     teams: s.teams.map(t => ({ name: t.name, kind: t.kind, managerId: t.manager_id })),
   };

@@ -523,6 +523,7 @@ class SessionService {
       commandCenterId: m.command_center_id,
       // Round-trip the floater config so the RM logbook can read who-floats-for-whom.
       floatingFor: Array.isArray(m.metadata?.floatingFor) ? m.metadata.floatingFor : [],
+      pairedWith: Array.isArray(m.metadata?.pairedWith) ? m.metadata.pairedWith : undefined,
       // Round-trip the per-manager digital mapping config (Sealing, non-mapping CCs).
       digitalMapping: m.metadata?.digitalMapping || undefined,
       // Legacy single configs are wrapped so downstream code only deals in lists.
@@ -1750,6 +1751,8 @@ class SessionService {
             phone: m.phone,
             // Persist preview-staged floater config on Initialize Session.
             floatingFor: m.floatingFor || [],
+            // Managers sharing their teams today (Start session's pairs).
+            ...(m.pairedWith?.length ? { pairedWith: m.pairedWith } : {}),
             // Persist preview-staged per-manager digital mapping (if any).
             // Both shapes written: the singular keeps the yes/no consumers happy.
             digitalMapping: (m.digitalMappings && m.digitalMappings[0]) || m.digitalMapping || undefined,

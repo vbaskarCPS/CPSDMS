@@ -234,6 +234,11 @@
 .v2-person { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px 5px 6px; border-radius: 9px; background: var(--card);
   border: 1px solid var(--line); font-size: 12.5px; cursor: grab; user-select: none; touch-action: none; box-shadow: 0 1px 1px rgba(16,24,40,.04); }
 .v2-person .nm { font-weight: 700; }
+/* managers on the team board: drag one's name onto another's card to pair them */
+.v2 .v2-mgr-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px 4px 6px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); }
+.v2 .v2-mgr-chip.v2-draggable { cursor: grab; touch-action: none; }
+.v2 .v2-mgr-chip.overlay { box-shadow: 0 8px 22px rgba(0,0,0,.18); cursor: grabbing; }
+.v2 .v2-paired { box-shadow: inset 0 0 0 2px #0d9488; }
 .v2-person .cn { color: var(--mut); font-size: 11px; }
 .v2-person.overlay { cursor: grabbing; box-shadow: 0 8px 20px rgba(16,24,40,.18); border-color: var(--blue); }
 .v2-teams { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }

@@ -270,7 +270,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   useEffect(() => {
     const loadData = async () => {
-      const myTeam = workers.filter((w) => w.assignedManagerId === managerId);
+      // a paired (or floating) manager's team includes the managers they cover today
+      const covered = new Set<string>([managerId, ...(((currentUser as { floatingFor?: string[] } | undefined)?.floatingFor) || [])]);
+      const myTeam = workers.filter((w) => covered.has(w.assignedManagerId as string));
       if (isTeamSeason) {
         await loadTeamSeasonData(myTeam);
       } else {
@@ -278,7 +280,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       }
     };
     loadData();
-  }, [managerId, workers, allSessions, refreshKey, isTeamSeason]);
+  }, [managerId, workers, allSessions, refreshKey, isTeamSeason, currentUser]);
 
   const loadAerationData = async (myTeam: Worker[]) => {
     const enriched = await Promise.all(
