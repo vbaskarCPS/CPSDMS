@@ -9,6 +9,8 @@ import { ErrorBox, Tag } from '../../../ui';
 import type { CrewRow } from '../../../lib/crew';
 import { SideDraggable, TeamBoard } from '../TeamBoard';
 import { ContractorLink } from '../ContractorCard';
+import { useAuth } from '../../../lib/auth';
+import { centerService } from '../../../lib/permissions';
 
 const teamsFromRows = (rows: RosterRow[], fallbackMgr: string): PlanTeam[] =>
   [...new Set(rows.map(r => r.team).filter(Boolean) as string[])]
@@ -18,6 +20,8 @@ const teamsFromRows = (rows: RosterRow[], fallbackMgr: string): PlanTeam[] =>
 export const PlanTomorrow: React.FC<{ rows: RosterRow[]; managers: PlanManager[]; canEdit: boolean; onChanged: () => void; crew?: Map<string, CrewRow> }> =
   ({ rows, managers, canEdit, onChanged, crew }) => {
     const firstMgr = managers[0]?.id || '';
+    const { center } = useAuth();
+    const ramps = centerService(center?.services) === 'sealing';   // ramp crews (asphalt) are sealing only
     // Teams with people come from the saved rows; new empty teams live here until someone is dropped in.
     const [extra, setExtra] = useState<PlanTeam[]>([]);
     const saved = useMemo(() => teamsFromRows(rows, firstMgr), [rows, firstMgr]);
@@ -51,7 +55,7 @@ export const PlanTomorrow: React.FC<{ rows: RosterRow[]; managers: PlanManager[]
         <div className="v2-row" style={{ padding: '12px 14px 6px' }}>
           <b>Crew</b><span className="v2-mut v2-small">{rows.length} on the road trip · {working} working</span>
         </div>
-        <div className="v2-note" style={{ margin: '0 14px 6px' }}>Drag people onto a cart or ramp crew; drop them back here to take them off.</div>
+        <div className="v2-note" style={{ margin: '0 14px 6px' }}>{ramps ? 'Drag people onto a cart or ramp crew; drop them back here to take them off.' : 'Drag people onto a cart; drop them back here to take them off.'}</div>
         <div className="v2-confirm-list">
           {crewSorted.map(r => {
             const c = crew.get(r.hire_id); const cell = r.hire.person.cell_phone; const on = !!r.confirmed_at;
@@ -124,6 +128,7 @@ export const PlanTomorrow: React.FC<{ rows: RosterRow[]; managers: PlanManager[]
                 setExtra(x => [...x, { name, kind, managerId: mid }]);
                 if (h) save(() => assign(h, name, next));
               }}
+              ramps={ramps}
               onRamp={(name, ramp) => {
                 const t = teams.find(x => x.name === name); if (!canEdit || !t || (t.kind === 'ramp') === ramp) return;
                 const newName = nextTeamName(teams.filter(x => x.name !== name), ramp ? 'ramp' : 'cart');
