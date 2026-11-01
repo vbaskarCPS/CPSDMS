@@ -44,14 +44,17 @@
         },
         {
             "source": "/demo",
+            "has": [{ "type": "host", "value": "planner.propertystars.app" }],
             "destination": "/planner.html"
         },
         {
             "source": "/demo/",
+            "has": [{ "type": "host", "value": "planner.propertystars.app" }],
             "destination": "/planner.html"
         },
         {
             "source": "/demo/:path*",
+            "has": [{ "type": "host", "value": "planner.propertystars.app" }],
             "destination": "/planner.html"
         },
         {
