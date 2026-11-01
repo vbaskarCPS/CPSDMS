@@ -20,8 +20,8 @@ function Video({ videos, onEmpty }: { videos: ExVideo[]; onEmpty: string }) {
     <>
       <div className="wo-video"><iframe key={v.id} src={`https://www.youtube-nocookie.com/embed/${v.id}?rel=0&modestbranding=1&playsinline=1`} title={v.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen loading="lazy" /></div>
       <div className="pl-row" style={{ gap: 8 }}>
-        <small className="pl-muted pl-grow" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.title}</small>
-        {videos.length > 1 && <Button small ghost onClick={() => setI(x => x + 1)}><RefreshCw size={13} /> Another</Button>}
+        <small className="pl-muted pl-grow" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.seconds ? `${Math.floor(v.seconds / 60)}:${String(v.seconds % 60).padStart(2, '0')} · ` : ''}{v.title}</small>
+        {videos.length > 1 && <Button small ghost onClick={() => setI(x => x + 1)}><RefreshCw size={13} /> Another ({(i % videos.length) + 1}/{videos.length})</Button>}
         <a className="pl-btn pl-btn--small pl-btn--ghost" href={`https://www.youtube.com/watch?v=${v.id}`} target="_blank" rel="noreferrer"><ExternalLink size={13} /> YouTube</a>
       </div>
     </>

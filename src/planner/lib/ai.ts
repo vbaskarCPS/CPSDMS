@@ -118,7 +118,7 @@ export async function todosFromBrief(brief: Record<string, string>, priorities: 
   return (r.items || []).filter(i => i && typeof i.text === 'string' && i.text.trim()).slice(0, 14).map(i => ({ text: i.text.trim(), time: /^\d{2}:\d{2}$/.test(i.time || '') ? i.time : undefined, note: i.note?.trim() || undefined, priority: typeof i.priority === 'number' && i.priority >= 0 && i.priority <= 2 ? i.priority : undefined }));
 }
 
-export interface ExVideo { id: string; title: string }
+export interface ExVideo { id: string; title: string; seconds?: number }
 export interface ExPart { name: string; dose: string; cue: string; videos: ExVideo[] }
 export interface ExerciseInfo { videos: ExVideo[]; description: string; setup: string[]; tip: string; mistakes: string[]; parts: ExPart[]; fetchedAt?: string }
 /** How to do an exercise or stretch: the top YouTube videos plus Coach Claude's how-to and mind-muscle cue. A flow
