@@ -117,3 +117,11 @@ export async function todosFromBrief(brief: Record<string, string>, priorities: 
   const r = await invoke<{ items: TodoSuggestion[] }>({ action: 'todos', brief, priorities, frequent, context });
   return (r.items || []).filter(i => i && typeof i.text === 'string' && i.text.trim()).slice(0, 14).map(i => ({ text: i.text.trim(), time: /^\d{2}:\d{2}$/.test(i.time || '') ? i.time : undefined, note: i.note?.trim() || undefined, priority: typeof i.priority === 'number' && i.priority >= 0 && i.priority <= 2 ? i.priority : undefined }));
 }
+
+export interface ExerciseInfo { videos: { id: string; title: string }[]; description: string; setup: string[]; tip: string; mistakes: string[]; fetchedAt?: string }
+/** How to do an exercise or stretch: the top YouTube videos plus Coach Claude's how-to and mind-muscle cue. */
+export async function exerciseInfo(name: string, kind: 'exercise' | 'stretch' | 'cardio' = 'exercise'): Promise<ExerciseInfo> {
+  const r = await invoke<ExerciseInfo>({ action: 'exinfo', name, kind });
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter(x => typeof x === 'string' && x.trim()) : []);
+  return { videos: Array.isArray(r.videos) ? r.videos.filter(v => v && /^[\w-]{6,}$/.test(v.id)) : [], description: r.description || '', setup: list(r.setup), tip: r.tip || '', mistakes: list(r.mistakes), fetchedAt: new Date().toISOString() };
+}

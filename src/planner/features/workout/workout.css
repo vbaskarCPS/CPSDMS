@@ -105,3 +105,11 @@
 .wo-qa__choices button.is-on { background: var(--accent-ink); color: var(--accent); border-color: var(--accent-ink); }
 .wo-tomorrow { border-top: 1px solid color-mix(in srgb, var(--accent-ink) 20%, transparent); padding-top: 10px; margin-top: 4px; }
 .wo-tomorrow .wo-hero__row span { white-space: normal; }
+
+/* the exercise sheet: video + how-to */
+.wo-video { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: #000; }
+.wo-video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.wo-exinfo__list { margin: 4px 0 0; padding-left: 20px; font-size: 14px; line-height: 1.45; display: grid; gap: 4px; }
+.wo-ex__name { display: inline-flex; align-items: center; gap: 6px; }
+.wo-ex__name svg { color: var(--ink-2); flex: none; }
+.wo-ex__howto { border: 0; background: none; color: inherit; font: inherit; font-weight: inherit; padding: 0; display: inline-flex; align-items: center; gap: 6px; text-align: left; }
