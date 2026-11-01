@@ -140,7 +140,26 @@ export function templateFromPlan(r: PlanResult, units: Units, custom: Exercise[]
     const mode = e.mode === 'time' || (lib.timed && !e.reps) ? 'time' : 'reps';
     return { exerciseId: lib.id, name: lib.name, targetSets: Math.max(1, e.sets || 1), targetReps: mode === 'reps' ? (e.reps || '8-12') : '', restSec: Math.max(0, e.restSec ?? (mode === 'time' ? 0 : 90)), mode, targetSec: mode === 'time' ? Math.max(10, e.seconds || 60) : undefined, note: [e.note, e.weight ? `start ${e.weight} ${units}` : ''].filter(Boolean).join(' · ') || undefined };
   });
-  return { template: { id: uid(), name: r.name || 'Coach plan', exercises, order: 99 }, created };
+  return { template: { id: uid(), name: r.name || 'Coach plan', exercises: foldWarmups(exercises), order: 99 }, created };
+}
+
+/** A lift's light warm-up set written as its own item ("1 light set of one-arm row") folds into the working sets
+ *  of the same lift that follow it: one row in the session, with "1 light set first" as the cue. Two of the same
+ *  rows in a plan read as a mistake, and the live session would log them as two exercises. */
+export function foldWarmups(list: TemplateExercise[]): TemplateExercise[] {
+  const out: TemplateExercise[] = [];
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    // the same lift coming back soon with working sets (a pull-up or a stretch may sit between)
+    const next = list.slice(i + 1, i + 4).find(x => x.exerciseId === e.exerciseId && x.mode !== 'time' && x.targetSets > 1);
+    const light = e.mode !== 'time' && e.targetSets === 1 && !!next;
+    if (light && next) {
+      next.note = ['1 light set first (~50%)', next.note].filter(Boolean).join(' · ');
+      continue;
+    }
+    out.push(e);
+  }
+  return out;
 }
 
 export function emptyWorkout(name = 'Workout'): Workout {

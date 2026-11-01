@@ -151,7 +151,8 @@ mode 'time' for warm-up walks, bikes, rowing, stretching, planks and anything gi
 seconds), otherwise 'reps'. sets and reps as written ("2 x 8-12" → sets 2, reps "8-12"; "2 x 15" → reps "15"; per-side
 counts stay as written). restSec from the text; if not stated: 90 for compound lifts, 60 for isolation/accessory, 0 for
 warm-ups. note: the coach's cue for that exercise, under 12 words, or omit. weight only when a number is stated, in the
-user's units. A warm-up of "1 light set" of a lift is its own 'reps' item with sets 1 and note "light, ~50%".
+user's units. A warm-up of "1 light set" of a lift that is also in the session is NOT its own item: add "1 light set first" to
+that lift's note (the session shows each lift once). A warm-up lift that is not in the session is its own item with sets 1.
 name: a short session name. warmup_note: one line if the text has warm-up advice that isn't an exercise.`;
 const PLAN_SCHEMA = {
   type: 'object', properties: {
