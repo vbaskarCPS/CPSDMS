@@ -3,6 +3,7 @@
 // planner doc (planner_push_subscribe). Modelled on src/v2/lib/push.ts.
 import { supabase } from '../../lib/supabase';
 import { call, getPass, SignedOut } from './auth';
+import { isDemo } from './app';
 
 export type PushState = 'unsupported' | 'ios-install' | 'denied' | 'off' | 'on';
 
@@ -15,7 +16,7 @@ export function pushSupported(): boolean {
 
 /** Where notifications stand on this device. iPhones need the app on the Home Screen first. */
 export async function pushState(): Promise<PushState> {
-  if (typeof window === 'undefined') return 'unsupported';
+  if (typeof window === 'undefined' || isDemo()) return 'unsupported';
   if (isIos() && !standalone()) return 'ios-install';
   if (!pushSupported()) return 'unsupported';
   if (Notification.permission === 'denied') return 'denied';

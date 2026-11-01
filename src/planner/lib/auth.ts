@@ -2,7 +2,8 @@
 // Same shape as the worker pass (src/lib/workerPass.ts); the server keeps only the token's hash
 // (supabase/migrations/20261203100000_planner.sql).
 import { supabase } from '../../lib/supabase';
-import { appId } from './app';
+import { appId, isDemo } from './app';
+import { demoCall, demoPass } from '../demo/store';
 
 // one pass per app, so /vijayplanner and /roshplanner keep separate sign-ins on the same phone
 const KEY = appId() === 'vijayplanner' ? 'vijay-planner-pass' : `${appId()}-pass`;
@@ -18,6 +19,7 @@ function notify(p: PlannerPass | null) { listeners.forEach(fn => { try { fn(p); 
 export function onPassChange(fn: Listener): () => void { listeners.add(fn); return () => listeners.delete(fn); }
 
 export function getPass(): PlannerPass | null {
+  if (isDemo()) return demoPass;
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
@@ -48,6 +50,7 @@ export async function signIn(username: string, pin: string): Promise<SignInResul
 }
 
 export async function signOut(): Promise<void> {
+  if (isDemo()) { location.href = '/vijayplanner/'; return; }
   const p = getPass();
   forgetPass();
   if (p) { try { await supabase.rpc('planner_sign_out', { p_token: p.token }); } catch { /* it expires anyway */ } }
@@ -59,6 +62,7 @@ export class SignedOut extends Error { constructor() { super('Please sign in aga
 export async function call<T extends { ok: boolean; reason?: string }>(fn: string, args: Record<string, unknown> = {}): Promise<T> {
   const p = getPass();
   if (!p) throw new SignedOut();
+  if (isDemo()) return demoCall(fn, args) as T;
   const { data, error } = await supabase.rpc(fn, { p_token: p.token, ...args });
   if (error) throw new Error(error.message);
   const d = data as T;

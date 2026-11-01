@@ -13,8 +13,11 @@ export const APPS: Record<AppId, { name: string; short: string; owner: string; p
 export function appId(pathname = typeof location !== 'undefined' ? location.pathname : '/'): AppId {
   return /^\/roshplanner(\/|$)/.test(pathname) ? 'roshplanner' : 'vijayplanner';
 }
+/** The guided demo at planner.propertystars.app/demo: Vijay's planner on sample data, no sign-in, nothing saved
+ *  (demo/store.ts). The path reaches planner.html only on the planner host (vercel.json), so the path is enough here. */
+export const isDemo = (pathname = typeof location !== 'undefined' ? location.pathname : '/'): boolean => /^\/demo(\/|$)/.test(pathname);
 export const app = () => APPS[appId()];
-export const appBase = (): string => `/${appId()}`;
+export const appBase = (): string => (isDemo() ? '/demo' : `/${appId()}`);
 
 /** The profile for a signed-in person: their setting first, else the app they opened. */
 export function profileOf(settings?: Record<string, unknown> | null): Profile {

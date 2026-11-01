@@ -3,6 +3,8 @@ import { supabase } from '../../lib/supabase';
 import { getPass, forgetPass, SignedOut } from './auth';
 import { memoryContext } from './memory';
 import { lifeContext } from './lifeContext';
+import { isDemo } from './app';
+import { demoInvoke } from '../demo/store';
 
 // `sway` is set by the food feature's sway guide (features/food/sway), not by the food estimate itself.
 export interface FoodItem { name: string; portion: string; grams?: number; kcal: number; protein: number; carbs: number; fat: number; confidence?: 'high' | 'medium' | 'low'; sway?: 'go' | 'ease' | 'neutral' }
@@ -12,6 +14,7 @@ export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 async function invoke<T>(body: Record<string, unknown>): Promise<T> {
   const p = getPass();
   if (!p) throw new SignedOut();
+  if (isDemo()) return (await demoInvoke(body)) as T;
   const { data, error } = await supabase.functions.invoke('planner-ai', { body: { ...body, token: p.token } });
   if (error) {
     // supabase-js hides the body on non-2xx; try to read it for the real message

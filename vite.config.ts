@@ -31,12 +31,14 @@ function precacheManifest(): Plugin {
   };
 }
 
-/** Vijay Planner (src/planner) is a second page, planner.html, served at /vijayplanner/* and /roshplanner/* (vercel.json
+/** Vijay Planner (src/planner) is a second page, planner.html, served at /vijayplanner/*, /roshplanner/* and /demo/* (vercel.json
  *  rewrites it in production; this does the same for the dev server). Its own manifest makes it a
  *  separate home-screen app next to the field app. */
 function plannerPage(): Plugin {
-  const rewrite = (req: { url?: string }, _res: unknown, next: () => void) => {
-    if (req.url && /^\/(vijayplanner|roshplanner)(\/|$|\?)/.test(req.url) && !/\.\w+(\?|$)/.test(req.url)) req.url = '/planner.html';
+  const rewrite = (req: { url?: string; headers?: { host?: string } }, _res: unknown, next: () => void) => {
+    // /demo is the planner's tour only on the planner host (vercel.json `has: host`); the field app has its own /demo
+    const plannerHost = /^planner\./.test(req.headers?.host || '') || !!process.env.PLANNER_DEMO;
+    if (req.url && (/^\/(vijayplanner|roshplanner)(\/|$|\?)/.test(req.url) || (plannerHost && /^\/demo(\/|$|\?)/.test(req.url))) && !/\.\w+(\?|$)/.test(req.url)) req.url = '/planner.html';
     // the Main Street AI website (mainstreetai.propertystars.app in production; /site/mainstreetai anywhere)
     else if (req.url && /^\/site\/mainstreetai\/?(\?|$)/.test(req.url)) req.url = '/mainstreetai.html';
     next();

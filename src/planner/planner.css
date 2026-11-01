@@ -212,3 +212,22 @@ a { color: inherit; }
 .today-block__actions:empty { display: none; }
 .today-block:not(.is-now) .today-block__actions .pl-btn { min-height: 32px; font-size: 13px; }
 .today-prios { margin-top: 4px; }
+
+/* ── guided demo (/demo, demo/Tour.tsx): a card above the nav; pages get room for it */
+.pl-demo .pl-page { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 224px); }
+.pl-tour { position: fixed; left: 10px; right: 10px; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 10px); z-index: 20; max-width: 560px; margin: 0 auto; background: var(--accent); color: var(--accent-ink); border-radius: var(--radius); padding: 12px 14px 12px; box-shadow: 0 12px 32px rgba(16, 28, 58, 0.35); overflow: hidden; animation: pl-tour-in 0.35s ease; }
+@keyframes pl-tour-in { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }
+.pl-tour__bar { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: rgba(255, 255, 255, 0.18); }
+.pl-tour__bar span { display: block; height: 100%; background: var(--amber); transition: width 1s linear; }
+.pl-tour__head { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+.pl-tour__step { flex: 1; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--amber); }
+.pl-tour__icon { background: transparent; border: 0; color: inherit; padding: 6px; border-radius: 10px; display: grid; place-items: center; opacity: 0.85; }
+.pl-tour__icon svg { width: 18px; height: 18px; }
+.pl-tour__title { display: block; font-family: var(--serif); font-size: 19px; line-height: 1.2; margin: 4px 0 6px; }
+.pl-tour__text { margin: 0 0 10px; font-size: 14px; line-height: 1.45; opacity: 0.92; }
+.pl-tour__nav { display: flex; gap: 8px; justify-content: flex-end; }
+.pl-tour__nav .pl-btn--ghost { color: inherit; border-color: rgba(255, 255, 255, 0.35); }
+.pl-tour__nav .pl-btn--primary { background: var(--amber); color: #101c3a; border-color: var(--amber); text-decoration: none; }
+.pl-tour__nav .pl-btn svg { width: 16px; height: 16px; }
+.pl-demo .brief__foot { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 224px); }
+.pl-demo .pl-fab { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 224px); }
