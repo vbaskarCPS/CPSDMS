@@ -35,7 +35,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 type Msg = { role: 'user' | 'assistant'; content: unknown };
 
-async function claude(system: string, messages: Msg[], maxTokens = 1500): Promise<string> {
+async function claudeRaw(system: string, messages: Msg[], maxTokens: number): Promise<{ text: string; stop: string }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -45,7 +45,21 @@ async function claude(system: string, messages: Msg[], maxTokens = 1500): Promis
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error?.message || `Anthropic ${res.status}`);
-  return (data.content || []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('');
+  return { text: (data.content || []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join(''), stop: String(data.stop_reason || '') };
+}
+/** A text answer. An empty answer is asked for again once, then it's an error (never saved as a blank reply);
+ *  an answer cut off by max_tokens is continued once, so a long plan isn't left mid-sentence. */
+async function claude(system: string, messages: Msg[], maxTokens = 1500): Promise<string> {
+  // a history that ends in a blank assistant turn (an earlier failure) would be refused by the API
+  const clean = messages.filter(m => !(m.role === 'assistant' && !String(m.content ?? '').trim()));
+  let r = await claudeRaw(system, clean, maxTokens);
+  if (!r.text.trim()) r = await claudeRaw(system, clean, maxTokens);
+  if (!r.text.trim()) throw new Error('Coach Claude didn’t answer — try again');
+  if (r.stop === 'max_tokens') {
+    const more = await claudeRaw(system, [...clean, { role: 'assistant', content: r.text }, { role: 'user', content: 'Continue exactly where you left off — no recap, no repeating what you already wrote.' }], maxTokens);
+    r = { text: r.text + more.text, stop: more.stop };
+  }
+  return r.text;
 }
 
 /** Ask for a structured answer through a forced tool call: the API guarantees the JSON matches the schema. */
@@ -84,7 +98,7 @@ person's whole day: routine, habits, food, sleep, priorities and reviews. The co
 every logged set (weight x reps, @RPE, L/R for one-arm moves), the person's own notes per exercise and per session,
 earlier reviews and prescriptions, habits and their marks, meals, recent days and the about_me notes. Read it before
 answering and quote the real numbers and notes; never say you lack data that is in the context. Be concise (phone
-screen): short paragraphs, specific numbers, no fluff. Weights in the user's units. If something sounds like an
+screen): short paragraphs, specific numbers, no fluff. A session plan is one line per exercise (name: sets x reps, weight, one cue) and no long preamble, so even a 70-minute session fits. Weights in the user's units. If something sounds like an
 injury, say to see a professional and keep the advice conservative. You are Coach Claude; don't describe yourself
 as an AI model. Sessions you plan only reach the person's planner when they tap a button under your message, so when
 they ask to change or plan a session (workout_templates with planned_for_date shows what's planned; today's session is
@@ -322,7 +336,7 @@ Deno.serve(async req => {
       const messages = (Array.isArray(b.messages) ? b.messages : []).slice(-20) as Msg[];
       if (!messages.length) return json({ error: 'No messages' }, 400);
       const ctx = b.context ? `\n\nContext (JSON):\n${JSON.stringify(b.context).slice(0, 20000)}` : '';
-      const reply = await claude(COACH_SYSTEM + ctx, messages, 1200);
+      const reply = await claude(COACH_SYSTEM + ctx, messages, 3000);
       return json({ reply });
     }
     if (action === 'reflect') {
@@ -379,6 +393,10 @@ Deno.serve(async req => {
       const ctx = JSON.stringify(b.context ?? {}).slice(0, 24000);
       const r = await claudeJson<Record<string, unknown>>(DAYPLAN_SYSTEM,
         [{ role: 'user', content: `Units: ${units}\n\nLibrary (id — name):\n${library.map(x => `${x.id} — ${x.name}`).join('\n')}\n\n${answers ? `My answers to your questions: ${JSON.stringify(answers)}\n\n` : ''}Planner (JSON):\n${ctx}` }], DAYPLAN_SCHEMA, 4000);
+      // the model has answered with the tool's XML as a string once; a tomorrow that isn't a session with exercises is dropped
+      const t = r.tomorrow as { exercises?: unknown } | string | null | undefined;
+      if (!t || typeof t !== 'object' || !Array.isArray(t.exercises) || !t.exercises.length) r.tomorrow = null;
+      if (!Array.isArray(r.questions)) r.questions = [];
       return json(r);
     }
     if (action === 'briefhints') {

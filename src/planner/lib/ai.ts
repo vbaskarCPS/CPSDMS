@@ -101,7 +101,7 @@ export interface DayPlan { review: string; questions: DayPlanQuestion[]; tomorro
 export async function dayPlan(library: { id: string; name: string }[], units: string, answers?: Record<string, string>): Promise<DayPlan> {
   const context = await lifeContext(units);
   const r = await invoke<DayPlan>({ action: 'dayplan', context, library: library.slice(0, 200), units, answers });
-  return { review: String(r.review || ''), questions: Array.isArray(r.questions) ? r.questions.filter(q => q && q.id && Array.isArray(q.choices)) : [], tomorrow: { ...r.tomorrow, exercises: Array.isArray(r.tomorrow?.exercises) ? r.tomorrow.exercises : [] }, answers, madeAt: new Date().toISOString() };
+  return { review: String(r.review || ''), questions: Array.isArray(r.questions) ? r.questions.filter(q => q && q.id && Array.isArray(q.choices)) : [], tomorrow: { ...(r.tomorrow && typeof r.tomorrow === 'object' ? r.tomorrow : { name: '', focus: '', minutes: 0, why: '' }), exercises: Array.isArray(r.tomorrow?.exercises) ? r.tomorrow.exercises : [] }, answers, madeAt: new Date().toISOString() };
 }
 
 export interface BriefHints { words: string[]; priorities: string[]; aGame: string; stress: string; stressResponse: string; excited: string; noticed?: string; madeAt?: string }
