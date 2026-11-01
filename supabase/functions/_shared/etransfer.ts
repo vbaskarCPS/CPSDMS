@@ -31,8 +31,9 @@ const READ_SCHEMA = { type: 'object', properties: {
 }, required: ['is_receipt'] };
 const PICK_SCHEMA = { type: 'object', properties: { key: { type: ['string', 'null'] }, confidence: { type: 'string', enum: ['high', 'medium', 'low'] }, reason: { type: 'string' } }, required: ['key', 'confidence', 'reason'] };
 
-/** Ask Claude for a structured answer: a forced tool call, so the reply is always the JSON asked for (the old
- *  "find the {…} in the prose" read failed on one in seven). One retry on a transport error. */
+/** Ask Claude for a structured answer through an "answer" tool. The model picks the tool itself (tool_choice
+ *  "auto": some models refuse a forced "tool"/"any"); if it answers in text instead, the JSON is read out of
+ *  the text. One retry, then the error says what came back. */
 async function claude(system: string, content: string, schema: Record<string, unknown>): Promise<Record<string, unknown>> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('Claude isn’t set up (ANTHROPIC_API_KEY is missing)');
@@ -42,14 +43,19 @@ async function claude(system: string, content: string, schema: Record<string, un
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(ws ? { 'anthropic-workspace-id': ws } : {}) },
-      body: JSON.stringify({ model: ETF_MODEL, max_tokens: 800, system, messages: [{ role: 'user', content }],
-        tools: [{ name: 'answer', description: 'The answer, as the fields asked for.', input_schema: schema }], tool_choice: { type: 'tool', name: 'answer' } }),
+      body: JSON.stringify({ model: ETF_MODEL, max_tokens: 800, system: `${system}\nAlways answer by calling the "answer" tool with those fields; no other text.`,
+        messages: [{ role: 'user', content }],
+        tools: [{ name: 'answer', description: 'Your answer, as the fields asked for.', input_schema: schema }], tool_choice: { type: 'auto' } }),
     });
     const out = await res.json().catch(() => ({}));
     if (!res.ok) { why = `Claude didn’t answer: ${out?.error?.message || res.status}`; if (res.status === 429 || res.status >= 500) continue; throw new Error(why); }
-    const use = (out.content || []).find((c: { type: string }) => c.type === 'tool_use');
+    const blocks = (out.content || []) as { type: string; input?: unknown; text?: string }[];
+    const use = blocks.find(c => c.type === 'tool_use');
     if (use?.input && typeof use.input === 'object') return use.input as Record<string, unknown>;
-    why = `Claude’s answer wasn’t usable (${out.stop_reason || 'no answer'})`;
+    const text = blocks.filter(c => c.type === 'text').map(c => c.text || '').join('');
+    const m = /\{[\s\S]*\}/.exec(text);
+    if (m) { try { return JSON.parse(m[0]); } catch { /* not JSON: once more */ } }
+    why = `Claude’s answer wasn’t usable: ${(text || out.stop_reason || 'nothing came back').replace(/\s+/g, ' ').slice(0, 160)}`;
   }
   throw new Error(why);
 }
