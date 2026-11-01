@@ -21,3 +21,7 @@
 .shop__offer span { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shop__offer small { font-size: 11px; color: var(--ink-2); }
 .shop__offer strong { flex: none; font-size: 16px; }
+.shop__deal.is-regular { color: var(--ink-2); }
+.shop__stores { display: flex; flex-wrap: wrap; gap: 6px; }
+.shop__stores button { border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; font-size: 13px; }
+.shop__stores button.is-on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
