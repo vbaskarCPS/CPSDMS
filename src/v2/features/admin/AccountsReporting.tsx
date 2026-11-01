@@ -13,8 +13,10 @@ import {
   type EtfReceipt, type EtfSale,
 } from '../../lib/etransfers';
 import { Btn, ErrorBox, Loading, Modal, Tabs, Tag } from '../../ui';
+import { CardCharges } from './CardCharges';
 
 type List = 'matched' | 'clients' | 'emails' | 'inbox';
+type Section = 'etransfers' | 'cards';
 const addDays = (iso: string, n: number) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 
 export const AccountsReporting: React.FC = () => {
@@ -22,6 +24,7 @@ export const AccountsReporting: React.FC = () => {
   const [centerId, setCenterId] = useState<string>(center?.id || '');
   const [from, setFrom] = useState(() => addDays(todayISO(), -1));
   const [to, setTo] = useState(() => todayISO());
+  const [section, setSection] = useState<Section>('etransfers');
   const [list, setList] = useState<List>('clients');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -47,9 +50,13 @@ export const AccountsReporting: React.FC = () => {
   return (
     <div className="v2-main v2-narrow">
       <div className="v2-head">
-        <span className="v2-h1">Accounts Reporting</span><Tag tone="b">E-transfers</Tag>
+        <span className="v2-h1">Accounts Reporting</span>
+        <div className="v2-etf-quick v2-etf-section" role="tablist" aria-label="Section">
+          <button type="button" role="tab" aria-selected={section === 'etransfers'} className={section === 'etransfers' ? 'on' : ''} onClick={() => setSection('etransfers')}>E-transfers</button>
+          <button type="button" role="tab" aria-selected={section === 'cards'} className={section === 'cards' ? 'on' : ''} onClick={() => setSection('cards')}>Credit cards</button>
+        </div>
         <span className="v2-spacer" />
-        <Btn kind="o" size="sm" icon={RefreshCw} disabled={busy === 'recheck'} onClick={recheck}>{busy === 'recheck' ? 'Checking…' : 'Check again'}</Btn>
+        {section === 'etransfers' && <Btn kind="o" size="sm" icon={RefreshCw} disabled={busy === 'recheck'} onClick={recheck}>{busy === 'recheck' ? 'Checking…' : 'Check again'}</Btn>}
       </div>
       <div className="v2-card v2-etf-bar">
         <select className="v2-input" value={centerId} onChange={e => setCenterId(e.target.value)} aria-label="Centre">
@@ -67,9 +74,12 @@ export const AccountsReporting: React.FC = () => {
             return <button key={label} type="button" className={on ? 'on' : ''} onClick={() => { setFrom(f); setTo(t); }}>{label}</button>;
           })}
         </div>
-        <p className="v2-etf-how"><Mail size={13} aria-hidden /> Forward the bank’s e-transfer notices to <b>{PAYMENTS_ADDRESS}</b> — Claude reads each one and matches it to a sale; clear matches are made on their own, the rest wait below for you to confirm.</p>
+        {section === 'etransfers' && <p className="v2-etf-how"><Mail size={13} aria-hidden /> Forward the bank’s e-transfer notices to <b>{PAYMENTS_ADDRESS}</b> — Claude reads each one and matches it to a sale; clear matches are made on their own, the rest wait below for you to confirm.</p>}
       </div>
 
+      {section === 'cards' && <CardCharges centerId={centerId} from={from} to={to} />}
+
+      {section === 'etransfers' && <>
       <ErrorBox error={report.error || error} />
       {note && <div className="v2-ok" style={{ marginBottom: 10 }}>{note}</div>}
       {!lists ? <Loading /> : <>
@@ -225,6 +235,7 @@ export const AccountsReporting: React.FC = () => {
             </details>
           )}
         </>}
+      </>}
       </>}
 
       {openMail && <MailModal mail={openMail} onClose={() => setOpenMail(null)} />}

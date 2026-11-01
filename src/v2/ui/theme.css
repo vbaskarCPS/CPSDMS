@@ -648,3 +648,8 @@
 .v2-etf-mailbar { gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .v2-etf-mailrow { cursor: pointer; }
 .v2-etf-mailrow:hover { background: var(--hover); }
+.v2-etf-section button { padding: 6px 12px; font-size: 13px; }
+.v2-cards-totals { margin-bottom: 10px; }
+.v2-cards-totals .v2-card:nth-child(2) { border-left-color: #b91c1c; }
+.v2-cards-totals .v2-card:nth-child(3), .v2-cards-totals .v2-card:nth-child(4) { border-left-color: #b45309; }
+.v2-cards-double { background: rgba(185, 28, 28, 0.06); }

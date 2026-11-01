@@ -91,11 +91,16 @@ export function decide(r: Receipt, all: Candidate[]): Decision {
   return { key: null, confirmed: false, how: 'auto', confidence: 'low', reason: 'No e-transfer sale fits' };
 }
 
-/** Is this email a forward (only forwards are processed)? */
-export function isForward(subject?: string | null, body?: string | null): boolean {
+/** Is this email a forward (only forwards are processed), or a bank notice sent straight to payments@
+ *  (a provider-side rule or the bank's own notification address: no "Fwd:" on those)? */
+export function isForward(subject?: string | null, body?: string | null, from?: string | null): boolean {
   if (/^\s*(fwd?|fw|tr)\s*:/i.test(subject || '')) return true;
+  if (isBankNotice(from)) return true;
   return /(-{3,}\s*forwarded message\s*-{3,}|begin forwarded message|-{3,}\s*original message\s*-{3,}|^\s*from:.*\n.*(sent|date):)/im.test(body || '');
 }
+/** Sent by Interac or a bank's notification address itself. */
+export const isBankNotice = (from?: string | null): boolean =>
+  /@(payments\.interac\.ca|interac\.ca|notify\.interac\.ca|td\.com|tdbank\.ca|rbc\.com|royalbank\.com|scotiabank\.com|bmo\.com|cibc\.com|tangerine\.ca|simplii\.com)$/i.test((from || '').trim());
 
 /** Plain text of an email for Claude (no tags, no styles, short). */
 export function plainText(html?: string | null, text?: string | null, max = 12000): string {
