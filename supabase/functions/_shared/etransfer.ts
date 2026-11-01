@@ -19,27 +19,39 @@ Pull out the e-transfer exactly as written. Never guess or invent a value: leave
 - reference: the reference number / confirmation number if shown.
 - memo: the sender's message if there is one.
 - bank: the bank that sent the notice, if you can tell.
-Output only JSON: {"is_receipt": true, "sender_name": "...", "sender_email": "...", "amount": 0, "sent_on": "YYYY-MM-DD", "reference": "...", "memo": "...", "bank": "...", "why_not": "..."} (why_not only when is_receipt is false, a few words).`;
+Answer with the fields: is_receipt, sender_name, sender_email, amount, sent_on (YYYY-MM-DD), reference, memo, bank, why_not (only when is_receipt is false, a few words).`;
 
 const PICK_RULES = `You match one Interac e-Transfer a business received to the sale it paid for. You get the e-transfer (sender, amount, date, message) and the possible sales (client name, address, day, amount). People often pay for a spouse or parent, so the sender's name can differ from the client's; the message often has the address or the client's name. A sale is usually paid the same day or within a few days after. The amount sent is often not exactly the recorded amount — tax added or left off, rounded up, a tip, or part of it now and the rest later — so a close amount with the right name or address is still a match.
 Pick the one sale it most likely paid for, or none if you can't tell. Never pick when two sales are equally likely.
-Output only JSON: {"key": "<the sale's key or null>", "confidence": "high|medium|low", "reason": "<under 90 characters>"}`;
+Answer with the fields: key (the sale's key, or null), confidence (high, medium or low), reason (under 90 characters).`;
 
-async function claude(system: string, content: string): Promise<Record<string, unknown>> {
+const READ_SCHEMA = { type: 'object', properties: {
+  is_receipt: { type: 'boolean' }, sender_name: { type: ['string', 'null'] }, sender_email: { type: ['string', 'null'] }, amount: { type: ['number', 'null'] },
+  sent_on: { type: ['string', 'null'] }, reference: { type: ['string', 'null'] }, memo: { type: ['string', 'null'] }, bank: { type: ['string', 'null'] }, why_not: { type: ['string', 'null'] },
+}, required: ['is_receipt'] };
+const PICK_SCHEMA = { type: 'object', properties: { key: { type: ['string', 'null'] }, confidence: { type: 'string', enum: ['high', 'medium', 'low'] }, reason: { type: 'string' } }, required: ['key', 'confidence', 'reason'] };
+
+/** Ask Claude for a structured answer: a forced tool call, so the reply is always the JSON asked for (the old
+ *  "find the {…} in the prose" read failed on one in seven). One retry on a transport error. */
+async function claude(system: string, content: string, schema: Record<string, unknown>): Promise<Record<string, unknown>> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('Claude isn’t set up (ANTHROPIC_API_KEY is missing)');
   const ws = (Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '').trim();
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(ws ? { 'anthropic-workspace-id': ws } : {}) },
-    body: JSON.stringify({ model: ETF_MODEL, max_tokens: 800, system, messages: [{ role: 'user', content }] }),
-  });
-  const out = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`Claude didn’t answer: ${out?.error?.message || res.status}`);
-  const text = (out.content || []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join('');
-  const m = /\{[\s\S]*\}/.exec(text);
-  if (!m) throw new Error('Claude’s answer wasn’t usable');
-  return JSON.parse(m[0]);
+  let why = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(ws ? { 'anthropic-workspace-id': ws } : {}) },
+      body: JSON.stringify({ model: ETF_MODEL, max_tokens: 800, system, messages: [{ role: 'user', content }],
+        tools: [{ name: 'answer', description: 'The answer, as the fields asked for.', input_schema: schema }], tool_choice: { type: 'tool', name: 'answer' } }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) { why = `Claude didn’t answer: ${out?.error?.message || res.status}`; if (res.status === 429 || res.status >= 500) continue; throw new Error(why); }
+    const use = (out.content || []).find((c: { type: string }) => c.type === 'tool_use');
+    if (use?.input && typeof use.input === 'object') return use.input as Record<string, unknown>;
+    why = `Claude’s answer wasn’t usable (${out.stop_reason || 'no answer'})`;
+  }
+  throw new Error(why);
 }
 
 const str = (v: unknown) => (typeof v === 'string' && v.trim() && v.trim().toLowerCase() !== 'null' ? v.trim() : null);
@@ -57,7 +69,7 @@ export async function matchReceipt(svc: any, receiptId: string): Promise<string>
   if (ce) throw new Error(ce.message);
   let d = decide(rc, (cands || []) as Candidate[]);
   if (!d.key && d.ask?.length) {
-    const pick = await claude(PICK_RULES, JSON.stringify({ e_transfer: rc, sales: d.ask.map(c => ({ key: c.key, client: c.client, address: c.address, day: c.day, amount: c.amount, centre: c.center })) }));
+    const pick = await claude(PICK_RULES, JSON.stringify({ e_transfer: rc, sales: d.ask.map(c => ({ key: c.key, client: c.client, address: c.address, day: c.day, amount: c.amount, centre: c.center })) }), PICK_SCHEMA);
     const key = str(pick.key);
     if (key && d.ask.some(c => c.key === key)) d = { ...d, key, how: 'claude', confidence: (str(pick.confidence) as 'high' | 'medium' | 'low') || 'low', reason: str(pick.reason) || d.reason };
   }
@@ -92,7 +104,7 @@ export async function receiptFor(svc: any, messageId: string): Promise<string | 
   if (!isForward(m.subject, body)) return save({ status: 'not_forward', note: 'Not a forward: only forwarded bank notices are read' });
   let p: Record<string, unknown>;
   try {
-    p = await claude(READ_RULES, `Forwarded by: ${m.from_email}\nSubject: ${m.subject || ''}\n\n${body}`);
+    p = await claude(READ_RULES, `Forwarded by: ${m.from_email}\nSubject: ${m.subject || ''}\n\n${body}`, READ_SCHEMA);
   } catch (err) {
     return save({ status: 'error', note: err instanceof Error ? err.message : 'Couldn’t read it' });
   }
