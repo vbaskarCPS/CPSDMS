@@ -1,7 +1,7 @@
 // src/planner/features/plan/TodoList.tsx — the day's to-do list (day.todos): tick, time, text, remove, add.
 // In the order you want to tackle it (move up/down); a time beside an item is a reminder, not a sort.
 // Used by the Brief's last step (editing), Today's "Tackle the list" block and the day page.
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Check, Plus, X, Clock, ChevronUp, ChevronDown, Star } from 'lucide-react';
 import { uid } from '../../ui/primitives';
 import { clock } from '../../lib/routine';
@@ -26,7 +26,7 @@ export function TodoList({ day, set, edit = true, compact = false, suggestions =
           <button type="button" className={`pl-check ${t.done ? 'is-on' : ''}`} aria-label={t.done ? 'Mark not done' : 'Mark done'} onClick={() => set(d => toggleTodo(d, t.id))}><Check /></button>
           <div className="todo__main">
             {edit
-              ? <input className="todo__text" value={t.text} onChange={e => patch(t.id, { text: e.target.value })} />
+              ? <GrowingText value={t.text} onChange={v => patch(t.id, { text: v })} />
               : <span className="todo__text">{t.text}</span>}
             {(t.note || t.must) && <small className="pl-muted">{t.must ? 'must do' : ''}{t.must && t.note ? ' · ' : ''}{t.note || ''}</small>}
           </div>
@@ -52,4 +52,11 @@ export function TodoList({ day, set, edit = true, compact = false, suggestions =
       {list.length > 0 && <p className="pl-muted" style={{ fontSize: 12, margin: '6px 0 0' }}>{done}/{list.length} done</p>}
     </div>
   );
+}
+
+/** A one-line box that grows to fit, so a long item wraps instead of being cut off. */
+function GrowingText({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => { const el = ref.current; if (el) { el.style.height = '0px'; el.style.height = `${el.scrollHeight}px`; } }, [value]);
+  return <textarea ref={ref} rows={1} className="todo__text" value={value} onChange={e => onChange(e.target.value.replace(/\n/g, ' '))} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); } }} />;
 }

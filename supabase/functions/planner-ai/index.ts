@@ -223,7 +223,8 @@ they will work through from now until dinner. Rules:
 - The message may list things that are often on this person's list (with their usual time): include the ones
   that fit today (a weekday chore on a weekday, not on a weekend), with that time.
 - Keep the order the person would tackle them in: time-fixed items where they fall, the rest by importance.
-- note: at most a few words of why, only when useful.`;
+- note: at most a few words of why, only when useful — never "as written", "priority N" or other bookkeeping; the
+  app marks priorities itself.`;
 const TODOS_SCHEMA = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, time: { type: 'string' }, note: { type: 'string' }, priority: { type: 'integer', description: '0-2 when the item is one of the three priorities, verbatim' } }, required: ['text'] } } }, required: ['items'] };
 
 const EXINFO_SYSTEM = `You are Coach Claude. Explain one exercise or stretch to a near-40 beginner-intermediate lifter with light hip and knee
