@@ -224,7 +224,9 @@ export function sentenceFor(r: Round): string {
 export const speakerFor = (r: Round): Speaker => (r.kind === 'hello' ? r.piece : 'narrator');
 
 export const cheers = (name: string) => ['YES!', 'GREAT JOB!', `${name.toUpperCase()} DID IT!`, 'WOW!', 'SUPER!'];
-export const stickerLine = (name: string) => `${name.toUpperCase()} GOT A STICKER!`;
+/** The game is Kiaan helping Mr Monkey build his sticker collection: every finished lesson is a sticker for him. */
+export const stickerLine = (name: string) => `${name.toUpperCase()} GOT MR MONKEY A STICKER!`;
+export const HELP_LINE = 'HELP MR MONKEY GET STICKERS!';
 
 // ── when he gets it wrong: say what he tapped (so even a wrong tap teaches), or the piece's rule ──
 /** Tapped the wrong piece or word: name what he picked. */
@@ -238,7 +240,7 @@ export const slowLine = (name: string) => `SLOW DOWN, ${name.toUpperCase()}.`;
 export const monkeyHello = (name: string) => `HI ${name.toUpperCase()}! I AM MR MONKEY.`;
 export const HIGH_FIVE = 'HIGH FIVE!';
 export const YEAH = 'YEAH!';
-export const MONKEY_LINES = (name: string) => [monkeyHello(name), HIGH_FIVE, YEAH];
+export const MONKEY_LINES = (name: string) => [monkeyHello(name), HIGH_FIVE, YEAH, HELP_LINE];
 
 /** The file name for a recorded line, e.g. "king--this-is-king". */
 export const clipId = (speaker: Speaker, text: string) =>
@@ -292,9 +294,10 @@ export function spokenFor(_speaker: Speaker, text: string, name = 'Kiaan'): stri
     'EAT THE APPLE.': 'Snack time! Can you eat the apple? Move onto it to gobble it up!',
     'EAT THE APPLES.': 'Snack time! Eat all the apples, one at a time!',
     [`${N} DID IT!`]: `${name} did it! Hooray!`,
-    [`${N} GOT A STICKER!`]: `Hooray! ${name} got a sticker! Great job!`,
+    [`${N} GOT MR MONKEY A STICKER!`]: `Hooray! ${name}, you got me a sticker! Thank you! Look at my collection!`,
     [`SLOW DOWN, ${N}.`]: `Whoa, slow down ${name}! Take a big breath, and think about it.`,
-    [`HI ${N}! I AM MR MONKEY.`]: `Hi ${name}! I'm Mr Monkey! Let's play!`,
+    [`HI ${N}! I AM MR MONKEY.`]: `Hi ${name}! I'm Mr Monkey! I'm collecting stickers. Will you help me? Let's play!`,
+    'HELP MR MONKEY GET STICKERS!': 'Help Mr Monkey get stickers! Every time you finish a lesson, he gets a new one for his collection.',
     'HIGH FIVE!': 'High five!',
     'YEAH!': 'Yeah! Woo-hoo!',
   };
