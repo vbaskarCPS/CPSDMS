@@ -46,18 +46,23 @@ export const AccountsReporting: React.FC = () => {
         <span className="v2-spacer" />
         <Btn kind="o" size="sm" icon={RefreshCw} disabled={busy === 'recheck'} onClick={recheck}>{busy === 'recheck' ? 'Checking…' : 'Check again'}</Btn>
       </div>
-      <div className="v2-note" style={{ marginBottom: 12 }}>
-        <Mail size={14} style={{ verticalAlign: -2 }} /> Forward the bank’s e-transfer notices to <b>{PAYMENTS_ADDRESS}</b>. Claude reads each forward and matches it to an
-        e-transfer sale; clear matches are made on their own, the rest wait below for you to confirm. Only forwarded emails are read.
-      </div>
-
-      <div className="v2-row" style={{ gap: 8, marginBottom: 12 }}>
-        <select className="v2-input" style={{ width: 'auto', flex: '1 1 160px' }} value={centerId} onChange={e => setCenterId(e.target.value)} aria-label="Centre">
+      <div className="v2-card v2-etf-bar">
+        <select className="v2-input" value={centerId} onChange={e => setCenterId(e.target.value)} aria-label="Centre">
           <option value="">All centres</option>
           {centers.map(c => <option key={c.id} value={c.id}>{c.display_name}</option>)}
         </select>
-        <label className="v2-row v2-small" style={{ gap: 6, flex: '1 1 150px' }}>From<input className="v2-input" type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} /></label>
-        <label className="v2-row v2-small" style={{ gap: 6, flex: '1 1 150px' }}>To<input className="v2-input" type="date" value={to} min={from} onChange={e => setTo(e.target.value)} /></label>
+        <div className="v2-etf-dates">
+          <input className="v2-input" type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} aria-label="From" />
+          <span className="v2-mut">–</span>
+          <input className="v2-input" type="date" value={to} min={from} onChange={e => setTo(e.target.value)} aria-label="To" />
+        </div>
+        <div className="v2-etf-quick" role="group" aria-label="Quick ranges">
+          {([['Today', 0, 0], ['Yesterday', 1, 1], ['7 days', 7, 0], ['30 days', 30, 0]] as const).map(([label, back, end]) => {
+            const f = addDays(todayISO(), -back), t = addDays(todayISO(), -end), on = f === from && t === to;
+            return <button key={label} type="button" className={on ? 'on' : ''} onClick={() => { setFrom(f); setTo(t); }}>{label}</button>;
+          })}
+        </div>
+        <p className="v2-etf-how"><Mail size={13} aria-hidden /> Forward the bank’s e-transfer notices to <b>{PAYMENTS_ADDRESS}</b> — Claude reads each one and matches it to a sale; clear matches are made on their own, the rest wait below for you to confirm.</p>
       </div>
 
       <ErrorBox error={report.error || error} />
