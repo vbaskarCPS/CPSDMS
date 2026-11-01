@@ -113,3 +113,9 @@
 .wo-ex__name { display: inline-flex; align-items: center; gap: 6px; }
 .wo-ex__name svg { color: var(--ink-2); flex: none; }
 .wo-ex__howto { border: 0; background: none; color: inherit; font: inherit; font-weight: inherit; padding: 0; display: inline-flex; align-items: center; gap: 6px; text-align: left; }
+.wo-parts { display: grid; gap: 6px; }
+.wo-parts button { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--bg-2); color: inherit; border-radius: 12px; padding: 9px 12px; font-size: 14px; }
+.wo-parts button b { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; background: color-mix(in srgb, var(--ink-2) 25%, transparent); }
+.wo-parts button small { margin-left: auto; color: var(--ink-2); flex: none; }
+.wo-parts button.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg-2)); }
+.wo-parts button.is-on b { background: var(--accent); color: var(--accent-ink); }

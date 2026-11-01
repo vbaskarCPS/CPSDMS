@@ -226,8 +226,13 @@ const TODOS_SCHEMA = { type: 'object', properties: { items: { type: 'array', ite
 const EXINFO_SYSTEM = `You are Coach Claude. Explain one exercise or stretch to a near-40 beginner-intermediate lifter with light hip and knee
 pain, for a phone screen. description: 2-3 sentences on what it is and what it works. setup: 3-5 short steps to perform it
 (positions, the movement, breathing). tip: ONE mind-muscle cue — what to feel and where, in one sentence. mistakes: 2-3 short
-common mistakes to avoid (knee/hip-friendly where relevant). Plain words, no headings.`;
-const EXINFO_SCHEMA = { type: 'object', properties: { description: { type: 'string' }, setup: { type: 'array', items: { type: 'string' } }, tip: { type: 'string' }, mistakes: { type: 'array', items: { type: 'string' } } }, required: ['description', 'setup', 'tip', 'mistakes'] };
+common mistakes to avoid (knee/hip-friendly where relevant). Plain words, no headings.
+parts: when the item is a flow, circuit, routine or a generic "stretching"/"mobility" block (its plan note may list the
+moves, or just the areas to work), break it into the 3-6 individual moves, in order: each with a precise searchable name
+("Half-kneeling hip flexor stretch", "90/90 hip rotation", "Standing calf stretch against a wall"), seconds or reps per side,
+and a one-line cue. For a single exercise or stretch, parts is empty.`;
+const EXINFO_SCHEMA = { type: 'object', properties: { description: { type: 'string' }, setup: { type: 'array', items: { type: 'string' } }, tip: { type: 'string' }, mistakes: { type: 'array', items: { type: 'string' } },
+  parts: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, dose: { type: 'string' }, cue: { type: 'string' } }, required: ['name', 'dose', 'cue'] } } }, required: ['description', 'setup', 'tip', 'mistakes', 'parts'] };
 
 /** The first few YouTube results for a query, without an API key (the results page carries them as JSON). */
 async function youtubeSearch(q: string): Promise<{ id: string; title: string }[]> {
@@ -347,11 +352,14 @@ Deno.serve(async req => {
       const name = typeof b.name === 'string' ? b.name.trim().slice(0, 80) : '';
       if (!name) return json({ error: 'No exercise' }, 400);
       const kind = b.kind === 'stretch' || b.kind === 'cardio' ? b.kind : 'exercise';
+      const note = typeof b.note === 'string' ? b.note.trim().slice(0, 400) : '';
       const [videos, info] = await Promise.all([
         youtubeSearch(kind === 'stretch' ? `${name} stretch how to do it properly` : kind === 'cardio' ? `${name} beginner how to` : `how to ${name} proper form`),
-        claudeJson<Record<string, unknown>>(EXINFO_SYSTEM, [{ role: 'user', content: `${kind === 'stretch' ? 'Stretch' : 'Exercise'}: ${name}` }], EXINFO_SCHEMA, 800),
+        claudeJson<{ parts?: { name: string; dose: string; cue: string }[] } & Record<string, unknown>>(EXINFO_SYSTEM, [{ role: 'user', content: `${kind === 'stretch' ? 'Stretch' : 'Exercise'}: ${name}${note ? `\nPlan note: ${note}` : ''}` }], EXINFO_SCHEMA, 1200),
       ]);
-      return json({ videos, ...info });
+      // a flow: one video per move
+      const parts = await Promise.all((Array.isArray(info.parts) ? info.parts : []).slice(0, 6).map(async p => ({ ...p, videos: await youtubeSearch(`${p.name} how to`) })));
+      return json({ videos, ...info, parts });
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];
