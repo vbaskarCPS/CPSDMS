@@ -1,6 +1,6 @@
 // The e-transfer receipt ↔ sale rules used by the payments@ matcher (supabase/functions/_shared/etfMatch.ts).
 import { describe, expect, it } from 'vitest';
-import { decide, isForward, memoHit, nameScore, plainText, type Candidate } from '../../../supabase/functions/_shared/etfMatch';
+import { amountGap, decide, isClose, isForward, memoHit, nameScore, plainText, type Candidate } from '../../../supabase/functions/_shared/etfMatch';
 
 const c = (key: string, client: string, amount: number, same: boolean, extra: Partial<Candidate> = {}): Candidate =>
   ({ key, day: '2026-10-31', client, address: '3938 Paradise Pl', amount, same_amount: same, ...extra });
@@ -41,9 +41,30 @@ describe('deciding', () => {
       [c('a', 'Mohammad Suhail', 357, true), c('b', 'Jesse Wilson', 357, true)]);
     expect(d).toMatchObject({ key: 'a', confirmed: true });
   });
-  it('name matches but the amount differs: suggested, low confidence', () => {
+  it('name matches, amount near: suggested, medium; far off: suggested, low', () => {
     const d = decide({ sender_name: 'Tricia Noorani', amount: 210 }, [c('a', 'Tricia Noorani', 200, false)]);
+    expect(d).toMatchObject({ key: 'a', confirmed: false, confidence: 'medium' });
+    expect(d.reason).toMatch(/\$10\.00 over/);
+    const far = decide({ sender_name: 'Tricia Noorani', amount: 100 }, [c('a', 'Tricia Noorani', 400, false)]);
+    expect(far).toMatchObject({ key: 'a', confirmed: false, confidence: 'low' });
+  });
+  it('close amount and the name: suggested, saying how far off it is', () => {
+    const d = decide({ sender_name: 'Kim Dyke', amount: 336 }, [c('a', 'Kim Dyke', 300, false, { close_amount: true })]);
+    expect(d).toMatchObject({ key: 'a', confirmed: false, confidence: 'medium' });
+    expect(d.reason).toMatch(/\$36\.00 over/);
+  });
+  it('close amount, other name, only sale near it: suggested low; part payment reads as short', () => {
+    const d = decide({ sender_name: 'Raj Patel', amount: 180 }, [c('a', 'Manju Bhatt', 200, false, { close_amount: true })]);
     expect(d).toMatchObject({ key: 'a', confirmed: false, confidence: 'low' });
+    expect(d.reason).toMatch(/\$20\.00 short/);
+  });
+  it('the gap', () => {
+    expect(amountGap(300, 300)).toBe('');
+    expect(amountGap(288, 300)).toBe('$12.00 short');
+    expect(amountGap(315, 300)).toBe('$15.00 over');
+    expect(isClose(325, 300)).toBe(true);
+    expect(isClose(400, 300)).toBe(false);
+    expect(isClose(1050, 1000)).toBe(true);
   });
   it('nothing fits: unmatched', () => {
     expect(decide({ sender_name: 'Nobody', amount: 12 }, []).key).toBeNull();

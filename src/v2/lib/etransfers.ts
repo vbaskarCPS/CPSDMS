@@ -44,12 +44,20 @@ export function etfLists(r: EtfReport) {
   const openReceipts = r.receipts.filter(x => ['new', 'unmatched', 'review', 'error'].includes(x.status) && !x.sales.some(s => s.confirmed));
   const notReceipts = r.receipts.filter(x => ['not_receipt', 'not_forward', 'ignored'].includes(x.status));
   const sum = (a: { amount: number | null }[]) => Math.round(a.reduce((t, x) => t + Number(x.amount || 0), 0) * 100) / 100;
+  // received = what the bank actually got for the matched sales (the e-transfer is often not the recorded amount)
+  const received = sum(matched.map(s => ({ amount: s.match!.amount ?? s.amount })));
   return {
     matched, waiting, openReceipts, notReceipts,
-    totals: { expected: sum(r.sales), received: sum(matched), waiting: sum(waiting), unmatchedEmails: sum(openReceipts) },
+    totals: { expected: sum(r.sales), received, matchedSold: sum(matched), gap: Math.round((received - sum(matched)) * 100) / 100, waiting: sum(waiting), unmatchedEmails: sum(openReceipts) },
   };
 }
 
+/** How far an e-transfer is from the sale it paid for: "$12.00 short", "$5.00 over", or '' when they agree. */
+export const amountGap = (sent: number | null | undefined, sold: number): string => {
+  if (sent == null) return '';
+  const d = Math.round((Number(sent) - sold) * 100) / 100;
+  return Math.abs(d) < 0.005 ? '' : d < 0 ? `${money(-d)} short` : `${money(d)} over`;
+};
 export const money = (n: number | null | undefined) => n == null ? '—' : `$${Number(n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const shortDate = (d: string | null | undefined) => !d ? '—' : new Date(`${d.slice(0, 10)}T12:00:00`).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
 export const daysSince = (d: string, today = new Date()) => Math.max(0, Math.floor((today.getTime() - new Date(`${d}T12:00:00`).getTime()) / 86400000));
