@@ -82,6 +82,9 @@ describe('the email', () => {
     expect(isForward('FW: Funds deposited', '')).toBe(true);
     expect(isForward('Funds deposited', '---------- Forwarded message ---------\nFrom: notify@payments.interac.ca')).toBe(true);
     expect(isForward('INTERAC e-Transfer: KIM DYKE sent you money', 'Hi, KIM DYKE sent you $300.00')).toBe(false);
+    // straight from the bank (a provider-side rule, or the bank's notification address): no Fwd: needed
+    expect(isForward('INTERAC e-Transfer: KIM DYKE sent you money', 'Hi', 'notify@payments.interac.ca')).toBe(true);
+    expect(isForward('INTERAC e-Transfer: KIM DYKE sent you money', 'Hi', 'someone@gmail.com')).toBe(false);
   });
   it('turns the html into plain text', () => {
     expect(plainText('<style>x{}</style><p>Amount:&nbsp;<b>$300.00</b></p><p>From: Kim</p>')).toBe('Amount: $300.00\nFrom: Kim');

@@ -107,7 +107,7 @@ export async function receiptFor(svc: any, messageId: string): Promise<string | 
     return data.id as string;
   };
   // only forwards are processed
-  if (!isForward(m.subject, body)) return save({ status: 'not_forward', note: 'Not a forward: only forwarded bank notices are read' });
+  if (!isForward(m.subject, body, m.from_email)) return save({ status: 'not_forward', note: 'Not a forward: only forwarded bank notices, or notices straight from the bank, are read' });
   let p: Record<string, unknown>;
   try {
     p = await claude(READ_RULES, `Forwarded by: ${m.from_email}\nSubject: ${m.subject || ''}\n\n${body}`, READ_SCHEMA);
