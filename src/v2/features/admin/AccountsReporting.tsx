@@ -4,17 +4,17 @@
 // Three lists: Matched · Unmatched client records (sales with no receipt yet) · Unmatched emails (receipts with
 // no sale). Clear matches are made on their own; suggestions wait here for a person to confirm. Nothing here
 // changes a payout.
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Check, Link2, Mail, RefreshCw, Unlink, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import {
-  amountGap, daysSince, etfConfirm, etfIgnore, etfLists, etfMatch, etfRecheck, etfReport, etfUnmatch, HOW_LABEL, money, PAYMENTS_ADDRESS, shortDate,
+  amountGap, daysSince, etfConfirm, etfInbox, etfMessage, mailState, type EtfMail, etfIgnore, etfLists, etfMatch, etfRecheck, etfReport, etfUnmatch, HOW_LABEL, money, PAYMENTS_ADDRESS, shortDate,
   type EtfReceipt, type EtfSale,
 } from '../../lib/etransfers';
 import { Btn, ErrorBox, Loading, Modal, Tabs, Tag } from '../../ui';
 
-type List = 'matched' | 'clients' | 'emails';
+type List = 'matched' | 'clients' | 'emails' | 'inbox';
 const addDays = (iso: string, n: number) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 
 export const AccountsReporting: React.FC = () => {
@@ -28,6 +28,11 @@ export const AccountsReporting: React.FC = () => {
   const [note, setNote] = useState<string | null>(null);
   const [pickFor, setPickFor] = useState<{ receipt?: EtfReceipt; sale?: EtfSale } | null>(null);
   const report = useLoad(() => etfReport(centerId || null, from, to), [centerId, from, to]);
+  // the payments@ mailbox itself (it isn't in the Mail app): every email that reached it
+  const [mailSearch, setMailSearch] = useState('');
+  const [mailTick, setMailTick] = useState(0);
+  const mail = useLoad(() => (list === 'inbox' ? etfInbox(mailSearch) : Promise.resolve(null)), [list, mailSearch, mailTick]);
+  const [openMail, setOpenMail] = useState<EtfMail | null>(null);
   const lists = useMemo(() => report.data ? etfLists(report.data) : null, [report.data]);
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
@@ -80,7 +85,39 @@ export const AccountsReporting: React.FC = () => {
           { key: 'matched', label: 'Matched', count: lists.matched.length },
           { key: 'clients', label: 'Unmatched client records', count: lists.waiting.length },
           { key: 'emails', label: 'Unmatched emails', count: lists.openReceipts.length },
+          { key: 'inbox', label: 'Inbox' },
         ]} />
+
+        {list === 'inbox' && (
+          <div className="v2-card" style={{ padding: 0 }}>
+            <div className="v2-row v2-etf-mailbar">
+              <span className="v2-small v2-mut"><Mail size={13} style={{ verticalAlign: -2 }} /> {PAYMENTS_ADDRESS} — every email that reached it, newest first. It stays out of the Mail app.</span>
+              <span className="v2-spacer" />
+              <input className="v2-input" placeholder="Search" value={mailSearch} onChange={e => setMailSearch(e.target.value)} aria-label="Search the payments inbox" style={{ width: 180 }} />
+              <Btn kind="o" size="sm" icon={RefreshCw} onClick={() => setMailTick(t => t + 1)}>Refresh</Btn>
+            </div>
+            <ErrorBox error={mail.error} />
+            <table className="v2-table v2-cards-sm">
+              <thead><tr><th>Received</th><th>Email</th><th style={{ textAlign: 'right' }}>Amount</th><th>Status</th><th>Sale</th></tr></thead>
+              <tbody>
+                {!mail.data && !mail.error && <tr><td colSpan={5}><Loading /></td></tr>}
+                {mail.data?.length === 0 && <tr><td colSpan={5} className="v2-mut">Nothing has reached {PAYMENTS_ADDRESS} yet{mailSearch ? ' that matches the search' : ''}.</td></tr>}
+                {mail.data?.map(m => {
+                  const st = mailState(m);
+                  return (
+                    <tr key={m.message_id} className="v2-etf-mailrow" onClick={() => setOpenMail(m)} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter') setOpenMail(m); }}>
+                      <td data-label="Received" className="v2-small">{new Date(m.at).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
+                      <td className="lead"><b>{m.subject || '(no subject)'}</b><div className="v2-small v2-mut">from {m.from_name ? `${m.from_name} · ` : ''}{m.from_email}{m.receipt?.sender ? ` · e-transfer from ${m.receipt.sender}` : ''}</div></td>
+                      <td data-label="Amount" style={{ textAlign: 'right' }}><b>{money(m.receipt?.amount ?? null)}</b></td>
+                      <td data-label="Status"><Tag tone={st.tone}>{st.label}</Tag>{m.receipt?.note && <div className="v2-small v2-mut">{m.receipt.note}</div>}</td>
+                      <td data-label="Sale" className="v2-small">{m.receipt?.sales.length ? m.receipt.sales.map((x, i) => <div key={i}>{x.client || '—'} · {money(x.amount)} · {shortDate(x.day)}{x.confirmed ? '' : ' (suggested)'}</div>) : <span className="v2-mut">—</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {list === 'matched' && (
           <div className="v2-card" style={{ padding: 0 }}>
@@ -190,6 +227,7 @@ export const AccountsReporting: React.FC = () => {
         </>}
       </>}
 
+      {openMail && <MailModal mail={openMail} onClose={() => setOpenMail(null)} />}
       {pickFor && lists && (
         <PickMatch for={pickFor} sales={lists.waiting} receipts={lists.openReceipts} busy={!!busy} onClose={() => setPickFor(null)}
           onPick={(receiptId, key) => act('pick', async () => { await etfMatch(receiptId, key); setPickFor(null); })} />
@@ -205,6 +243,34 @@ const Total: React.FC<{ label: string; value: string; sub: string; tone?: string
     <div className="v2-small v2-mut">{sub}</div>
   </div>
 );
+
+/** One email from payments@, as it arrived. */
+const MailModal: React.FC<{ mail: EtfMail; onClose: () => void }> = ({ mail, onClose }) => {
+  const msg = useLoad(() => etfMessage(mail.message_id), [mail.message_id]);
+  const ref = useRef<HTMLIFrameElement>(null);
+  const [h, setH] = useState(120);
+  const doc = useMemo(() => {
+    const m = msg.data;
+    const body = m?.html || `<pre style="white-space:pre-wrap;font:inherit;margin:0">${(m?.text || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!))}</pre>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#1f1f1f;font:14px/1.5 Inter,-apple-system,"Segoe UI",Arial,sans-serif;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}</style></head><body>${body}</body></html>`;
+  }, [msg.data]);
+  const fit = useCallback(() => { const d = ref.current?.contentDocument; if (d?.body) setH(Math.min(4000, Math.max(80, d.documentElement.scrollHeight + 2))); }, []);
+  const st = mailState(mail);
+  return (
+    <Modal title={mail.subject || '(no subject)'} onClose={onClose}>
+      <div className="v2-small v2-mut" style={{ marginBottom: 8 }}>
+        from {mail.from_name ? `${mail.from_name} <${mail.from_email}>` : mail.from_email} · {new Date(mail.at).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+        {' · '}<Tag tone={st.tone}>{st.label}</Tag>{mail.receipt?.note ? ` ${mail.receipt.note}` : ''}
+      </div>
+      <ErrorBox error={msg.error} />
+      {!msg.data && !msg.error ? <Loading /> : msg.data && (
+        <iframe ref={ref} title="Email" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" srcDoc={doc}
+          style={{ width: '100%', border: '1px solid var(--line)', borderRadius: 10, background: '#fff', height: h }}
+          onLoad={() => { fit(); setTimeout(fit, 300); setTimeout(fit, 1200); }} />
+      )}
+    </Modal>
+  );
+};
 
 /** Pick the other side of a match by hand: a receipt for a sale, or a sale for a receipt (closest amounts first). */
 const PickMatch: React.FC<{

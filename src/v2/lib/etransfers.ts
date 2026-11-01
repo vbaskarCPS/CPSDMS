@@ -21,6 +21,31 @@ export interface EtfReceipt {
 }
 export interface EtfReport { sales: EtfSale[]; receipts: EtfReceipt[] }
 
+/** One email that reached payments@ (Accounts Reporting › Inbox), with what the matcher made of it. */
+export interface EtfMail {
+  message_id: string; thread_id: string; at: string; from_email?: string; from_name?: string; subject?: string; snippet?: string; read?: boolean;
+  receipt?: { id: string; status: ReceiptStatus; note?: string | null; sender?: string | null; amount?: number | null; sent_on?: string | null; bank?: string | null; memo?: string | null;
+    sales: { client: string | null; day: string; amount: number; confirmed: boolean }[] } | null;
+}
+export interface EtfMessage { id: string; at: string; from_email?: string; from_name?: string; to?: string[]; subject?: string; html?: string; text?: string }
+export async function etfInbox(search?: string): Promise<EtfMail[]> { return (must(await db.rpc('app_etf_inbox', { p_search: search || null })) as EtfMail[]) || []; }
+export async function etfMessage(id: string): Promise<EtfMessage | null> { return must(await db.rpc('app_etf_message', { p_message: id })) as EtfMessage | null; }
+/** How a payments@ email stands, for the Inbox tab. */
+export function mailState(m: EtfMail): { label: string; tone: 'g' | 'a' | 'b' | 'r' | 'v' } {
+  const r = m.receipt;
+  if (!r) return { label: 'Not read yet', tone: 'v' };
+  switch (r.status) {
+    case 'matched': return { label: 'Matched', tone: 'g' };
+    case 'review': return { label: 'Suggested', tone: 'b' };
+    case 'unmatched': case 'new': return { label: 'No sale found', tone: 'a' };
+    case 'error': return { label: 'Couldn’t read', tone: 'r' };
+    case 'ignored': return { label: 'Not ours', tone: 'v' };
+    case 'not_receipt': return { label: 'Not a receipt', tone: 'v' };
+    case 'not_forward': return { label: 'Not a forward', tone: 'v' };
+    default: return { label: r.status, tone: 'v' };
+  }
+}
+
 export async function etfReport(centerId: string | null, from: string, to: string): Promise<EtfReport> {
   const r = must(await db.rpc('app_etf_report', { p_center: centerId, p_from: from, p_to: to })) as EtfReport | null;
   return { sales: r?.sales || [], receipts: r?.receipts || [] };

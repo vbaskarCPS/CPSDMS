@@ -645,3 +645,6 @@
   .v2-etf-dates { flex: 1 1 100%; }
   .v2-etf-dates .v2-input { flex: 1; width: auto; }
 }
+.v2-etf-mailbar { gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.v2-etf-mailrow { cursor: pointer; }
+.v2-etf-mailrow:hover { background: var(--hover); }
