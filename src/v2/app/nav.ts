@@ -68,18 +68,19 @@ export const COMPONENTS: Component[] = [
   { key: 'email', label: 'Email', icon: Mail, color: 'blue', perm: 'everyone', home: '/app/email', blurb: 'Your own inbox: firstname@propertystars.app', subs: [
     { key: 'inbox', label: 'Inbox', icon: Inbox, color: 'blue', path: '/app/email', ready: true },
   ] },
-  { key: 'sa', label: 'Super Admin', icon: Shield, color: 'rose', perm: 'super_admin_any', tabs: true, blurb: 'Users, centers, availability and territory', subs: [
+  { key: 'sa', label: 'Super Admin', icon: Shield, color: 'rose', perm: 'super_admin_any', tabs: true, blurb: 'Users, centers, availability, territory and accounts', subs: [
     { key: 'users', label: 'Users', icon: Users, color: 'rose', path: '/app/admin/users', ready: true },
     { key: 'centers', label: 'Centers & seasons', icon: Building2, color: 'blue', path: '/app/admin/centers', ready: true },
     { key: 'availability', label: 'Availability', icon: CalendarOff, color: 'amber', path: '/app/admin/availability', ready: true },
     { key: 'territory', label: 'Territory & Client Data', icon: MapPin, color: 'sky', path: '/app/admin/territory', ready: true },
+    { key: 'accounts', label: 'Accounts Reporting', icon: Receipt, color: 'green', path: '/app/admin/accounts', ready: true },
     { key: 'reporting', label: 'Reporting', icon: BarChart3, color: 'violet', path: '/app/admin/reporting', ready: false },
   ] },
 ];
 
 /** Which permission each Super Admin subcomponent needs. */
 export const SA_SUB_PERM: Record<string, Permission> = {
-  users: 'sa_users', centers: 'sa_users', availability: 'sa_users', territory: 'sa_territory', reporting: 'sa_reporting',
+  users: 'sa_users', centers: 'sa_users', availability: 'sa_users', territory: 'sa_territory', accounts: 'sa_reporting', reporting: 'sa_reporting',
 };
 
 export function visibleComponents(can: (p: Permission) => boolean): Component[] {

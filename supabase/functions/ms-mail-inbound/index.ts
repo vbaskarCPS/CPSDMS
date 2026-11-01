@@ -12,10 +12,12 @@
 //   4. the push function tells whoever it's for
 //   5. for a customer's email to a centre's customer mailbox, Claude suggests a reply and what to do with the booking
 //      (in the background, after answering Resend; kept for someone to approve — _shared/suggest.ts, RUN_71)
+//      — or, for payments@, Claude reads the forwarded e-transfer notice and matches it to a sale (_shared/etransfer.ts)
 // Deployed without JWT verification (Resend isn't signed in); the signature check stands in for it.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { DELIVERY_EVENTS, reasonOf, verify } from '../_shared/svix.ts';
 import { suggestFor } from '../_shared/suggest.ts';
+import { receiptFor } from '../_shared/etransfer.ts';
 export { verify };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -116,8 +118,11 @@ Deno.serve(async req => {
       });
       clearTimeout(t);
     } catch (err) { console.error('ms-mail-inbound: notify', err instanceof Error ? err.message : err); }
-    // Claude's suggestion, in the background (it takes a few seconds; Resend shouldn't wait)
-    const suggest = Promise.all(deliveries.map(d => suggestFor(svc, d.message_id)
+    // Claude's suggestion, in the background (it takes a few seconds; Resend shouldn't wait); for payments@,
+    // Claude reads the forwarded e-transfer notice and matches it to a sale instead (_shared/etransfer.ts)
+    const suggest = Promise.all(deliveries.map(d => receiptFor(svc, d.message_id)
+      .catch(err => { console.error('ms-mail-inbound: e-transfer', err instanceof Error ? err.message : err); return null; })
+      .then(rid => rid ? null : suggestFor(svc, d.message_id))
       .catch(err => console.error('ms-mail-inbound: suggest', err instanceof Error ? err.message : err))));
     const rt = (globalThis as unknown as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
     if (rt?.waitUntil) rt.waitUntil(suggest); else await suggest;
