@@ -10,6 +10,8 @@
 //   POST { token, action: 'briefhints', context }   → suggestions for each Bed/Morning Brief question (once there is history)
 //   POST { token, action: 'todos', brief, priorities, context }   → { items: [{ text, time?, note? }] }  the day's to-do list from the Brief
 //   POST { token, action: 'exinfo', name, kind? }   → { videos: [{id,title}], description, tip, setup[], mistakes[] }  how to do an exercise/stretch
+//   POST { token, action: 'deals', items: [{id,text}], postal, stores? }   → { items: [{ id, section, deals: [{merchant, name, price, saleStory, validTo}] }] }
+//        this week's flyer deals near a postal code (Flipp's flyer data, unofficial) matched to the shopping list
 //   POST { token, action: 'categorize', merchants: [string], categories: [string] }
 //        → { categories: { [merchant]: category } }
 //   POST { token, action: 'reflect', context }                     → { reply }  (2–3 sentences on the day)
@@ -258,6 +260,25 @@ async function youtubeSearch(q: string, max = 5): Promise<{ id: string; title: s
   } catch { return []; }
 }
 
+const SECTIONS = ['Produce', 'Bakery', 'Deli', 'Meat & Seafood', 'Dairy & Eggs', 'Frozen', 'Pantry', 'Snacks & Drinks', 'Baby', 'Health & Beauty', 'Household & Cleaning', 'Pet', 'Hardware & Auto', 'Other'];
+const DEALS_SYSTEM = `You match a household shopping list to this week's flyer items. For each list item you get candidate flyer
+items (index, store, name, price, sale story). Pick ONLY candidates that are genuinely the same product the person means
+(the item they'd actually buy: "milk" matches 2L/4L milk, not milk chocolate or a rusk with "milk" in the name; "batteries"
+matches AA/AAA packs). Up to 4 matches per item, best value first, at most one per store. Also give each list item its
+store section from this list: ${SECTIONS.join(' | ')}. Return every list item, with an empty matches list when nothing fits.`;
+const DEALS_SCHEMA = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, section: { type: 'string', enum: SECTIONS }, matches: { type: 'array', items: { type: 'integer' } } }, required: ['id', 'section', 'matches'] } } }, required: ['items'] };
+
+type FlippItem = { name: string; merchant_name: string; current_price: number | null; sale_story?: string | null; valid_to?: string; valid_from?: string; flyer_id?: number; clean_image_url?: string };
+/** This week's flyer items near a postal code, for one search (Flipp's search, unofficial: when it changes, deals just go empty). */
+async function flippSearch(q: string, postal: string): Promise<FlippItem[]> {
+  try {
+    const res = await fetch(`https://backflipp.wishabi.com/flipp/items/search?locale=en-ca&postal_code=${encodeURIComponent(postal)}&q=${encodeURIComponent(q)}`, { headers: { 'accept': 'application/json', 'user-agent': 'Mozilla/5.0' } });
+    if (!res.ok) return [];
+    const j = await res.json();
+    return Array.isArray(j.items) ? j.items.filter((i: FlippItem) => i && i.name && i.merchant_name) : [];
+  } catch { return []; }
+}
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -372,6 +393,29 @@ Deno.serve(async req => {
       // a flow: one video per move
       const parts = await Promise.all((Array.isArray(info.parts) ? info.parts : []).slice(0, 6).map(async p => ({ ...p, videos: await youtubeSearch(`${p.name} how to`) })));
       return json({ videos, ...info, parts });
+    }
+    if (action === 'deals') {
+      const items = (Array.isArray(b.items) ? b.items : []).filter(x => x && typeof x.id === 'string' && typeof x.text === 'string' && x.text.trim()).slice(0, 40) as { id: string; text: string }[];
+      const postal = (typeof b.postal === 'string' ? b.postal : '').replace(/\s+/g, '').toUpperCase();
+      const stores = (Array.isArray(b.stores) ? b.stores : []).filter(s => typeof s === 'string') as string[];
+      if (!items.length) return json({ items: [] });
+      // a 3-character FSA is enough for Flipp once padded to a full code
+      const pc = postal.length >= 6 ? postal : `${postal.slice(0, 3)}1A1`;
+      const found = await Promise.all(items.map(async it => {
+        const list = await flippSearch(it.text.trim(), pc);
+        const prefer = (m: string) => stores.some(s => m.toLowerCase().includes(s.toLowerCase())) ? 0 : 1;
+        // nearby/preferred stores first, then cheapest; cap the candidates Coach Claude has to read
+        const cands = list.filter(i => typeof i.current_price === 'number').sort((a, b) => prefer(a.merchant_name) - prefer(b.merchant_name) || (a.current_price! - b.current_price!)).slice(0, 18);
+        return { it, cands };
+      }));
+      const prompt = found.map(({ it, cands }) => `${it.id} · "${it.text}"\n${cands.map((c, i) => `  [${i}] ${c.merchant_name} — ${c.name} — $${c.current_price}${c.sale_story ? ` (${c.sale_story})` : ''}`).join('\n') || '  (no flyer items)'}`).join('\n\n');
+      const r = await claudeJson<{ items: { id: string; section: string; matches: number[] }[] }>(DEALS_SYSTEM, [{ role: 'user', content: `Preferred stores: ${stores.join(', ') || 'any'}\n\n${prompt}` }], DEALS_SCHEMA, 2500);
+      const out = found.map(({ it, cands }) => {
+        const pick = (r.items || []).find(x => x.id === it.id);
+        const deals = (pick?.matches || []).map(i => cands[i]).filter(Boolean).slice(0, 4).map(c => ({ merchant: c.merchant_name, name: c.name, price: c.current_price, saleStory: c.sale_story || undefined, validTo: c.valid_to, validFrom: c.valid_from, image: c.clean_image_url }));
+        return { id: it.id, section: pick?.section && SECTIONS.includes(pick.section) ? pick.section : 'Other', deals };
+      });
+      return json({ items: out, stores_seen: [...new Set(found.flatMap(f => f.cands.map(c => c.merchant_name)))] });
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];
