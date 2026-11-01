@@ -15,7 +15,7 @@
 import { createPortal } from 'react-dom';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BOARD, WORD, canMove, cheers, notThereLine, oopsLine, slowLine, clipId, spokenFor, movesFrom, sentenceFor,
+  BOARD, WORD, canMove, cheers, notThereLine, oopsLine, slowLine, clipId, spokenFor, movesFrom, sentenceFor, monkeyHello, HIGH_FIVE, YEAH,
   type Piece, type Round, type Speaker, type Sq,
 } from '../../lib/littleChess/lessons';
 import { castName, chessHost, countAloud, lessonLine, lessonOops, storyLine, answerOf, type Cast, type Question, type Intro, type ChessRound } from '../../lib/littleLessons/levels';
@@ -23,6 +23,7 @@ import { applySettings, lessonQuestion, lessonStarted, nextLesson, readProgress,
 import type { GameProps } from './games';
 import { CHARACTER_CSS, Character, type Mood } from './chessCharacters';
 import { CastShape, LESSON_CHARACTER_CSS } from './lessonCharacters';
+import { MONKEY_CSS, MrMonkey, type Pose } from './monkey';
 import { clipCount, englishVoices, hush, loadClips, onSpeaking, onVoicesReady, say, type VoiceInfo } from './voice';
 
 const BG = 'radial-gradient(120% 80% at 50% 0%, #0f766e 0%, #134e4a 55%, #042f2e 100%)';
@@ -31,11 +32,14 @@ const FONT = "'Andika', 'Comic Sans MS', 'Trebuchet MS', system-ui, sans-serif";
 
 // ── the voice: the recorded clip if there is one, else the tablet's most natural voice (or the one a grown-up picked) ──
 let chosenVoice: string | null = null, useRecorded = true, playerName = 'Kiaan';
+/** who the line now being said belongs to ('narrator' = Mr Monkey) */
+let nowTalking: Speaker | Cast = 'narrator';
 type Line = { text: string; who?: Speaker | Cast; said?: string; key?: string };
 /** Say a line: its recorded clip (chess lines are named by their text, lesson lines by `key`), or the
  *  tablet reads the full sentence. */
 const talk = (line: Line, on: boolean, onWord?: (i: number) => void, onEnd?: () => void) => {
   const who = (line.who || 'narrator') as Speaker;
+  nowTalking = who;
   say(line.text, {
     on, voice: chosenVoice, onWord, onEnd, recorded: useRecorded,
     clip: clipId(who, line.key || line.text),
@@ -106,6 +110,7 @@ const CSS = `
   @keyframes ll-spark { 0% { transform: translate(0,0) scale(.4); opacity: 1 } 100% { transform: translate(var(--dx), var(--dy)) scale(1.1) rotate(160deg); opacity: 0 } }
   ${CHARACTER_CSS}
   ${LESSON_CHARACTER_CSS}
+  ${MONKEY_CSS}
 `;
 
 /** `k`: which question of the lesson this is; `left`: questions to go before the sticker. */
@@ -146,7 +151,7 @@ const LittleLessons: React.FC<GameProps<Partial<LessonProgress>>> = ({ progress,
       const got = stickerFor(next);
       update({ ...next, stickers: [...next.stickers, got] });
       setRun(null); setSticker(got);
-      talk({ text: `${player.toUpperCase()} GOT A STICKER!` }, next.voice);
+      talk({ text: `${player.toUpperCase()} GOT A STICKER!` }, next.voice, undefined, () => talk({ text: HIGH_FIVE }, next.voice));
       return;
     }
     update(next);
@@ -167,7 +172,10 @@ const LittleLessons: React.FC<GameProps<Partial<LessonProgress>>> = ({ progress,
       {sticker && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={() => setSticker(null)}>
           <div className="rounded-[40px] bg-teal-950/95 border-4 border-yellow-300 px-10 py-8 text-center shadow-2xl" style={{ animation: 'lc-pop .5s ease-out' }}>
-            <div style={{ fontSize: 'clamp(110px, 22vw, 200px)', lineHeight: 1, animation: 'lc-float 2s ease-in-out infinite' }}>{sticker}</div>
+            <div className="flex items-end justify-center gap-2">
+              <StickerMonkey voice={p.voice} />
+              <div style={{ fontSize: 'clamp(110px, 22vw, 200px)', lineHeight: 1, animation: 'lc-float 2s ease-in-out infinite' }}>{sticker}</div>
+            </div>
             <div className="font-black mt-4" style={{ fontSize: 'clamp(30px, 5vw, 52px)' }}>{player.toUpperCase()} GOT A STICKER!</div>
             <button type="button" onClick={e => { e.stopPropagation(); setSticker(null); }} className="mt-6 px-10 py-4 rounded-full bg-yellow-300 text-teal-950 font-black text-3xl">YAY!</button>
           </div>
@@ -186,7 +194,8 @@ const Home: React.FC<{ p: LessonProgress; name: string; onPlay: () => void; onEx
       <div className="font-black text-3xl tracking-wide">LITTLE LESSONS</div>
       <HoldButton onHold={onGrownups} label="Hold for grown-ups">⚙</HoldButton>
     </div>
-    <div className="flex items-end justify-center gap-2 mt-6" aria-hidden="true">
+    <div className="flex items-end justify-center gap-2 mt-6">
+      <Greeter name={name} voice={p.voice} />
       <CastShape who="ollie" size={110} style={{ animation: 'lc-float 2.6s ease-in-out infinite' }} />
       <Character piece="knight" size={120} style={{ animation: 'lc-float 2.2s ease-in-out infinite' }} />
       <CastShape who="benny" size={110} style={{ animation: 'lc-float 2.9s ease-in-out infinite' }} />
@@ -207,6 +216,37 @@ const Home: React.FC<{ p: LessonProgress; name: string; onPlay: () => void; onEx
     </div>
   </div>
 );
+
+/** On the sticker card: hand out for a high five; tap it and he cheers. */
+const StickerMonkey: React.FC<{ voice: boolean }> = ({ voice }) => {
+  const [slapped, setSlapped] = useState(false);
+  const talking = useTalking();
+  return (
+    <button type="button" aria-label="High five Mr Monkey" className="relative" onClick={e => { e.stopPropagation(); if (slapped) return; setSlapped(true); talk({ text: YEAH }, voice); }}
+      style={{ animation: slapped ? 'll-jump .8s ease-out 2' : undefined, transformOrigin: '50% 100%', WebkitTapHighlightColor: 'transparent' }}>
+      <MrMonkey size={130} pose={slapped ? 'cheer' : 'highfive'} mood={slapped ? 'happy' : talking ? 'talk' : 'idle'} />
+      {slapped && <span className="mk-slap absolute pointer-events-none" aria-hidden="true" style={{ right: -6, top: 0, fontSize: 44 }}>✋</span>}
+    </button>
+  );
+};
+
+/** Mr Monkey on the home screen: waves; a tap and he says hello and holds his hand out; tap the hand for the high five. */
+const Greeter: React.FC<{ name: string; voice: boolean }> = ({ name, voice }) => {
+  const [step, setStep] = useState<'wave' | 'hello' | 'hand' | 'slap'>('wave');
+  const talking = useTalking();
+  const tap = () => {
+    if (step === 'wave') { setStep('hello'); talk({ text: monkeyHello(name) }, voice, undefined, () => { setStep('hand'); talk({ text: HIGH_FIVE }, voice); }); }
+    else if (step === 'hand') { setStep('slap'); talk({ text: YEAH }, voice); window.setTimeout(() => setStep('wave'), 1600); }
+  };
+  const pose: Pose = step === 'hand' ? 'highfive' : step === 'slap' ? 'cheer' : step === 'hello' ? 'idle' : 'wave';
+  const mood: Mood = step === 'slap' ? 'happy' : talking && (step === 'hello' || step === 'hand') ? 'talk' : 'idle';
+  return (
+    <button type="button" onClick={tap} aria-label="Mr Monkey" className="relative" style={{ animation: step === 'slap' ? 'll-jump .8s ease-out 2' : 'lc-float 2.3s ease-in-out infinite', transformOrigin: '50% 100%', WebkitTapHighlightColor: 'transparent' }}>
+      <MrMonkey size={150} pose={pose} mood={mood} />
+      {step === 'slap' && <span className="mk-slap absolute pointer-events-none" aria-hidden="true" style={{ right: -10, top: 0, fontSize: 48 }}>✋</span>}
+    </button>
+  );
+};
 
 /** Grown-ups' corner on the tablet: the voice. (His lesson mix is on the grown-ups' "Kiaan's lessons" page.) */
 const Grownups: React.FC<{ p: LessonProgress; onChange: (p: LessonProgress) => void; onClose: () => void }> = ({ p, onChange, onClose }) => {
@@ -264,7 +304,10 @@ const StoryCard: React.FC<{ level: Intro; voice: boolean; onDone: () => void; on
       <div className="flex items-center justify-between px-4"><HoldButton onHold={onQuit} label="Hold to stop">‹</HoldButton><div className="w-14" /></div>
       <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
         <div className="rounded-[48px] bg-white/10 px-12 py-6" style={{ animation: 'lc-pop .5s ease-out' }}>
-          <div style={{ animation: 'll-enter .9s cubic-bezier(.3,1.4,.5,1) both' }}>
+          <div className="flex items-end justify-center" style={{ animation: 'll-enter .9s cubic-bezier(.3,1.4,.5,1) both' }}>
+            {/* Mr Monkey sits in to hear the story, and claps when it's done */}
+            <MrMonkey size={Math.min(190, window.innerHeight * 0.23)} pose={ready ? 'cheer' : 'idle'} mood={ready ? 'happy' : talking ? 'wow' : 'idle'}
+              style={{ animation: ready ? 'll-jump .8s ease-out 2' : 'mk-lean 2.6s ease-in-out infinite', transformOrigin: '50% 100%' }} />
             <CastShape who={level.cast} size={Math.min(280, window.innerHeight * 0.34)} mood={talking ? 'talk' : ready ? 'happy' : lit % 3 ? 'idle' : 'wow'}
               style={{ animation: talking ? 'll-talkbob .45s ease-in-out infinite' : 'lc-bounce 1.4s ease-in-out infinite', transformOrigin: '50% 100%' }} />
           </div>
@@ -285,7 +328,7 @@ const StoryCard: React.FC<{ level: Intro; voice: boolean; onDone: () => void; on
 };
 
 // ── the character on stage: talks while a line is said, reacts to his answers ──
-type Act = { talking: boolean; reaction: 'right' | 'wrong' | null; thinking: boolean };
+type Act = { talking: boolean; reaction: 'right' | 'wrong' | null; thinking: boolean; who?: Speaker | Cast };
 const ActCtx = createContext<Act>({ talking: false, reaction: null, thinking: false });
 /** true while a line is being said (the characters move their mouths) */
 function useTalking(): boolean {
@@ -298,12 +341,23 @@ const SPARKS = ['⭐', '✨', '💛', '🌟', '✨', '⭐'];
  *  (with sparkles) when he gets it, and looks worried after a miss. */
 const Host: React.FC<{ who: Cast; size: number; enter?: boolean }> = ({ who, size, enter = true }) => {
   const a = useContext(ActCtx);
-  const mood: Mood = a.reaction === 'right' ? 'happy' : a.reaction === 'wrong' ? 'oops' : a.talking ? 'talk' : 'idle';
+  const hostTalks = a.talking && a.who !== 'narrator';
+  const monkeyTalks = a.talking && a.who === 'narrator';
+  const mood: Mood = a.reaction === 'right' ? 'happy' : a.reaction === 'wrong' ? 'oops' : hostTalks ? 'talk' : 'idle';
   const move = a.reaction === 'right' ? 'll-jump .8s ease-out 2' : a.reaction === 'wrong' ? 'll-shake .7s ease-in-out'
-    : a.talking ? 'll-talkbob .45s ease-in-out infinite' : a.thinking ? 'll-ponder 2.4s ease-in-out infinite' : 'll-sway 3.2s ease-in-out infinite';
+    : hostTalks ? 'll-talkbob .45s ease-in-out infinite' : a.thinking ? 'll-ponder 2.4s ease-in-out infinite' : 'll-sway 3.2s ease-in-out infinite';
+  // Mr Monkey stands with whoever is asking: he listens to them, points at the answers while Kiaan thinks,
+  // high-fives them when it's right, and shrugs when it's not
+  const pose: Pose = a.reaction === 'right' ? 'highfive' : a.reaction === 'wrong' ? 'shrug' : monkeyTalks ? 'point' : a.thinking ? 'point' : hostTalks ? 'wave' : 'idle';
+  const mMood: Mood = a.reaction === 'right' ? 'happy' : a.reaction === 'wrong' ? 'oops' : monkeyTalks ? 'talk' : hostTalks ? 'wow' : 'idle';
+  const mMove = a.reaction === 'right' ? 'll-jump .8s ease-out 2' : a.reaction === 'wrong' ? 'll-shake .7s ease-in-out' : monkeyTalks ? 'll-talkbob .45s ease-in-out infinite' : 'mk-lean 2.6s ease-in-out infinite';
   return (
     <div className="relative inline-block" style={{ animation: enter ? 'll-enter .9s cubic-bezier(.3,1.4,.5,1) both' : undefined }}>
-      <div style={{ animation: move, transformOrigin: '50% 100%' }}><CastShape who={who} size={size} mood={mood} /></div>
+      <div className="flex items-end" style={{ gap: size * 0.02 }}>
+        <div style={{ animation: mMove, transformOrigin: '50% 100%' }}><MrMonkey size={size * 0.78} mood={mMood} pose={pose} /></div>
+        <div style={{ animation: move, transformOrigin: '50% 100%' }}><CastShape who={who} size={size} mood={mood} /></div>
+      </div>
+      {a.reaction === 'right' && <span className="mk-slap absolute pointer-events-none" aria-hidden="true" style={{ left: '38%', top: '8%', fontSize: size * 0.26 }}>✋</span>}
       {a.reaction === 'right' && SPARKS.map((s, i) => (
         <span key={i} className="absolute left-1/2 top-1/3 pointer-events-none" aria-hidden="true"
           style={{ fontSize: size * 0.18, ['--dx' as string]: `${Math.cos((i / SPARKS.length) * Math.PI * 2) * size * 0.7}px`,
@@ -397,7 +451,7 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
     window.setTimeout(() => { setCheer(null); onDone(right); }, 1500);
   };
   const listening = lock === 'listen';
-  const act: Act = { talking, reaction, thinking: lock === 'think' };
+  const act: Act = { talking, reaction, thinking: lock === 'think', who: nowTalking };
   const replay = () => { if (!lockRef.current) talk(line, voice, setLit); };
 
   return (

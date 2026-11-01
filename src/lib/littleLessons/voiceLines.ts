@@ -2,7 +2,7 @@
 // (public/minigame/make-little-chess-voices.mjs makes one clip per line; a test keeps its list in step).
 // Each line is said by a character: the chess questions by whoever asks them (chessHost), each level's
 // story, Ollie's words, Benny's counting, Zip's sums, and everyone's cheers.
-import { LESSONS, NAME_ORDER, cheers, clipId, notThereLine, oopsLine, sentenceFor, slowLine, spokenFor, stickerLine, type Speaker } from '../littleChess/lessons';
+import { LESSONS, MONKEY_LINES, NAME_ORDER, cheers, clipId, notThereLine, oopsLine, sentenceFor, slowLine, spokenFor, stickerLine, type Speaker } from '../littleChess/lessons';
 import { chessHost, lessonLines, type Cast } from './levels';
 
 export type VoiceLine = { speaker: string; text: string; id: string; spoken: string };
@@ -22,6 +22,7 @@ export function allVoiceLines(names: string[]): VoiceLine[] {
   for (const name of names) {
     chess('narrator', stickerLine(name), name);
     chess('narrator', slowLine(name), name);
+    for (const m of MONKEY_LINES(name)) chess('narrator', m, name);   // Mr Monkey's own lines
     for (const who of [...NAME_ORDER, ...FRIENDS]) for (const c of cheers(name)) add(who, c, spokenFor('narrator', c, name));
   }
   return [...out.values()];

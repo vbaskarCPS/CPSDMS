@@ -204,7 +204,8 @@ export const stickerFor = (p: ChessProgress) => STICKERS[p.stickers.length % STI
 
 // ── what gets said out loud, and by whom (for the recorded voice clips) ──
 
-/** Who says a line: the narrator reads instructions; each character says its own hello and cheers. */
+/** Who says a line: the narrator (Mr Monkey, the host — Kiaan's own sock monkey, a bright high voice) reads
+ *  instructions; each character says its own hello and cheers. (His clips keep the 'narrator' name.) */
 export type Speaker = 'narrator' | Piece;
 export const SPEAKERS: Speaker[] = ['narrator', ...NAME_ORDER];
 
@@ -232,6 +233,12 @@ export const oopsLine = (tapped: Piece) => `THAT IS ${WORD[tapped]}.`;
 export const notThereLine = (piece: Piece) => `NOT THERE! ${HOW[piece]}`;
 /** Tapping too fast (two misses close together): a calm pause. */
 export const slowLine = (name: string) => `SLOW DOWN, ${name.toUpperCase()}.`;
+
+// ── Mr Monkey's own lines: he says hello on the home screen, and asks for a high five when it's earned ──
+export const monkeyHello = (name: string) => `HI ${name.toUpperCase()}! I AM MR MONKEY.`;
+export const HIGH_FIVE = 'HIGH FIVE!';
+export const YEAH = 'YEAH!';
+export const MONKEY_LINES = (name: string) => [monkeyHello(name), HIGH_FIVE, YEAH];
 
 /** The file name for a recorded line, e.g. "king--this-is-king". */
 export const clipId = (speaker: Speaker, text: string) =>
@@ -287,6 +294,9 @@ export function spokenFor(_speaker: Speaker, text: string, name = 'Kiaan'): stri
     [`${N} DID IT!`]: `${name} did it! Hooray!`,
     [`${N} GOT A STICKER!`]: `Hooray! ${name} got a sticker! Great job!`,
     [`SLOW DOWN, ${N}.`]: `Whoa, slow down ${name}! Take a big breath, and think about it.`,
+    [`HI ${N}! I AM MR MONKEY.`]: `Hi ${name}! I'm Mr Monkey! Let's play!`,
+    'HIGH FIVE!': 'High five!',
+    'YEAH!': 'Yeah! Woo-hoo!',
   };
   return fixed[text] || CHEER_SAID[text] || text.charAt(0) + text.slice(1).toLowerCase();
 }
@@ -304,6 +314,7 @@ export function voiceLines(names: string[]): { speaker: Speaker; text: string; i
     who = name;
     add('narrator', stickerLine(name));
     add('narrator', slowLine(name));
+    for (const m of MONKEY_LINES(name)) add('narrator', m);
     for (const p of NAME_ORDER) for (const c of cheers(name)) add(p, c);
   }
   return [...out.values()];
