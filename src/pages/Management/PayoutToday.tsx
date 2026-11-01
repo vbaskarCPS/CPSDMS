@@ -1375,7 +1375,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         className={`bg-gray-800 border-2 ${isSoloCart ? 'border-gray-700' : teamCartStyles.cartBorder} rounded-lg overflow-hidden mb-2`}
       >
         <div
-          className={`px-3 py-2 ${isSoloCart ? 'bg-gray-750' : teamCartStyles.cartHeaderBg} border-b ${isSoloCart ? 'border-gray-700' : teamCartStyles.cartHeaderBorder} flex items-center justify-between`}
+          className={`px-3 py-2 ${isSoloCart ? 'bg-gray-750' : teamCartStyles.cartHeaderBg} border-b ${isSoloCart ? 'border-gray-700' : teamCartStyles.cartHeaderBorder} flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5`}
         >
           <div className="flex items-center gap-3">
             {!isSoloCart && (
@@ -1397,7 +1397,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-4 text-gray-400 text-xs">
+          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 sm:gap-4 text-gray-400 text-xs">
             <div className="text-center">
               <span className="text-[9px] text-gray-600 uppercase block leading-none">Steps</span>
               <span className="font-bold text-gray-300">{sharedStats.stepCount}</span>
@@ -1477,7 +1477,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                   }`}
                 />
 
-                <div className="font-bold text-gray-200 min-w-[140px] truncate hover:text-white">
+                <div className="font-bold text-gray-200 min-w-0 sm:min-w-[140px] truncate hover:text-white">
                   {worker.firstName} {worker.lastName}
                 </div>
 
@@ -1534,7 +1534,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     return (
       <div
         key={session.id}
-        className="bg-gray-800 border border-gray-700 py-1.5 px-2 rounded flex items-center gap-2 hover:bg-gray-750 hover:border-gray-600 transition-colors group text-xs"
+        className="bg-gray-800 border border-gray-700 py-1.5 px-2 rounded flex flex-wrap sm:flex-nowrap items-center gap-2 hover:bg-gray-750 hover:border-gray-600 transition-colors group text-xs"
       >
         <div
           className={`w-0.5 h-5 rounded-full flex-shrink-0 ${
@@ -1553,7 +1553,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           #{worker.contractorId}
         </span>
 
-        <span className="text-gray-700">|</span>
+        <span className="hidden sm:inline text-gray-700">|</span>
 
         <span
           className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 min-w-[55px] justify-center ${
@@ -1724,7 +1724,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           </div>
         )}
 
-        <div className="grid grid-cols-6 gap-px bg-gray-700">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-px bg-gray-700">
           <div className="bg-gray-800 p-2 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <Users size={10} />
@@ -1790,7 +1790,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-6 gap-px bg-gray-700">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-px bg-gray-700">
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <Banknote size={9} />

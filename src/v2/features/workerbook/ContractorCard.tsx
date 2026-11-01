@@ -114,15 +114,15 @@ const CardBody: React.FC<{ hire: Hire; tab: TabKey; setTab: (t: TabKey) => void;
         <div className="v2-card-h" style={{ padding: '12px 14px 0' }}>Payout days</div>
         {lines.loading && !lines.data ? <Loading /> : (lines.data || []).length === 0 ? <div className="v2-mut v2-small" style={{ padding: 14 }}>No payout days yet.</div> : (
           <div className="v2-table-wrap" style={{ maxHeight: 300, overflow: 'auto' }}>
-            <table className="v2-table">
+            <table className="v2-table v2-cards-sm v2-cards-3">
               <thead><tr><th>Day</th><th>Manager</th><th style={{ textAlign: 'right' }}>Steps</th><th style={{ textAlign: 'right' }}>EQ</th><th style={{ textAlign: 'right' }}>Rate</th>
                 <th style={{ textAlign: 'right' }}>Pay</th><th /></tr></thead>
               <tbody>{(lines.data || []).slice(0, 60).map(l => (
                 <tr key={l.id} className="click" onClick={() => { onClose(); nav(`/app/workerbook/days/${l.day}`); }}>
-                  <td>{shortDay(l.day)}</td><td className="v2-small">{l.manager || '—'}</td>
-                  <td style={{ textAlign: 'right' }}>{Number(l.steps).toFixed(1)}</td><td style={{ textAlign: 'right' }}>{Number(l.equiv).toFixed(2)}</td>
-                  <td style={{ textAlign: 'right' }}>{Number(l.payout_rate).toFixed(2)}</td><td style={{ textAlign: 'right' }}><b>{money(Number(l.total_payout))}</b></td>
-                  <td>{l.payslip_id ? <Tag tone="g">Payslip</Tag> : <Tag tone="a">Unpaid</Tag>}</td>
+                  <td data-label="Day"><b>{shortDay(l.day)}</b></td><td data-label="Manager" className="v2-small">{l.manager || '—'}</td>
+                  <td data-label="Steps" style={{ textAlign: 'right' }}>{Number(l.steps).toFixed(1)}</td><td data-label="EQ" style={{ textAlign: 'right' }}>{Number(l.equiv).toFixed(2)}</td>
+                  <td data-label="Rate" style={{ textAlign: 'right' }}>{Number(l.payout_rate).toFixed(2)}</td><td data-label="Pay" style={{ textAlign: 'right' }}><b>{money(Number(l.total_payout))}</b></td>
+                  <td data-label="Payslip">{l.payslip_id ? <Tag tone="g">Payslip</Tag> : <Tag tone="a">Unpaid</Tag>}</td>
                 </tr>))}
               </tbody>
             </table>
