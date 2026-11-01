@@ -133,13 +133,13 @@ export const BookingsPage: React.FC = () => {
           )}
 
           <div className="v2-row" style={{ gap: 8, margin: '10px 0' }}>
-            <div className="v2-search" style={{ flex: 1 }}><Search size={15} /><input className="v2-input" placeholder="Search address, name, route, phone, notes…" value={q} onChange={e => setQ(e.target.value)} aria-label="Search bookings" /></div>
+            <div className="v2-search" style={{ flex: '1 1 240px', minWidth: 0 }}><Search size={15} /><input className="v2-input" placeholder="Search address, name, route, phone, notes…" value={q} onChange={e => setQ(e.target.value)} aria-label="Search bookings" /></div>
             <span className="v2-mut v2-small">{rows.data?.total ?? 0} shown</span>
           </div>
 
           <div className="v2-card" style={{ padding: 0 }}>
             <div className="v2-table-wrap">
-              <table className="v2-table">
+              <table className="v2-table v2-cards-sm">
                 <thead><tr><th>Address</th><th>Customer</th><th>Route</th><th>Map</th><th>Job</th><th>Status</th><th>Notes</th></tr></thead>
                 <tbody>
                   {rows.loading && !rows.data ? <tr><td colSpan={7}><Loading /></td></tr>
@@ -148,18 +148,18 @@ export const BookingsPage: React.FC = () => {
                       const last = lastAttempt(b.attempts);
                       return (
                         <tr key={b.id} className="click" onClick={() => setOpen(b.id)}>
-                          <td><b>{addressOf(b)}</b><div className="v2-mut v2-small">{b.city}</div></td>
-                          <td>{nameOf(b) || <span className="v2-mut">—</span>}{b.plan && <div className="v2-small v2-mut">{PLAN_LABEL[b.plan.kind]}</div>}</td>
-                          <td style={{ whiteSpace: 'nowrap' }}>{b.map_state === 'moved' ? <>{b.moved_from} → <b>{b.route_code}</b></> : <b>{b.route_code || b.sheet_route || '—'}</b>}<div className="v2-small v2-mut">{b.area_name}</div></td>
-                          <td><Tag tone={STATE_TONE[mapped(b.map_state)]}>{STATE_LABEL[mapped(b.map_state)]}</Tag></td>
-                          <td style={{ whiteSpace: 'nowrap' }}><b>{b.job_code || servicesCode(b.services)}</b>{b.prepaid && <div className="v2-small v2-mut">Prepaid</div>}</td>
-                          <td style={{ whiteSpace: 'nowrap' }}>
+                          <td className="lead"><b>{addressOf(b)}</b><div className="v2-mut v2-small">{b.city}</div></td>
+                          <td data-label="Customer">{nameOf(b) || <span className="v2-mut">—</span>}{b.plan && <div className="v2-small v2-mut">{PLAN_LABEL[b.plan.kind]}</div>}</td>
+                          <td data-label="Route" style={{ whiteSpace: 'nowrap' }}>{b.map_state === 'moved' ? <>{b.moved_from} → <b>{b.route_code}</b></> : <b>{b.route_code || b.sheet_route || '—'}</b>}<div className="v2-small v2-mut">{b.area_name}</div></td>
+                          <td data-label="Map"><Tag tone={STATE_TONE[mapped(b.map_state)]}>{STATE_LABEL[mapped(b.map_state)]}</Tag></td>
+                          <td data-label="Job" style={{ whiteSpace: 'nowrap' }}><b>{b.job_code || servicesCode(b.services)}</b>{b.prepaid && <div className="v2-small v2-mut">Prepaid</div>}</td>
+                          <td data-label="Status" style={{ whiteSpace: 'nowrap' }}>
                             <span className="v2-row" style={{ gap: 6 }}><i className="dot" style={{ background: bookingColor(b) }} />{b.status === 'done' ? `Done ${shortDay(b.done_on)}` : b.status === 'cancelled' ? 'Cancelled' : last ? 'Tried' : 'Open'}
                               {(b.round || 1) > 1 && b.status === 'open' && <Tag tone="b">2nd round</Tag>}{b.refund_requested_at && <Tag tone="a">Refund</Tag>}</span>
                             {b.status === 'done' && b.done_by_name && <div className="v2-small v2-mut">{b.done_by_name}</div>}
                             {b.status !== 'done' && last && <div className="v2-small" style={{ color: '#c2410c' }}>{attemptLine(last)}</div>}
                           </td>
-                          <td className="v2-small" style={{ maxWidth: 280 }}>{b.field_notes}{b.office_notes && <div className="v2-mut">Office: {b.office_notes}</div>}</td>
+                          <td className="v2-small full" style={{ maxWidth: 280 }}>{b.field_notes}{b.office_notes && <div className="v2-mut">Office: {b.office_notes}</div>}</td>
                         </tr>
                       );
                     })}
@@ -327,22 +327,22 @@ export const PlansPage: React.FC = () => {
           <option value="">Every plan</option>
           {(Object.keys(PLAN_LABEL) as PlanKind[]).filter(k => !kind || k === kind || kinds.includes(k)).map(k => <option key={k} value={k}>{PLAN_LABEL[k]}</option>)}
         </select>
-        <div className="v2-search" style={{ flex: 1 }}><Search size={15} /><input className="v2-input" placeholder="Search address or name…" value={q} onChange={e => setQ(e.target.value)} aria-label="Search plans" /></div>
+        <div className="v2-search" style={{ flex: '1 1 220px', minWidth: 0 }}><Search size={15} /><input className="v2-input" placeholder="Search address or name…" value={q} onChange={e => setQ(e.target.value)} aria-label="Search plans" /></div>
         <span className="v2-mut v2-small">{shown.length} plan{shown.length === 1 ? '' : 's'}</span>
       </div>
       <div className="v2-card" style={{ padding: 0 }}>
         <div className="v2-table-wrap">
-          <table className="v2-table">
+          <table className="v2-table v2-cards-sm">
             <thead><tr><th>Customer</th><th>Plan</th><th>Price</th><th>Bookings</th></tr></thead>
             <tbody>
               {plans.loading && !plans.data ? <tr><td colSpan={4}><Loading /></td></tr>
                 : shown.length === 0 ? <tr><td colSpan={4} className="v2-mut">No plans yet.</td></tr>
                 : shown.map(p => (
                   <tr key={p.id}>
-                    <td><b>{p.client?.address || '—'}</b><div className="v2-small v2-mut">{[p.client?.name, p.client?.city].filter(Boolean).join(' · ')}</div></td>
-                    <td><b>{PLAN_LABEL[p.kind]}</b> {p.year}{p.prepaid && <div className="v2-small v2-mut">Prepaid</div>}</td>
-                    <td>{p.price != null ? `$${Number(p.price).toFixed(2)}` : '—'}</td>
-                    <td>
+                    <td className="lead"><b>{p.client?.address || '—'}</b><div className="v2-small v2-mut">{[p.client?.name, p.client?.city].filter(Boolean).join(' · ')}</div></td>
+                    <td data-label="Plan"><b>{PLAN_LABEL[p.kind]}</b> {p.year}{p.prepaid && <div className="v2-small v2-mut">Prepaid</div>}</td>
+                    <td data-label="Price">{p.price != null ? `$${Number(p.price).toFixed(2)}` : '—'}</td>
+                    <td className="full">
                       <div className="v2-row" style={{ gap: 6, flexWrap: 'wrap' }}>
                         {p.bookings.length === 0 ? <span className="v2-mut v2-small">None yet</span> : p.bookings.map(x => (
                           <span key={x.id} className="v2-mb-chip" style={{ borderColor: bookingColor({ status: x.status, tried: x.tried > 0 }), color: '#111827' }}>

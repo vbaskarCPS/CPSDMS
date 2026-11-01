@@ -96,7 +96,7 @@ export const Contractors: React.FC = () => {
       {hires.loading ? <Loading /> : (
         <div className="v2-card" style={{ padding: 0 }}>
           <div className="v2-table-wrap">
-            <table className="v2-table">
+            <table className="v2-table v2-cards-sm v2-cards-3">
               <thead><tr>
                 <th>CN #</th><th>Name</th><th>Cell</th><th>Shuttle</th>{allCenters && <th>Home center</th>}
                 <th style={{ textAlign: 'right' }}>Days</th><th style={{ textAlign: 'right' }}>NS</th><th>Silver Hats</th><th>Status</th><th>PIN</th>
@@ -107,16 +107,16 @@ export const Contractors: React.FC = () => {
                   const hats = HAT_CODES.filter(c => (h.person.hats?.[c] || 0) > 0).map(c => `${c} ${h.person.hats[c]}`).join(' · ');
                   return (
                     <tr key={h.id} className="click" onClick={() => openCard?.(h.id, hires.reload)}>
-                      <td><b>{h.cn}</b></td>
-                      <td><b>{fullName(h.person)}</b>{days === 0 && <> <Tag tone="v">ROOKIE</Tag></>}</td>
-                      <td>{h.person.cell_phone || '—'}</td>
-                      <td>{h.shuttle || '—'}</td>
-                      {allCenters && <td>{centerName(h.center_id)}</td>}
-                      <td style={{ textAlign: 'right' }}>{days}</td>
-                      <td style={{ textAlign: 'right', color: h.ns_count ? '#b91c1c' : undefined, fontWeight: h.ns_count ? 700 : undefined }}>{h.ns_count}</td>
-                      <td className="v2-small">{hats || '—'}</td>
-                      <td><Tag tone={tone(h.status)}>{h.status === 'active' ? 'Active' : h.status}</Tag></td>
-                      <td className="v2-small">{h.pin_set_at ? 'Set' : <span className="v2-mut">Not set</span>}</td>
+                      <td data-label="CN #"><b>{h.cn}</b></td>
+                      <td className="lead"><b>{fullName(h.person)}</b>{days === 0 && <> <Tag tone="v">ROOKIE</Tag></>}</td>
+                      <td data-label="Cell">{h.person.cell_phone || '—'}</td>
+                      <td data-label="Shuttle">{h.shuttle || '—'}</td>
+                      {allCenters && <td data-label="Home center">{centerName(h.center_id)}</td>}
+                      <td data-label="Days" style={{ textAlign: 'right' }}>{days}</td>
+                      <td data-label="NS" style={{ textAlign: 'right', color: h.ns_count ? '#b91c1c' : undefined, fontWeight: h.ns_count ? 700 : undefined }}>{h.ns_count}</td>
+                      <td data-label="Silver hats" className="v2-small">{hats || '—'}</td>
+                      <td data-label="Status"><Tag tone={tone(h.status)}>{h.status === 'active' ? 'Active' : h.status}</Tag></td>
+                      <td data-label="PIN" className="v2-small">{h.pin_set_at ? 'Set' : <span className="v2-mut">Not set</span>}</td>
                     </tr>
                   );
                 })}

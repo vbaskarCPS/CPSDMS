@@ -716,8 +716,8 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
         onClick={() => handleRowClick(tx)}
         className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 flex flex-col gap-1 relative mb-1 transition-colors hover:border-cps-blue cursor-pointer group"
       >
-        <div className="flex items-center justify-between gap-2 text-xs">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
+        <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-x-2 gap-y-1 text-xs">
+          <div className="flex items-center gap-2 min-w-0 flex-1 basis-full sm:basis-auto">
             <span className="font-mono font-bold bg-gray-700 text-gray-300 px-1.5 rounded text-[10px] min-w-[32px] text-center">
               {tx.routeCode || '--'}
             </span>
@@ -793,18 +793,18 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
     <div className="flex flex-col h-screen bg-gray-900 text-gray-100 overflow-hidden">
 
       {/* HEADER */}
-      <div className="bg-gray-800 border-b border-gray-700 p-4 shadow-md z-10">
-        <div className="flex items-center justify-between max-w-7xl mx-auto w-full">
-          <div className="flex items-center gap-4">
+      <div className="bg-gray-800 border-b border-gray-700 p-3 sm:p-4 shadow-md z-10">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 max-w-7xl mx-auto w-full">
+          <div className="flex items-start sm:items-center gap-2 sm:gap-4 min-w-0">
             <button
               onClick={() => navigate(-1)}
               className="p-2 hover:bg-gray-700 rounded-full transition-colors"
             >
               <ArrowLeft size={20} />
             </button>
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold text-white">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                <h1 className="text-xl sm:text-2xl font-bold text-white">
                   {worker.firstName} {worker.lastName}
                 </h1>
                 
@@ -835,7 +835,7 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
                   </button>
                 )}
               </div>
-              <div className="flex items-center gap-4 text-sm text-gray-400 font-mono mt-1">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:gap-4 text-sm text-gray-400 font-mono mt-1">
                 <span className="bg-gray-700 px-2 py-0.5 rounded text-xs">
                   ID: {worker.contractorId}
                 </span>
@@ -884,7 +884,7 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
           </div>
 
           {/* HEADER STATS */}
-          <div className="flex gap-8 text-right">
+          <div className="flex justify-between sm:justify-start gap-4 sm:gap-8 sm:text-right">
             <div>
               <div className="text-xs text-gray-500 uppercase font-bold">Projected EQ</div>
               <div className="text-xl font-bold text-gray-300 font-mono">
@@ -911,7 +911,7 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
+      <div className="flex-1 overflow-y-auto custom-scrollbar p-3 sm:p-6">
         <div className="max-w-7xl mx-auto w-full space-y-6">
 
           {/* TRANSACTION HISTORY - Now first for both seasons */}
@@ -1007,9 +1007,9 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
               <Receipt size={20} className="text-green-400" /> Reconciliation
             </h3>
 
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-              {/* Cash Input */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+              {/* Cash Input — full width on phones so both boxes fit */}
+              <div className="col-span-2 sm:col-span-1 bg-gray-900/50 p-3 sm:p-4 rounded-lg border border-gray-700">
                 <div className="flex items-center gap-2 mb-3">
                   <Banknote size={18} className="text-green-400" />
                   <span className="text-sm font-bold text-gray-300">Cash Collected</span>
@@ -1022,14 +1022,14 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
                     type="number"
                     value={cashBills}
                     onChange={(e) => setCashBills(e.target.value)}
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500 text-sm"
+                    className="flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded p-2.5 sm:p-2 text-white placeholder-gray-500 text-base sm:text-sm"
                     placeholder="Bills ($)"
                   />
                   <input
                     type="number"
                     value={cashChange}
                     onChange={(e) => setCashChange(e.target.value)}
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500 text-sm"
+                    className="flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded p-2.5 sm:p-2 text-white placeholder-gray-500 text-base sm:text-sm"
                     placeholder="Change ($)"
                   />
                 </div>
@@ -1049,7 +1049,7 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
               </div>
 
               {/* Cheque Input */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+              <div className="col-span-2 sm:col-span-1 bg-gray-900/50 p-3 sm:p-4 rounded-lg border border-gray-700">
                 <div className="flex items-center gap-2 mb-3">
                   <Receipt size={18} className="text-blue-400" />
                   <span className="text-sm font-bold text-gray-300">Cheques Collected</span>
@@ -1061,7 +1061,7 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
                   type="number"
                   value={chequeAmount}
                   onChange={(e) => setChequeAmount(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white mb-2 placeholder-gray-500 text-sm"
+                  className="w-full bg-gray-800 border border-gray-600 rounded p-2.5 sm:p-2 text-white mb-2 placeholder-gray-500 text-base sm:text-sm"
                   placeholder="0.00"
                 />
                 {chequeDiff !== 0 && (
@@ -1080,49 +1080,49 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
               </div>
 
               {/* E-Transfer (Display Only) */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+              <div className="bg-gray-900/50 p-3 sm:p-4 rounded-lg border border-gray-700 min-w-0">
                 <div className="flex items-center gap-2 mb-3">
                   <Wallet size={18} className="text-cyan-400" />
                   <span className="text-sm font-bold text-gray-300">E-Transfer</span>
                 </div>
                 <div className="text-xs text-gray-500 mb-2">System Total</div>
-                <div className="text-2xl font-bold font-mono text-cyan-400">
+                <div className="text-xl sm:text-2xl font-bold font-mono text-cyan-400">
                   ${totalETransfer.toFixed(2)}
                 </div>
               </div>
 
               {/* Credit Card (Display Only) */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+              <div className="bg-gray-900/50 p-3 sm:p-4 rounded-lg border border-gray-700 min-w-0">
                 <div className="flex items-center gap-2 mb-3">
                   <CreditCard size={18} className="text-orange-400" />
                   <span className="text-sm font-bold text-gray-300">Credit Card</span>
                 </div>
                 <div className="text-xs text-gray-500 mb-2">System Total</div>
-                <div className="text-2xl font-bold font-mono text-orange-400">
+                <div className="text-xl sm:text-2xl font-bold font-mono text-orange-400">
                   ${totalCreditCard.toFixed(2)}
                 </div>
               </div>
 
               {/* Prepaid (Display Only) */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+              <div className="bg-gray-900/50 p-3 sm:p-4 rounded-lg border border-gray-700 min-w-0">
                 <div className="flex items-center gap-2 mb-3">
                   <Wallet size={18} className="text-indigo-400" />
                   <span className="text-sm font-bold text-gray-300">Prepaid</span>
                 </div>
                 <div className="text-xs text-gray-500 mb-2">System Total</div>
-                <div className="text-2xl font-bold font-mono text-indigo-400">
+                <div className="text-xl sm:text-2xl font-bold font-mono text-indigo-400">
                   ${totalPrepaid.toFixed(2)}
                 </div>
               </div>
 
               {/* Billed (Display Only) */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+              <div className="bg-gray-900/50 p-3 sm:p-4 rounded-lg border border-gray-700 min-w-0">
                 <div className="flex items-center gap-2 mb-3">
                   <Receipt size={18} className="text-gray-400" />
                   <span className="text-sm font-bold text-gray-300">Billed</span>
                 </div>
                 <div className="text-xs text-gray-500 mb-2">System Total</div>
-                <div className="text-2xl font-bold font-mono text-gray-400">
+                <div className="text-xl sm:text-2xl font-bold font-mono text-gray-400">
                   ${totalBilled.toFixed(2)}
                 </div>
               </div>
@@ -1277,8 +1277,8 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
               CHANGED: gated on isTeamSeason (was isLawnRejuv) and uses teamPayouts
               (renamed from lawnRejuvPayouts). All inner math identical. */}
           {isTeamSeason && teamWorkers.length > 0 && (
-            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
-              <div className="flex items-center justify-between mb-4">
+            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-3 sm:p-5 mb-10">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
                   <Users size={20} className="text-green-400" /> Team Payout Configuration
                 </h3>
@@ -1339,7 +1339,7 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
               )}
 
               {/* Grid Header */}
-              <div className="grid grid-cols-12 gap-2 text-[10px] text-gray-500 uppercase font-bold mb-2 px-2">
+              <div className="hidden sm:grid grid-cols-12 gap-2 text-[10px] text-gray-500 uppercase font-bold mb-2 px-2">
                 <div className="col-span-2">Worker</div>
                 <div className="text-center">Equiv %</div>
                 <div className="text-center">Upsell %</div>
@@ -1361,14 +1361,14 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
                   return (
                     <div 
                       key={payout.worker.contractorId}
-                      className={`grid grid-cols-12 gap-2 items-center p-2 rounded-lg border ${
+                      className={`grid grid-cols-3 sm:grid-cols-12 gap-x-2 gap-y-3 sm:gap-y-2 items-center p-3 sm:p-2 rounded-lg border ${
                         isCurrentWorker 
                           ? 'bg-blue-900/20 border-blue-700' 
                           : 'bg-gray-900/50 border-gray-700'
                       }`}
                     >
                       {/* Worker Name */}
-                      <div className="col-span-2 flex items-center gap-2">
+                      <div className="col-span-3 sm:col-span-2 flex items-center gap-2">
                         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
                           isCurrentWorker ? 'bg-blue-400' : 'bg-gray-500'
                         }`} />
@@ -1383,7 +1383,8 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
                       </div>
 
                       {/* Equiv % Input */}
-                      <div className="flex justify-center">
+                      <div className="flex flex-col items-center">
+                        <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Equiv %</span>
                         <input
                           type="number"
                           value={equivSplit[payout.worker.contractorId] || 0}
@@ -1395,14 +1396,15 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
                             }));
                             setIsModified(true);
                           }}
-                          className="w-14 bg-gray-800 border border-gray-600 rounded px-1 py-1 text-white text-center text-xs"
+                          className="w-full max-w-[84px] sm:w-14 bg-gray-800 border border-gray-600 rounded px-1 py-2 sm:py-1 text-white text-center text-base sm:text-xs"
                           min="0"
                           max="100"
                         />
                       </div>
 
                       {/* Upsell % Input */}
-                      <div className="flex justify-center">
+                      <div className="flex flex-col items-center">
+                        <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Upsell %</span>
                         <input
                           type="number"
                           value={upsellSplit[payout.worker.contractorId] || 0}
@@ -1414,7 +1416,7 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
                             }));
                             setIsModified(true);
                           }}
-                          className="w-14 bg-gray-800 border border-gray-600 rounded px-1 py-1 text-white text-center text-xs"
+                          className="w-full max-w-[84px] sm:w-14 bg-gray-800 border border-gray-600 rounded px-1 py-2 sm:py-1 text-white text-center text-base sm:text-xs"
                           min="0"
                           max="100"
                         />
@@ -1422,31 +1424,37 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
 
                       {/* Assigned EQ (read-only) */}
                       <div className="text-center text-xs font-mono text-blue-300">
+                        <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Assigned EQ</span>
                         {payout.assignedEQ.toFixed(2)}
                       </div>
 
                       {/* Rate (read-only) */}
                       <div className="text-center text-xs font-mono text-gray-300">
+                        <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Rate</span>
                         ${payout.workerTotalRate.toFixed(2)}
                       </div>
 
                       {/* Production (read-only) */}
                       <div className="text-center text-xs font-mono text-white">
+                        <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Production</span>
                         ${payout.productionPay.toFixed(2)}
                       </div>
 
                       {/* Upsell+IOS (read-only) */}
                       <div className="text-center text-xs font-mono text-purple-300">
+                        <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Upsell+IOS</span>
                         ${(payout.upsellCommission + payout.iosCommission).toFixed(2)}
                       </div>
 
                       {/* Bonus (read-only) */}
                       <div className="text-center text-xs font-mono text-yellow-400">
+                        <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Bonus</span>
                         {payout.bonusAmount > 0 ? `+$${payout.bonusAmount.toFixed(0)}` : '-'}
                       </div>
 
                       {/* Machine Checkbox */}
-                      <div className="flex justify-center">
+                      <div className="flex flex-col items-center">
+                        <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Machine</span>
                         <input
                           type="checkbox"
                           checked={workerMachineRentals[payout.worker.contractorId] ?? true}
@@ -1457,13 +1465,14 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
                             }));
                             setIsModified(true);
                           }}
-                          className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
+                          className="w-6 h-6 sm:w-4 sm:h-4 accent-blue-500 rounded cursor-pointer"
                           title="Machine rental ($10)"
                         />
                       </div>
 
                       {/* Deductions Input */}
-                      <div className="flex justify-center">
+                      <div className="flex flex-col items-center">
+                        <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Deductions</span>
                         <input
                           type="number"
                           value={workerDeductions[payout.worker.contractorId] || ''}
@@ -1475,14 +1484,15 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
                             }));
                             setIsModified(true);
                           }}
-                          className="w-16 bg-gray-800 border border-gray-600 rounded px-1 py-1 text-white text-center text-xs"
+                          className="w-full max-w-[84px] sm:w-16 bg-gray-800 border border-gray-600 rounded px-1 py-2 sm:py-1 text-white text-center text-base sm:text-xs"
                           placeholder="0"
                           min="0"
                         />
                       </div>
 
                       {/* Final Pay (read-only) */}
-                      <div className="text-right text-sm font-bold text-green-400 font-mono">
+                      <div className="col-span-3 sm:col-span-1 flex sm:block justify-between items-center border-t sm:border-0 border-gray-700 pt-2 sm:pt-0 text-right text-base sm:text-sm font-bold text-green-400 font-mono">
+                        <span className="sm:hidden text-xs text-gray-400 font-sans uppercase">Final pay</span>
                         ${payout.finalPay.toFixed(2)}
                       </div>
                     </div>
@@ -1491,27 +1501,27 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
               </div>
 
               {/* Totals Row */}
-              <div className="grid grid-cols-12 gap-2 items-center mt-3 pt-3 border-t border-gray-700 px-2">
-                <div className="col-span-2 text-sm font-bold text-gray-400">TOTALS</div>
+              <div className="grid grid-cols-3 sm:grid-cols-12 gap-x-2 gap-y-2 items-center mt-3 pt-3 border-t border-gray-700 px-2">
+                <div className="col-span-3 sm:col-span-2 text-sm font-bold text-gray-400">TOTALS</div>
                 <div className={`text-center text-xs font-bold ${
                   Math.abs(equivTotal - 100) < 0.01 ? 'text-green-400' : 'text-red-400'
                 }`}>
-                  {equivTotal}%
+<span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Equiv</span>{equivTotal}%
                 </div>
                 <div className={`text-center text-xs font-bold ${
                   Math.abs(upsellTotal - 100) < 0.01 ? 'text-green-400' : 'text-red-400'
                 }`}>
-                  {upsellTotal}%
+<span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Upsell</span>{upsellTotal}%
                 </div>
                 <div className="text-center text-xs font-mono text-blue-300">
-                  {actualTotalEQ.toFixed(2)}
+                  <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">EQ</span>{actualTotalEQ.toFixed(2)}
                 </div>
-                <div className="col-span-3"></div>
+                <div className="hidden sm:block col-span-3"></div>
                 <div className="text-center text-xs font-mono text-yellow-400">
-                  {bonusTotal > 0 ? `+$${bonusTotal.toFixed(0)}` : '-'}
+                  <span className="sm:hidden block text-[10px] text-gray-500 uppercase font-bold mb-1">Bonus</span>{bonusTotal > 0 ? `+$${bonusTotal.toFixed(0)}` : '-'}
                 </div>
-                <div className="col-span-2"></div>
-                <div className="text-right text-lg font-bold text-green-400 font-mono">
+                <div className="hidden sm:block col-span-2"></div>
+                <div className="col-span-2 sm:col-span-1 text-right text-lg font-bold text-green-400 font-mono">
                   ${finalPay.toFixed(2)}
                 </div>
               </div>
@@ -1525,7 +1535,7 @@ const PayoutContractor: React.FC<{ doneHref?: string }> = ({ doneHref = '/admin/
 
               {/* Quick Actions */}
               <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-700">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => {
                       const equalSplit = createEqualSplit(teamWorkers.map(w => w.contractorId));

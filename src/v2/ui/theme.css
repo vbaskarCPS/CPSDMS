@@ -593,3 +593,33 @@
 .v2-mb-listlink span { flex: 1; min-width: 0; line-height: 1.35; }
 .v2 .v2-mb-listlink.sm { background: #ecfdf5; color: #065f46; border-color: #6ee7b7; }
 .v2-mb-listlink:hover { filter: brightness(.97); }
+
+/* ---------- phones (portrait) ----------
+   Tables marked .v2-cards-sm turn into one card per row: the header row is hidden and each cell
+   shows its column name (data-label) above its value. Cells marked .full take the whole width.
+   Desktop and tablets keep the table. */
+@media (max-width: 640px) {
+  .v2-table-wrap:has(> .v2-cards-sm) { overflow-x: visible; }
+  .v2-table.v2-cards-sm, .v2-table.v2-cards-sm tbody { display: block; }
+  .v2-table.v2-cards-sm thead { display: none; }
+  .v2-table.v2-cards-sm tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px;
+    padding: 12px 10px; border-bottom: 1px solid var(--line-soft); }
+  .v2-table.v2-cards-sm td { display: block; padding: 0; border: 0; min-width: 0; text-align: left !important;
+    white-space: normal !important; max-width: none !important; }
+  .v2-table.v2-cards-sm td.full, .v2-table.v2-cards-sm td[colspan] { grid-column: 1 / -1; }
+  .v2-table.v2-cards-sm.v2-cards-3 tr { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .v2-table.v2-cards-sm td.lead { grid-column: 1 / -1; order: -1; font-size: 15px; }
+  .v2-table.v2-cards-sm td:empty { display: none; }
+  .v2-table.v2-cards-sm td[data-label]::before { content: attr(data-label); display: block; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .02em; color: var(--mut); margin-bottom: 2px; }
+  .v2-table.v2-cards-sm tr.click:hover td { background: none; }
+  .v2-table.v2-cards-sm tr.click:active { background: var(--hover); }
+
+  /* every pop-up's buttons wrap instead of running off the edge */
+  .v2-modal-f { flex-wrap: wrap; padding: 12px 14px; }
+
+  /* top bar: the page has its own title, so the component name gives way to the buttons */
+  .v2-bar { gap: 8px; padding: 0 10px; }
+  .v2-tabs button, .v2-tabs a { padding: 9px 9px; }
+}
+@media (max-width: 480px) { .v2-bar .v2-crumb { display: none; } }
