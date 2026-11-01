@@ -9,6 +9,7 @@
 //   POST { token, action: 'dayplan', context, answers?, library, units }  → { review, questions, tomorrow }  (after a session: review + tomorrow's plan)
 //   POST { token, action: 'briefhints', context }   → suggestions for each Bed/Morning Brief question (once there is history)
 //   POST { token, action: 'todos', brief, priorities, context }   → { items: [{ text, time?, note? }] }  the day's to-do list from the Brief
+//   POST { token, action: 'exinfo', name, kind? }   → { videos: [{id,title}], description, tip, setup[], mistakes[] }  how to do an exercise/stretch
 //   POST { token, action: 'categorize', merchants: [string], categories: [string] }
 //        → { categories: { [merchant]: category } }
 //   POST { token, action: 'reflect', context }                     → { reply }  (2–3 sentences on the day)
@@ -222,6 +223,24 @@ they will work through from now until dinner. Rules:
 - note: at most a few words of why, only when useful.`;
 const TODOS_SCHEMA = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, time: { type: 'string' }, note: { type: 'string' }, priority: { type: 'integer', description: '0-2 when the item is one of the three priorities, verbatim' } }, required: ['text'] } } }, required: ['items'] };
 
+const EXINFO_SYSTEM = `You are Coach Claude. Explain one exercise or stretch to a near-40 beginner-intermediate lifter with light hip and knee
+pain, for a phone screen. description: 2-3 sentences on what it is and what it works. setup: 3-5 short steps to perform it
+(positions, the movement, breathing). tip: ONE mind-muscle cue — what to feel and where, in one sentence. mistakes: 2-3 short
+common mistakes to avoid (knee/hip-friendly where relevant). Plain words, no headings.`;
+const EXINFO_SCHEMA = { type: 'object', properties: { description: { type: 'string' }, setup: { type: 'array', items: { type: 'string' } }, tip: { type: 'string' }, mistakes: { type: 'array', items: { type: 'string' } } }, required: ['description', 'setup', 'tip', 'mistakes'] };
+
+/** The first few YouTube results for a query, without an API key (the results page carries them as JSON). */
+async function youtubeSearch(q: string): Promise<{ id: string; title: string }[]> {
+  try {
+    const res = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`, { headers: { 'accept-language': 'en', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' } });
+    const html = await res.text();
+    const out: { id: string; title: string }[] = []; const seen = new Set<string>();
+    const re = /"videoRenderer":\{"videoId":"([^"]+)".*?"title":\{"runs":\[\{"text":"([^"]+)"/g; let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) && out.length < 4) { if (!seen.has(m[1])) { seen.add(m[1]); out.push({ id: m[1], title: m[2].replace(/\\u0026/g, '&').replace(/\\"/g, '"') }); } }
+    return out;
+  } catch { return []; }
+}
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -323,6 +342,16 @@ Deno.serve(async req => {
       const r = await claudeJson<{ items: unknown[] }>(TODOS_SYSTEM,
         [{ role: 'user', content: `Brief answers: ${JSON.stringify(brief)}\nPriorities (0-2): ${JSON.stringify(priorities)}\nOften on my list: ${frequent.join('; ') || 'nothing yet'}\n\nPlanner (JSON):\n${JSON.stringify(b.context ?? {}).slice(0, 20000)}` }], TODOS_SCHEMA, 1500);
       return json({ items: Array.isArray(r.items) ? r.items : [] });
+    }
+    if (action === 'exinfo') {
+      const name = typeof b.name === 'string' ? b.name.trim().slice(0, 80) : '';
+      if (!name) return json({ error: 'No exercise' }, 400);
+      const kind = b.kind === 'stretch' || b.kind === 'cardio' ? b.kind : 'exercise';
+      const [videos, info] = await Promise.all([
+        youtubeSearch(kind === 'stretch' ? `${name} stretch how to do it properly` : kind === 'cardio' ? `${name} beginner how to` : `how to ${name} proper form`),
+        claudeJson<Record<string, unknown>>(EXINFO_SYSTEM, [{ role: 'user', content: `${kind === 'stretch' ? 'Stretch' : 'Exercise'}: ${name}` }], EXINFO_SCHEMA, 800),
+      ]);
+      return json({ videos, ...info });
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];
