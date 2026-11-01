@@ -31,12 +31,12 @@ function precacheManifest(): Plugin {
   };
 }
 
-/** Vijay Planner (src/planner) is a second page, planner.html, served at /vijayplanner/* and /roshplanner/* (vercel.json
+/** Vijay Planner (src/planner) is a second page, planner.html, served at /vijayplanner/*, /roshplanner/* and /demo/* (vercel.json
  *  rewrites it in production; this does the same for the dev server). Its own manifest makes it a
  *  separate home-screen app next to the field app. */
 function plannerPage(): Plugin {
   const rewrite = (req: { url?: string }, _res: unknown, next: () => void) => {
-    if (req.url && /^\/(vijayplanner|roshplanner)(\/|$|\?)/.test(req.url) && !/\.\w+(\?|$)/.test(req.url)) req.url = '/planner.html';
+    if (req.url && /^\/(vijayplanner|roshplanner|demo)(\/|$|\?)/.test(req.url) && !/\.\w+(\?|$)/.test(req.url)) req.url = '/planner.html';
     // the Main Street AI website (mainstreetai.propertystars.app in production; /site/mainstreetai anywhere)
     else if (req.url && /^\/site\/mainstreetai\/?(\?|$)/.test(req.url)) req.url = '/mainstreetai.html';
     next();

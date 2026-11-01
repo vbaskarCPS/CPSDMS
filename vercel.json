@@ -43,6 +43,18 @@
             "destination": "/planner.html"
         },
         {
+            "source": "/demo",
+            "destination": "/planner.html"
+        },
+        {
+            "source": "/demo/",
+            "destination": "/planner.html"
+        },
+        {
+            "source": "/demo/:path*",
+            "destination": "/planner.html"
+        },
+        {
             "source": "/(.*)",
             "destination": "/index.html"
         }

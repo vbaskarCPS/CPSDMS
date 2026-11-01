@@ -7,13 +7,13 @@
          The static tags below are Vijay's, as the fallback; this runs before the manifest link exists. -->
     <script>
       (function () {
-        var rosh = /^\/roshplanner(\/|$)/.test(location.pathname);
+        var rosh = /^\/roshplanner(\/|$)/.test(location.pathname), demo = /^\/demo(\/|$)/.test(location.pathname);
         var app = rosh ? 'roshplanner' : 'vijayplanner';
-        var name = rosh ? 'Rosh Planner' : 'Vijay Planner', short = rosh ? 'Rosh' : 'Planner', color = rosh ? '#3b1f5e' : '#101c3a';
+        var name = demo ? 'Planner demo' : rosh ? 'Rosh Planner' : 'Vijay Planner', short = rosh ? 'Rosh' : 'Planner', color = rosh ? '#3b1f5e' : '#101c3a';
         document.documentElement.dataset.theme = rosh ? 'plum' : 'navy';
         document.title = name;
         function tag(t, attrs) { var e = document.createElement(t); for (var k in attrs) e.setAttribute(k, attrs[k]); document.head.appendChild(e); }
-        tag('link', { rel: 'manifest', href: '/' + app + '/manifest.json' });
+        if (!demo) tag('link', { rel: 'manifest', href: '/' + app + '/manifest.json' });
         tag('link', { rel: 'icon', type: 'image/svg+xml', href: '/' + app + '/logo.svg' });
         tag('link', { rel: 'apple-touch-icon', href: '/' + app + '/icon-192.png' });
         tag('meta', { name: 'theme-color', content: color });

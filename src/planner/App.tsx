@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { getPass, onPassChange, refreshMe, type PlannerPass } from './lib/auth';
-import { profileOf } from './lib/app';
+import { isDemo, profileOf } from './lib/app';
+import { Tour } from './demo/Tour';
 import { setProfile } from './lib/routine';
 import { Shell } from './ui/Shell';
 import { Login } from './screens/Login';
@@ -52,6 +53,7 @@ export function PlannerApp() {
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      {isDemo() && <Tour />}
     </Shell>
   );
 }
