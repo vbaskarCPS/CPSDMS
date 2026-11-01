@@ -32,7 +32,7 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
   const units = useUnits(pass);
   const { templates, workouts, custom, loading, setTemplates } = useWorkoutData();
   const [starting, setStarting] = useState(false);
-  const [howTo, setHowTo] = useState<{ id: string; name: string } | null>(null);
+  const [howTo, setHowTo] = useState<{ id: string; name: string; note?: string } | null>(null);
 
   const unfinished = workouts.find(w => !w.endedAt);
   const tpl = useMemo(() => todaysTemplate(templates, workouts), [templates, workouts]);
@@ -68,7 +68,7 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
           <h2>{tpl.name}</h2>
           <div className="wo-hero__list">
             {targets.map(({ e, s }) => (
-              <div className="wo-hero__row" key={e.exerciseId}><button type="button" className="wo-ex__howto" onClick={() => setHowTo({ id: e.exerciseId, name: e.name })}>{e.name}</button><span>{e.targetSets} × {e.targetReps}{s.weight > 0 ? ` @ ${s.weight} ${units}` : ''}</span></div>
+              <div className="wo-hero__row" key={e.exerciseId}><button type="button" className="wo-ex__howto" onClick={() => setHowTo({ id: e.exerciseId, name: e.name, note: e.note })}>{e.name}</button><span>{e.targetSets} × {e.targetReps}{s.weight > 0 ? ` @ ${s.weight} ${units}` : ''}</span></div>
             ))}
           </div>
           <Button block style={{ background: 'var(--accent-ink)', color: 'var(--accent)', border: 0 }} disabled={starting} onClick={() => void start(tpl)}><Play size={18} /> Start {tpl.name.toLowerCase()}</Button>
@@ -95,7 +95,7 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
         <Link className="pl-tile" to="/workout/history"><History aria-hidden /><div><b>History</b><small>{finished.length} sessions</small></div></Link>
       </div>
 
-      <ExerciseSheet exerciseId={howTo?.id ?? null} name={howTo?.name || ''} custom={custom} onClose={() => setHowTo(null)} />
+      <ExerciseSheet exerciseId={howTo?.id ?? null} name={howTo?.name || ''} note={howTo?.note} custom={custom} onClose={() => setHowTo(null)} />
       {finished.length > 0 && (
         <Card>
           <h3 style={{ marginBottom: 6 }}>Recent</h3>

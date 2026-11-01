@@ -118,10 +118,14 @@ export async function todosFromBrief(brief: Record<string, string>, priorities: 
   return (r.items || []).filter(i => i && typeof i.text === 'string' && i.text.trim()).slice(0, 14).map(i => ({ text: i.text.trim(), time: /^\d{2}:\d{2}$/.test(i.time || '') ? i.time : undefined, note: i.note?.trim() || undefined, priority: typeof i.priority === 'number' && i.priority >= 0 && i.priority <= 2 ? i.priority : undefined }));
 }
 
-export interface ExerciseInfo { videos: { id: string; title: string }[]; description: string; setup: string[]; tip: string; mistakes: string[]; fetchedAt?: string }
-/** How to do an exercise or stretch: the top YouTube videos plus Coach Claude's how-to and mind-muscle cue. */
-export async function exerciseInfo(name: string, kind: 'exercise' | 'stretch' | 'cardio' = 'exercise'): Promise<ExerciseInfo> {
-  const r = await invoke<ExerciseInfo>({ action: 'exinfo', name, kind });
+export interface ExVideo { id: string; title: string }
+export interface ExPart { name: string; dose: string; cue: string; videos: ExVideo[] }
+export interface ExerciseInfo { videos: ExVideo[]; description: string; setup: string[]; tip: string; mistakes: string[]; parts: ExPart[]; fetchedAt?: string }
+/** How to do an exercise or stretch: the top YouTube videos plus Coach Claude's how-to and mind-muscle cue. A flow
+ *  ("Mobility flow", "Stretching") comes back broken into its moves, each with its own videos. */
+export async function exerciseInfo(name: string, kind: 'exercise' | 'stretch' | 'cardio' = 'exercise', note?: string): Promise<ExerciseInfo> {
+  const r = await invoke<ExerciseInfo>({ action: 'exinfo', name, kind, note });
   const list = (v: unknown) => (Array.isArray(v) ? v.filter(x => typeof x === 'string' && x.trim()) : []);
-  return { videos: Array.isArray(r.videos) ? r.videos.filter(v => v && /^[\w-]{6,}$/.test(v.id)) : [], description: r.description || '', setup: list(r.setup), tip: r.tip || '', mistakes: list(r.mistakes), fetchedAt: new Date().toISOString() };
+  const vids = (v: unknown): ExVideo[] => (Array.isArray(v) ? v.filter(x => x && typeof x.id === 'string' && /^[\w-]{6,}$/.test(x.id)) : []);
+  return { videos: vids(r.videos), description: r.description || '', setup: list(r.setup), tip: r.tip || '', mistakes: list(r.mistakes), parts: (Array.isArray(r.parts) ? r.parts : []).filter(p => p && p.name).map(p => ({ name: p.name, dose: p.dose || '', cue: p.cue || '', videos: vids(p.videos) })), fetchedAt: new Date().toISOString() };
 }

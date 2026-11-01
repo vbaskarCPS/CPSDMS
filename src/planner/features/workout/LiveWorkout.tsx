@@ -64,7 +64,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   const [picker, setPicker] = useState<null | { mode: 'add' } | { mode: 'swap'; index: number }>(null);
   const [rest, setRest] = useState<{ endsAt: number; total: number } | null>(null);
   const [summary, setSummary] = useState<Workout | null>(null);
-  const [howTo, setHowTo] = useState<{ id: string; name: string } | null>(null);
+  const [howTo, setHowTo] = useState<{ id: string; name: string; note?: string } | null>(null);
   const [toast, say] = useToast();
   const timer = useRef<number | undefined>(undefined);
   const latest = useRef<Workout | null>(null);
@@ -249,7 +249,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
         return (
           <Card key={`${ex.exerciseId}-${ei}`} className="wo-ex">
             <div className="wo-ex__head" onClick={() => setOpen(isOpen && !readOnly ? -1 : ei)}>
-              <div className="pl-grow"><b className="wo-ex__name"><button type="button" className="wo-ex__howto" aria-label={`How to do ${ex.name}`} onClick={e => { e.stopPropagation(); setHowTo({ id: ex.exerciseId, name: ex.name }); }}>{ex.name} <PlayCircle size={15} /></button></b><small>{doneN}/{ex.sets.length} {ex.mode === 'time' ? 'rounds' : 'sets'}{ex.targetReps ? ` · ${ex.targetReps} reps` : ''}{ex.mode === 'time' && ex.sets[0]?.seconds ? ` · ${fmtSec(ex.sets[0].seconds)}` : ''} · rest {ex.restSec}s{ex.note ? ` · ${ex.note}` : ''}</small></div>
+              <div className="pl-grow"><b className="wo-ex__name"><button type="button" className="wo-ex__howto" aria-label={`How to do ${ex.name}`} onClick={e => { e.stopPropagation(); setHowTo({ id: ex.exerciseId, name: ex.name, note: ex.note }); }}>{ex.name} <PlayCircle size={15} /></button></b><small>{doneN}/{ex.sets.length} {ex.mode === 'time' ? 'rounds' : 'sets'}{ex.targetReps ? ` · ${ex.targetReps} reps` : ''}{ex.mode === 'time' && ex.sets[0]?.seconds ? ` · ${fmtSec(ex.sets[0].seconds)}` : ''} · rest {ex.restSec}s{ex.note ? ` · ${ex.note}` : ''}</small></div>
               {!readOnly && (isOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />)}
             </div>
             {isOpen && (
@@ -310,7 +310,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       {!readOnly && <Button block ghost danger onClick={discard}>Discard session</Button>}
       {rest && <div style={{ height: 64 }} />}
 
-      <ExerciseSheet exerciseId={howTo?.id ?? null} name={howTo?.name || ''} custom={custom} onClose={() => setHowTo(null)} />
+      <ExerciseSheet exerciseId={howTo?.id ?? null} name={howTo?.name || ''} note={howTo?.note} custom={custom} onClose={() => setHowTo(null)} />
       <ExercisePicker open={!!picker} onClose={() => setPicker(null)} onPick={onPick} custom={custom} onCustomAdded={e => setCustom(c => [...c, e])} />
       <RestTimer endsAt={rest?.endsAt ?? null} total={rest?.total ?? 0} onDone={() => setRest(null)} onExtend={() => setRest(r => (r ? { endsAt: r.endsAt + 30000, total: r.total + 30 } : r))} onSkip={() => setRest(null)} />
 
