@@ -21,7 +21,7 @@ Pull out the e-transfer exactly as written. Never guess or invent a value: leave
 - bank: the bank that sent the notice, if you can tell.
 Output only JSON: {"is_receipt": true, "sender_name": "...", "sender_email": "...", "amount": 0, "sent_on": "YYYY-MM-DD", "reference": "...", "memo": "...", "bank": "...", "why_not": "..."} (why_not only when is_receipt is false, a few words).`;
 
-const PICK_RULES = `You match one Interac e-Transfer a business received to the sale it paid for. You get the e-transfer (sender, amount, date, message) and the possible sales (client name, address, day, amount). People often pay for a spouse or parent, so the sender's name can differ from the client's; the message often has the address or the client's name. A sale is usually paid the same day or within a few days after.
+const PICK_RULES = `You match one Interac e-Transfer a business received to the sale it paid for. You get the e-transfer (sender, amount, date, message) and the possible sales (client name, address, day, amount). People often pay for a spouse or parent, so the sender's name can differ from the client's; the message often has the address or the client's name. A sale is usually paid the same day or within a few days after. The amount sent is often not exactly the recorded amount — tax added or left off, rounded up, a tip, or part of it now and the rest later — so a close amount with the right name or address is still a match.
 Pick the one sale it most likely paid for, or none if you can't tell. Never pick when two sales are equally likely.
 Output only JSON: {"key": "<the sale's key or null>", "confidence": "high|medium|low", "reason": "<under 90 characters>"}`;
 

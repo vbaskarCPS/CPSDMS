@@ -2,14 +2,16 @@
 // No Deno or network here, so the app's tests run it too (src/v2/lib/etfMatch.test.ts).
 //
 // A receipt (who sent it, how much, when, their message) is matched against the e-transfer sales that could
-// fit (etf_candidates: same amount, or a word of the sender's name in the client's name, sold up to 3 weeks
-// before). The rules:
+// fit (etf_candidates: same amount, a close amount, or a word of the sender's name in the client's name, sold
+// up to 3 weeks before). The rules:
 //   - one sale has the same amount AND the name (or the message) points at it → matched, no one needs to look
 //   - otherwise, if there's a likely sale → suggested, for a person to confirm (Claude picks when there are several)
 //   - nothing fits → the receipt stays unmatched
+// The e-transfer is often not the recorded amount: tax added or left off, rounded up, a tip, part of it now and
+// the rest later. A close amount (within $30 or 15%) with the name is a suggestion that says how far off it is.
 
 export interface Receipt { sender_name?: string | null; sender_email?: string | null; amount?: number | null; sent_on?: string | null; memo?: string | null }
-export interface Candidate { key: string; day: string; center?: string | null; client?: string | null; address?: string | null; route_code?: string | null; amount: number; cart?: string | null; same_amount: boolean; suggested?: boolean }
+export interface Candidate { key: string; day: string; center?: string | null; client?: string | null; address?: string | null; route_code?: string | null; amount: number; cart?: string | null; same_amount: boolean; close_amount?: boolean; suggested?: boolean }
 export interface Decision { key: string | null; confirmed: boolean; how: 'auto' | 'claude'; confidence: 'high' | 'medium' | 'low'; reason: string; ask?: Candidate[] }
 
 const words = (s?: string | null) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -37,6 +39,13 @@ export function memoHit(memo?: string | null, c?: Pick<Candidate, 'client' | 'ad
 }
 
 const money = (n: number) => `$${Number(n).toFixed(2)}`;
+/** How far the e-transfer is from the sale: "$12.00 short" / "$5.00 over" / "" when equal. */
+export function amountGap(sent: number | null | undefined, sold: number): string {
+  const d = Math.round((Number(sent || 0) - sold) * 100) / 100;
+  return Math.abs(d) < 0.005 ? '' : d < 0 ? `${money(-d)} short` : `${money(d)} over`;
+}
+/** Within $30 or 15% of the sale — the usual tax / rounding / tip / part-payment gap. */
+export const isClose = (sent: number | null | undefined, sold: number) => sent != null && Math.abs(Number(sent) - sold) <= Math.max(30, sold * 0.15);
 
 export function decide(r: Receipt, all: Candidate[]): Decision {
   const fresh = all.filter(c => !c.suggested);
@@ -57,6 +66,15 @@ export function decide(r: Receipt, all: Candidate[]): Decision {
       reason: `Only sale for ${money(c.amount)} then, but the name differs (sent by ${who}, client ${c.client || 'unknown'})` };
   }
   if (same.length > 1) return { key: null, confirmed: false, how: 'claude', confidence: 'low', reason: 'Several sales for that amount', ask: same };
+  // not the recorded amount, but near it: tax, rounding, a tip, or part of it
+  const close = pool.filter(c => !c.same_amount && (c.close_amount ?? isClose(r.amount, c.amount)));
+  const closeNamed = close.filter(named);
+  if (closeNamed.length === 1) {
+    const c = closeNamed[0];
+    return { key: c.key, confirmed: false, how: 'auto', confidence: 'medium',
+      reason: `${who} matches ${c.client || 'the client'}; ${money(Number(r.amount || 0))} sent for ${money(c.amount)} sold (${amountGap(r.amount, c.amount)})` };
+  }
+  if (closeNamed.length > 1) return { key: null, confirmed: false, how: 'claude', confidence: 'low', reason: 'Name fits several sales, amounts close', ask: closeNamed };
   const byName = pool.filter(named);
   if (byName.length === 1) {
     const c = byName[0];
@@ -64,6 +82,12 @@ export function decide(r: Receipt, all: Candidate[]): Decision {
       reason: `Name matches ${c.client || 'the client'} but the amount differs (${money(Number(r.amount || 0))} sent, ${money(c.amount)} sold)` };
   }
   if (byName.length > 1) return { key: null, confirmed: false, how: 'claude', confidence: 'low', reason: 'Name fits several sales, amount differs', ask: byName };
+  if (close.length === 1) {
+    const c = close[0];
+    return { key: c.key, confirmed: false, how: 'auto', confidence: 'low',
+      reason: `Only sale near ${money(Number(r.amount || 0))} then: ${c.client || 'unknown'}, ${money(c.amount)} sold (${amountGap(r.amount, c.amount)}); sent by ${who}` };
+  }
+  if (close.length > 1) return { key: null, confirmed: false, how: 'claude', confidence: 'low', reason: 'Several sales near that amount', ask: close };
   return { key: null, confirmed: false, how: 'auto', confidence: 'low', reason: 'No e-transfer sale fits' };
 }
 

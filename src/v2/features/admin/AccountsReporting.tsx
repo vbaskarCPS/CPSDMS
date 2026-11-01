@@ -9,7 +9,7 @@ import { Check, Link2, Mail, RefreshCw, Unlink, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import {
-  daysSince, etfConfirm, etfIgnore, etfLists, etfMatch, etfRecheck, etfReport, etfUnmatch, HOW_LABEL, money, PAYMENTS_ADDRESS, shortDate,
+  amountGap, daysSince, etfConfirm, etfIgnore, etfLists, etfMatch, etfRecheck, etfReport, etfUnmatch, HOW_LABEL, money, PAYMENTS_ADDRESS, shortDate,
   type EtfReceipt, type EtfSale,
 } from '../../lib/etransfers';
 import { Btn, ErrorBox, Loading, Modal, Tabs, Tag } from '../../ui';
@@ -70,7 +70,8 @@ export const AccountsReporting: React.FC = () => {
       {!lists ? <Loading /> : <>
         <div className="v2-grid4 v2-etf-totals" style={{ marginBottom: 12 }}>
           <Total label="E-transfers sold" value={money(lists.totals.expected)} sub={`${report.data!.sales.length} sales`} />
-          <Total label="Received" value={money(lists.totals.received)} sub={`${lists.matched.length} matched`} tone="#047857" />
+          <Total label="Received" value={money(lists.totals.received)} tone="#047857"
+            sub={`${lists.matched.length} matched${lists.totals.gap ? ` · ${amountGap(lists.totals.received, lists.totals.matchedSold)} of ${money(lists.totals.matchedSold)}` : ''}`} />
           <Total label="No receipt yet" value={money(lists.totals.waiting)} sub={`${lists.waiting.length} client records`} tone={lists.waiting.length ? '#b45309' : undefined} />
           <Total label="Receipts with no sale" value={money(lists.totals.unmatchedEmails)} sub={`${lists.openReceipts.length} emails`} tone={lists.openReceipts.length ? '#b91c1c' : undefined} />
         </div>
@@ -94,7 +95,7 @@ export const AccountsReporting: React.FC = () => {
                     <td data-label="Cart" className="v2-small">{s.cart}</td>
                     <td data-label="Sold" style={{ textAlign: 'right' }}><b>{money(s.amount)}</b>{s.split && <div className="v2-small v2-mut">part of {money(s.price)}</div>}</td>
                     <td data-label="Receipt" className="v2-small"><b>{s.match!.sender || s.match!.sender_email}</b> · {money(s.match!.amount)} · {shortDate(s.match!.sent_on)}
-                      {s.match!.amount != null && Math.abs(Number(s.match!.amount) - s.amount) > 0.005 && <> <Tag tone="a">amount differs</Tag></>}
+                      {amountGap(s.match!.amount, s.amount) && <> <Tag tone={Number(s.match!.amount) < s.amount ? 'a' : 'b'}>{amountGap(s.match!.amount, s.amount)}</Tag></>}
                       {s.match!.reference && <div className="v2-mut">Ref {s.match!.reference}</div>}</td>
                     <td data-label="How" className="v2-small" title={s.match!.reason || ''}>{HOW_LABEL[s.match!.how]}</td>
                     <td className="full" style={{ textAlign: 'right' }}>
@@ -122,6 +123,7 @@ export const AccountsReporting: React.FC = () => {
                     <td data-label="Receipt" className="v2-small">
                       {s.match ? <>
                         <Tag tone="b">Suggested</Tag> <b>{s.match.sender || s.match.sender_email}</b> · {money(s.match.amount)} · {shortDate(s.match.sent_on)}
+                        {amountGap(s.match.amount, s.amount) && <> <Tag tone={Number(s.match.amount) < s.amount ? 'a' : 'b'}>{amountGap(s.match.amount, s.amount)}</Tag></>}
                         <div className="v2-mut">{s.match.reason}</div>
                       </> : <span className="v2-mut">None yet · {daysSince(s.day)} day{daysSince(s.day) === 1 ? '' : 's'}</span>}
                     </td>
@@ -217,13 +219,13 @@ const PickMatch: React.FC<{
       <div className="v2-stack" style={{ gap: 6, maxHeight: '60vh', overflowY: 'auto' }}>
         {f.sale && near(receipts).map(r => (
           <button key={r.id} type="button" className="v2-pick" style={{ display: 'block', textAlign: 'left' }} disabled={busy} onClick={() => onPick(r.id, f.sale!.key)}>
-            <b>{r.sender || r.sender_email || r.subject}</b> · <b>{money(r.amount)}</b> · {shortDate(r.sent_on || r.received_at)}
+            <b>{r.sender || r.sender_email || r.subject}</b> · <b>{money(r.amount)}</b>{amountGap(r.amount, amount) && <span className="v2-mut"> ({amountGap(r.amount, amount)})</span>} · {shortDate(r.sent_on || r.received_at)}
             {r.memo && <div className="v2-small v2-mut">“{r.memo}”</div>}
           </button>
         ))}
         {f.receipt && near(sales).map(s => (
           <button key={s.key} type="button" className="v2-pick" style={{ display: 'block', textAlign: 'left' }} disabled={busy} onClick={() => onPick(f.receipt!.id, s.key)}>
-            <b>{s.client || '—'}</b> · <b>{money(s.amount)}</b> · {shortDate(s.day)}
+            <b>{s.client || '—'}</b> · <b>{money(s.amount)}</b>{amountGap(amount, s.amount) && <span className="v2-mut"> ({amountGap(amount, s.amount)})</span>} · {shortDate(s.day)}
             <div className="v2-small v2-mut">{s.address} · {s.route_code} · {s.cart}{s.center ? ` · ${s.center}` : ''}</div>
           </button>
         ))}
