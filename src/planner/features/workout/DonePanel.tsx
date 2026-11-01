@@ -89,7 +89,7 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
             </div>
           )}
 
-          {t && (
+          {t && t.exercises.length > 0 && (
             <div className="wo-tomorrow">
               <p className="pl-eyebrow" style={{ marginBottom: 2 }}>Tomorrow · {t.focus} · ~{t.minutes} min</p>
               <b style={{ fontSize: 16 }}>{t.name}</b>
