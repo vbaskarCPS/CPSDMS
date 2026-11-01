@@ -17,6 +17,7 @@ import { FoodTodayCard } from '../features/food';
 import { MoneyTodayCard } from '../features/money';
 import { CycleTodayCard } from '../features/cycle';
 import { CalendarTodayCard } from '../features/calendar';
+import { ShopTodayCard } from '../features/shop';
 
 function greeting(h: number): string {
   if (h < 4) return 'Still up';
@@ -188,6 +189,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
 
       <InstallHint />
       <CalendarTodayCard />
+      <ShopTodayCard />
       {routine.profile === 'morning' && <CycleTodayCard pass={pass} />}
       <HabitsTodayCard pass={pass} />
       <WorkoutTodayCard pass={pass} />

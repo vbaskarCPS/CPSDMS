@@ -129,3 +129,11 @@ export async function exerciseInfo(name: string, kind: 'exercise' | 'stretch' | 
   const vids = (v: unknown): ExVideo[] => (Array.isArray(v) ? v.filter(x => x && typeof x.id === 'string' && /^[\w-]{6,}$/.test(x.id)) : []);
   return { videos: vids(r.videos), description: r.description || '', setup: list(r.setup), tip: r.tip || '', mistakes: list(r.mistakes), parts: (Array.isArray(r.parts) ? r.parts : []).filter(p => p && p.name).map(p => ({ name: p.name, dose: p.dose || '', cue: p.cue || '', videos: vids(p.videos) })), fetchedAt: new Date().toISOString() };
 }
+
+export interface Deal { merchant: string; name: string; price: number | null; saleStory?: string; validTo?: string; validFrom?: string; image?: string }
+export interface DealsResult { items: { id: string; section: string; deals: Deal[] }[]; stores_seen?: string[] }
+/** This week's flyer deals near the household for the shopping list (Flipp data, matched by Coach Claude), plus each item's store section. */
+export async function shoppingDeals(items: { id: string; text: string }[], postal: string, stores: string[]): Promise<DealsResult> {
+  const r = await invoke<DealsResult>({ action: 'deals', items, postal, stores });
+  return { items: Array.isArray(r.items) ? r.items : [], stores_seen: r.stores_seen };
+}
