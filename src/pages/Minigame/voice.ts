@@ -89,7 +89,7 @@ export function say(text: string, opts: { on: boolean; voice?: string | null; on
   sayWithTablet(text, opts);
 }
 
-function sayWithTablet(text: string, opts: { voice?: string | null; onWord?: (i: number) => void; spoken?: string; onEnd?: () => void }) {
+function sayWithTablet(text: string, opts: { voice?: string | null; onWord?: (i: number) => void; spoken?: string; onEnd?: () => void; clip?: string }) {
   const s = synth();
   if (!s) { opts.onEnd?.(); return; }
   try {
@@ -98,8 +98,9 @@ function sayWithTablet(text: string, opts: { voice?: string | null; onWord?: (i:
     const u = new SpeechSynthesisUtterance(opts.spoken || text.toLowerCase().replace(/\bl\b/g, 'L'));
     const v = pickVoice(opts.voice);
     if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'en-US';
-    // a little slower and only slightly brighter than normal: friendly without sounding like a chipmunk
-    u.rate = 0.88; u.pitch = 1.05;
+    // a little slower and only slightly brighter than normal: friendly without sounding like a chipmunk;
+    // Mr Monkey (the narrator's lines) is a small monkey with a high, bright voice
+    u.rate = 0.88; u.pitch = opts.clip?.startsWith('narrator--') ? 1.45 : 1.05;
     // spread the lit-up words over roughly how long the full sentence takes to say
     const words = text.split(' ').length, said = (opts.spoken || text).split(' ').length, on = opts.onWord;
     u.onstart = () => { setSpeaking(true); if (on) wordTimer(words, Math.max(400, (said * 400) / words), on); };
