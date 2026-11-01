@@ -1,7 +1,8 @@
 // src/planner/features/workout/Coach.tsx — /workout/coach: chat with Coach Claude, who sees the whole planner (lib/lifeContext).
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Send, RotateCcw, ListPlus, Play } from 'lucide-react';
+import { Send, RotateCcw, ListPlus, Play, CalendarCheck } from 'lucide-react';
+import { dayKey } from '../../lib/docs';
 import type { PlannerPass } from '../../lib/auth';
 import { coach, type ChatMessage } from '../../lib/ai';
 import { getDoc, putDoc } from '../../lib/docs';
@@ -11,7 +12,7 @@ import { daysAgo, loadBodyWeights, loadCustomExercises, loadTemplates, loadWorko
 import { fmtSec, type CoachChat, type Exercise, type Template, type Workout } from './types';
 import { useUnits } from './WorkoutHome';
 
-const PROMPTS = ['Plan my next session', "I'm sore — adjust today", 'Why am I stuck on bench?', 'Write me a 4-week plan'];
+const PROMPTS = ["Change tomorrow's session", "I'm sore — adjust tomorrow", 'Plan my next session', 'Why am I stuck on bench?'];
 
 
 export function Coach({ pass }: { pass: PlannerPass }) {
@@ -37,6 +38,20 @@ export function Coach({ pass }: { pass: PlannerPass }) {
     finally { setParsing(null); }
   };
   const addToPlan = async (i: number) => { const r = await parse(i); if (r) setPlan({ ...r, replace: '' }); };
+  const tomorrowKey = () => { const d = new Date(); d.setDate(d.getDate() + 1); return dayKey(d); };
+  /** The plan in this reply becomes tomorrow's session (replacing one already planned for tomorrow). */
+  const setTomorrow = async (i: number) => {
+    const r = await parse(i); if (!r) return;
+    try {
+      for (const e of r.created) await saveCustomExercise(e);
+      const existing = ctx?.templates.find(t => t.plannedFor === tomorrowKey() && !t.archived);
+      const t: Template = { ...r.template, id: existing?.id || r.template.id, plannedFor: tomorrowKey(), order: -1 };
+      await saveTemplate(t);
+      setCtx(c => c && ({ ...c, templates: existing ? c.templates.map(x => (x.id === t.id ? t : x)) : [t, ...c.templates] }));
+      setCustom(c => [...c, ...r.created]);
+      say(`Tomorrow: "${t.name}" — it's on the Train page`, 'good');
+    } catch (e) { say(e instanceof Error ? e.message : "Couldn't save", 'bad'); }
+  };
   const startNow = async (i: number) => {
     const r = await parse(i); if (!r) return;
     try {
@@ -99,8 +114,9 @@ export function Coach({ pass }: { pass: PlannerPass }) {
             <div className={`pl-bubble ${m.role === 'user' ? 'pl-bubble--me' : 'pl-bubble--coach'}`}>{m.content}</div>
             {m.role === 'assistant' && /\d\s*[x×]\s*\d|sets?|reps?|min/i.test(m.content) && (
               <div className="wo-msgbtns">
-                <Button small ghost disabled={parsing !== null} onClick={() => void addToPlan(i)}><ListPlus size={14} /> {parsing === i ? 'Reading…' : 'Add to my plan'}</Button>
-                <Button small primary disabled={parsing !== null} onClick={() => void startNow(i)}><Play size={14} /> Start this now</Button>
+                <Button small primary disabled={parsing !== null} onClick={() => void setTomorrow(i)}><CalendarCheck size={14} /> {parsing === i ? 'Reading…' : "Make this tomorrow's"}</Button>
+                <Button small ghost disabled={parsing !== null} onClick={() => void startNow(i)}><Play size={14} /> Start now</Button>
+                <Button small ghost disabled={parsing !== null} onClick={() => void addToPlan(i)}><ListPlus size={14} /> Save as template</Button>
               </div>
             )}
           </div>

@@ -84,7 +84,10 @@ earlier reviews and prescriptions, habits and their marks, meals, recent days an
 answering and quote the real numbers and notes; never say you lack data that is in the context. Be concise (phone
 screen): short paragraphs, specific numbers, no fluff. Weights in the user's units. If something sounds like an
 injury, say to see a professional and keep the advice conservative. You are Coach Claude; don't describe yourself
-as an AI model.`;
+as an AI model. Sessions you plan only reach the person's planner when they tap a button under your message, so when
+they ask to change tomorrow's session (workout_templates with planned_for_date = tomorrow is the current one), reply
+with the COMPLETE revised session written out as a plan — every exercise with sets x reps or minutes, rest and a cue —
+and end with: Tap "Make this tomorrow's" to swap it in.`;
 
 const REFLECT_SYSTEM = `You are Coach Claude, a warm, direct high-performance coach reviewing one day of a personal planner (morning
 intentions, priorities, habits, evening answers, scores, meals, the workout) with the person's recent days and about_me notes for context. Reply in 2–3 short sentences, second person: one thing
@@ -234,15 +237,22 @@ and a one-line cue. For a single exercise or stretch, parts is empty.`;
 const EXINFO_SCHEMA = { type: 'object', properties: { description: { type: 'string' }, setup: { type: 'array', items: { type: 'string' } }, tip: { type: 'string' }, mistakes: { type: 'array', items: { type: 'string' } },
   parts: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, dose: { type: 'string' }, cue: { type: 'string' } }, required: ['name', 'dose', 'cue'] } } }, required: ['description', 'setup', 'tip', 'mistakes', 'parts'] };
 
-/** The first few YouTube results for a query, without an API key (the results page carries them as JSON). */
-async function youtubeSearch(q: string): Promise<{ id: string; title: string }[]> {
+/** The first few YouTube results for a query, without an API key (the results page carries them as JSON).
+ *  Filtered to videos under 4 minutes and sorted shortest first: mid-workout, nobody watches an 11-minute video. */
+async function youtubeSearch(q: string, max = 5): Promise<{ id: string; title: string; seconds?: number }[]> {
   try {
-    const res = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`, { headers: { 'accept-language': 'en', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' } });
+    const res = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgQQARgB`, { headers: { 'accept-language': 'en', 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' } });
     const html = await res.text();
-    const out: { id: string; title: string }[] = []; const seen = new Set<string>();
-    const re = /"videoRenderer":\{"videoId":"([^"]+)".*?"title":\{"runs":\[\{"text":"([^"]+)"/g; let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) && out.length < 4) { if (!seen.has(m[1])) { seen.add(m[1]); out.push({ id: m[1], title: m[2].replace(/\\u0026/g, '&').replace(/\\"/g, '"') }); } }
-    return out;
+    const out: { id: string; title: string; seconds?: number }[] = []; const seen = new Set<string>();
+    const re = /"videoRenderer":\{"videoId":"([^"]+)".*?"title":\{"runs":\[\{"text":"([^"]+)"(.*?)"lengthText":\{.*?"simpleText":"([\d:]+)"/g; let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) && out.length < 12) {
+      if (seen.has(m[1]) || m[3].length > 6000) continue;   // a lengthText far away belongs to another video
+      seen.add(m[1]);
+      const parts = m[4].split(':').map(Number); const seconds = parts.reduce((a, b) => a * 60 + b, 0);
+      out.push({ id: m[1], title: m[2].replace(/\\u0026/g, '&').replace(/\\"/g, '"'), seconds });
+    }
+    // under 4 minutes, shortest first; skip 10-second clips that show nothing
+    return out.filter(v => (v.seconds ?? 0) >= 12 && (v.seconds ?? 0) <= 240).sort((a, b) => (a.seconds ?? 999) - (b.seconds ?? 999)).slice(0, max);
   } catch { return []; }
 }
 
