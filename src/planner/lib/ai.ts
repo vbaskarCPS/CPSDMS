@@ -130,10 +130,11 @@ export async function exerciseInfo(name: string, kind: 'exercise' | 'stretch' | 
   return { videos: vids(r.videos), description: r.description || '', setup: list(r.setup), tip: r.tip || '', mistakes: list(r.mistakes), parts: (Array.isArray(r.parts) ? r.parts : []).filter(p => p && p.name).map(p => ({ name: p.name, dose: p.dose || '', cue: p.cue || '', videos: vids(p.videos) })), fetchedAt: new Date().toISOString() };
 }
 
-export interface Deal { merchant: string; name: string; price: number | null; saleStory?: string; validTo?: string; validFrom?: string; image?: string }
-export interface DealsResult { items: { id: string; section: string; deals: Deal[] }[]; stores_seen?: string[] }
-/** This week's flyer deals near the household for the shopping list (Flipp data, matched by Coach Claude), plus each item's store section. */
-export async function shoppingDeals(items: { id: string; text: string }[], postal: string, stores: string[]): Promise<DealsResult> {
-  const r = await invoke<DealsResult>({ action: 'deals', items, postal, stores });
+export interface Deal { merchant: string; name: string; price: number | null; saleStory?: string; validTo?: string; validFrom?: string; image?: string; kind?: 'flyer' | 'regular'; wasPrice?: number }
+export interface DealsResult { items: { id: string; section: string; deals: Deal[]; suggestedStore?: string; reason?: string }[]; stores_seen?: string[] }
+/** This week's flyer deals near the household for the shopping list (Flipp data, matched by Coach Claude), each item's
+ *  store section, and — for the stores with no flyers — which one is likely best for it. */
+export async function shoppingDeals(items: { id: string; text: string }[], postal: string, stores: string[], specialty: { name: string; note?: string }[] = []): Promise<DealsResult> {
+  const r = await invoke<DealsResult>({ action: 'deals', items, postal, stores, specialty });
   return { items: Array.isArray(r.items) ? r.items : [], stores_seen: r.stores_seen };
 }

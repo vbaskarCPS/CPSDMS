@@ -5,7 +5,7 @@ import { Plus, Check, X, RefreshCw, Store, Map, Tag, Settings2 } from 'lucide-re
 import type { PlannerPass } from '../../lib/auth';
 import { Page, Header, Card, Button, Sheet, Field, Input, useToast, uid } from '../../ui/primitives';
 import { loadList, loadPrefs, refreshDeals, removeItem, saveItem, savePrefs } from './store';
-import { ANYWHERE, bestDeal, DEFAULT_PREFS, liveDeals, sectionRank, storeOf, type ShopItem, type ShopPrefs } from './types';
+import { ANYWHERE, bestDeal, DEFAULT_PREFS, isFlyer, liveDeals, sectionRank, storeOf, type ShopItem, type ShopPrefs } from './types';
 
 const money = (n: number | null | undefined) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
 const until = (iso?: string) => (iso ? `until ${new Date(iso).toLocaleDateString([], { weekday: 'short' })}` : '');
@@ -89,7 +89,7 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
 
           {groups.map(g => (
             <Card key={g.key} className="shop__group">
-              <h3>{g.key}{g.key === ANYWHERE && view === 'store' ? <small> · no flyer deal this week</small> : null}</h3>
+              <h3>{g.key}{view === 'store' && g.key === ANYWHERE ? <small> · no deal or price found</small> : view === 'store' && prefs.specialty.some(s => s.name === g.key) ? <small> · no flyer — likely best here</small> : null}</h3>
               {g.items.map(i => {
                 const d = bestDeal(i);
                 return (
@@ -98,8 +98,8 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
                     <div className="shop__main">
                       <b>{i.qty ? `${i.qty} ` : ''}{i.text}</b>
                       {d
-                        ? <button type="button" className="shop__deal" onClick={() => setPick(i)}>{money(d.price)} {d.name}{d.saleStory ? ` · ${d.saleStory}` : ''}{d.validTo ? ` · ${until(d.validTo)}` : ''}{liveDeals(i).length > 1 ? ` · +${liveDeals(i).length - 1} more` : ''}</button>
-                        : <small className="pl-muted">{view === 'store' ? (i.section || '') : (checking ? 'checking flyers…' : 'no flyer deal')}{i.by !== pass.user.username ? ` · added by ${i.by}` : ''}</small>}
+                        ? <button type="button" className={`shop__deal ${isFlyer(d) ? '' : 'is-regular'}`} onClick={() => setPick(i)}>{money(d.price)} {d.name}{isFlyer(d) ? `${d.saleStory ? ` · ${d.saleStory}` : ''}${d.validTo ? ` · ${until(d.validTo)}` : ''}` : ' · regular price'}{liveDeals(i).length > 1 ? ` · +${liveDeals(i).length - 1} more` : ''}</button>
+                        : <button type="button" className="shop__deal is-regular" onClick={() => setPick(i)}>{i.suggestedStore && storeOf(i) === i.suggestedStore ? `likely best here · ${i.reason || 'no flyer'}` : checking && !i.dealsAt ? 'checking flyers…' : `${view === 'store' ? (i.section || 'no deal found') : 'no deal found'} · tap to pick a store`}{i.by !== pass.user.username ? ` · added by ${i.by}` : ''}</button>}
                     </div>
                     <button type="button" className="shop__x" aria-label="Remove" onClick={() => void remove(i)}><X size={14} /></button>
                   </div>
@@ -116,7 +116,7 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
           {done.map(i => <div key={i.id} className="shop__item is-done"><button type="button" className="pl-check is-on" aria-label="Put back" onClick={() => void toggle(i)}><Check /></button><div className="shop__main"><b>{i.qty ? `${i.qty} ` : ''}{i.text}</b></div></div>)}
         </Card>
       )}
-      <p className="pl-muted" style={{ fontSize: 12, textAlign: 'center' }}>One list for the house. Deals are this week's flyers near {prefs.postal}; sections are the usual store layout, not exact aisle numbers.</p>
+      <p className="pl-muted" style={{ fontSize: 12, textAlign: 'center' }}>One list for the house. Deals are this week's flyers near {prefs.postal}, with everyday prices where stores list them; sections are the usual store layout, not exact aisle numbers.</p>
 
       <Sheet open={!!pick} onClose={() => setPick(null)} title={pick ? `${pick.text} — this week` : ''}>
         {pick && (
@@ -124,11 +124,16 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
             {liveDeals(pick).map((d, k) => (
               <button type="button" key={k} className={`shop__offer ${storeOf(pick) === d.merchant ? 'is-on' : ''}`} onClick={() => void choose(pick, d.merchant)}>
                 {d.image && <img src={d.image} alt="" loading="lazy" />}
-                <div className="pl-grow"><b>{d.merchant}</b><span>{d.name}</span><small>{d.saleStory ? `${d.saleStory} · ` : ''}{until(d.validTo)}</small></div>
+                <div className="pl-grow"><b>{d.merchant}{isFlyer(d) ? '' : ' · regular price'}</b><span>{d.name}</span><small>{isFlyer(d) ? `${d.saleStory ? `${d.saleStory} · ` : ''}flyer ${until(d.validTo)}` : d.wasPrice ? `was ${money(d.wasPrice)}` : 'everyday price'}</small></div>
                 <strong>{money(d.price)}</strong>
               </button>
             ))}
-            {liveDeals(pick).length === 0 && <p className="pl-muted">No flyer deal for this one this week.</p>}
+            {liveDeals(pick).length === 0 && <p className="pl-muted">No flyer deal or listed price for this one.</p>}
+            <p className="pl-label" style={{ marginTop: 4 }}>Or get it at</p>
+            <div className="shop__stores">
+              {[...prefs.specialty.map(s => s.name), ...prefs.stores].filter(s => !liveDeals(pick).some(d => d.merchant === s)).map(s => <button type="button" key={s} className={storeOf(pick) === s ? 'is-on' : ''} onClick={() => void choose(pick, s)}>{s}{pick.suggestedStore === s ? ' ★' : ''}</button>)}
+            </div>
+            {pick.suggestedStore && pick.reason && <small className="pl-muted">★ Coach Claude: {pick.reason}</small>}
             <Button ghost onClick={() => void choose(pick, undefined)}>Just get it anywhere</Button>
           </div>
         )}
@@ -137,8 +142,9 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
       <Sheet open={showPrefs} onClose={() => setShowPrefs(false)} title="Your stores">
         <div className="pl-stack">
           <Field label="Postal code (first 3 is enough)"><Input value={prefs.postal} onChange={e => setPrefs({ ...prefs, postal: e.target.value.toUpperCase() })} /></Field>
-          <Field label="Stores near you, one per line" hint="Deals from these come first; others still show when they're the best price."><textarea className="pl-input pl-textarea" rows={5} value={prefs.stores.join('\n')} onChange={e => setPrefs({ ...prefs, stores: e.target.value.split('\n').map(s => s.trim()).filter(Boolean) })} /></Field>
-          <Button primary onClick={async () => { await savePrefs(prefs); setShowPrefs(false); void recheck(); }}>Save &amp; re-check flyers</Button>
+          <Field label="Stores with flyers, one per line" hint="Deals from these come first; others still show when they're the best price."><textarea className="pl-input pl-textarea" rows={4} value={prefs.stores.join('\n')} onChange={e => setPrefs({ ...prefs, stores: e.target.value.split('\n').map(s => s.trim()).filter(Boolean) })} /></Field>
+          <Field label="Stores without flyers, one per line: name — what they're good for" hint="Lococo's and the Indian, Caribbean and Middle Eastern grocers. Coach Claude sends the right items there when no flyer beats them. Rename these to the actual shops."><textarea className="pl-input pl-textarea" rows={5} value={prefs.specialty.map(s => `${s.name}${s.note ? ` — ${s.note}` : ''}`).join('\n')} onChange={e => setPrefs({ ...prefs, specialty: e.target.value.split('\n').map(l => l.trim()).filter(Boolean).map(l => { const [name, ...rest] = l.split(/\s+[—-]\s+/); return { name: name.trim(), note: rest.join(' - ').trim() || undefined }; }) })} /></Field>
+          <Button primary onClick={async () => { await savePrefs(prefs); setShowPrefs(false); void recheck(); }}>Save &amp; re-check</Button>
         </div>
       </Sheet>
       {toast}

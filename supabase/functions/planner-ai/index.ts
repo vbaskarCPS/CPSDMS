@@ -264,18 +264,30 @@ const SECTIONS = ['Produce', 'Bakery', 'Deli', 'Meat & Seafood', 'Dairy & Eggs',
 const DEALS_SYSTEM = `You match a household shopping list to this week's flyer items. For each list item you get candidate flyer
 items (index, store, name, price, sale story). Pick ONLY candidates that are genuinely the same product the person means
 (the item they'd actually buy: "milk" matches 2L/4L milk, not milk chocolate or a rusk with "milk" in the name; "batteries"
-matches AA/AAA packs). Up to 4 matches per item, best value first, at most one per store. Also give each list item its
-store section from this list: ${SECTIONS.join(' | ')}. Return every list item, with an empty matches list when nothing fits.`;
-const DEALS_SCHEMA = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, section: { type: 'string', enum: SECTIONS }, matches: { type: 'array', items: { type: 'integer' } } }, required: ['id', 'section', 'matches'] } } }, required: ['items'] };
+matches AA/AAA packs). Candidates are [flyer] sale items or [regular price] everyday prices. Up to 5 matches per item,
+flyer deals first then the cheapest regular prices, at most one per store. Also give each list item its
+store section from this list: ${SECTIONS.join(' | ')}. Return every list item, with an empty matches list when nothing fits.
+The household also shops at stores that publish no flyers (listed with a note on what they're good for, e.g. an Indian
+grocer, a Caribbean grocer, a Middle Eastern grocer, Lococo's for produce and meat). For each item, when one of those is
+clearly the better place for it (basmati, atta, ghee, dal → the Indian grocer; plantain, scotch bonnet, saltfish → the
+Caribbean grocer; pita, tahini, halal meat, labneh → the Middle Eastern grocer; fresh produce and meat in bulk →
+Lococo's) — or when nothing matched at all and one of them would carry it — set suggested_store to that store's exact
+name and give a 3-6 word reason. Otherwise leave suggested_store empty.`;
+const DEALS_SCHEMA = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, section: { type: 'string', enum: SECTIONS }, matches: { type: 'array', items: { type: 'integer' } }, suggested_store: { type: 'string' }, reason: { type: 'string' } }, required: ['id', 'section', 'matches'] } } }, required: ['items'] };
 
-type FlippItem = { name: string; merchant_name: string; current_price: number | null; sale_story?: string | null; valid_to?: string; valid_from?: string; flyer_id?: number; clean_image_url?: string };
-/** This week's flyer items near a postal code, for one search (Flipp's search, unofficial: when it changes, deals just go empty). */
+type FlippItem = { name: string; merchant_name: string; current_price: number | null; sale_story?: string | null; valid_to?: string; valid_from?: string; flyer_id?: number; clean_image_url?: string; kind: 'flyer' | 'regular'; original_price?: number | null };
+/** This week's flyer items near a postal code, plus stores' regular (online) prices, for one search
+ *  (Flipp's search, unofficial: when it changes, deals just go empty). */
 async function flippSearch(q: string, postal: string): Promise<FlippItem[]> {
   try {
     const res = await fetch(`https://backflipp.wishabi.com/flipp/items/search?locale=en-ca&postal_code=${encodeURIComponent(postal)}&q=${encodeURIComponent(q)}`, { headers: { 'accept': 'application/json', 'user-agent': 'Mozilla/5.0' } });
     if (!res.ok) return [];
     const j = await res.json();
-    return Array.isArray(j.items) ? j.items.filter((i: FlippItem) => i && i.name && i.merchant_name) : [];
+    const flyer: FlippItem[] = (Array.isArray(j.items) ? j.items : []).filter((i: FlippItem) => i && i.name && i.merchant_name).map((i: FlippItem) => ({ ...i, kind: 'flyer' as const }));
+    // everyday prices (Walmart and a few others list theirs): the answer when nothing is on sale
+    const regular: FlippItem[] = (Array.isArray(j.ecom_items) ? j.ecom_items : []).filter((i: Record<string, unknown>) => i && i.name && (i.merchant || i.merchant_name) && typeof i.current_price === 'number')
+      .map((i: Record<string, unknown>) => ({ name: String(i.name), merchant_name: String(i.merchant || i.merchant_name), current_price: i.current_price as number, original_price: typeof i.original_price === 'number' ? i.original_price : null, clean_image_url: typeof i.image_url === 'string' ? i.image_url : undefined, kind: 'regular' as const }));
+    return [...flyer, ...regular];
   } catch { return []; }
 }
 
@@ -398,6 +410,7 @@ Deno.serve(async req => {
       const items = (Array.isArray(b.items) ? b.items : []).filter(x => x && typeof x.id === 'string' && typeof x.text === 'string' && x.text.trim()).slice(0, 40) as { id: string; text: string }[];
       const postal = (typeof b.postal === 'string' ? b.postal : '').replace(/\s+/g, '').toUpperCase();
       const stores = (Array.isArray(b.stores) ? b.stores : []).filter(s => typeof s === 'string') as string[];
+      const specialty = (Array.isArray(b.specialty) ? b.specialty : []).filter(s => s && typeof s.name === 'string').slice(0, 10) as { name: string; note?: string }[];
       if (!items.length) return json({ items: [] });
       // a 3-character FSA is enough for Flipp once padded to a full code
       const pc = postal.length >= 6 ? postal : `${postal.slice(0, 3)}1A1`;
@@ -405,15 +418,18 @@ Deno.serve(async req => {
         const list = await flippSearch(it.text.trim(), pc);
         const prefer = (m: string) => stores.some(s => m.toLowerCase().includes(s.toLowerCase())) ? 0 : 1;
         // nearby/preferred stores first, then cheapest; cap the candidates Coach Claude has to read
-        const cands = list.filter(i => typeof i.current_price === 'number').sort((a, b) => prefer(a.merchant_name) - prefer(b.merchant_name) || (a.current_price! - b.current_price!)).slice(0, 18);
+        const flyer = list.filter(i => i.kind === 'flyer' && typeof i.current_price === 'number').sort((a, b) => prefer(a.merchant_name) - prefer(b.merchant_name) || (a.current_price! - b.current_price!)).slice(0, 14);
+        const regular = list.filter(i => i.kind === 'regular').sort((a, b) => prefer(a.merchant_name) - prefer(b.merchant_name) || (a.current_price! - b.current_price!)).slice(0, 10);
+        const cands = [...flyer, ...regular];
         return { it, cands };
       }));
-      const prompt = found.map(({ it, cands }) => `${it.id} · "${it.text}"\n${cands.map((c, i) => `  [${i}] ${c.merchant_name} — ${c.name} — $${c.current_price}${c.sale_story ? ` (${c.sale_story})` : ''}`).join('\n') || '  (no flyer items)'}`).join('\n\n');
-      const r = await claudeJson<{ items: { id: string; section: string; matches: number[] }[] }>(DEALS_SYSTEM, [{ role: 'user', content: `Preferred stores: ${stores.join(', ') || 'any'}\n\n${prompt}` }], DEALS_SCHEMA, 2500);
+      const prompt = found.map(({ it, cands }) => `${it.id} · "${it.text}"\n${cands.map((c, i) => `  [${i}] ${c.kind === 'regular' ? '[regular price] ' : '[flyer] '}${c.merchant_name} — ${c.name} — $${c.current_price}${c.sale_story ? ` (${c.sale_story})` : ''}`).join('\n') || '  (nothing found)'}`).join('\n\n');
+      const r = await claudeJson<{ items: { id: string; section: string; matches: number[]; suggested_store?: string; reason?: string }[] }>(DEALS_SYSTEM, [{ role: 'user', content: `Preferred stores: ${stores.join(', ') || 'any'}\nStores without flyers: ${specialty.map(s => `${s.name}${s.note ? ` (${s.note})` : ''}`).join('; ') || 'none'}\n\n${prompt}` }], DEALS_SCHEMA, 3000);
       const out = found.map(({ it, cands }) => {
         const pick = (r.items || []).find(x => x.id === it.id);
-        const deals = (pick?.matches || []).map(i => cands[i]).filter(Boolean).slice(0, 4).map(c => ({ merchant: c.merchant_name, name: c.name, price: c.current_price, saleStory: c.sale_story || undefined, validTo: c.valid_to, validFrom: c.valid_from, image: c.clean_image_url }));
-        return { id: it.id, section: pick?.section && SECTIONS.includes(pick.section) ? pick.section : 'Other', deals };
+        const deals = (pick?.matches || []).map(i => cands[i]).filter(Boolean).slice(0, 5).map(c => ({ merchant: c.merchant_name, name: c.name, price: c.current_price, saleStory: c.sale_story || undefined, validTo: c.valid_to, validFrom: c.valid_from, image: c.clean_image_url, kind: c.kind, wasPrice: c.original_price && c.original_price > (c.current_price || 0) ? c.original_price : undefined }));
+        const sug = specialty.find(s => s.name.toLowerCase() === (pick?.suggested_store || '').trim().toLowerCase());
+        return { id: it.id, section: pick?.section && SECTIONS.includes(pick.section) ? pick.section : 'Other', deals, suggestedStore: sug?.name, reason: sug ? pick?.reason : undefined };
       });
       return json({ items: out, stores_seen: [...new Set(found.flatMap(f => f.cands.map(c => c.merchant_name)))] });
     }
