@@ -114,7 +114,7 @@ export function mailHref(to: string, subject: string, body: string): string {
 }
 
 // ───────────── reading a business card ─────────────
-export interface CardFields { name: string | null; phone: string | null; email: string | null; title: string | null }
+export interface CardFields { name: string | null; phone: string | null; email: string | null; title: string | null; website?: string | null }
 const TITLE = /\b(owner|president|ceo|cfo|coo|founder|director|manager|partner|principal|broker|agent|dr\.?|accountant|cpa|bookkeeper)\b/i;
 export function parseCard(text: string): CardFields {
   const lines = text.split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(l => l.length > 1);
@@ -129,7 +129,11 @@ export function parseCard(text: string): CardFields {
   // a name: two or three words, letters only, capitalised, not the title, not a company word
   const name = lines.find(l => l !== titleLine && /^[A-Z][a-zA-Z'’.-]+(\s+[A-Z][a-zA-Z'’.-]+){1,2}$/.test(l)
     && !/\b(inc|ltd|llc|corp|group|services|solutions|company|co\.|street|st\.|road|rd\.|avenue|ave)\b/i.test(l)) || null;
-  return { name, phone, email: email ? email.toLowerCase() : null, title: titleLine };
+  // a website: www.x.ca or x.com, not the email's domain written out
+  const web = (/\b((?:https?:\/\/)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ca|com|net|org|biz|co|io|ai|info|app)\b(?:\/[^\s]*)?)/i
+    .exec(text.replace(/\s*@\s*/g, '@').replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, ' ')) || [])[1] || null;
+  const website = web ? web.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '') : null;
+  return { name, phone, email: email ? email.toLowerCase() : null, title: titleLine, website };
 }
 
 // ───────────── offline ids ─────────────

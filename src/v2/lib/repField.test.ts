@@ -66,8 +66,12 @@ describe('send info', () => {
 describe('business card', () => {
   it('pulls the contact out', () => {
     const r = parseCard('ACME PLUMBING INC\nJane Smith\nOwner\nTel: 905.555.0199\nFax 905 555 0100\nJane @ AcmePlumbing.ca\n12 Main St');
-    expect(r).toEqual({ name: 'Jane Smith', phone: '(905) 555-0199', email: 'jane@acmeplumbing.ca', title: 'Owner' });
+    expect(r).toEqual({ name: 'Jane Smith', phone: '(905) 555-0199', email: 'jane@acmeplumbing.ca', title: 'Owner', website: null });
     expect(parseCard('').name).toBeNull();
+  });
+  it('reads a website, but not the email’s domain', () => {
+    expect(parseCard('Linh Tran\nOwner\n613 555 0142\nlinh@phobank.ca\nwww.PhoBank.ca').website).toBe('www.phobank.ca');
+    expect(parseCard('Linh Tran\nlinh@phobank.ca').website).toBeNull();
   });
 });
 

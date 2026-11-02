@@ -20,7 +20,9 @@ import {
 import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BookOnboarding } from './BookOnboarding';
-import { businessContacts, hasAnswers, saveDeckAnswers, type DeckAnswers } from '../../lib/meetings';
+import { hasAnswers, saveDeckAnswers, type DeckAnswers } from '../../lib/meetings';
+import { DoNotKnock, People } from './People';
+import { dnkLabel } from '../../lib/msField';
 import { download, useRep } from './repContext';
 
 /** What's known from the map, for when the business can't be loaded (no signal). */
@@ -39,7 +41,9 @@ async function kitFor(campaign: string): Promise<Kit> {
 
 export const BusinessSheet: React.FC<{
   id: string; campaign: string; fallback?: SheetFallback | null; onClose: () => void; onSaved: (v: SavedVisit) => void;
-}> = ({ id, campaign, fallback, onClose, onSaved }) => {
+  /** it came off the list (do not knock) */
+  onGone?: () => void;
+}> = ({ id, campaign, fallback, onClose, onSaved, onGone }) => {
   const { session } = useAuth();
   const { toast } = useRep();
   const b = useLoad(() => repBusiness(id, campaign), [id, campaign]);
@@ -63,7 +67,6 @@ export const BusinessSheet: React.FC<{
   const answers = React.useRef<DeckAnswers | null>(null);
   const savedAnswers = React.useRef('');
   const [peopleTick, setPeopleTick] = useState(0);
-  const people = useLoad(() => businessContacts(id, campaign).catch(() => []), [id, campaign, peopleTick]);
   const keepAnswers = useCallback(() => {
     const a = answers.current; if (!hasAnswers(a)) return;
     const k = JSON.stringify(a); if (k === savedAnswers.current) return;
@@ -259,17 +262,10 @@ export const BusinessSheet: React.FC<{
       {outcome && <Btn onClick={save} disabled={busy || scanning} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e', marginTop: 6 }}>
         {busy ? 'Saving…' : outcome === 'closed' ? 'Save deal for approval' : 'Save visit'}</Btn>}
 
-      {!!people.data?.length && (
-        <>
-          <div style={{ fontWeight: 800, margin: '16px 0 2px' }}>People here</div>
-          {people.data.map(c => (
-            <div key={c.id} className="v2-small v2-rep-visit">
-              <b>{c.name || 'No name'}</b>{c.role ? ` · ${c.role}` : ''}
-              {c.phone && <> · <a href={`tel:${c.phone.replace(/[^0-9+]/g, '')}`}>{c.phone}</a></>}
-              {c.email && <> · <a href={`mailto:${c.email}`}>{c.email}</a></>}
-            </div>))}
-        </>)}
+      <People business={id} campaign={campaign} offline={offline} tick={peopleTick} />
       {!offline && <History d={d as RepBusinessView} loading={b.loading && !b.data} />}
+      {!offline && <DoNotKnock business={id} campaign={campaign} name={d.name}
+        onDone={r => { toast(`${d.name}: ${dnkLabel(r).toLowerCase()}. It’s off every rep’s list.`); (onGone || onClose)(); }} />}
     </Sheet>
   );
 };

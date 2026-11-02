@@ -9,7 +9,8 @@ import {
   type MapBiz, type RepMap, type RepToday,
 } from '../../lib/rep';
 import { distLabel, nearest, openAt } from '../../lib/repField';
-import { BUSINESS_KINDS } from '../../lib/msCity';
+import { BUSINESS_KINDS, kindLabel } from '../../lib/msCity';
+import { mapPlaces, nearbyAdded, type MapPlace, type NearbyBiz } from '../../lib/msField';
 import { cacheGet, cacheSet } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BusinessSheet, type SavedVisit } from './BusinessSheet';
@@ -122,9 +123,11 @@ export const HomeMap: React.FC = () => {
       {open && (
         <BusinessSheet key={openId} id={open.id} campaign={open.campaign}
           fallback={open.b ? { id: open.b.id, name: open.b.n, address: open.b.a, kind: open.b.k, lat: open.b.lat, lng: open.b.lng, hours: open.b.h, lead: open.b.lead } : null}
-          onClose={() => setOpen(null)} onSaved={onSaved} />)}
+          onClose={() => setOpen(null)} onSaved={onSaved}
+          onGone={() => { const cid = open.campaign; setM(cur => cur && { ...cur, data: { ...cur.data, businesses: cur.data.businesses.filter(b => !(b.id === open.id && b.c === cid)) } }); setOpen(null); }} />)}
       {adding && !adding.pick && m && (
         <AddLead campaigns={campaigns} at={adding.at || null}
+          onOpen={id => { const b = m.data.businesses.find(x => x.id === id); if (!b) return false; setAdding(null); setOpen(`${b.id}|${b.c}`); return true; }}
           onPick={() => setAdding({ pick: true })} onClose={() => setAdding(null)}
           onAdded={(biz, campaign) => {
             setAdding(null);
@@ -197,11 +200,13 @@ const DayBar: React.FC = () => {
   );
 };
 
-// ───────────── a business that isn't on the map ─────────────
+// ───────────── add a business: where the rep is standing ─────────────
+// Opens on the rep's GPS: the street address, businesses already added within 60 m (open one instead of adding it
+// twice), and business names from map data at that spot to tap. Or type the name.
 const AddLead: React.FC<{
   campaigns: { id: string; name: string; color: string }[]; at: { lat: number; lng: number } | null;
-  onPick: () => void; onClose: () => void; onAdded: (b: MapBiz, campaign: string) => void;
-}> = ({ campaigns, at, onPick, onClose, onAdded }) => {
+  onPick: () => void; onClose: () => void; onAdded: (b: MapBiz, campaign: string) => void; onOpen: (id: string) => boolean;
+}> = ({ campaigns, at, onPick, onClose, onAdded, onOpen }) => {
   const [name, setName] = useState('');
   const [kind, setKind] = useState('');
   const [address, setAddress] = useState('');
@@ -210,23 +215,57 @@ const AddLead: React.FC<{
   const [point, setPoint] = useState<{ lat: number; lng: number } | null>(at);
   const [hits, setHits] = useState<{ lat: number; lng: number; label: string }[]>([]);
   const [busy, setBusy] = useState(false);
+  const [locating, setLocating] = useState(!at);
   const [error, setError] = useState<unknown>(null);
+  const [added, setAdded] = useState<NearbyBiz[]>([]);
+  const [places, setPlaces] = useState<MapPlace[]>([]);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
   const near = useRef<{ lat: number; lng: number } | null>(null);
-  useEffect(() => { hereNow(5000).then(p => { near.current = p; }); }, []);
-  useEffect(() => { if (at) { setPoint(at); reverseGeocode(at).then(a => { if (a) setAddress(a); }); } }, [at]);
+
+  // what's at a spot: its address, what's already been added, and names from map data
+  const lookAround = useCallback(async (p: { lat: number; lng: number }) => {
+    setPoint(p); setHits([]);
+    const [a, ad, pl] = await Promise.all([reverseGeocode(p), nearbyAdded(p).catch(() => []), mapPlaces(p)]);
+    if (a) setAddress(a);
+    setAdded(ad.filter(x => x.m <= 60));
+    // a name already added here isn't offered again
+    const have = new Set(ad.map(x => x.name.toLowerCase()));
+    setPlaces(pl.filter(x => !have.has(x.name.toLowerCase())));
+  }, []);
+  useEffect(() => {
+    if (at) { lookAround(at); return; }
+    let live = true;
+    hereNow(8000).then(p => {
+      if (!live) return;
+      setLocating(false); near.current = p;
+      if (p) lookAround(p); else setError(new Error('Your location isn’t available. Type the address or tap the map.'));
+    });
+    return () => { live = false; };
+  }, [at, lookAround]);
 
   const here = async () => {
     setBusy(true); setError(null);
     const p = await hereNow();
     setBusy(false);
     if (!p) { setError(new Error('Your location isn’t available. Type the address or tap the map.')); return; }
-    setPoint(p); setHits([]);
-    const a = await reverseGeocode(p); if (a) setAddress(a);
+    near.current = p; lookAround(p);
   };
   const look = async () => {
     setError(null);
-    try { const h = await geocode(address, near.current); setHits(h); if (!h.length) setError(new Error('No match. Try the street number and name, or tap the map.')); }
+    try { const h = await geocode(address, near.current || point); setHits(h); if (!h.length) setError(new Error('No match. Try the street number and name, or tap the map.')); }
     catch (e) { setError(e); }
+  };
+  const pickPlace = (x: MapPlace) => {
+    setPicked(x.name); setName(x.name);
+    if (x.kind) setKind(x.kind);
+    if (x.address) setAddress(a => (a && /^\d/.test(a) ? a : x.address || a));
+    setPoint({ lat: x.lat, lng: x.lng });
+  };
+  const openAdded = (x: NearbyBiz) => {
+    if (onOpen(x.id)) return;
+    setNote(`${x.name} is already on the map, but not in your zones. Ask an admin if it should be yours.`);
   };
   const save = async () => {
     if (!point) { setError(new Error('Where is it? Use your location, look up the address, or tap the map.')); return; }
@@ -241,8 +280,29 @@ const AddLead: React.FC<{
       <div className="v2-rep-sheet" role="dialog" aria-label="Add a business" onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center' }}><h2 style={{ flex: 1 }}>Add a business</h2>
           <button type="button" aria-label="Close" onClick={onClose} className="v2-rep-x"><X size={20} /></button></div>
-        <div className="v2-small v2-mut" style={{ marginBottom: 10 }}>For one that isn’t on the map. It counts for you right away; an admin only checks it isn’t a duplicate.</div>
-        <Field label="Business name"><input className="v2-input" autoFocus value={name} onChange={e => setName(e.target.value)} autoComplete="off" /></Field>
+        <div className="v2-small" style={{ margin: '4px 0 10px', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <LocateFixed size={15} style={{ color: '#2563eb', flexShrink: 0 }} />
+          {locating ? <span className="v2-mut">Finding where you are…</span> : point ? <span>You’re at <b>{address || 'this spot'}</b></span> : <span className="v2-mut">No location yet</span>}
+        </div>
+        {added.map(x => (
+          <div key={x.id} className="v2-add-dup">
+            <span style={{ flex: 1 }}><b>{x.dnk ? 'Do not knock' : 'Already added'} {x.m} m away:</b> {x.name}{x.by ? `, by ${x.by}` : ''}</span>
+            {!x.dnk && <button type="button" onClick={() => openAdded(x)}>Open it</button>}
+          </div>))}
+        {note && <div className="v2-rep-note" style={{ marginTop: 0, marginBottom: 8 }}>{note}</div>}
+        {places.length > 0 && <>
+          <div className="v2-rep-label">Is it one of these?</div>
+          <div className="v2-add-near">
+            {places.map(x => (
+              <button key={x.name + x.lat} type="button" className={`opt${picked === x.name ? ' on' : ''}`} onClick={() => pickPlace(x)}>
+                <span className="ic">{x.name.slice(0, 1).toUpperCase()}</span>
+                <span className="t"><b>{x.name}</b>{[x.kind ? kindLabel(x.kind) : x.category.split(',')[0], x.address, `${x.m} m`].filter(Boolean).join(' · ')}</span>
+              </button>))}
+            <button type="button" className="opt" onClick={() => { setPicked(null); setName(''); nameRef.current?.focus(); }}>
+              <span className="ic">+</span><span className="t"><b>Not listed</b>Type the name below</span></button>
+          </div>
+        </>}
+        <Field label="Business name"><input ref={nameRef} className="v2-input" value={name} onChange={e => { setName(e.target.value); setPicked(null); }} autoComplete="off" /></Field>
         <Field label="What kind">
           <div className="v2-rep-kinds">
             {BUSINESS_KINDS.map(k => <button key={k.key} type="button" className={`v2-rep-pill${kind === k.key ? ' on' : ''}`} onClick={() => setKind(k.key)}>{k.label}</button>)}
@@ -259,10 +319,9 @@ const AddLead: React.FC<{
           <div className="v2-rep-hits">{hits.map(h => (
             <button key={h.label} type="button" onClick={() => { setPoint(h); setAddress(h.label); setHits([]); }}>{h.label}</button>))}</div>)}
         <div className="v2-rep-acts" style={{ margin: '0 0 6px' }}>
-          <button type="button" onClick={here} disabled={busy}><LocateFixed size={15} />I’m here</button>
+          <button type="button" onClick={here} disabled={busy}><LocateFixed size={15} />Use where I am</button>
           <button type="button" onClick={onPick}><Crosshair size={15} />Tap the map</button>
         </div>
-        {point && <div className="v2-small" style={{ color: '#15803d', marginBottom: 6 }}>Pin set{address ? `: ${address}` : ''}</div>}
         <Field label="Phone (optional)"><input className="v2-input" type="tel" value={phone} onChange={e => setPhone(e.target.value)} autoComplete="off" /></Field>
         {campaigns.length > 1 && (
           <Field label="Campaign">
@@ -270,7 +329,8 @@ const AddLead: React.FC<{
           </Field>)}
         <ErrorBox error={error} />
         <Btn onClick={save} disabled={busy || !name.trim() || !kind} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e' }}>
-          {busy ? 'Adding…' : 'Add it and log a visit'}</Btn>
+          {busy ? 'Adding…' : 'Add it'}</Btn>
+        <div className="v2-small v2-mut" style={{ marginTop: 8 }}>It opens next, ready for their cards, the deck or the visit.</div>
       </div>
     </div>
   );
