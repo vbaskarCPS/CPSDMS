@@ -60,7 +60,7 @@ export const COMPONENTS: Component[] = [
     { key: 'zones', label: 'Zones', icon: Hexagon, color: 'teal', path: '/app/mainstreet/zones', ready: true },
     { key: 'cities', label: 'Cities', icon: Building2, color: 'sky', path: '/app/mainstreet/cities', ready: true },
     { key: 'campaigns', label: 'Campaigns', icon: Megaphone, color: 'rose', path: '/app/mainstreet/campaigns', ready: true },
-    { key: 'reps', label: 'Reps', icon: UserCheck, color: 'blue', path: '/app/mainstreet/reps', ready: true },
+    { key: 'reps', label: 'Users', icon: UserCheck, color: 'blue', path: '/app/mainstreet/reps', ready: true },
     { key: 'deals', label: 'Deals', icon: BadgeCheck, color: 'green', path: '/app/mainstreet/deals', ready: true },
     { key: 'meetings', label: 'Meetings', icon: CalendarCheck, color: 'amber', path: '/app/mainstreet/meetings', ready: true },
     { key: 'inbox', label: 'Inbox', icon: Mail, color: 'blue', path: '/app/mainstreet/inbox', ready: true },
