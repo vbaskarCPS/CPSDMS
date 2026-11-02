@@ -61,7 +61,7 @@ export const COMPONENTS: Component[] = [
     { key: 'split', label: 'Split', icon: Split, color: 'amber', path: '/app/mainstreet/split', ready: true },
     { key: 'cities', label: 'Cities', icon: Building2, color: 'sky', path: '/app/mainstreet/cities', ready: true },
     { key: 'campaigns', label: 'Campaigns', icon: Megaphone, color: 'rose', path: '/app/mainstreet/campaigns', ready: true },
-    { key: 'reps', label: 'Reps', icon: UserCheck, color: 'blue', path: '/app/mainstreet/reps', ready: true },
+    { key: 'reps', label: 'Users', icon: UserCheck, color: 'blue', path: '/app/mainstreet/reps', ready: true },
     { key: 'pipeline', label: 'Pipeline', icon: Columns3, color: 'violet', path: '/app/mainstreet/pipeline', ready: true },
     { key: 'deals', label: 'Deals', icon: BadgeCheck, color: 'green', path: '/app/mainstreet/deals', ready: true },
     { key: 'followups', label: 'Follow-ups', icon: Clock, color: 'amber', path: '/app/mainstreet/followups', ready: true },
