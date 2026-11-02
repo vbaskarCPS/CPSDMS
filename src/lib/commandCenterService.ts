@@ -297,6 +297,15 @@ export function withCartMembers<T extends { worker_id: string; team_worker_ids?:
   };
 }
 
+/** A logsheet session with no worker on it at all (worker_id and every cart member missing, or the text
+ *  "undefined"). Made by mistake when a logsheet opened without a signed-in worker; nobody can sell on it,
+ *  so lists of the day's carts leave it out. Close day clears it with the rest. */
+const realId = (v: unknown) => typeof v === 'string' && v.trim() !== '' && v !== 'undefined' && v !== 'null';
+export function isBlankSession(row: { worker_id?: string | null; team_worker_ids?: (string | null)[] | null } | null | undefined): boolean {
+  if (!row) return true;
+  return !realId(row.worker_id) && !(row.team_worker_ids || []).some(realId);
+}
+
 // --- VALIDATE SPLIT TOTALS 100% ---
 export const validateSplitTotal = (split: TeamSplitConfig): boolean => {
   const total = Object.values(split).reduce((sum, val) => sum + val, 0);

@@ -375,6 +375,18 @@ const Dashboard: React.FC = () => {
         navigate('/');
         return;
       }
+      // No worker on this logsheet (a manager's "View logsheet" reopened after they went back, so the
+      // signed-in user is the manager): go back to the manager's screen instead of opening an empty cart.
+      if (!storedWorker.contractorId) {
+        if (rmViewMode && originalUser) {
+          setStorageItem('current_user', originalUser);
+          removeStorageItem('rm_original_user');
+          removeStorageItem('rm_view_mode');
+          removeStorageItem('rm_view_cart_names');
+          navigate('/rm-logbook');
+        } else navigate('/');
+        return;
+      }
       setWorker(storedWorker);
 
       try {

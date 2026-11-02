@@ -17,6 +17,7 @@ import {
   calculateAsphaltSplit,
   createEqualSplit,
   withCartMembers,
+  isBlankSession,
   EQ_DIVISOR
 } from './commandCenterService';
 import {
@@ -2769,7 +2770,7 @@ class SessionService {
       ]);
       
       // a cart that lists nobody is that worker's own (see withCartMembers)
-      const sessions = (sessionsRes.data || []).map(withCartMembers);
+      const sessions = (sessionsRes.data || []).filter(r => !isBlankSession(r)).map(withCartMembers);
       const allTransactions = (transactionsRes.data || []).map(tx => this.mapDbTransaction(tx));
       
       const transactionsBySessionId: Record<string, SessionTransaction[]> = {};
@@ -2904,6 +2905,9 @@ class SessionService {
     }
   
     public async startLogsheetSession(workerId: string): Promise<LogsheetSession> {
+      // never open a session for nobody (a logsheet opened without a signed-in worker, e.g. a manager's
+      // "View logsheet" reloaded after they went back): it would make an empty cart on the day
+      if (isBlankSession({ worker_id: workerId })) throw new Error('No worker is signed in on this logsheet');
       const ccId = this.getCCId();
       const date = await this.getDailySessionDate();
       if (!date) throw new Error('No active session day found');

@@ -25,3 +25,14 @@ describe('carts that list nobody', () => {
     expect(r.upsell_split).toEqual({ I1: 100 });
   });
 });
+
+describe('blank sessions (a logsheet opened with no worker signed in)', () => {
+  it('a session with no worker anywhere is blank; any real member makes it a cart', async () => {
+    const { isBlankSession } = await import('./commandCenterService');
+    expect(isBlankSession({ worker_id: null, team_worker_ids: [null] })).toBe(true);
+    expect(isBlankSession({ worker_id: 'undefined', team_worker_ids: ['undefined'] })).toBe(true);
+    expect(isBlankSession({ worker_id: undefined as unknown as string })).toBe(true);
+    expect(isBlankSession({ worker_id: 'I1012', team_worker_ids: ['I1012'] })).toBe(false);
+    expect(isBlankSession({ worker_id: null, team_worker_ids: ['I1295', 'I1453'] })).toBe(false);
+  });
+});
