@@ -129,7 +129,7 @@ const KitEditor: React.FC<{ campaign: Campaign; onClose: () => void }> = ({ camp
       {!k ? (error ? <ErrorBox error={error} /> : <Loading />) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <Field label="Pay per approved deal ($)" hint="Shows reps what they’ve earned. Leave empty if not set."><input className="v2-input" inputMode="decimal" value={k.pay_per_deal} onChange={e => set({ pay_per_deal: e.target.value.replace(/[^0-9.]/g, '') })} /></Field>
+            {/* Pay per approved deal: hidden until rep earnings are built (any saved value is kept and saved back as is) */}
             <Field label="Try “not interested” again after (days)" hint="It comes back on the rep’s list after this."><input className="v2-input" inputMode="numeric" value={k.retry_days} onChange={e => set({ retry_days: e.target.value.replace(/[^0-9]/g, '') })} /></Field>
           </div>
           <div className="v2-h2" style={{ margin: '8px 0 4px' }}>Send info</div>

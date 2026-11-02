@@ -193,15 +193,15 @@ export const Dashboard: React.FC = () => {
         <div className="v2-card" style={{ flex: 1, minWidth: 140 }}><div className="v2-note">Visits today</div><div style={{ fontSize: 26, fontWeight: 800 }}>{list.reduce((a, r) => a + r.visits, 0)}</div></div>
         <div className="v2-card" style={{ flex: 1, minWidth: 140 }}><div className="v2-note">Deals today</div><div style={{ fontSize: 26, fontWeight: 800 }}>{list.reduce((a, r) => a + r.deals, 0)}</div></div>
         <div className="v2-card" style={{ flex: 1, minWidth: 180 }}>
-          <div className="v2-note">Daily goal per rep</div>
+          <div className="v2-note">Daily goal per rep (a rep can set their own visits goal)</div>
           {g ? (
             <div className="v2-row" style={{ gap: 6, marginTop: 4 }}>
               <input className="v2-input" style={{ width: 64 }} inputMode="numeric" value={g.v} onChange={e => setG({ ...g, v: e.target.value.replace(/\D/g, '') })} aria-label="Visits a day" />visits
-              <input className="v2-input" style={{ width: 52 }} inputMode="numeric" value={g.d} onChange={e => setG({ ...g, d: e.target.value.replace(/\D/g, '') })} aria-label="Deals a day" />deals
+              <input className="v2-input" style={{ width: 52 }} inputMode="numeric" value={g.d} onChange={e => setG({ ...g, d: e.target.value.replace(/\D/g, '') })} aria-label="Onboardings a day" />onboardings
               <Btn size="sm" disabled={busy || !g.v} onClick={saveGoals_}>Save</Btn>
             </div>
           ) : (
-            <div style={{ fontWeight: 800, fontSize: 17, marginTop: 4 }}>{goals.data ? `${goals.data.visits_per_day} visits · ${goals.data.deals_per_day} deals` : '…'}
+            <div style={{ fontWeight: 800, fontSize: 17, marginTop: 4 }}>{goals.data ? `${goals.data.visits_per_day} visits · ${goals.data.deals_per_day} onboardings` : '…'}
               {goals.data && <> <Btn kind="o" size="sm" icon={Pencil} onClick={() => setG({ v: String(goals.data!.visits_per_day), d: String(goals.data!.deals_per_day) })}>Edit</Btn></>}</div>)}
         </div>
       </div>

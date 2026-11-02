@@ -39,7 +39,7 @@ const TOUR: Record<Role, Step[]> = {
     { to: '/app/rep', title: 'Present and book', text: 'On a business, tap Present: everything is in the Taxifi deck: the pitch, the owner’s questions, a proposal next to what they pay today, and the onboarding call, booked into the host’s real open times on the last screen.' },
     { to: '/app/rep/followups', title: 'Follow-ups', text: 'Everyone you promised to come back to or call, overdue first, with who to ask for. Add one to your calendar or open it on the map.' },
     { to: '/app/rep/inbox', title: 'Inbox', text: 'Emails with your businesses, filed on each one. Write a follow-up yourself or have Claude draft it from the visit.' },
-    { to: '/app/rep/me', title: 'Me', text: 'Today against your goals, your streak, earnings, the week’s board and your numbers. Then switch to the host (the orange Demo button, bottom left) to see the calls you booked.' },
+    { to: '/app/rep/me', title: 'Visits & Onboardings', text: 'The leaderboards for onboardings booked and visits (today, this week, this month), today against your own visits goal, and your numbers. Then switch to the host (the orange Demo button, bottom left) to see the calls you booked.' },
   ],
   host: [
     { to: '/app/host', title: 'Onboarding calls', text: 'The host takes the calls reps book from the deck. “How did it go?” lists the calls that have started: mark them Closed, No-show or Not a fit.' },

@@ -112,6 +112,18 @@
 .v2-rep-board td { padding: 7px 6px; border-top: 1px solid var(--line-soft); }
 .v2-rep-board tr.me td { background: #f0fdfa; font-weight: 700; }
 .v2-rep-stat b { white-space: nowrap; }
+/* Visits & Onboardings: the two leaderboards side by side (stacked on a phone), and my goal */
+.v2-rep-board-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.v2-rep-board-top .t { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; }
+@media (max-width: 560px) { .v2-rep-board-top .v2-rep-seg { width: 100%; } .v2-rep-board-top .v2-rep-seg button { flex: 1; } }
+.v2-rep-boards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 6px; }
+@media (max-width: 560px) { .v2-rep-boards { grid-template-columns: 1fr; gap: 4px; } }
+.v2-rep-board-h { font-size: 12px; font-weight: 800; color: var(--mut); text-transform: uppercase; letter-spacing: .04em; margin-top: 6px; }
+.v2-rep-board td:first-child { width: 28px; color: var(--mut); }
+.v2-rep-goal-edit { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; margin: 2px 0 10px; }
+.v2-rep-goal-edit label { display: flex; flex-direction: column; gap: 3px; }
+.v2-rep-goal-edit input { width: 90px; }
+.v2-rep-nav a { text-align: center; line-height: 1.15; }
 
 /* pitch menu: Kit, Present, Share info */
 .v2-rep-pitch { border: 1px solid var(--line); border-radius: 14px; padding: 10px; margin: 0 0 10px; background: #fafbfa; }

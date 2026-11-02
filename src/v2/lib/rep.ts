@@ -303,6 +303,8 @@ export async function repKit(campaign: string): Promise<Kit> {
 export interface RepToday {
   day: string; started_at: string | null; ended_at: string | null; distance_m: number; minutes: number;
   visits: number; deals: number; followups: number; goal_visits: number; goal_deals: number;
+  /** the visits goal is the rep's own (else the team's, team_goal_visits) */
+  goal_own?: boolean; team_goal_visits?: number;
 }
 export async function repToday(): Promise<RepToday> { return must(await db.rpc('ms_rep_today')) as RepToday; }
 export async function dayStart(p: { lat: number; lng: number } | null): Promise<RepToday> {
@@ -316,13 +318,21 @@ export async function dayEnd(p: { lat: number; lng: number } | null): Promise<Re
 }
 export const hoursLabel = (min: number) => (min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')}`);
 
-// ───────────── goals, the board ─────────────
-export interface Board {
-  week_of: string; goal_visits: number; goal_deals: number; streak: number;
-  board: { me: boolean; name: string; visits: number; approved: number; pending: number }[];
-  earnings: { week: number; total: number; unpriced: number };
+// ───────────── goals, the leaderboards ─────────────
+export type BoardPeriod = 'today' | 'week' | 'month';
+export interface BoardRep { me: boolean; name: string; visits: number; approved: number; pending: number }
+export interface Leaderboard { period: BoardPeriod; from: string; streak: number; goal_visits: number; reps: BoardRep[] }
+export async function repLeaderboard(period: BoardPeriod): Promise<Leaderboard> {
+  const b = must(await db.rpc('ms_rep_leaderboard', { p_period: period })) as Leaderboard;
+  return { ...b, reps: b.reps || [] };
 }
-export async function repBoard(): Promise<Board> { const b = must(await db.rpc('ms_rep_board')) as Board; return { ...b, board: b.board || [] }; }
+/** Onboardings booked: approved first, then waiting, then visits. */
+export const byOnboardings = (a: BoardRep, b: BoardRep) => b.approved - a.approved || b.pending - a.pending || b.visits - a.visits || a.name.localeCompare(b.name);
+export const byVisits = (a: BoardRep, b: BoardRep) => b.visits - a.visits || (b.approved + b.pending) - (a.approved + a.pending) || a.name.localeCompare(b.name);
+/** My daily goal for businesses to visit; null goes back to the team's. */
+export async function setVisitGoal(visits: number | null): Promise<{ goal_visits: number; own: boolean; team_goal_visits: number }> {
+  return must(await db.rpc('ms_rep_set_visit_goal', { p_visits: visits })) as { goal_visits: number; own: boolean; team_goal_visits: number };
+}
 export const money = (n: number) => n.toLocaleString('en-CA', { style: 'currency', currency: 'CAD', maximumFractionDigits: n % 1 ? 2 : 0 });
 
 // ───────────── photos ─────────────
