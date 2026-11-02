@@ -193,7 +193,8 @@ export const BusinessSheet: React.FC<{
 
       <div style={{ fontWeight: 800, marginTop: 10 }}>What happened?</div>
       <div className="v2-rep-outs">
-        {OUTCOMES.map(o => (
+        {/* a closed deal is made by booking onboarding from Present, not logged by hand */}
+        {OUTCOMES.filter(o => o.key !== 'closed').map(o => (
           <button key={o.key} type="button" className={`v2-rep-out${outcome === o.key ? ' on' : ''}`} onClick={() => { setOutcome(o.key); setError(null); }} aria-pressed={outcome === o.key}>
             <b><i className="v2-rep-dot" style={{ background: o.color }} />{o.label}</b><span>{o.hint}</span>
           </button>))}
