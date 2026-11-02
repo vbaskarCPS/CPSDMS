@@ -1,15 +1,15 @@
 // src/v2/features/rep/RepApp.tsx — the MainstreetAI rep app (/app/rep). A rep only ever lands here:
-// a map of all their zones (the home screen), the zone list, follow-ups, and "Me" (today, goals, the
-// week's board, earnings, numbers). MainstreetAI only, no Property Stars. Managing reps is in the
+// a map of all their zones (the home screen), the zone list, follow-ups, and "Visits & Onboardings" (the
+// leaderboards, today against their own visits goal, their numbers). MainstreetAI only, no Property Stars. Managing reps is in the
 // management portal.
 import React, { useMemo, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, Mail, Map as MapIcon, Trophy, User } from 'lucide-react';
+import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, Mail, Map as MapIcon, Pencil, Trophy } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
-  FOLLOW_UP_RING, hereNow, isOpen, kindLabel, STAGE_PIN, stagePin, money, pinOf, repBoard, repFollowups, repHome, repNumbers, repZone, walkOrder, whenLabel,
-  type FollowUp, type RepBusiness,
+  FOLLOW_UP_RING, hereNow, isOpen, kindLabel, STAGE_PIN, stagePin, pinOf, repLeaderboard, byOnboardings, byVisits, setVisitGoal, repFollowups, repHome, repNumbers, repZone, walkOrder, whenLabel,
+  type BoardPeriod, type BoardRep, type FollowUp, type RepBusiness,
 } from '../../lib/rep';
 import { followUpIcs, metres } from '../../lib/repField';
 import { cacheGet } from '../../lib/repQueue';
@@ -71,7 +71,7 @@ const Frame: React.FC<{ full?: boolean; mail?: boolean; children: React.ReactNod
         <NavLink to="/app/rep/zones" className={tab}><LayoutList size={20} />Zones</NavLink>
         <NavLink to="/app/rep/inbox" className={tab}><Mail size={20} />Inbox{!!unread.data && <span className="badge blue">{unread.data}</span>}</NavLink>
         <NavLink to="/app/rep/followups" className={tab}><Clock size={20} />Follow-ups{!!due.data && <span className="badge">{due.data}</span>}</NavLink>
-        <NavLink to="/app/rep/me" className={tab}><User size={20} />Me{stuck > 0 && <span className="badge">{stuck}</span>}</NavLink>
+        <NavLink to="/app/rep/me" className={tab}><Trophy size={20} />Visits &amp; Onboardings{stuck > 0 && <span className="badge">{stuck}</span>}</NavLink>
       </nav>
     </div></div>
   );
@@ -247,18 +247,24 @@ const Followups: React.FC = () => {
   );
 };
 
-// ───────────── me: today, goals, the board, earnings, numbers ─────────────
+// ───────────── visits & onboardings: the leaderboards, today against my goal, my numbers ─────────────
+const PERIODS: { key: BoardPeriod; label: string }[] = [{ key: 'today', label: 'Today' }, { key: 'week', label: 'This week' }, { key: 'month', label: 'This month' }];
+
 const Me: React.FC = () => {
-  const { today, queue, flushNow } = useRep();
-  const b = useLoad(() => repBoard(), []);
+  const { today, refreshToday, queue, flushNow } = useRep();
+  const [period, setPeriod] = useState<BoardPeriod>('week');
+  const b = useLoad(() => repLeaderboard(period), [period]);
   const n = useLoad(() => repNumbers(), []);
   const max = Math.max(1, ...(n.data?.days || []).map(d => d.visits));
   const pct = (a: number, g: number) => `${Math.min(100, g ? Math.round((100 * a) / g) : 0)}%`;
   const stuck = queue.filter(q => q.error);
   const waiting = queue.filter(q => !q.error);
+  const onb = useMemo(() => [...(b.data?.reps || [])].sort(byOnboardings), [b.data]);
+  const vis = useMemo(() => [...(b.data?.reps || [])].sort(byVisits), [b.data]);
+  const from = b.data ? new Date(`${b.data.from}T12:00:00`).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) : '';
   return (
     <>
-      <h1>Me</h1>
+      <h1>Visits &amp; Onboardings</h1>
       <div style={{ marginBottom: 12 }}><PushToggle /></div>
       {(stuck.length > 0 || waiting.length > 0) && (
         <div className="v2-rep-zone">
@@ -270,45 +276,41 @@ const Me: React.FC = () => {
               <div className="v2-small" style={{ color: '#b91c1c' }}>{q.error}</div>
             </div>))}
         </div>)}
-      {today && (
-        <div className="v2-rep-zone">
-          <div className="row"><b>Today</b></div>
-          <div className="v2-rep-goal"><span>Visits <b>{today.visits}</b> / {today.goal_visits}</span><div className="v2-rep-bar"><b style={{ width: pct(today.visits, today.goal_visits) }} /></div></div>
-          <div className="v2-rep-goal"><span>Deals <b>{today.deals}</b> / {today.goal_deals}</span><div className="v2-rep-bar"><b style={{ width: pct(today.deals, today.goal_deals), background: '#16a34a' }} /></div></div>
-        </div>)}
-      <ErrorBox error={b.error || n.error} />
-      {b.data && (
-        <>
-          <div className="v2-rep-stat">
-            <div><b><Flame size={18} style={{ verticalAlign: -2, color: '#ea580c' }} /> {b.data.streak}</b><span>Day streak (goal met)</span></div>
-            <div><b>{money(b.data.earnings.week)}</b><span>Earned this week</span></div>
-            <div><b>{money(b.data.earnings.total)}</b><span>Earned in all</span></div>
+
+      <div className="v2-rep-zone">
+        <div className="v2-rep-board-top"><span className="t"><Trophy size={16} /><b>Leaderboard</b></span>
+          <div className="v2-rep-seg" role="tablist" aria-label="Period">
+            {PERIODS.map(p => <button key={p.key} type="button" role="tab" aria-selected={period === p.key} className={period === p.key ? 'on' : ''} onClick={() => setPeriod(p.key)}>{p.label}</button>)}
           </div>
-          {b.data.earnings.unpriced > 0 && <div className="v2-small v2-mut" style={{ margin: '-4px 0 10px' }}>{b.data.earnings.unpriced} approved deal{b.data.earnings.unpriced === 1 ? '' : 's'} on a campaign with no pay set yet.</div>}
-          <div className="v2-rep-zone">
-            <div className="row"><Trophy size={16} /><b>This week</b><span className="v2-small v2-mut" style={{ marginLeft: 'auto' }}>from {new Date(`${b.data.week_of}T12:00:00`).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}</span></div>
-            <table className="v2-rep-board">
-              <thead><tr><th>#</th><th>Rep</th><th>Deals</th><th>Visits</th></tr></thead>
-              <tbody>{b.data.board.map((r, i) => (
-                <tr key={i} className={r.me ? 'me' : ''}><td>{i + 1}</td><td>{r.me ? 'You' : r.name}</td><td><b>{r.approved}</b>{r.pending ? <span className="v2-mut"> +{r.pending}</span> : ''}</td><td>{r.visits}</td></tr>))}</tbody>
-            </table>
-            <div className="v2-small v2-mut">Deals count once approved; +n are waiting.</div>
-          </div>
-        </>)}
+        </div>
+        <ErrorBox error={b.error} />
+        {b.loading && !b.data ? <Loading /> : b.data && (
+          <>
+            {period !== 'today' && <div className="v2-small v2-mut" style={{ marginTop: 4 }}>From {from}</div>}
+            <div className="v2-rep-boards">
+              <BoardTable title="Onboardings booked" rows={onb} value={r => <><b>{r.approved}</b>{r.pending ? <span className="v2-mut"> +{r.pending}</span> : ''}</>} />
+              <BoardTable title="Visits" rows={vis} value={r => <b>{r.visits}</b>} />
+            </div>
+            <div className="v2-small v2-mut">Onboardings count once an admin approves them; +n are waiting.</div>
+          </>)}
+      </div>
+
+      {today && <TodayGoals today={today} streak={b.data?.streak ?? null} pct={pct} onSaved={() => { refreshToday(); b.reload(); }} />}
+      <ErrorBox error={n.error} />
       {n.loading && !n.data ? <Loading /> : n.data && (
         <>
           <div className="v2-rep-zone">
             <b>Visits, last 14 days</b>
             <div className="v2-rep-days">
               {n.data.days.map(d => (
-                <div key={d.day} title={`${d.day}: ${d.visits} visits, ${d.deals} deals`}>
+                <div key={d.day} title={`${d.day}: ${d.visits} visits, ${d.deals} onboardings booked`}>
                   <span>{d.visits || ''}</span><i style={{ height: `${(100 * d.visits) / max}%` }} /><span>{new Date(`${d.day}T12:00:00`).getDate()}</span>
                 </div>))}
             </div>
           </div>
           <div className="v2-rep-zone">
-            <b>Recent deals</b>
-            {!n.data.recent_deals.length && <div className="v2-small v2-mut" style={{ marginTop: 6 }}>No deals yet.</div>}
+            <b>Recent onboardings booked</b>
+            {!n.data.recent_deals.length && <div className="v2-small v2-mut" style={{ marginTop: 6 }}>None yet.</div>}
             {n.data.recent_deals.map(d => (
               <div key={d.id} className="v2-rep-visit">
                 <div className="h"><b style={{ flex: 1 }}>{d.business}</b>
@@ -321,5 +323,63 @@ const Me: React.FC = () => {
           <div className="v2-small v2-mut">{n.data.visits_total} visits logged in all.</div>
         </>)}
     </>
+  );
+};
+
+/** One leaderboard: the top reps, and me (with my place) even when I'm further down. */
+const BoardTable: React.FC<{ title: string; rows: BoardRep[]; value: (r: BoardRep) => React.ReactNode }> = ({ title, rows, value }) => {
+  const TOP = 10;
+  const mine = rows.findIndex(r => r.me);
+  const shown = rows.slice(0, TOP);
+  return (
+    <div>
+      <div className="v2-rep-board-h">{title}</div>
+      <table className="v2-rep-board">
+        <tbody>
+          {shown.map((r, i) => (
+            <tr key={i} className={r.me ? 'me' : ''}><td>{i + 1}</td><td>{r.me ? 'You' : r.name}</td><td style={{ textAlign: 'right' }}>{value(r)}</td></tr>))}
+          {mine >= TOP && (
+            <tr className="me"><td>{mine + 1}</td><td>You</td><td style={{ textAlign: 'right' }}>{value(rows[mine])}</td></tr>)}
+          {!rows.length && <tr><td colSpan={3} className="v2-mut">No one yet.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+/** Today against my own goal for businesses to visit (I set it; clearing it goes back to the team's). */
+const TodayGoals: React.FC<{
+  today: NonNullable<ReturnType<typeof useRep>['today']>; streak: number | null; pct: (a: number, g: number) => string; onSaved: () => void;
+}> = ({ today, streak, pct, onSaved }) => {
+  const [edit, setEdit] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const save = async (v: number | null) => {
+    setBusy(true); setErr(null);
+    try { await setVisitGoal(v); setEdit(null); onSaved(); } catch (e) { setErr(e); } finally { setBusy(false); }
+  };
+  const n = Number(edit);
+  return (
+    <div className="v2-rep-zone">
+      <div className="row"><b>Today</b>
+        {streak != null && streak > 0 && <span className="v2-small" style={{ marginLeft: 'auto', fontWeight: 700, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 3 }}><Flame size={14} style={{ color: '#ea580c' }} /> {streak} day{streak === 1 ? '' : 's'} in a row</span>}</div>
+      <div className="v2-rep-goal">
+        <span>Visits <b>{today.visits}</b> / {today.goal_visits}
+          {edit === null && <button type="button" className="v2-rep-mini" style={{ marginLeft: 8 }} onClick={() => setEdit(String(today.goal_visits))}><Pencil size={12} style={{ verticalAlign: -1 }} /> My goal</button>}</span>
+        <div className="v2-rep-bar"><b style={{ width: pct(today.visits, today.goal_visits) }} /></div>
+      </div>
+      {edit !== null && (
+        <div className="v2-rep-goal-edit">
+          <label className="v2-small">Businesses to visit a day
+            <input className="v2-input" inputMode="numeric" autoFocus value={edit} onChange={e => setEdit(e.target.value.replace(/\D/g, '').slice(0, 3))} aria-label="Businesses to visit a day" />
+          </label>
+          <button type="button" className="v2-rep-mini" disabled={busy || !(n >= 1 && n <= 500)} onClick={() => save(n)}>{busy ? 'Saving…' : 'Save'}</button>
+          {today.goal_own && <button type="button" className="v2-rep-mini" disabled={busy} onClick={() => save(null)}>Use team goal{today.team_goal_visits ? ` (${today.team_goal_visits})` : ''}</button>}
+          <button type="button" className="v2-rep-mini" disabled={busy} onClick={() => { setEdit(null); setErr(null); }}>Cancel</button>
+          <ErrorBox error={err} />
+        </div>)}
+      <div className="v2-rep-goal"><span>Onboardings booked <b>{today.deals}</b> / {today.goal_deals}</span><div className="v2-rep-bar"><b style={{ width: pct(today.deals, today.goal_deals), background: '#16a34a' }} /></div></div>
+      {!today.goal_own && edit === null && <div className="v2-small v2-mut" style={{ marginTop: 6 }}>Your visits goal is the team’s. Tap My goal to set your own.</div>}
+    </div>
   );
 };

@@ -199,8 +199,10 @@ function today() {
   const vs = visitsToday();
   const minutes = S.day.started_at ? Math.round(((S.day.ended_at ? new Date(S.day.ended_at).getTime() : Date.now()) - new Date(S.day.started_at).getTime()) / MIN) : 0;
   return { day: todayKey(), started_at: S.day.started_at, ended_at: S.day.ended_at, distance_m: S.day.distance_m + vs.length * 140, minutes,
-    visits: vs.length, deals: vs.filter(v => v.outcome === 'closed').length, followups: vs.filter(v => v.outcome === 'follow_up').length, goal_visits: 40, goal_deals: 2 };
+    visits: vs.length, deals: vs.filter(v => v.outcome === 'closed').length, followups: vs.filter(v => v.outcome === 'follow_up').length,
+    goal_visits: myGoal ?? 40, goal_deals: 2, goal_own: myGoal != null, team_goal_visits: 40 };
 }
+let myGoal: number | null = null;   // the demo rep's own daily visits goal (session only)
 function followups() {
   const out = [];
   for (const b of allBiz()) {
@@ -327,16 +329,25 @@ export function rpc(name: string, a: Args): unknown {
     case 'ms_rep_day_start': S.day.started_at = iso(Date.now()); S.day.ended_at = null; return today();
     case 'ms_rep_day_ping': S.day.distance_m += 25; return null;
     case 'ms_rep_day_end': S.day.ended_at = iso(Date.now()); return today();
-    case 'ms_rep_board': {
-      const mine = S.visits.filter(v => Date.now() - new Date(v.at).getTime() < 7 * D);
-      const appr = [...S.deals.values()].filter(d => d.status === 'approved');
-      const board = [
-        { me: true, name: REP.name, visits: mine.length, approved: appr.length, pending: [...S.deals.values()].filter(d => d.status === 'pending').length },
-        { me: false, name: 'Jamie Tran', visits: 96, approved: 5, pending: 1 }, { me: false, name: 'Riya Kapoor', visits: 81, approved: 3, pending: 2 },
-        { me: false, name: 'Ben Okafor', visits: 64, approved: 2, pending: 0 },
-      ].sort((x, y) => y.approved - x.approved || y.visits - x.visits);
-      const pay = kit().pay_per_deal || 0;
-      return { week_of: torontoDay(Date.now() - torontoDay(Date.now()).dow * D).key, goal_visits: 40, goal_deals: 2, streak: 3, board, earnings: { week: appr.length * pay, total: (appr.length + 6) * pay, unpriced: 0 } };
+    case 'ms_rep_leaderboard': {
+      const period = str(a.p_period) === 'today' ? 'today' : str(a.p_period) === 'month' ? 'month' : 'week';
+      const days = period === 'today' ? 1 : period === 'week' ? torontoDay(Date.now()).dow + 1 : new Date().getDate();
+      const f = period === 'today' ? 1 / 7 : period === 'week' ? 1 : 4;
+      const mine = S.visits.filter(v => Date.now() - new Date(v.at).getTime() < days * D);
+      const reps = [
+        { me: true, name: REP.name, visits: mine.length, approved: [...S.deals.values()].filter(d => d.status === 'approved').length, pending: [...S.deals.values()].filter(d => d.status === 'pending').length },
+        { me: false, name: 'Jamie Tran', visits: Math.round(96 * f), approved: Math.round(5 * f), pending: 1 },
+        { me: false, name: 'Riya Kapoor', visits: Math.round(81 * f), approved: Math.round(3 * f), pending: Math.round(2 * f) },
+        { me: false, name: 'Ben Okafor', visits: Math.round(64 * f), approved: Math.round(2 * f), pending: 0 },
+      ];
+      const from = period === 'today' ? todayKey() : period === 'week' ? torontoDay(Date.now() - torontoDay(Date.now()).dow * D).key : `${todayKey().slice(0, 8)}01`;
+      return { period, from, streak: 3, goal_visits: myGoal ?? 40, reps };
+    }
+    case 'ms_rep_set_visit_goal': {
+      const v = a.p_visits == null ? null : Number(a.p_visits);
+      if (v != null && !(v >= 1 && v <= 500)) throw new Error('Pick a goal between 1 and 500');
+      myGoal = v;
+      return { goal_visits: myGoal ?? 40, own: myGoal != null, team_goal_visits: 40 };
     }
     case 'ms_get_goals': return { visits_per_day: 40, deals_per_day: 2 };
     case 'ms_rep_add_lead': {
