@@ -4,6 +4,8 @@
 // The phone's location is set to Oakville, in the middle of the demo zones.
 import seedJson from './seed.json';
 import { fn, rpc, table } from './store';
+import { db } from '../v2/lib/client';
+import { supabase } from '../lib/supabase';
 
 const SUPA = /^https:\/\/[a-z0-9]+\.supabase\.co\//;
 const json = (body: unknown, status = 200) => new Response(body === undefined ? 'null' : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -19,6 +21,15 @@ async function bodyOf(input: RequestInfo | URL, init?: RequestInit): Promise<Rec
 const photos = new Map<string, string>();   // uploaded in the demo: path → a local object URL
 
 export function installDemoNetwork(): void {
+  // Every Supabase request first asks the client for the signed-in session, and only one tab at a time may read it.
+  // With the real app open in another tab on the phone, the demo waited behind it and never loaded ("Loading your
+  // zones…"). The demo has no session of its own, so it never asks: requests go straight to the pretend server.
+  for (const c of [db, supabase]) {
+    const auth = c.auth as unknown as { getSession: () => Promise<unknown>; stopAutoRefresh?: () => Promise<void> };
+    auth.getSession = async () => ({ data: { session: null }, error: null });
+    void auth.stopAutoRefresh?.();
+  }
+
   const real = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
