@@ -38,3 +38,8 @@ body:has(.v2-rep-page, .v2-rep-present, .v2-rep-sheet-bg, .v2-modal-bg, .v2-rep-
 body:not(:has(.v2-rep-nav)) .msd-pill { bottom: 16px; }
 /* the demo never asks to send notifications */
 .v2-push { display: none !important; }
+/* the rep's walk-through sits at the top, out of the way of Add, the sheets' buttons and the deck's arrows */
+.msd-tour.coach { top: 60px; bottom: auto; padding: 11px 14px; font-size: 13.5px; }
+.msd-tour.coach p { margin: 4px 0 0; }
+.msd-tour.coach .f { margin-top: 10px; }
+body:has(.v2-rep-present) .msd-tour.coach { top: auto; bottom: 74px; opacity: .97; }
