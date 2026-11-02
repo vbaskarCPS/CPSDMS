@@ -152,6 +152,24 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 .prop-r.tot { border-top: 2px solid var(--ink); }
 .prop-r.tot b { color: var(--ink); font-size: 18px; }
 .prop-r.tot b.us { color: var(--accent); }
+.sbs { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.sbs-h, .sbs-r, .sbs-t { display: grid; grid-template-columns: 1fr 96px 104px; gap: 8px; align-items: center; padding: 0 12px; }
+.sbs-h { padding-top: 10px; padding-bottom: 6px; }
+.sbs-h span { font-family: var(--mono); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); text-align: right; }
+.sbs-h .us { color: var(--accent); }
+.sbs-r { border-top: 1px solid var(--line); padding-top: 10px; padding-bottom: 10px; }
+.sbs-r .lab b { display: block; font-size: 15px; }
+.sbs-r .lab small { display: block; font-size: 12px; line-height: 1.35; color: var(--mut); margin-top: 2px; }
+.sbs-r > .now, .sbs-r > .us { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+.sbs-r > .now b { font-family: var(--mono); font-size: 15px; font-variant-numeric: tabular-nums; }
+.sbs-r > .us b { font-family: var(--mono); font-size: 16px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.sbs-r > div small { font-size: 11px; color: var(--mut); }
+.sbs-r.disc { background: var(--accent-soft); }
+.sbs-t { border-top: 2px solid var(--ink); padding-top: 12px; padding-bottom: 12px; }
+.sbs-t span { font-weight: 700; }
+.sbs-t b { text-align: right; font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; }
+.sbs-t b.us { color: var(--accent); }
+@media (max-width: 380px) { .sbs-h, .sbs-r, .sbs-t { grid-template-columns: 1fr 84px 88px; gap: 6px; padding: 0 10px; } }
 .fit { background: var(--accent-soft); border-radius: 12px; padding: 11px 14px; font-weight: 600; }
 .save { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; justify-content: center; text-align: center; background: var(--accent); color: var(--on-accent); border-radius: 16px; padding: 14px 16px; }
 .save span { font-weight: 600; }
@@ -354,7 +372,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
         <h2>What taxifi would look like for you.</h2>
         <div class="empty" id="p-empty">Answer the questions on the last screen and your proposal shows here.</div>
         <div id="p-body" hidden>
-          <div class="prop" id="p-lines" role="table" aria-label="Your taxifi proposal"></div>
+          <div class="sbs" id="p-lines" role="table" aria-label="What you pay now, next to taxifi"></div>
           <div class="save" id="p-save" style="margin-top:12px" aria-live="polite"><span>You’d keep about</span><b id="p-save-n"></b><span>a year</span></div>
           <p class="small" id="p-vs" style="margin:8px 0 0"></p>
           <div class="fit" id="p-fit" style="margin-top:12px"></div>
@@ -519,22 +537,40 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
       inhouse: 'Your team gets its hours back: taxifi keeps the books current daily, and a Canadian accountant signs every month.',
       nobody: 'Behind on the books? taxifi catches you up first. Catch-up is scoped on your onboarding call.' }[a.books] || 'Books current every day, with a Canadian accountant behind every number.';
     return { lines: lines, monthly: Math.round(yearly / 12), yearly: Math.round(yearly), quoted: core == null, discount: disc,
-      today_yearly: today, year_end_in: !!a.year_end, savings: today != null && core != null ? Math.round(today - yearly) : null, fit: fit };
+      today_yearly: today, year_end_in: !!a.year_end, core: core, pay: pay, staff: staff, t2: T2, services: services,
+      now_month: a.pay_now ? NOW[a.pay_now] : null, now_ye: a.year_end ? YE[a.year_end] : null, savings: today != null && core != null ? Math.round(today - yearly) : null, fit: fit };
   }
   function render() {
     var p = proposal();
     document.getElementById('p-empty').hidden = !!p;
     document.getElementById('p-body').hidden = !p;
     if (!p) return;
+    // what they pay now (the middle of the ranges they picked), next to taxifi's starting prices
     var box = document.getElementById('p-lines'); box.innerHTML = '';
-    function row(cls, name, sub, val, valCls) {
-      var r = document.createElement('div'); r.className = 'prop-r' + (cls ? ' ' + cls : ''); r.setAttribute('role', 'row');
-      var n = document.createElement('span'); n.textContent = name; if (sub) { var sm = document.createElement('small'); sm.textContent = sub; n.appendChild(sm); }
-      var v = document.createElement('b'); v.textContent = val; if (valCls) v.className = valCls;
-      r.appendChild(n); r.appendChild(v); box.appendChild(r);
+    function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+    function cell(cls, val, sub) { var d = el('div', cls); d.setAttribute('role', 'cell'); d.appendChild(el('b', null, val)); if (sub) d.appendChild(el('small', null, sub)); return d; }
+    var h = el('div', 'sbs-h'); h.setAttribute('role', 'row');
+    [['', ''], ['Today', ''], ['taxifi', 'us']].forEach(function (c) { var x = el('span', c[1], c[0]); x.setAttribute('role', 'columnheader'); h.appendChild(x); });
+    box.appendChild(h);
+    function row(cls, name, sub, now, nowSub, us, usSub) {
+      var r = el('div', 'sbs-r' + (cls ? ' ' + cls : '')); r.setAttribute('role', 'row');
+      var lab = el('div', 'lab'); lab.setAttribute('role', 'rowheader'); lab.appendChild(el('b', null, name)); if (sub) lab.appendChild(el('small', null, sub));
+      r.appendChild(lab); r.appendChild(cell('now', now, nowSub)); r.appendChild(cell('us', us, usSub)); box.appendChild(r);
     }
-    p.lines.forEach(function (l) { row(l[3], l[0], l[2], l[1]); });
-    row('tot', p.quoted ? 'A year, plus Core' : 'About a year', p.quoted ? null : 'about ' + money(p.monthly) + ' a month', money(p.yearly), 'us');
+    var dash = '—';
+    row('', 'Bookkeeping', 'a month', p.now_month != null ? '~' + money(p.now_month) : dash, p.now_month != null ? 'with payroll' : 'not answered',
+      p.core == null ? 'Quoted' : money(p.core), p.core == null ? 'over $100K/mo' : 'Core, from');
+    row('', 'Payroll', p.staff ? 'a month, ' + p.staff + (p.staff === 1 ? ' person' : ' people') : 'a month', p.now_month != null ? 'incl.' : dash, p.now_month != null ? 'in bookkeeping' : null,
+      p.pay ? money(p.pay) : '$0', p.pay ? '$49 + $10 each' : 'no staff');
+    row('', 'Corporate return', 'a year', p.now_ye != null ? '~' + money(p.now_ye) : dash, p.now_ye != null ? null : 'not answered',
+      money(p.t2), 'T2 Standard, from');
+    row('', 'Software', 'QuickBooks or similar', dash, null, '$0', 'included');
+    row('disc', 'Bundle discount', 'on the taxifi quote', '', null, '−' + Math.round(p.discount * 100) + '%', p.services + ' services');
+    var t = el('div', 'sbs-t'); t.setAttribute('role', 'row');
+    t.appendChild(el('span', null, p.quoted ? 'A year, plus Core' : 'A year'));
+    t.appendChild(el('b', null, p.today_yearly != null ? '~' + money(p.today_yearly) : dash));
+    t.appendChild(el('b', 'us', money(p.yearly)));
+    box.appendChild(t);
     var save = document.getElementById('p-save'), vs = document.getElementById('p-vs');
     save.hidden = !(p.savings > 0);
     if (p.savings > 0) document.getElementById('p-save-n').textContent = money(p.savings);
