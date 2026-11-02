@@ -56,7 +56,9 @@ async function claudeRaw(system: string, messages: Msg[], maxTokens: number): Pr
     console.error('planner-ai: Anthropic failed:', why);
     throw new Error(res?.status === 429 ? `Coach Claude is rate-limited right now — try again in a minute. (${why})` : res?.status === 529 ? 'Coach Claude is overloaded right now — try again in a minute.' : why);
   }
-  return { text: (data.content || []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join(''), stop: String(data.stop_reason || '') };
+  const text = ((data.content || []) as { type: string; text?: string }[]).filter(c => c.type === 'text').map(c => c.text || '').join('');
+  if (!text.trim()) console.error('planner-ai: empty answer from Anthropic:', JSON.stringify({ stop: data.stop_reason, content: data.content, model: MODEL }).slice(0, 800));
+  return { text, stop: String(data.stop_reason || '') };
 }
 /** A text answer. An empty answer is asked for again once, then it's an error (never saved as a blank reply);
  *  an answer cut off by max_tokens is continued once, so a long plan isn't left mid-sentence. */
