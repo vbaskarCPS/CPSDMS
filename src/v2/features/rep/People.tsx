@@ -31,7 +31,7 @@ export const People: React.FC<{ business: string; campaign: string; offline: boo
         const read = await readCards(fs, shrinkPhoto);
         setScanned(read.map(r => ({
           file: r.file, url: URL.createObjectURL(r.file), website: r.website || '',
-          c: { ...emptyContact(), name: r.name || '', phone: r.phone || '', email: r.email || '', title: r.title || '', role: roleFromTitle(r.title) },
+          c: { ...emptyContact(), email_ok: true, name: r.name || '', phone: r.phone || '', email: r.email || '', title: r.title || '', role: roleFromTitle(r.title) },
         })));
       } catch { setError(new Error('Couldn’t read the cards here (the reader needs signal the first time). Add the people by typing instead.')); }
       finally { setReading(false); if (fileRef.current) fileRef.current.value = ''; }
@@ -87,6 +87,7 @@ const PersonFields: React.FC<{ c: ContactInput; set: (c: ContactInput) => void }
       <input className="v2-input" type="email" inputMode="email" autoCapitalize="none" placeholder="Email" value={c.email} onChange={e => set({ ...c, email: e.target.value })} autoComplete="off" />
     </div>
     <label className="v2-people-check"><input type="checkbox" checked={c.decides} onChange={e => set({ ...c, decides: e.target.checked })} /> Makes the decision</label>
+    {c.email.trim() && <label className="v2-people-check"><input type="checkbox" checked={!!c.email_ok} onChange={e => set({ ...c, email_ok: e.target.checked })} /> OK to send them follow-up emails</label>}
     <input className="v2-input" placeholder="Best time to catch them, e.g. after 2 PM weekdays" value={c.best_time} onChange={e => set({ ...c, best_time: e.target.value })} autoComplete="off" />
   </>
 );
@@ -95,7 +96,7 @@ const EditPerson: React.FC<{ business: string; campaign: string; person: BizCont
   ({ business, campaign, person, onClose, onSaved }) => {
     const [c, setC] = useState<ContactInput>(person ? {
       name: person.name || '', role: person.role || '', title: person.title || '', phone: person.phone || '', email: person.email || '',
-      decides: !!person.decides, best_time: person.best_time || '',
+      decides: !!person.decides, best_time: person.best_time || '', email_ok: person.email_ok ?? (person.source === 'card' ? true : null),
     } : emptyContact());
     const [busy, setBusy] = useState(false); const [error, setError] = useState<unknown>(null);
     const save = async () => {

@@ -45,6 +45,7 @@ import { Deals as MsDeals } from './features/mainstreet/Deals';
 import { Meetings as MsMeetings } from './features/mainstreet/Meetings';
 import { Split as MsSplit } from './features/mainstreet/Split';
 import { Pipeline as MsPipeline } from './features/mainstreet/Pipeline';
+import { Followups as MsFollowups } from './features/mainstreet/Followups';
 import { HostApp } from './features/meetings/HostApp';
 import { MailApp } from './features/mail/MailApp';
 import { Unsubscribe } from './features/mail/Unsubscribe';
@@ -135,6 +136,7 @@ const V2Routes: React.FC = () => (
     <Route path="mainstreet/reps" element={<Guard perm="mainstreet_admin"><Reps /></Guard>} />
     <Route path="mainstreet/dashboard" element={<Guard perm="mainstreet_admin"><MsDashboard /></Guard>} />
     <Route path="mainstreet/deals" element={<Guard perm="mainstreet_admin"><MsDeals /></Guard>} />
+    <Route path="mainstreet/followups" element={<Guard perm="mainstreet_admin"><MsFollowups /></Guard>} />
     <Route path="mainstreet/pipeline" element={<Guard perm="mainstreet_admin"><MsPipeline /></Guard>} />
     <Route path="mainstreet/split" element={<Guard perm="mainstreet_admin"><MsSplit /></Guard>} />
     <Route path="mainstreet/meetings" element={<Guard perm="mainstreet_admin"><MsMeetings /></Guard>} />

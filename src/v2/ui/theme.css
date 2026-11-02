@@ -689,3 +689,11 @@
   .v2-pipe .col.phone-on { display: flex; }
   .v2-pipe .ch { display: none; }
 }
+
+/* MainstreetAI › Follow-ups */
+.v2-fu-step { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line); }
+.v2-fu-step:first-child { border-top: 0; }
+.v2-fu-step .day { display: flex; gap: 6px; align-items: center; font-weight: 700; font-size: 13px; white-space: nowrap; }
+.v2-fu-step .day .v2-input { width: 64px; }
+.v2-fu-step textarea { flex: 1; min-width: 0; }
+@media (max-width: 520px) { .v2-fu-step { flex-wrap: wrap; } .v2-fu-step textarea { flex-basis: 100%; } }

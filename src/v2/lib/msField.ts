@@ -8,19 +8,21 @@ import { metres, parseCard, type CardFields } from './repField';
 export const ROLES = ['Owner', 'Partner', 'Manager', 'Bookkeeper', 'Other'] as const;
 export interface BizContact {
   id: string; name?: string; role?: string; title?: string; phone?: string; email?: string;
-  decides?: boolean; best_time?: string; card_photo?: string; source?: string; updated_at: string;
+  decides?: boolean; best_time?: string; card_photo?: string; source?: string; email_ok?: boolean | null; updated_at: string;
 }
-export interface ContactInput { name: string; role: string; title: string; phone: string; email: string; decides: boolean; best_time: string }
+export interface ContactInput { name: string; role: string; title: string; phone: string; email: string; decides: boolean; best_time: string; email_ok?: boolean | null }
 export const emptyContact = (): ContactInput => ({ name: '', role: '', title: '', phone: '', email: '', decides: false, best_time: '' });
 
 export async function contactsList(business: string, campaign: string): Promise<BizContact[]> {
   return (must(await db.rpc('ms_business_contacts_list', { p_business: business, p_campaign: campaign })) as BizContact[]) || [];
 }
 export async function saveContact(business: string, campaign: string, c: ContactInput, opts: { id?: string | null; cardPhoto?: string | null; source?: 'card' | 'typed' } = {}): Promise<string> {
-  return must(await db.rpc('ms_contact_save', {
+  const id = must(await db.rpc('ms_contact_save', {
     p_id: opts.id || null, p_business: business, p_campaign: campaign, p_name: c.name, p_role: c.role, p_title: c.title,
     p_phone: c.phone, p_email: c.email, p_decides: c.decides, p_best_time: c.best_time, p_card_photo: opts.cardPhoto || null, p_source: opts.source || 'typed',
   })) as string;
+  if (c.email_ok !== undefined && c.email_ok !== null) must(await db.rpc('ms_contact_email_ok', { p_id: id, p_campaign: campaign, p_ok: c.email_ok }));
+  return id;
 }
 export async function hideContact(id: string, campaign: string): Promise<void> { must(await db.rpc('ms_contact_hide', { p_id: id, p_campaign: campaign })); }
 export async function setWebsite(business: string, campaign: string, website: string): Promise<void> {

@@ -64,6 +64,7 @@ export const COMPONENTS: Component[] = [
     { key: 'reps', label: 'Reps', icon: UserCheck, color: 'blue', path: '/app/mainstreet/reps', ready: true },
     { key: 'pipeline', label: 'Pipeline', icon: Columns3, color: 'violet', path: '/app/mainstreet/pipeline', ready: true },
     { key: 'deals', label: 'Deals', icon: BadgeCheck, color: 'green', path: '/app/mainstreet/deals', ready: true },
+    { key: 'followups', label: 'Follow-ups', icon: Clock, color: 'amber', path: '/app/mainstreet/followups', ready: true },
     { key: 'meetings', label: 'Meetings', icon: CalendarCheck, color: 'amber', path: '/app/mainstreet/meetings', ready: true },
     { key: 'inbox', label: 'Inbox', icon: Mail, color: 'blue', path: '/app/mainstreet/inbox', ready: true },
     { key: 'dashboard', label: 'Dashboard', icon: BarChart3, color: 'violet', path: '/app/mainstreet/dashboard', ready: true },
