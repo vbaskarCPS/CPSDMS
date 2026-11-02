@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import { Crosshair, LocateFixed, Plus, X } from 'lucide-react';
 import {
-  addLead, geocode, hereNow, isOpen, repMap, reverseGeocode,
+  addLead, geocode, hereNow, isOpen, repMap, reverseGeocode, stagePin,
   type MapBiz, type RepMap,
 } from '../../lib/rep';
 import { BUSINESS_KINDS, kindLabel } from '../../lib/msCity';
@@ -49,7 +49,7 @@ export const HomeMap: React.FC = () => {
   }, [m, camp]);
   const shown = useMemo(() => (m?.data.businesses || []).filter(b =>
     (!camp || b.c === camp) && (show === 'all' || isOpen(b.s))), [m, camp, show]);
-  const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.n, state: b.s, lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
+  const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.n, state: stagePin(b.st, b.s), lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
   const left = useMemo(() => (m?.data.businesses || []).filter(b => (!camp || b.c === camp) && isOpen(b.s)).length, [m, camp]);
 
   const open = useMemo(() => {

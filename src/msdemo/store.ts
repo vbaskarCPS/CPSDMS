@@ -67,6 +67,7 @@ const S = {
     hours: { '1': [[540, 1020]], '2': [[540, 1020]], '3': [[540, 1020]], '4': [[540, 1020]], '5': [[540, 960]] } as Hours,
   },
   threads: [] as (Thread & { last_at: string; unread: number; business_id: string })[],
+  lost: new Map<string, string>(),   // business → the lost reason
 };
 
 const OWNERS = ['Maria Lopez', 'Dev Patel', 'Jordan Lee', 'Priya Sharma', 'Tom Reyes', 'Lina Haddad', 'Marco Bianchi', 'Grace Kim', 'Omar Siddiqui', 'Hannah Wright', 'Chris Novak', 'Aisha Bello'];
@@ -254,14 +255,14 @@ function bizState(bid: string) {
   const vs = visitsOf(bid);
   const m = S.meetings.filter(x => x.business.id === bid).sort((a, b) => b.starts_at.localeCompare(a.starts_at))[0];
   const s = stateOf(bid);
-  const stage = s.state === 'closed' || m?.status === 'closed' ? 'won' : m && m.status === 'booked' ? 'booked'
+  const stage = S.lost.has(bid) || m?.status === 'not_fit' ? 'lost' : s.state === 'closed' || m?.status === 'closed' ? 'won' : m && m.status === 'booked' ? 'booked'
     : s.state === 'not_interested' || s.state === 'cant_sell' ? 'lost' : s.state === 'interested' || s.state === 'follow_up' || s.state === 'pending' ? 'pitched'
     : vs.length ? 'talked' : 'new';
   const heat = stage === 'booked' || stage === 'pitched' ? (s.state === 'interested' ? 'hot' : 'warm') : stage === 'talked' ? 'cold' : undefined;
   const a = S.answers.get(bid);
   return { stage, heat, points: vs.length * 10 + (a ? 30 : 0), why: heat ? [a ? 'Answered the deck questions' : 'Asked for information', `${vs.length} visit${vs.length === 1 ? '' : 's'}`] : [],
     meeting: m ? { id: m.id, starts_at: m.starts_at, status: m.status, host: m.host.name } : undefined, yearly: a?.proposal?.yearly,
-    decider: vs.find(v => v.contact_name)?.contact_name, last_at: vs[0]?.at, visits: vs.length, lost_reason: stage === 'lost' ? vs[0]?.notes : undefined };
+    decider: vs.find(v => v.contact_name)?.contact_name, last_at: vs[0]?.at, visits: vs.length, lost_reason: stage === 'lost' ? S.lost.get(bid) || (vs[0]?.outcome === 'not_interested' ? 'Said not interested' : vs[0]?.notes) : undefined };
 }
 function timeline(bid: string) {
   const items: { at: string; kind: string; title?: string; outcome?: string; by?: string; text?: string; who?: string; follow_up_at?: string }[] = [];
@@ -290,12 +291,12 @@ export function rpc(name: string, a: Args): unknown {
     case 'ms_rep_map': {
       const pairs: MapPair[] = seed.zones.map(z => ({ zone_id: z.id, zone_name: z.name, city: z.city, polygon: z.polygon, campaign_id: camp.id, campaign_name: camp.name, color: camp.color }));
       const businesses: MapBiz[] = allBiz().map(b => { const s = stateOf(b.id); return { id: b.id, n: b.n, a: b.a || undefined, lat: b.lat, lng: b.lng, k: b.k, p: b.p || undefined, z: b.z, c: camp.id,
-        h: b.h || undefined, lead: (b as Lead).lead || undefined, s: s.state, at: s.last_at || undefined, f: s.follow_up_at || undefined }; });
+        h: b.h || undefined, lead: (b as Lead).lead || undefined, s: s.state, st: bizState(b.id).stage, at: s.last_at || undefined, f: s.follow_up_at || undefined }; });
       return { pairs, businesses };
     }
     case 'ms_rep_zone': {
       const z = zoneById.get(str(a.p_zone)); if (!z) throw new Error('That zone isn’t yours.');
-      const businesses: RepBusiness[] = allBiz().filter(b => b.z === z.id).map(b => ({ id: b.id, name: b.n, address: b.a, lat: b.lat, lng: b.lng, kind: b.k, plaza: b.p, plaza_id: b.pid == null ? null : String(b.pid), hours: b.h, lead: (b as Lead).lead, ...stateOf(b.id) }));
+      const businesses: RepBusiness[] = allBiz().filter(b => b.z === z.id).map(b => ({ id: b.id, name: b.n, address: b.a, lat: b.lat, lng: b.lng, kind: b.k, plaza: b.p, plaza_id: b.pid == null ? null : String(b.pid), hours: b.h, lead: (b as Lead).lead, ...stateOf(b.id), stage: bizState(b.id).stage }));
       return { zone: { id: z.id, name: z.name, city: z.city, polygon: z.polygon, center: z.center }, campaign: camp, businesses };
     }
     case 'ms_rep_business': { const v = businessView(str(a.p_business)); if (!v) throw new Error('Not found'); return v; }
@@ -348,7 +349,7 @@ export function rpc(name: string, a: Args): unknown {
     case 'ms_save_deck_answers': S.answers.set(str(a.p_business), a.p_data as DeckAnswers); return null;
     case 'ms_business_state': return bizState(str(a.p_business));
     case 'ms_business_timeline': return timeline(str(a.p_business));
-    case 'ms_set_lost': return bizState(str(a.p_business));
+    case 'ms_set_lost': { const r = str(a.p_reason); if (r) S.lost.set(str(a.p_business), r); else S.lost.delete(str(a.p_business)); return bizState(str(a.p_business)); }
     case 'ms_set_do_not_knock': return null;
     case 'ms_business_set_website': return null;
     case 'ms_business_contacts_list': {

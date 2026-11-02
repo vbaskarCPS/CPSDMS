@@ -17,6 +17,13 @@ export const OUTCOMES: { key: Outcome; label: string; hint: string; color: strin
   { key: 'cant_sell', label: 'Can’t sell here', hint: 'Shut down, wrong type, head office only: comes off your list', color: '#111827' },
 ];
 export const outcomeOf = (k: string | null | undefined) => OUTCOMES.find(o => o.key === k) || null;
+/** What a rep logs at the door now. Everything else moves the stage by itself: Present (pitched), booking
+ *  onboarding (booked, and the deal), the host's outcome (won / lost). The older outcomes stay for the history. */
+export const DOOR_OUTCOMES: { key: Outcome; label: string; hint: string; color: string }[] = [
+  { key: 'come_back', label: 'No one to talk to', hint: 'Closed, or the owner wasn’t in: come back', color: '#64748b' },
+  { key: 'follow_up', label: 'Talked, follow up', hint: 'A time to come back or call, and who to ask for', color: '#f59e0b' },
+  { key: 'not_interested', label: 'Not interested', hint: 'Marks it lost, with the reason', color: '#dc2626' },
+];
 
 export const PIN: Record<PinState, { label: string; color: string }> = {
   new: { label: 'Not visited', color: '#ffffff' },
@@ -31,6 +38,34 @@ export const PIN: Record<PinState, { label: string; color: string }> = {
   cant_sell: { label: 'Can’t sell here', color: '#111827' },
 };
 export const pinOf = (s: string | null | undefined) => PIN[(s as PinState) in PIN ? (s as PinState) : 'new'];
+
+/** Pins by stage (New → Talked to → Pitched → Booked → Won / Lost), amber while a follow-up is open. */
+export type StagePin = 'new' | 'talked' | 'pitched' | 'booked' | 'won' | 'lost' | 'follow_up' | 'off';
+export const STAGE_PIN: Record<StagePin, { label: string; color: string }> = {
+  new: { label: 'New', color: '#ffffff' },
+  talked: { label: 'Talked to', color: '#94a3b8' },
+  follow_up: { label: 'Follow-up', color: '#f59e0b' },
+  pitched: { label: 'Pitched', color: '#2563eb' },
+  booked: { label: 'Onboarding booked', color: '#86efac' },
+  won: { label: 'Won', color: '#16a34a' },
+  lost: { label: 'Lost', color: '#dc2626' },
+  off: { label: 'Can’t sell here', color: '#111827' },
+};
+/** The pin for a business: its stage (from the server, when it sends one), with an open follow-up shown amber;
+ *  without a stage (an older copy on the phone), worked out from the last visit. */
+export function stagePin(stage: string | null | undefined, s: PinState): StagePin {
+  if (s === 'cant_sell') return 'off';
+  if (s === 'follow_up' && stage !== 'won' && stage !== 'lost' && stage !== 'booked') return 'follow_up';
+  if (stage && stage in STAGE_PIN) return stage as StagePin;
+  switch (s) {
+    case 'new': return 'new';
+    case 'interested': case 'rejected': return 'pitched';
+    case 'pending': return 'booked';
+    case 'closed': return 'won';
+    case 'not_interested': return 'lost';
+    default: return 'talked';
+  }
+}
 /** Still worth a knock: never visited, come back, follow-up, interested, a rejected deal, and a "not
  *  interested" from long enough ago (the campaign's retry days). */
 export const isOpen = (s: PinState) => s === 'new' || s === 'retry' || s === 'come_back' || s === 'follow_up' || s === 'interested' || s === 'rejected';
@@ -49,7 +84,7 @@ export async function repHome(): Promise<RepHome> {
 // ───────────── a zone ─────────────
 export interface RepBusiness {
   id: string; name: string; address: string | null; lat: number; lng: number; kind: string; plaza: string | null; plaza_id: string | null;
-  state: PinState; last_at: string | null; follow_up_at: string | null; visits: number; hours?: unknown; lead?: boolean;
+  state: PinState; stage?: string; last_at: string | null; follow_up_at: string | null; visits: number; hours?: unknown; lead?: boolean;
 }
 export interface RepZoneView {
   zone: { id: string; name: string; city: string | null; polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon; center: [number, number] };
@@ -219,7 +254,7 @@ export const kindLabel = (k: string) => (k || '').replace(/_/g, ' ').replace(/^.
 // ───────────── the home map (RUN_61) ─────────────
 export interface MapPair { zone_id: string; zone_name: string; city: string | null; polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon; campaign_id: string; campaign_name: string; color: string }
 /** One business on the map: short keys keep the download small. */
-export interface MapBiz { id: string; n: string; a?: string; lat: number; lng: number; k: string; p?: string; z?: string; c: string; h?: string[]; lead?: boolean; s: PinState; at?: string; f?: string }
+export interface MapBiz { id: string; n: string; a?: string; lat: number; lng: number; k: string; p?: string; z?: string; c: string; h?: string[]; lead?: boolean; s: PinState; st?: string; at?: string; f?: string }
 export interface RepMap { pairs: MapPair[]; businesses: MapBiz[] }
 export async function repMap(): Promise<RepMap> {
   const r = must(await db.rpc('ms_rep_map')) as RepMap;

@@ -9,12 +9,13 @@ import { inbox, mailWhen } from '../../lib/mail';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
-  hereNow, kindLabel, OUTCOMES, outcomeOf, photoUrls, repBusiness, repKit, shrinkPhoto, stateAfter, visitArgs, visitProblem, whenLabel,
+  DOOR_OUTCOMES, hereNow, kindLabel, outcomeOf, photoUrls, repBusiness, repKit, shrinkPhoto, stateAfter, visitArgs, visitProblem, whenLabel,
   type Kit, type LoggedVisit, type Outcome, type PinState, type RepBusinessView,
 } from '../../lib/rep';
 import {
   followUpIcs, newId, parseCard,
 } from '../../lib/repField';
+import { LOST_REASONS, setLost } from '../../lib/msPipeline';
 import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BookOnboarding } from './BookOnboarding';
@@ -48,6 +49,7 @@ export const BusinessSheet: React.FC<{
   const b = useLoad(() => repBusiness(id, campaign), [id, campaign]);
   const kit = useLoad(() => kitFor(campaign), [campaign]);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [lostWhy, setLostWhy] = useState('');
   const [notes, setNotes] = useState('');
   const [cName, setCName] = useState(''); const [cPhone, setCPhone] = useState(''); const [cEmail, setCEmail] = useState('');
   const [when, setWhen] = useState('');
@@ -109,6 +111,7 @@ export const BusinessSheet: React.FC<{
 
   const save = useCallback(async () => {
     if (!outcome || !d) return;
+    if (outcome === 'not_interested' && !lostWhy) { setError(new Error('Pick why they’re not interested.')); return; }
     const input = { outcome, notes, contact_name: cName, contact_phone: cPhone, contact_email: cEmail,
       follow_up_at: when ? new Date(when).toISOString() : null };
     const problem = visitProblem(input);
@@ -129,6 +132,8 @@ export const BusinessSheet: React.FC<{
       const o = outcomeOf(outcome)!;
       const r = await sendOrQueue({ id: client_id, rpc: 'ms_rep_log_visit', args, photos: qp, label: `${d.name}: ${o.label}`, queued_at: Date.now() });
       const res = r.data as LoggedVisit | undefined;
+      // Not interested is Lost, with the reason (when there's signal; without it the stage still reads it from the visit)
+      if (outcome === 'not_interested' && r.sent) await setLost(id, campaign, lostWhy).catch(() => undefined);
       const msg = !r.sent ? `${o.label} saved on your phone. It sends when you have signal.`
         : outcome === 'closed' ? 'Deal saved: it’s with an admin to approve.'
         : res?.far ? `${o.label} saved. ${here ? `You were ${res.distance_m} m away, so an admin will see it.` : 'Your location wasn’t available, so an admin will see it.'}`
@@ -140,7 +145,7 @@ export const BusinessSheet: React.FC<{
       } else toast(msg);
       onSaved({ business: id, outcome, state: stateAfter(outcome), here: here ? { lat: here.lat, lng: here.lng } : null, queued: !r.sent });
     } catch (e) { setError(e); } finally { setBusy(false); }
-  }, [outcome, notes, cName, cPhone, cEmail, when, photos, id, campaign, d, session, toast, onSaved]);
+  }, [outcome, lostWhy, notes, cName, cPhone, cEmail, when, photos, id, campaign, d, session, toast, onSaved]);
 
 
 
@@ -193,11 +198,19 @@ export const BusinessSheet: React.FC<{
 
       <div style={{ fontWeight: 800, marginTop: 10 }}>What happened?</div>
       <div className="v2-rep-outs">
-        {OUTCOMES.map(o => (
+        {/* the rest moves the stage by itself: Present (pitched), booking onboarding (booked, the deal), the host (won / lost) */}
+        {DOOR_OUTCOMES.map(o => (
           <button key={o.key} type="button" className={`v2-rep-out${outcome === o.key ? ' on' : ''}`} onClick={() => { setOutcome(o.key); setError(null); }} aria-pressed={outcome === o.key}>
             <b><i className="v2-rep-dot" style={{ background: o.color }} />{o.label}</b><span>{o.hint}</span>
           </button>))}
       </div>
+      {outcome === 'not_interested' && (
+        <>
+          <div style={{ fontWeight: 700, fontSize: 13.5, marginTop: 8 }}>Why? <span className="v2-mut" style={{ fontWeight: 400 }}>(marks it lost)</span></div>
+          <div className="v2-rep-kinds" style={{ marginTop: 6 }}>
+            {LOST_REASONS.map(r => <button key={r} type="button" className={`v2-rep-pill${lostWhy === r ? ' on' : ''}`} onClick={() => { setLostWhy(lostWhy === r ? '' : r); setError(null); }} aria-pressed={lostWhy === r}>{r}</button>)}
+          </div>
+        </>)}
       {outcome === 'follow_up' && (
         <Field label="Follow up on"><input className="v2-input" type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} /></Field>)}
       {(outcome === 'follow_up' || outcome === 'interested' || outcome === 'closed') && (
