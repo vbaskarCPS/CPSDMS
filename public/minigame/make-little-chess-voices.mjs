@@ -17,7 +17,7 @@ import { createInterface } from 'node:readline/promises';
 
 // A voice to suit each character (Google's descriptions of the voices in brackets).
 const VOICES = {
-  narrator: 'Leda',      // youthful, bright and high: Mr Monkey, Kiaan's own sock monkey, the host (was Sulafat, a grown-up)
+  narrator: 'Zephyr',    // bright and high: Mr Monkey, Kiaan's own sock monkey, the host (was Sulafat, a grown-up; Leda is the Pawn)
   rook: 'Alnilam',       // firm: a big sturdy castle
   knight: 'Fenrir',      // excitable: a bouncy horse
   king: 'Algenib',       // gravelly: a big jolly king
