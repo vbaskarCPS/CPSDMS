@@ -42,6 +42,8 @@ import { Cities } from './features/mainstreet/Cities';
 import { WorkerHome } from './features/worker/WorkerHome';
 import { RepApp } from './features/rep/RepApp';
 import { Deals as MsDeals } from './features/mainstreet/Deals';
+import { Meetings as MsMeetings } from './features/mainstreet/Meetings';
+import { HostApp } from './features/meetings/HostApp';
 import { MailApp } from './features/mail/MailApp';
 import { Unsubscribe } from './features/mail/Unsubscribe';
 import { Loading } from './ui';
@@ -131,6 +133,9 @@ const V2Routes: React.FC = () => (
     <Route path="mainstreet/reps" element={<Guard perm="mainstreet_admin"><Reps /></Guard>} />
     <Route path="mainstreet/dashboard" element={<Guard perm="mainstreet_admin"><MsDashboard /></Guard>} />
     <Route path="mainstreet/deals" element={<Guard perm="mainstreet_admin"><MsDeals /></Guard>} />
+    <Route path="mainstreet/meetings" element={<Guard perm="mainstreet_admin"><MsMeetings /></Guard>} />
+    {/* an onboarding host: their calls and hours (MainstreetAI › Meetings adds hosts) */}
+    <Route path="host" element={<Guard><HostApp /></Guard>} />
     <Route path="email" element={<Guard><div className="v2-staff-mail"><MailApp staff /></div></Guard>} />
     <Route path="mainstreet/inbox" element={<Guard perm="mainstreet_admin"><div className="v2-ms-mail"><MailApp admin /></div></Guard>} />
     <Route path="account" element={<Guard><MyAccount /></Guard>} />

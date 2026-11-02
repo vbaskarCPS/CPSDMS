@@ -19,6 +19,7 @@ import {
 } from '../../lib/repField';
 import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
+import { BookOnboarding } from './BookOnboarding';
 import { download, useRep } from './repContext';
 
 /** What's known from the map, for when the business can't be loaded (no signal). */
@@ -55,6 +56,8 @@ export const BusinessSheet: React.FC<{
   const [mailTick, setMailTick] = useState(0);
   const mail = useLoad(() => inbox('inbox', undefined, id).catch(() => []), [id, mailTick]);
   const [presenting, setPresenting] = useState(false);
+  const [booking, setBooking] = useState(false);
+  const booked = React.useRef(false);
   useEffect(() => () => photos.forEach(p => URL.revokeObjectURL(p.url)), []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const d: (RepBusinessView | (SheetFallback & { phone?: null; website?: null; plaza?: null; visits: []; sends: [] })) | null =
@@ -174,7 +177,15 @@ export const BusinessSheet: React.FC<{
       {pitch === 'kit' && <KitPanel kit={kit.data} error={kit.error} />}
       {pitch === 'share' && <SendInfo kit={kit.data} error={kit.error} business={d.name} businessId={id} campaign={campaign}
         phone={cPhone || d.phone || ''} email={cEmail || lastEmail(d)} contact={cName} onEmail={() => setComposing(emailInit())} />}
-      {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref} onClose={() => setPresenting(false)} />}
+      {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref} onClose={() => setPresenting(false)} onBook={() => setBooking(true)} />}
+      {booking && <BookOnboarding campaign={campaign} business={id} businessName={d.name}
+        owner={{ name: cName, phone: cPhone || d.phone || '', email: cEmail || lastEmail(d) }}
+        onBooked={() => { booked.current = true; }}
+        onClose={() => {
+          setBooking(false);
+          // once booked, the visit is saved as a closed deal: close the deck and the business like any saved visit
+          if (booked.current) { booked.current = false; setPresenting(false); toast('Onboarding booked. The deal is with an admin to approve.'); onSaved({ business: id, outcome: 'closed', state: stateAfter('closed'), here: null, queued: false }); }
+        }} />}
       {composing && <Composer init={composing} onClose={() => setComposing(null)} onSent={() => { setComposing(null); setMailTick(t => t + 1); toast('Email sent.'); }} />}
 
       {!!mail.data?.length && (
@@ -316,16 +327,21 @@ const SendInfo: React.FC<{ kit: Kit | null; error: unknown; business: string; bu
   };
 
 // ───────────── present: the campaign's deck, full screen ─────────────
-const Presenter: React.FC<{ url: string; code: string; onClose: () => void }> = ({ url, code, onClose }) => {
+const Presenter: React.FC<{ url: string; code: string; onClose: () => void; onBook: () => void }> = ({ url, code, onClose, onBook }) => {
   const src = `${url}#embed=1&ref=${encodeURIComponent(code)}`;
+  const frame = React.useRef<HTMLIFrameElement>(null);
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', esc);
-    return () => window.removeEventListener('keydown', esc);
-  }, [onClose]);
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('.v2-rep-book')) onClose(); };
+    // the deck's last slide: "Book onboarding" (only from this deck's frame)
+    const msg = (e: MessageEvent) => {
+      if (e.source === frame.current?.contentWindow && (e.data as { type?: string } | null)?.type === 'ms-book-onboarding') onBook();
+    };
+    window.addEventListener('keydown', esc); window.addEventListener('message', msg);
+    return () => { window.removeEventListener('keydown', esc); window.removeEventListener('message', msg); };
+  }, [onClose, onBook]);
   return (
     <div className="v2-rep-present" role="dialog" aria-label="Presentation">
-      <iframe src={src} title="Presentation" />
+      <iframe ref={frame} src={src} title="Presentation" />
       <button type="button" className="close" onClick={onClose} aria-label="Close the presentation"><X size={20} /></button>
     </div>
   );

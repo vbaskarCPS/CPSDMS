@@ -167,6 +167,8 @@ export interface PipelineDeal {
   business: { id: string; name: string; address: string | null; kind: string; phone: string | null };
   campaign: string; color: string; zone?: string; rep: string; rep_id: string;
   notes?: string; contact_name?: string; contact_phone?: string; contact_email?: string; far: boolean; distance_m?: number;
+  /** the onboarding call booked from the deck, when there is one */
+  meeting?: { id: string; starts_at: string; status: 'booked' | 'closed' | 'no_show' | 'not_fit' | 'cancelled'; host: string; outcome_note: string | null } | null;
 }
 export async function dealsList(status: 'pending' | 'approved' | 'rejected'): Promise<PipelineDeal[]> {
   return (must(await db.rpc('ms_deals_list', { p_status: status })) as PipelineDeal[]) || [];

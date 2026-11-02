@@ -7,6 +7,7 @@ import { Check, GitMerge, MapPin, Trash2, X } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { dealPhotos, decideDeal, dealsList, flagsList, kindLabel, leadsList, photoUrls, resolveFlag, resolveLead, whenLabel, type Flag, type Lead, type PipelineDeal } from '../../lib/rep';
 import { Btn, ErrorBox, Loading, Tabs, Tag } from '../../ui';
+import { STATUS_LABEL, STATUS_TONE, dayLabel, timeLabel } from '../../lib/meetings';
 
 type View = 'pending' | 'approved' | 'rejected' | 'flags' | 'leads';
 
@@ -70,6 +71,10 @@ const DealList: React.FC<{ list: PipelineDeal[]; view: View; onDone: () => void 
             <Where far={d.far} distance_m={d.distance_m} />
             {(d.contact_name || d.contact_phone || d.contact_email) && <span>{[d.contact_name, d.contact_phone, d.contact_email].filter(Boolean).join(' · ')}</span>}
           </div>
+          {d.meeting && <div className="v2-row v2-small" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+            <Tag tone={d.meeting.status === 'booked' ? 'v' : STATUS_TONE[d.meeting.status]}>{d.meeting.status === 'booked' ? 'Onboarding booked' : `Onboarding: ${STATUS_LABEL[d.meeting.status]}`}</Tag>
+            <span>{dayLabel(d.meeting.starts_at)} at {timeLabel(d.meeting.starts_at)} with {d.meeting.host}{d.meeting.outcome_note ? ` · ${d.meeting.outcome_note}` : ''}</span>
+          </div>}
           {d.notes && <div className="v2-small" style={{ marginTop: 6 }}>“{d.notes}”</div>}
           <DealPhotos id={d.id} />
           {d.status !== 'pending' && <div className="v2-small v2-mut" style={{ marginTop: 6 }}>
