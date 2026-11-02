@@ -64,7 +64,7 @@ export const Followups: React.FC = () => {
             <div key={i} className="v2-fu-step">
               <label className="day">Day <input className="v2-input" type="number" min={0} max={60} value={s.day} aria-label={`Step ${i + 1}: days after the first visit`}
                 onChange={e => setSteps(ss => ss.map((x, j) => (j === i ? { ...x, day: Math.max(0, Math.min(60, Number(e.target.value) || 0)) } : x)))} /></label>
-              <textarea className="v2-input" rows={2} value={s.purpose} aria-label={`Step ${i + 1}: what it's for`}
+              <textarea className="v2-input" rows={3} value={s.purpose} aria-label={`Step ${i + 1}: what it's for`}
                 onChange={e => setSteps(ss => ss.map((x, j) => (j === i ? { ...x, purpose: e.target.value } : x)))} />
               {steps.length > 1 && <button type="button" className="v2-rep-x" aria-label="Remove this step" onClick={() => setSteps(ss => ss.filter((_, j) => j !== i))}><X size={16} /></button>}
             </div>))}

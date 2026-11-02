@@ -697,3 +697,8 @@
 .v2-fu-step .day .v2-input { width: 64px; }
 .v2-fu-step textarea { flex: 1; min-width: 0; }
 @media (max-width: 520px) { .v2-fu-step { flex-wrap: wrap; } .v2-fu-step textarea { flex-basis: 100%; } }
+@media (max-width: 560px) {
+  .v2-split-list .r { flex-wrap: wrap; }
+  .v2-split-list .r .t { flex-basis: calc(100% - 30px); }
+  .v2-split-list .v2-sel { max-width: none; flex: 1 0 100%; margin-left: 24px; }
+}
