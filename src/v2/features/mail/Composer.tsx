@@ -28,6 +28,7 @@ export interface ComposeInit {
   staff?: boolean;                   // a manager's own mailbox (staff email): contacts, sent as them
   mailbox_id?: string | null;
   attachments?: Attachment[];        // forwarded files
+  autoWrite?: string;                // Claude drafts it right away from this ask (a follow-up), unless a draft is saved
 }
 
 // everyone with a staff mailbox, loaded once per visit
@@ -140,6 +141,13 @@ export const Composer: React.FC<{ init: ComposeInit; docked?: boolean; onClose: 
     } catch (e) { setError(e instanceof Error ? e.message : 'AI couldn’t write it.'); }
     finally { setBusy(null); }
   };
+  // a follow-up: Claude drafts it as soon as the editor is ready (once; a saved draft wins)
+  const autoDone = useRef(false);
+  useEffect(() => {
+    if (!editor || autoDone.current || !init.autoWrite || saved?.html) return;
+    autoDone.current = true;
+    write(init.autoWrite);
+  }, [editor]);   // eslint-disable-line react-hooks/exhaustive-deps
   const rewrite = async (how: string) => {
     if (!editor || editor.isEmpty) { setError('Write something first, or use Write with AI.'); return; }
     setBusy('ai'); setError(null); setRewriteOpen(false);

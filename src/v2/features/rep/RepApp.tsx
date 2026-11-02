@@ -8,10 +8,11 @@ import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, 
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
-  hoursLabel, isOpen, kindLabel, money, pinOf, repBoard, repFollowups, repHome, repNumbers, repZone, walkOrder, whenLabel,
+  hereNow, hoursLabel, isOpen, kindLabel, money, pinOf, repBoard, repFollowups, repHome, repNumbers, repZone, walkOrder, whenLabel,
   type FollowUp, type RepBusiness,
 } from '../../lib/rep';
-import { followUpIcs, openAt } from '../../lib/repField';
+import { followUpIcs, metres, openAt } from '../../lib/repField';
+import { cacheGet } from '../../lib/repQueue';
 import { drop } from '../../lib/repQueue';
 import { inboxCounts } from '../../lib/mail';
 import { MailApp } from '../mail/MailApp';
@@ -19,6 +20,7 @@ import { PushToggle } from '../mail/PushToggle';
 import { ErrorBox, Loading } from '../../ui';
 import { MsLogo, MsTab } from '../../ui/MsLogo';
 import { BusinessSheet } from './BusinessSheet';
+import { FollowupEmails } from './FollowupEmails';
 import { HomeMap } from './HomeMap';
 import { RepMapView } from './RepMapView';
 import { download, RepProvider, useRep } from './repContext';
@@ -180,6 +182,30 @@ const Followups: React.FC = () => {
   const f = useLoad(() => repFollowups(), []);
   const [perm, setPerm] = useState(() => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission));
   const groups: { key: FollowUp['when']; label: string }[] = [{ key: 'overdue', label: 'Overdue' }, { key: 'today', label: 'Today' }, { key: 'later', label: 'Coming up' }];
+  // walking order: nearest first from where the rep stands, then nearest to that, and so on (places from the map on this phone)
+  const [walk, setWalk] = useState<{ here: { lat: number; lng: number }; at: Record<string, { lat: number; lng: number }> } | null>(null);
+  const [walking, setWalking] = useState(false);
+  const toggleWalk = async () => {
+    if (walk) { setWalk(null); return; }
+    setWalking(true);
+    const [here, cached] = await Promise.all([hereNow(8000), cacheGet<{ businesses: { id: string; lat: number; lng: number }[] }>('map')]);
+    setWalking(false);
+    if (!here) return;
+    const at: Record<string, { lat: number; lng: number }> = {};
+    for (const b of cached?.data.businesses || []) at[b.id] = { lat: b.lat, lng: b.lng };
+    setWalk({ here, at });
+  };
+  const order = (xs: FollowUp[]): FollowUp[] => {
+    if (!walk) return xs;
+    const left = xs.filter(x => walk.at[x.business_id]); const out: FollowUp[] = [];
+    let from = walk.here;
+    while (left.length) {
+      let k = 0;
+      for (let i = 1; i < left.length; i++) if (metres(from, walk.at[left[i].business_id]) < metres(from, walk.at[left[k].business_id])) k = i;
+      const [n] = left.splice(k, 1); out.push(n); from = walk.at[n.business_id];
+    }
+    return [...out, ...xs.filter(x => !walk.at[x.business_id])];
+  };
   const ics = (x: FollowUp) => download(`follow-up-${x.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.ics`,
     followUpIcs({ uid: `${x.business_id}-${x.follow_up_at}`, title: `Follow up: ${x.name}`, at: x.follow_up_at, where: x.address,
       notes: [x.contact_name && `Ask for ${x.contact_name}`, x.contact_phone, x.notes].filter(Boolean).join('\n') }));
@@ -190,10 +216,16 @@ const Followups: React.FC = () => {
         <button type="button" className="v2-rep-zone v2-rep-ask" onClick={async () => { try { setPerm(await Notification.requestPermission()); } catch { /* no */ } }}>
           <Bell size={18} /><div><b>Remind me on this phone</b><div className="v2-small v2-mut">A reminder 10 minutes before each follow-up, while MainstreetAI is open.</div></div>
         </button>)}
+      <FollowupEmails />
       <ErrorBox error={f.error} />
       {f.loading && !f.data ? <Loading /> : !f.data?.length ? <div className="v2-rep-zone v2-mut">No follow-ups. When a business asks you to come back, log a Follow-up and it shows here.</div> : null}
+      {!!f.data?.length && (
+        <div className="v2-rep-row" style={{ margin: '4px 0 0' }}>
+          <span className="v2-small v2-mut">{walk ? 'In walking order from where you are' : 'By time'}</span>
+          <button type="button" className={`v2-rep-mini${walking ? ' busy' : ''}`} onClick={toggleWalk}>{walk ? 'By time' : 'Walking order'}</button>
+        </div>)}
       {groups.map(g => {
-        const list = (f.data || []).filter(x => x.when === g.key);
+        const list = order((f.data || []).filter(x => x.when === g.key));
         if (!list.length) return null;
         return (
           <div key={g.key}>

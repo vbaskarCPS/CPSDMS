@@ -25,7 +25,9 @@ function boundsOf(zones: MapZone[], pins: MapPin[]): mapboxgl.LngLatBounds | nul
 export const RepMapView = React.forwardRef<RepMapHandle, {
   zones: MapZone[]; pins: MapPin[]; onPick: (id: string) => void; onMapTap?: ((p: { lat: number; lng: number }) => void) | null;
   fitKey: string; showCounts?: boolean; children?: React.ReactNode;
-}>(({ zones, pins, onPick, onMapTap, fitKey, showCounts = true, children }, ref) => {
+  /** a road zone's roads: properties.walked yes | partly | no */
+  roads?: GeoJSON.FeatureCollection | null;
+}>(({ zones, pins, onPick, onMapTap, fitKey, showCounts = true, children, roads }, ref) => {
   const box = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
   const [ready, setReady] = useState(false);
@@ -53,6 +55,10 @@ export const RepMapView = React.forwardRef<RepMapHandle, {
         m.addSource('rep-zone-label', { type: 'geojson', data: EMPTY });   // apart, so a font that won't load can't hide the outlines
         m.addLayer({ id: 'rep-zone-fill', type: 'fill', source: 'rep-zone', paint: { 'fill-color': ['get', 'color'] as never, 'fill-opacity': 0.06 } });
         m.addLayer({ id: 'rep-zone-line', type: 'line', source: 'rep-zone', paint: { 'line-color': ['get', 'color'] as never, 'line-width': 3 } });
+        m.addSource('rep-roads', { type: 'geojson', data: EMPTY });
+        m.addLayer({ id: 'rep-roads', type: 'line', source: 'rep-roads', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: {
+          'line-color': ['match', ['get', 'walked'], 'yes', '#0f766e', 'partly', '#5eead4', '#94a3b8'] as never,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2, 16, 6], 'line-opacity': 0.85 } });
         m.addLayer({ id: 'rep-zone-name', type: 'symbol', source: 'rep-zone-label', maxzoom: 14.5, layout: {
           'text-field': ['get', 'name'], 'text-size': 13, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'] },
           paint: { 'text-color': ['get', 'color'] as never, 'text-halo-color': '#fff', 'text-halo-width': 2 } });
@@ -97,6 +103,11 @@ export const RepMapView = React.forwardRef<RepMapHandle, {
       if (b) { m.fitBounds(b, { padding: 36, duration: 0, maxZoom: 16 }); fitted.current = fitKey; }
     }
   }, [ready, zones, fitKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const m = map.current; if (!ready || !m) return;
+    (m.getSource('rep-roads') as mapboxgl.GeoJSONSource | undefined)?.setData(roads || EMPTY);
+  }, [ready, roads]);
 
   useEffect(() => {
     const m = map.current; if (!ready || !m) return;

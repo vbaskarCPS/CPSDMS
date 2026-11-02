@@ -9,14 +9,16 @@ import { dealPhotos, decideDeal, dealsList, flagsList, kindLabel, leadsList, pho
 import { Btn, ErrorBox, Loading, Tabs, Tag } from '../../ui';
 import { STATUS_LABEL, STATUS_TONE, dayLabel, timeLabel } from '../../lib/meetings';
 import { AnswersPanel } from '../meetings/shared';
+import { dnkLabel, doNotKnockList, setDoNotKnock, type DnkRow } from '../../lib/msField';
 import '../meetings/meetings.css';
 
-type View = 'pending' | 'approved' | 'rejected' | 'flags' | 'leads';
+type View = 'pending' | 'approved' | 'rejected' | 'flags' | 'leads' | 'dnk';
 
 export const Deals: React.FC = () => {
   const [view, setView] = useState<View>('pending');
   const [tick, setTick] = useState(0);
-  const deals = useLoad(() => (view === 'flags' || view === 'leads' ? Promise.resolve([] as PipelineDeal[]) : dealsList(view)), [view, tick]);
+  const deals = useLoad(() => (view === 'flags' || view === 'leads' || view === 'dnk' ? Promise.resolve([] as PipelineDeal[]) : dealsList(view)), [view, tick]);
+  const dnk = useLoad(() => doNotKnockList(), [tick]);
   const leads = useLoad(() => leadsList(), [tick]);
   const flags = useLoad(() => flagsList(), [tick]);
   const pending = useLoad(() => dealsList('pending').then(d => d.length), [tick]);
@@ -29,9 +31,11 @@ export const Deals: React.FC = () => {
         { key: 'approved', label: 'Approved' }, { key: 'rejected', label: 'Rejected' },
         { key: 'flags', label: 'Can’t sell here', count: flags.data?.length },
         { key: 'leads', label: 'Added by reps', count: leads.data?.length },
+        { key: 'dnk', label: 'Do not knock', count: dnk.data?.length },
       ]} />
       <ErrorBox error={view === 'flags' ? flags.error : view === 'leads' ? leads.error : deals.error} />
-      {view === 'leads' ? (leads.loading && !leads.data ? <Loading /> : <LeadList list={leads.data || []} onDone={refresh} />)
+      {view === 'dnk' ? (dnk.loading && !dnk.data ? <Loading /> : <DnkList list={dnk.data || []} onDone={refresh} />)
+        : view === 'leads' ? (leads.loading && !leads.data ? <Loading /> : <LeadList list={leads.data || []} onDone={refresh} />)
         : view === 'flags'
         ? (flags.loading && !flags.data ? <Loading /> : <FlagList list={flags.data || []} onDone={refresh} />)
         : (deals.loading && !deals.data ? <Loading /> : <DealList list={deals.data || []} view={view} onDone={refresh} />)}
@@ -172,6 +176,33 @@ const LeadList: React.FC<{ list: Lead[]; onDone: () => void }> = ({ list, onDone
           <div className="v2-row" style={{ gap: 8, marginTop: 10 }}>
             <Btn kind="g" icon={Check} onClick={() => act(l.id, 'keep')} disabled={busy === l.id}>It’s new: keep it</Btn>
             <Btn kind="o" icon={Trash2} onClick={() => act(l.id, 'remove')} disabled={busy === l.id}>Not a business: remove</Btn>
+          </div>
+        </div>))}
+    </>
+  );
+};
+
+// do not knock: off every rep's list until it's put back here
+const DnkList: React.FC<{ list: DnkRow[]; onDone: () => void }> = ({ list, onDone }) => {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const back = async (id: string) => {
+    setBusy(id); setError(null);
+    try { await setDoNotKnock(id, null, null); onDone(); } catch (e) { setError(e); } finally { setBusy(null); }
+  };
+  if (!list.length) return <div className="v2-card" style={{ padding: 30, textAlign: 'center' }}><div className="v2-note">None. When a rep marks a business do not knock, it shows here.</div></div>;
+  return (
+    <>
+      <ErrorBox error={error} />
+      {list.map(r => (
+        <div key={r.id} className="v2-card" style={{ padding: 14, marginBottom: 10 }}>
+          <div className="v2-row" style={{ gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 800, fontSize: 15.5 }}>{r.name}</div>
+              <div className="v2-small v2-mut">{r.address || ''}</div>
+              <div className="v2-small" style={{ marginTop: 4 }}><Tag tone="r">{dnkLabel(r.reason)}</Tag> {r.by ? `${r.by} · ` : ''}{whenLabel(r.at)}</div>
+            </div>
+            <Btn kind="o" size="sm" disabled={busy === r.id} onClick={() => back(r.id)}>Put it back on the lists</Btn>
           </div>
         </div>))}
     </>
