@@ -77,7 +77,7 @@ export async function runToReady(runId: string, onStep: (s: StepState) => void, 
 /** One line for the progress note. */
 export function stepLabel(s: StepState | null): string {
   if (!s) return 'Setting up…';
-  if (s.stage === 'growing') return `Growing ${s.zones} zones from where the businesses are…`;
+  if (s.stage === 'growing') return `Growing ${s.zones} zones from the densest blocks…`;
   if (s.stage === 'leftovers') return 'Placing the last blocks…';
   if (s.stage === 'balancing') return `Evening out the zones (${s.moves} blocks moved)…`;
   if (s.stage === 'shaping') return 'Drawing the outlines…';
@@ -94,7 +94,7 @@ export function proposalFeatures(p: ProposedZone[], color: string, picked: numbe
     shapes: { type: 'FeatureCollection', features: p.map(z => ({ type: 'Feature', geometry: z.polygon, properties: { key: z.key, color, sel: picked.includes(z.key) ? 1 : 0 } })) },
     labels: { type: 'FeatureCollection', features: p.map(z => {
       const pts = coordsOfAny(z.polygon); const lng = pts.reduce((s, c) => s + c[0], 0) / pts.length, lat = pts.reduce((s, c) => s + c[1], 0) / pts.length;
-      return { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] }, properties: { key: z.key, label: `${z.name} · ${z.count}` } };
+      return { type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] }, properties: { key: z.key, label: z.name } };
     }) },
   };
 }

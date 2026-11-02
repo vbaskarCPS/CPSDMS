@@ -53,6 +53,10 @@ export async function setCityStatus(cityId: string, status: City['status'], note
   must(await db.rpc('ms_city_set_status', { p_city: cityId, p_status: status, p_note: note }));
 }
 export async function replaceLines(cityId: string, lines: LineRow[]): Promise<number> { return must(await db.rpc('ms_city_replace_lines', { p_city: cityId, p_lines: lines })) as number; }
+/** The heavy end of a build (blocks, density, which blocks touch) runs in the background, a minute at a time. */
+export interface CityJob { stage: 'blocks' | 'density' | 'adjacency' | 'done' | 'failed'; note: string | null; blocks: number; scored: number; updated_at: string }
+export async function queueCityBuild(cityId: string): Promise<CityJob> { return must(await db.rpc('ms_city_queue_build', { p_city: cityId })) as CityJob; }
+export async function cityJob(cityId: string): Promise<CityJob | null> { return (must(await db.rpc('ms_city_job', { p_city: cityId })) as CityJob | null) || null; }
 export async function makeBlocks(cityId: string): Promise<number> { return must(await db.rpc('ms_city_make_blocks', { p_city: cityId })) as number; }
 export async function replacePlazas(cityId: string, plazas: PlazaRow[]): Promise<number> { return must(await db.rpc('ms_city_replace_plazas', { p_city: cityId, p_plazas: plazas })) as number; }
 export async function upsertBusinesses(cityId: string, rows: BusinessRow[]): Promise<number> {

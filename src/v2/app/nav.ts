@@ -4,7 +4,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Map, BookOpen, CalendarCheck, Phone, Shield, Calendar, FileText, SlidersHorizontal, UserPlus, Contact, AlertCircle,
-  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck, BadgeCheck, Mail, Send, Split, Columns3,
+  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck, BadgeCheck, Mail, Send, Columns3,
 } from 'lucide-react';
 import type { ColorName } from '../ui';
 import type { Permission } from '../lib/permissions';
@@ -58,7 +58,6 @@ export const COMPONENTS: Component[] = [
   { key: 'ms', label: 'MainstreetAI', icon: Store, color: 'teal', perm: 'mainstreet_admin', home: '/app/mainstreet/zones', tabs: true, brand: 'MainstreetAI',
     blurb: 'Business door-knocking: zones, campaigns, reps and the dashboard', subs: [
     { key: 'zones', label: 'Zones', icon: Hexagon, color: 'teal', path: '/app/mainstreet/zones', ready: true },
-    { key: 'split', label: 'Split', icon: Split, color: 'amber', path: '/app/mainstreet/split', ready: true },
     { key: 'cities', label: 'Cities', icon: Building2, color: 'sky', path: '/app/mainstreet/cities', ready: true },
     { key: 'campaigns', label: 'Campaigns', icon: Megaphone, color: 'rose', path: '/app/mainstreet/campaigns', ready: true },
     { key: 'reps', label: 'Users', icon: UserCheck, color: 'blue', path: '/app/mainstreet/reps', ready: true },
