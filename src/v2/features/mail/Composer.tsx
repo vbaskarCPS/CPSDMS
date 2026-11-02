@@ -23,7 +23,7 @@ export interface ComposeInit {
   title?: string;                    // "New message", "Reply"
   thread_id?: string | null; business_id?: string | null; campaign_id?: string | null;
   to?: string[]; cc?: string[]; subject?: string; html?: string;
-  context?: string;                  // a line under the title: "Ace Plumbing · Taxify"
+  context?: string;                  // a line under the title: "Ace Plumbing · Taxifi"
   quick?: string[];                  // suggested AI asks
   staff?: boolean;                   // a manager's own mailbox (staff email): contacts, sent as them
   mailbox_id?: string | null;
