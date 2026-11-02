@@ -653,3 +653,17 @@
 .v2-cards-totals .v2-card:nth-child(2) { border-left-color: #b91c1c; }
 .v2-cards-totals .v2-card:nth-child(3), .v2-cards-totals .v2-card:nth-child(4) { border-left-color: #b45309; }
 .v2-cards-double { background: rgba(185, 28, 28, 0.06); }
+
+/* MainstreetAI › Split a city */
+.v2-split { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.v2-split > .v2-ms-mapcard { flex: 999 1 560px; min-width: 0; }
+.v2-split-side { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.v2-split-list { display: flex; flex-direction: column; }
+.v2-split-list .r { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); width: 100%; text-align: left; background: none; border-left: 0; border-right: 0; border-bottom: 0; color: inherit; font: inherit; }
+.v2-split-list .r:first-child { border-top: 0; }
+.v2-split-list .r.btn { cursor: pointer; }
+.v2-split-list .r.on { background: var(--hover, #f9fafb); }
+.v2-split-list .r > i { width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0; }
+.v2-split-list .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.v2-split-list .t .v2-input { padding: 5px 8px; font-weight: 700; }
+.v2-split-list .v2-sel { width: auto; max-width: 150px; }

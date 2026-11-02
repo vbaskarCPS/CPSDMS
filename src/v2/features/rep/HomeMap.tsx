@@ -11,6 +11,7 @@ import {
 import { distLabel, nearest, openAt } from '../../lib/repField';
 import { BUSINESS_KINDS, kindLabel } from '../../lib/msCity';
 import { mapPlaces, nearbyAdded, type MapPlace, type NearbyBiz } from '../../lib/msField';
+import { km, zoneWalked } from '../../lib/msSplit';
 import { cacheGet, cacheSet } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BusinessSheet, type SavedVisit } from './BusinessSheet';
@@ -50,6 +51,20 @@ export const HomeMap: React.FC = () => {
     for (const p of m?.data.pairs || []) if (!camp || p.campaign_id === camp) if (!seen.has(p.zone_id)) seen.set(p.zone_id, { id: p.zone_id, name: p.zone_name, color: p.color, polygon: p.polygon });
     return [...seen.values()];
   }, [m, camp]);
+  // road zones: each road walked, partly walked or not yet (from where the phone was during the day)
+  const [walked, setWalked] = useState<{ roads: GeoJSON.FeatureCollection; total: number; done: number } | null>(null);
+  const zoneKey = zones.map(z => z.id).join(',');
+  useEffect(() => {
+    if (!zoneKey || m?.cached) { setWalked(null); return; }
+    let live = true;
+    Promise.all(zoneKey.split(',').map(z => zoneWalked(z).catch(() => null))).then(ws => {
+      if (!live) return;
+      const got = ws.filter((w): w is NonNullable<typeof w> => !!w && w.total_m > 0);
+      setWalked(got.length ? { roads: { type: 'FeatureCollection', features: got.flatMap(w => w.roads) },
+        total: got.reduce((t, w) => t + w.total_m, 0), done: got.reduce((t, w) => t + w.walked_m, 0) } : null);
+    });
+    return () => { live = false; };
+  }, [zoneKey, mapTick, m?.cached]);
   const shown = useMemo(() => (m?.data.businesses || []).filter(b =>
     (!camp || b.c === camp) && (show === 'all' || isOpen(b.s)) && (!openNow || openAt(b.h, clock) !== false)), [m, camp, show, openNow, clock]);
   const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.n, state: b.s, lat: b.lat, lng: b.lng, lead: b.lead,
@@ -98,6 +113,7 @@ export const HomeMap: React.FC = () => {
           <button type="button" className={show === 'all' ? 'on' : ''} onClick={() => setShow('all')}>All</button>
         </div>
         <button type="button" className={`v2-rep-pill${openNow ? ' on' : ''}`} onClick={() => setOpenNow(v => !v)} aria-pressed={openNow}>Open now</button>
+        {walked && <span className="v2-rep-pill" title="Your main roads walked so far">Walked {km(walked.done)} of {km(walked.total)}</span>}
         {campaigns.length > 1 && campaigns.map(c => (
           <button key={c.id} type="button" className={`v2-rep-pill${camp === c.id ? ' on' : ''}`} onClick={() => setCamp(camp === c.id ? null : c.id)}>
             <i style={{ background: c.color }} />{c.name}</button>))}
@@ -108,7 +124,7 @@ export const HomeMap: React.FC = () => {
         m.data.pairs.length === 0 && m.data.businesses.length === 0
           ? <div className="v2-rep-body"><div className="v2-rep-zone"><b>No zones yet.</b><div className="v2-mut v2-small">Your admin assigns your zones. They’ll show here.</div></div></div>
           : (
-            <RepMapView ref={mapRef} zones={zones} pins={pins} fitKey={zones.map(z => z.id).join(',')} showCounts={!adding?.pick}
+            <RepMapView ref={mapRef} zones={zones} pins={pins} roads={walked?.roads} fitKey={zones.map(z => z.id).join(',')} showCounts={!adding?.pick}
               onPick={id => setOpen(id)}
               onMapTap={adding?.pick ? p => setAdding({ at: p }) : null}>
               {adding?.pick
