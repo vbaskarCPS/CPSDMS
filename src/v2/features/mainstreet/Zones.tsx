@@ -4,14 +4,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Map as MbMap, MapMouseEvent } from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { Archive, ArchiveRestore, Check, Pencil, Plus, Search, Trash2, Undo2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Pencil, Plus, Search, Sparkles, Trash2, Undo2, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useLoad } from '../../lib/data';
 import {
   acceptRun, assignRep, closeRing, runToReady, stepLabel, type StepState, deleteZone, discardRun, filterZones, generateZones, listCampaigns, listReps, listRuns, listZones, mergeProposed, placeAt, placeLabel,
   polygonProblem, proposalFeatures, saveZone, setZoneCampaigns, setZoneStatus, zoneColor, zoneFeatures, type Zone, type ZoneFilter, type ZoneRun,
 } from '../../lib/mainstreet';
-import { listCampaignCategories, listCities, type City } from '../../lib/msCity';
+import { listCities, type City } from '../../lib/msCity';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 import { coordsOf, createZonesMap, drawFeatures, fit, removeMap, setSource } from './msMap';
 
@@ -183,8 +183,7 @@ export const Zones: React.FC = () => {
         <span className="v2-spacer" />
         <span className="v2-mut v2-small">{all.filter(z => z.status === 'active').length} active · {all.filter(z => z.status === 'active' && z.campaigns.every(c => !c.rep_id)).length} without a rep</span>
         {!draft && !review && <Btn kind="o" icon={Plus} onClick={() => startDraw(null)}>Draw a zone</Btn>}
-        {/* "Generate zones" (balanced by preloaded businesses) is parked: zones come from Split now. GenerateModal stays below. */}
-        {!draft && !review && <Link to="/app/mainstreet/split" className="v2-btn">Split a city</Link>}
+        {!draft && !review && <Btn icon={Sparkles} onClick={() => setGenOpen(true)}>Generate zones</Btn>}
       </div>
       <div className="v2-row" style={{ marginBottom: 12 }}>
         <button className={`v2-chip${filter === 'all' ? ' on' : ''}`} onClick={() => setFilter('all')}>All</button>
@@ -233,7 +232,7 @@ export const Zones: React.FC = () => {
               </div>
               <div className="v2-mut v2-small" style={{ marginBottom: 12 }}>
                 {placeLabel(selected)} · {selected.frozen_at ? 'generated' : 'drawn'} {new Date(selected.created_at).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}
-                {selected.business_count != null && <> · <b>{selected.business_count}</b> businesses</>}
+                {selected.business_count != null && <> · density <b>{selected.business_count}</b></>}
                 {selected.frozen_at && <> · <Tag tone="b">Frozen</Tag></>}
               </div>
 
@@ -277,7 +276,7 @@ export const Zones: React.FC = () => {
                 <div className="v2-note" style={{ padding: 16 }}>{all.length ? 'No zones match.' : 'No zones yet. Draw the first one on the map.'}</div>
               ) : (
                 <div className="v2-table-wrap"><table className="v2-table">
-                  <thead><tr><th>Zone</th><th>City / Area</th><th>Businesses</th><th>Campaigns · rep</th><th>Created</th></tr></thead>
+                  <thead><tr><th>Zone</th><th>City / Area</th><th>Density</th><th>Campaigns · rep</th><th>Created</th></tr></thead>
                   <tbody>
                     {shown.map(z => (
                       <tr key={z.id} className="click" onClick={() => setPicked(z.id)}>
@@ -320,8 +319,6 @@ const GenerateModal: React.FC<{ cities: City[]; campaigns: { id: string; name: s
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<unknown>(null);
     const [step, setStep] = useState<StepState | null>(null);
-    const cats = useLoad(listCampaignCategories, []);
-    const hasCats = !!(cats.data || []).some(c => c.campaign_id === campaignId);
     const city = built.find(c => c.id === cityId);
     const go = async () => {
       if (!city) return;
@@ -336,15 +333,15 @@ const GenerateModal: React.FC<{ cities: City[]; campaigns: { id: string; name: s
       } catch (e) { setError(e); } finally { setBusy(false); }
     };
     return (
-      <Modal title="Generate zones" onClose={onClose} footer={<><Btn kind="o" onClick={onClose}>Cancel</Btn><Btn disabled={busy || !city || !campaignId || !hasCats} onClick={go}>{busy ? 'Working…' : 'Propose zones'}</Btn></>}>
+      <Modal title="Generate zones" onClose={onClose} footer={<><Btn kind="o" onClick={onClose}>Cancel</Btn><Btn disabled={busy || !city || !campaignId} onClick={go}>{busy ? 'Working…' : 'Propose zones'}</Btn></>}>
         {!built.length ? <div className="v2-note">No city is built yet. <Link to="/app/mainstreet/cities" style={{ textDecoration: 'underline' }}>Build one first.</Link></div> : <>
           <Field label="City">
-            <select className="v2-sel" value={cityId} onChange={e => setCityId(e.target.value)}>{built.map(c => <option key={c.id} value={c.id}>{c.name} · {c.eligible_open} eligible businesses</option>)}</select>
+            <select className="v2-sel" value={cityId} onChange={e => setCityId(e.target.value)}>{built.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
           </Field>
-          <Field label="Campaign" hint={campaignId && cats.data && !hasCats ? 'This campaign has no business categories yet: set them under Campaigns › Edit.' : 'Only the campaign’s categories count; chains and closed places never do.'}>
+          <Field label="Campaign" hint="The zones are made for this campaign; assign reps after.">
             <select className="v2-sel" value={campaignId} onChange={e => setCampaignId(e.target.value)}>{campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
           </Field>
-          <Field label="How many zones" hint="Each zone gets an equal share of the eligible businesses, built from whole blocks between real streets; plazas are never split. You can merge or regenerate before accepting.">
+          <Field label="How many zones" hint="Usually one per rep. Each zone gets an equal share of the city’s density (commercial land and main-road frontage), built from whole blocks between the main roads. You can merge or regenerate before accepting.">
             <input className="v2-input" type="number" min={1} max={60} value={target} onChange={e => setTarget(Math.max(1, Math.min(60, +e.target.value || 1)))} style={{ width: 120 }} />
           </Field>
           {busy && <div className="v2-note">{stepLabel(step)}</div>}
@@ -361,9 +358,9 @@ const ReviewPanel: React.FC<{ review: { city: City; run: ZoneRun; picked: number
   return (
     <div className="v2-card">
       <div className="v2-row" style={{ marginBottom: 4 }}><b style={{ fontSize: 16 }}>Proposed: {run.proposal.length} zones for {run.campaign_name}</b><span className="v2-spacer" /><Tag tone="a">Review</Tag></div>
-      <div className="v2-mut v2-small" style={{ marginBottom: 10 }}>{review.city.name} · {run.stats.eligible} eligible businesses · about {run.stats.share} per zone · {run.stats.free_blocks} free blocks</div>
+      <div className="v2-mut v2-small" style={{ marginBottom: 10 }}>{review.city.name} · density {run.stats.eligible} in all · about {run.stats.share} per zone · {run.stats.free_blocks} blocks</div>
       <div className="v2-table-wrap" style={{ maxHeight: 300, overflowY: 'auto', marginBottom: 10 }}><table className="v2-table">
-        <thead><tr><th /><th>Zone</th><th>Businesses</th><th>Plazas</th></tr></thead>
+        <thead><tr><th /><th>Zone</th><th>Density</th><th>Plazas</th></tr></thead>
         <tbody>
           {run.proposal.map(z => (
             <tr key={z.key} className="click" onClick={() => onPick(z.key)} style={picked.includes(z.key) ? { background: 'var(--sel)' } : undefined}>

@@ -1,16 +1,17 @@
 // src/v2/features/mainstreet/Cities.tsx — MainstreetAI › Cities: the cities and areas reps work in. Building one
-// loads its boundary and its streets from OpenStreetMap (free); nothing else. Then Split shares its main roads
-// between reps. An area can be part of a city: one or more neighbourhoods or wards (Kanata, Barrhaven).
+// is free (OpenStreetMap): its boundary, streets and commercial land load here; then the blocks, their density and
+// which blocks touch are worked out in the background. Then Zones › Generate makes zones of equal density. An area
+// can be part of a city: one or more neighbourhoods or wards (Kanata, Barrhaven).
 // Preloading businesses (OpenStreetMap, Google) is parked in CitiesParked.tsx: reps only see what they add.
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, Loader2, Plus, RefreshCw, Square } from 'lucide-react';
 import { useLoad } from '../../lib/data';
-import { fetchBoundary, fetchLines, joinAreas, listCities, replaceLines, saveCity, searchAreas, setCityStatus, type AreaHit, type City } from '../../lib/msCity';
+import { cityJob, fetchBoundary, fetchLines, fetchPlazas, joinAreas, listCities, queueCityBuild, replaceLines, replacePlazas, saveCity, searchAreas, setCityStatus, type AreaHit, type City, type CityJob } from '../../lib/msCity';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 
 type StepState = 'todo' | 'running' | 'done' | 'failed';
-interface Step { key: 'boundary' | 'lines'; label: string; state: StepState; note?: string }
+interface Step { key: 'boundary' | 'lines' | 'land' | 'blocks'; label: string; state: StepState; note?: string }
 
 export const Cities: React.FC = () => {
   const cities = useLoad(listCities, []);
@@ -27,7 +28,7 @@ export const Cities: React.FC = () => {
       <ErrorBox error={cities.error} />
       <div className="v2-card" style={{ padding: 0, overflow: 'hidden' }}>
         {cities.loading ? <Loading /> : !cities.data?.length ? (
-          <div className="v2-note" style={{ padding: 16 }}>No cities yet. Add one: its boundary and streets load in a minute, then Split shares its main roads between reps.</div>
+          <div className="v2-note" style={{ padding: 16 }}>No cities yet. Add one and build it (free map data), then Zones › Generate makes zones of equal density.</div>
         ) : (
           <div className="v2-table-wrap"><table className="v2-table">
             <thead><tr><th>City or area</th><th>Status</th><th>Zones</th><th /></tr></thead>
@@ -35,11 +36,11 @@ export const Cities: React.FC = () => {
               {cities.data.map(c => (
                 <tr key={c.id}>
                   <td className="lead" data-label="City"><b>{c.name}</b> <span className="v2-mut v2-small">{c.province}</span>{c.build_note && c.status === 'failed' && <div className="v2-small" style={{ color: 'var(--rose)' }}>{c.build_note}</div>}</td>
-                  <td data-label="Status">{statusTag(c)}</td>
+                  <td data-label="Status">{statusTag(c)}{c.status === 'building' && c.build_note && <div className="v2-small v2-mut">{c.build_note}…</div>}</td>
                   <td data-label="Zones">{c.zones}</td>
                   <td className="full" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {c.status === 'built' && <Link to="/app/mainstreet/split" className="v2-btn o sm">Split</Link>}{' '}
-                    <Btn kind="o" size="sm" icon={RefreshCw} onClick={() => setBuilding(c)}>{c.status === 'built' ? 'Reload streets' : 'Build'}</Btn>
+                    {c.status === 'built' && <Link to="/app/mainstreet/zones" className="v2-btn o sm">Make zones</Link>}{' '}
+                    <Btn kind="o" size="sm" icon={RefreshCw} onClick={() => setBuilding(c)}>{c.status === 'built' ? 'Rebuild' : c.status === 'building' ? 'Progress' : 'Build'}</Btn>
                   </td>
                 </tr>))}
             </tbody>
@@ -121,17 +122,46 @@ function bboxOf(g: GeoJSON.Polygon | GeoJSON.MultiPolygon): { s: number; w: numb
   return { s, w, n, e };
 }
 
-/** Two steps: the boundary (unless it's already saved, as for an area), then the streets. */
+/** Boundary, streets and commercial land load here; the blocks and their density are worked out in the background. */
 const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose }) => {
   const [steps, setSteps] = useState<Step[]>([
     { key: 'boundary', label: 'Boundary', state: city.boundary ? 'done' : 'todo', note: city.boundary ? 'Saved' : undefined },
     { key: 'lines', label: 'Streets', state: 'todo' },
+    { key: 'land', label: 'Commercial land (plazas, business parks)', state: 'todo' },
+    { key: 'blocks', label: 'Blocks and density (in the background)', state: 'todo' },
   ]);
   const [error, setError] = useState<unknown>(null);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
+  const [job, setJob] = useState<CityJob | null>(null);
   const abort = useRef<AbortController | null>(null);
   const set = (key: Step['key'], state: StepState, note?: string) => setSteps(ss => ss.map(s => s.key === key ? { ...s, state, note: note ?? s.note } : s));
+  const jobNote = (j: CityJob) => j.stage === 'blocks' ? 'Cutting the blocks along the main roads…'
+    : j.stage === 'density' ? `Scoring density: ${j.scored} of ${j.blocks} blocks` : j.stage === 'adjacency' ? 'Joining neighbouring blocks…'
+    : j.stage === 'done' ? `${j.blocks} blocks` : j.note || 'Failed';
+  // a build already in the background: show where it's at
+  useEffect(() => {
+    if (city.status !== 'building') return;
+    cityJob(city.id).then(j => {
+      if (!j || j.stage === 'done' || j.stage === 'failed') return;
+      setSteps(ss => ss.map(s => ({ ...s, state: s.key === 'blocks' ? 'running' : 'done', note: s.key === 'blocks' ? jobNote(j) : s.note })));
+      setJob(j);
+    }).catch(() => undefined);
+  }, [city.id, city.status]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // follow the background part every few seconds
+  useEffect(() => {
+    if (!job || job.stage === 'done' || job.stage === 'failed') return;
+    const t = setTimeout(async () => {
+      try {
+        const j = await cityJob(city.id); if (!j) return;
+        setJob(j);
+        if (j.stage === 'done') { set('blocks', 'done', jobNote(j)); setDone(true); }
+        else if (j.stage === 'failed') { set('blocks', 'failed', jobNote(j)); setError(new Error(j.note || 'The background step failed')); }
+        else set('blocks', 'running', jobNote(j));
+      } catch (e) { setError(e); }
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [job, city.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   const run = async () => {
     setRunning(true); setError(null);
     const ctrl = new AbortController(); abort.current = ctrl;
@@ -148,10 +178,12 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
       }
       set('lines', 'running');
       const lines = await fetchLines(bboxOf(geometry), ctrl.signal, (d, of) => set('lines', 'running', `OpenStreetMap · part ${d} of ${of}`));
-      const n = await replaceLines(city.id, lines);
-      set('lines', 'done', `${n} road pieces`);
-      await setCityStatus(city.id, 'built');
-      setDone(true);
+      set('lines', 'done', `${await replaceLines(city.id, lines)} road pieces`);
+      set('land', 'running');
+      const land = await fetchPlazas(bboxOf(geometry), ctrl.signal, (d, of) => set('land', 'running', `OpenStreetMap · part ${d} of ${of}`));
+      set('land', 'done', `${await replacePlazas(city.id, land)} areas`);
+      set('blocks', 'running', 'Queued: it starts within a minute');
+      setJob(await queueCityBuild(city.id));
     } catch (e) {
       const stopped = ctrl.signal.aborted;
       setError(stopped ? new Error('Stopped. Press Start to try again.') : e);
@@ -164,10 +196,10 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
     <Modal title={`Build ${city.name}`} onClose={running ? () => undefined : onClose}
       footer={<>
         {running ? <Btn kind="r" icon={Square} onClick={() => abort.current?.abort()}>Stop</Btn> : <Btn kind="o" onClick={onClose}>{done ? 'Done' : 'Close'}</Btn>}
-        {!running && !done && <Btn onClick={run}>{city.status === 'built' ? 'Reload streets' : 'Start'}</Btn>}
-        {done && <Link to="/app/mainstreet/split" className="v2-btn">Split it between reps</Link>}
+        {!running && !done && !(job && job.stage !== 'failed' && job.stage !== 'done') && <Btn onClick={run}>{city.status === 'built' ? 'Rebuild' : 'Start'}</Btn>}
+        {done && <Link to="/app/mainstreet/zones" className="v2-btn">Make zones</Link>}
       </>}>
-      <div className="v2-small v2-mut" style={{ marginBottom: 10 }}>Free map data from OpenStreetMap. Takes a minute or two for a big city.</div>
+      <div className="v2-small v2-mut" style={{ marginBottom: 10 }}>Free map data from OpenStreetMap. The last step runs in the background: you can close this and come back; a big city takes a few minutes.</div>
       <div style={{ display: 'grid', gap: 6 }}>
         {steps.map(s => (
           <div key={s.key} className="v2-row" style={{ gap: 10, alignItems: 'flex-start' }}>
