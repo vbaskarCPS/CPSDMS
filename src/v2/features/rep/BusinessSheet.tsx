@@ -137,7 +137,7 @@ export const BusinessSheet: React.FC<{
       // Not interested is Lost, with the reason (when there's signal; without it the stage still reads it from the visit)
       if (outcome === 'not_interested' && r.sent) await setLost(id, campaign, lostWhy).catch(() => undefined);
       const msg = !r.sent ? `${o.label} saved on your phone. It sends when you have signal.`
-        : outcome === 'closed' ? 'Deal saved: it’s with an admin to approve.'
+        : outcome === 'closed' ? 'Deal saved.'
         : res?.far ? `${o.label} saved. ${here ? `You were ${res.distance_m} m away, so an admin will see it.` : 'Your location wasn’t available, so an admin will see it.'}`
         : `${o.label} saved.`;
       if (outcome === 'follow_up' && input.follow_up_at) {
@@ -189,7 +189,7 @@ export const BusinessSheet: React.FC<{
         onClose={() => {
           setBooking(false);
           // once booked, the visit is saved as a closed deal: close the deck and the business like any saved visit
-          if (booked.current) { booked.current = false; keepAnswers(); setPresenting(false); toast('Onboarding booked. The deal is with an admin to approve.'); onSaved({ business: id, outcome: 'closed', state: stateAfter('closed'), here: null, queued: false }); }
+          if (booked.current) { booked.current = false; keepAnswers(); setPresenting(false); toast('Onboarding booked: that’s the deal.'); onSaved({ business: id, outcome: 'closed', state: stateAfter('closed'), here: null, queued: false }); }
         }} />}
 
       {!!mail.data?.length && (
@@ -250,7 +250,7 @@ export const BusinessSheet: React.FC<{
         </>)}
       <ErrorBox error={error} />
       {outcome && <Btn onClick={save} disabled={busy || scanning} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e', marginTop: 6 }}>
-        {busy ? 'Saving…' : outcome === 'closed' ? 'Save deal for approval' : 'Save visit'}</Btn>}
+        {busy ? 'Saving…' : outcome === 'closed' ? 'Save deal' : 'Save visit'}</Btn>}
 
       <People business={id} campaign={campaign} offline={offline} tick={peopleTick} />
       {!offline && <History d={d as RepBusinessView} loading={b.loading && !b.data} />}
@@ -318,7 +318,7 @@ const History: React.FC<{ d: RepBusinessView; loading: boolean }> = ({ d, loadin
             <div className="h"><i className="v2-rep-dot" style={{ background: o?.color }} /><b>{o?.label}</b><span className="v2-mut v2-small">{whenLabel(v.at)}</span>
               {v.far && <span className="v2-small" style={{ color: '#b45309', marginLeft: 'auto' }}><MapPin size={12} /> {v.distance_m != null ? `${v.distance_m} m away` : 'no location'}</span>}</div>
             {v.deal && <div className="v2-small" style={{ color: v.deal === 'approved' ? '#15803d' : v.deal === 'rejected' ? '#7e22ce' : '#6b7280' }}>
-              Deal {v.deal === 'pending' ? 'waiting for approval' : v.deal === 'approved' ? 'approved' : 'not approved'}{v.deal_note ? `: ${v.deal_note}` : ''}</div>}
+              Deal {v.deal === 'pending' ? 'saved' : v.deal === 'approved' ? 'approved' : 'not approved'}{v.deal_note ? `: ${v.deal_note}` : ''}</div>}
             {v.follow_up_at && <div className="v2-small">Follow up {whenLabel(v.follow_up_at)}</div>}
             {(v.contact_name || v.contact_phone || v.contact_email) && <div className="v2-small">{[v.contact_name, v.contact_phone, v.contact_email].filter(Boolean).join(' · ')}</div>}
             {v.notes && <div className="v2-small v2-mut">{v.notes}</div>}

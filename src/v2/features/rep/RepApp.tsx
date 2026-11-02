@@ -291,7 +291,7 @@ const Me: React.FC = () => {
               <BoardTable title="Onboardings booked" rows={onb} value={r => <><b>{r.approved}</b>{r.pending ? <span className="v2-mut"> +{r.pending}</span> : ''}</>} />
               <BoardTable title="Visits" rows={vis} value={r => <b>{r.visits}</b>} />
             </div>
-            <div className="v2-small v2-mut">Onboardings count once an admin approves them; +n are waiting.</div>
+            <div className="v2-small v2-mut">Every onboarding booked counts; no approval needed.</div>
           </>)}
       </div>
 
@@ -315,7 +315,7 @@ const Me: React.FC = () => {
               <div key={d.id} className="v2-rep-visit">
                 <div className="h"><b style={{ flex: 1 }}>{d.business}</b>
                   <span className="v2-small" style={{ fontWeight: 700, color: d.status === 'approved' ? '#15803d' : d.status === 'rejected' ? '#7e22ce' : '#6b7280' }}>
-                    {d.status === 'approved' ? 'Approved' : d.status === 'rejected' ? 'Not approved' : 'Waiting'}</span></div>
+                    {d.status === 'approved' ? 'Approved' : d.status === 'rejected' ? 'Not approved' : 'Saved'}</span></div>
                 <div className="v2-small v2-mut">{d.campaign} · {whenLabel(d.at)}{d.note ? ` · ${d.note}` : ''}</div>
               </div>))}
             {n.data.deals.rejected > 0 && <div className="v2-small v2-mut" style={{ marginTop: 6 }}>{n.data.deals.rejected} not approved in all.</div>}
