@@ -38,13 +38,24 @@ type Msg = { role: 'user' | 'assistant'; content: unknown };
 async function claudeRaw(system: string, messages: Msg[], maxTokens: number): Promise<{ text: string; stop: string }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || `Anthropic ${res.status}`);
+  // a busy or rate-limited API is tried again (three times, backing off) before it's an error
+  let res: Response | null = null, data: { content?: unknown[]; stop_reason?: string; error?: { message?: string; type?: string } } = {};
+  for (let attempt = 0; attempt < 3; attempt++) {
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
+      body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages }),
+    });
+    data = await res.json().catch(() => ({}));
+    if (res.ok || !(res.status === 429 || res.status === 529 || res.status >= 500)) break;
+    console.error(`planner-ai: Anthropic ${res.status} (${data?.error?.type || ''}: ${data?.error?.message || ''}), attempt ${attempt + 1}`);
+    await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+  }
+  if (!res || !res.ok) {
+    const why = data?.error?.message || `Anthropic ${res?.status}`;
+    console.error('planner-ai: Anthropic failed:', why);
+    throw new Error(res?.status === 429 ? `Coach Claude is rate-limited right now — try again in a minute. (${why})` : res?.status === 529 ? 'Coach Claude is overloaded right now — try again in a minute.' : why);
+  }
   return { text: (data.content || []).filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text).join(''), stop: String(data.stop_reason || '') };
 }
 /** A text answer. An empty answer is asked for again once, then it's an error (never saved as a blank reply);
@@ -309,8 +320,9 @@ async function flippSearch(q: string, postal: string): Promise<FlippItem[]> {
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
+  let b: Record<string, unknown> = {};
   try {
-    const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+    b = await req.json().catch(() => ({})) as Record<string, unknown>;
     const token = typeof b.token === 'string' ? b.token : '';
     const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { auth: { persistSession: false } });
     const { data: me, error } = await anon.rpc('planner_me', { p_token: token });
@@ -463,6 +475,7 @@ Deno.serve(async req => {
     }
     return json({ error: 'Unknown action' }, 400);
   } catch (e) {
+    console.error('planner-ai:', typeof b?.action === 'string' ? b.action : '?', e instanceof Error ? e.message : String(e));
     return json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }
 });
