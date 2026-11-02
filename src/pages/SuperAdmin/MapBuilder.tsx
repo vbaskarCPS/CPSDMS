@@ -1177,14 +1177,24 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
 
   const handleSaveAll = async () => {
     if (!currentArea) return;
+    // Until the saved routes are back on the map, this tab doesn't hold the whole map: saving would drop them.
+    if (restoredFor !== currentArea.area_name) { setError('The saved routes haven’t finished loading — wait a moment, then save again.'); return; }
     setSaving(true); setError(null);
     try {
       const approved = routes.filter(r => r.status === 'approved' && r.selectedWayIds.size > 0);
-      await supabase.from('route_maps').delete().eq('area_name', currentArea.area_name);
+      // Each approved route is written over its saved copy. Only a route this tab lists and no longer has
+      // approved is removed — a map this tab never loaded (an older tab, a renumbered map) is left alone;
+      // the old "delete everything, then insert" wiped those.
+      const keep = new Set(approved.map(r => r.num));
+      const dropped = routes.map(r => r.num).filter(n => !keep.has(n));
+      if (dropped.length) {
+        const { error: delErr } = await supabase.from('route_maps').delete().eq('area_name', currentArea.area_name).in('route_number', dropped);
+        if (delErr) throw delErr;
+      }
       for (const route of approved) {
         const segments = effectiveWays.filter(w => route.selectedWayIds.has(w.id)).map(w => ({ osmId: w.rootId ?? w.id, name: w.name, coordinates: w.geometry }));
         const routeCode = formatRouteCode(currentArea.prefix, route.num);
-        await supabase.from('route_maps').insert({
+        const { error: upErr } = await supabase.from('route_maps').upsert({
           area_name: currentArea.area_name,
           route_number: route.num,
           route_code: routeCode,
@@ -1195,12 +1205,15 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
           ai_notes: route.aiNotes,
           approved_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-        });
+        }, { onConflict: 'area_name,route_number' });
+        if (upErr) throw upErr;
       }
-      // Update area_prefixes route_count to reflect actual number of routes
+      // The map's span is its first unbroken run of numbers (a route added past another map's
+      // numbers — LNG74 after LNG28 — is kept by being drawn, not by stretching the span over that map).
       const start = currentArea.route_start ?? 1;
-      const maxRouteNum = routes[routes.length - 1]?.num ?? start;
-      const newRouteCount = maxRouteNum - start + 1;
+      let run = 0;
+      for (const r of routes) { if (r.num === start + run) run++; else break; }
+      const newRouteCount = Math.max(1, run, currentArea.route_count || 0);
       await supabase.from('area_prefixes').update({ route_count: newRouteCount }).eq('area_name', currentArea.area_name);
       // Update local state so card reflects new range immediately on return
       setAreas(prev => prev.map(a => a.area_name === currentArea.area_name ? { ...a, route_count: newRouteCount } : a));
