@@ -34,24 +34,9 @@ export function dayLabel(iso: string): string {
 }
 export const todayIso = () => { const d = new Date(); return `${monthKey(d)}-${String(d.getDate()).padStart(2, '0')}`; };
 
-// ── merchants ──
-/** Long digit runs (13–19) could be a card number: keep the last 4 only. */
-export function maskNumbers(s: string): string { return s.replace(/\d[\d -]{11,22}\d/g, m => { const digits = m.replace(/\D/g, ''); return digits.length >= 13 && digits.length <= 19 ? `****${digits.slice(-4)}` : m; }); }
-
-const CITY_TAIL = /\s+(TORONTO|MISSISSAUGA|BRAMPTON|MARKHAM|VAUGHAN|RICHMOND HILL|SCARBOROUGH|NORTH YORK|ETOBICOKE|OAKVILLE|BURLINGTON|HAMILTON|OTTAWA|LONDON|KITCHENER|WATERLOO|MILTON|AJAX|PICKERING|WHITBY|OSHAWA|BARRIE|GUELPH|WINDSOR|KINGSTON|MONTREAL|VANCOUVER|CALGARY|EDMONTON|WINNIPEG)\b.*$/;
-/** "TIM HORTONS #2231 TORONTO ON" → "TIM HORTONS". Stable across months, so rules stick. */
-export function normalizeMerchant(desc: string): string {
-  let s = maskNumbers(desc).toUpperCase();
-  s = s.replace(/\*{2,}\d{4}/g, ' ');                       // masked numbers
-  s = s.replace(/\b(SQ|TST|SP|PAYPAL|PP|AMZN MKTP|APL)\s*\*\s*/g, '');   // processor prefixes: SQ *, TST*, PAYPAL *
-  s = s.replace(/[#*][\w-]*/g, ' ');                       // store numbers: #1234, *QX7
-  s = s.replace(/\b\d{2,}\b/g, ' ');                       // other numbers
-  s = s.replace(/\b[A-Z]{1,2}\d+[A-Z\d]*\b/g, ' ');         // reference codes like QT4X9
-  s = s.replace(CITY_TAIL, '');
-  s = s.replace(/\s+(ON|QC|BC|AB|MB|SK|NS|NB|PE|NL|CA|CAN)\b\s*$/, '');
-  s = s.replace(/[^\w&'.\-\s/]/g, ' ').replace(/\s+/g, ' ').trim();
-  return s.slice(0, 40) || 'UNKNOWN';
-}
+// ── merchants ── (shared with the planner-plaid edge function, so CSV and bank rows agree)
+export { maskNumbers, normalizeMerchant } from '../../../../supabase/functions/_shared/plannerMoney';
+import { hideReplaced } from '../../../../supabase/functions/_shared/plannerMoney';
 
 /** FNV-1a; good enough to spot the same bank line twice. */
 export function hash(s: string): string {
@@ -130,16 +115,37 @@ export async function mergeTxns(rows: Txn[], existing: Record<string, Txn[]>): P
   return { added, dupes, months: docs.map(d => d.key) };
 }
 
-/** Set a category on some transactions (by id) across months and save the months touched. */
+/** Set a category on some transactions (by id) across months and save the months touched. The months
+ *  are read again just before writing, so rows the bank sync added in the meantime aren't lost (and rows
+ *  hidden on screen, like a connected account's CSV rows, are written back untouched). */
 export async function recategorize(months: Record<string, Txn[]>, ids: Set<string>, category: string): Promise<string[]> {
-  const docs: { kind: string; key: string; data: TxnMonth }[] = [];
+  const keys: string[] = [];
   for (const [m, rows] of Object.entries(months)) {
     let hit = false;
     for (const t of rows) if (ids.has(t.id)) { t.category = category; t.source = 'manual'; hit = true; }
-    if (hit) docs.push({ kind: 'txns', key: m, data: { rows } });
+    if (hit) keys.push(m);
+  }
+  if (!keys.length) return [];
+  keys.sort();
+  const fresh = await loadMonths(keys[0], keys[keys.length - 1]);
+  const docs: { kind: string; key: string; data: TxnMonth }[] = [];
+  for (const m of keys) {
+    const rows = fresh[m] || [];
+    for (const t of rows) if (ids.has(t.id)) { t.category = category; t.source = 'manual'; }
+    docs.push({ kind: 'txns', key: m, data: { rows } });
   }
   await putDocs(docs);
-  return docs.map(d => d.key);
+  return keys;
+}
+
+/** What the screens show: a connected account's CSV rows are hidden (see hideReplaced). */
+export function visibleMonths(months: Record<string, Txn[]>, accounts: Account[]): Record<string, Txn[]> {
+  const linked: Record<string, { removedAt?: string }> = {};
+  for (const a of accounts) if (a.plaid) linked[a.id] = { removedAt: a.plaid.removedAt };
+  if (!Object.keys(linked).length) return months;
+  const out: Record<string, Txn[]> = {};
+  for (const [m, rows] of Object.entries(months)) out[m] = hideReplaced(rows, linked);
+  return out;
 }
 
 // ── sums ──

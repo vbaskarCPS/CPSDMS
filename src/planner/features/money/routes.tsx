@@ -12,4 +12,6 @@ export const moneyRoutes: { path: string; element: JSX.Element }[] = [
   { path: '/money/budget', element: <Budget /> },
   { path: '/money/accounts', element: <Accounts /> },
   { path: '/money/recurring', element: <Recurring /> },
+  // Plaid sends people back here after an OAuth bank's own sign-in page (registered in the Plaid dashboard)
+  { path: '/plaid-oauth', element: <Accounts resume /> },
 ];
