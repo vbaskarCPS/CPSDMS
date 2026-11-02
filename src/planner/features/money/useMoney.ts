@@ -1,7 +1,7 @@
 // src/planner/features/money/useMoney.ts — one load for the finance screens: accounts, the months in
-// range, the user's rules and the budget.
+// range (a connected account's CSV rows hidden), the user's rules and the budget.
 import { useCallback, useEffect, useState } from 'react';
-import { loadAccounts, loadBudget, loadMonths, loadRules } from './lib';
+import { loadAccounts, loadBudget, loadMonths, loadRules, visibleMonths } from './lib';
 import type { Account, Budget, Txn } from './types';
 
 export interface MoneyData { accounts: Account[]; months: Record<string, Txn[]>; rules: Record<string, string>; budget: Budget }
@@ -14,7 +14,7 @@ export function useMoney(from?: string, to?: string) {
   const reload = useCallback(async () => {
     try {
       const [accounts, months, rules, budget] = await Promise.all([loadAccounts(), loadMonths(from, to), loadRules(), loadBudget()]);
-      setData({ accounts, months, rules, budget }); setError(null);
+      setData({ accounts, months: visibleMonths(months, accounts), rules, budget }); setError(null);
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not load'); }
     finally { setLoading(false); }
   }, [from, to]);

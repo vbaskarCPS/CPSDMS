@@ -4,16 +4,16 @@ import { Link } from 'react-router-dom';
 import { Wallet, ChevronRight } from 'lucide-react';
 import { Card, Progress } from '../../ui/primitives';
 import type { PlannerPass } from '../../lib/auth';
-import { budgetTotal, daysInMonth, loadBudget, loadMonths, money, monthKey, sumByCategory, totals } from './lib';
+import { budgetTotal, daysInMonth, loadAccounts, loadBudget, loadMonths, money, monthKey, sumByCategory, totals, visibleMonths } from './lib';
 
 export function MoneyTodayCard(_: { pass: PlannerPass }) {
   const m = monthKey();
   const [s, setS] = useState<{ spent: number; budget: number; top?: [string, number]; n: number } | null>(null);
   useEffect(() => {
     let on = true;
-    Promise.all([loadMonths(m, m), loadBudget()]).then(([months, b]) => {
+    Promise.all([loadMonths(m, m), loadBudget(), loadAccounts()]).then(([months, b, accounts]) => {
       if (!on) return;
-      const rows = months[m] || [];
+      const rows = visibleMonths(months, accounts)[m] || [];
       const cats = Object.entries(sumByCategory(rows)).sort((a, b) => b[1] - a[1]);
       setS({ spent: totals(rows).spent, budget: budgetTotal(b), top: cats[0], n: rows.length });
     }).catch(() => on && setS({ spent: 0, budget: 0, n: 0 }));

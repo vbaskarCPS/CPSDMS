@@ -90,6 +90,9 @@ export function Import() {
             <button type="button" className="pl-chip" onClick={() => { setNewAcc({ name: '', type: 'chequing', last4: '' }); setAccountId(''); }}>+ New account</button>
           </div>
         )}
+        {live.find(a => a.id === chosen)?.plaid && !live.find(a => a.id === chosen)?.plaid?.removedAt && (
+          <p className="pl-muted" style={{ fontSize: 13, margin: 0 }}>This account is connected to the bank, so its transactions come in on their own. A CSV imported here is kept but stays hidden.</p>
+        )}
         {newAcc && (
           <div className="pl-stack">
             <Field label="Account name"><Input value={newAcc.name} placeholder="e.g. TD Chequing" onChange={e => setNewAcc({ ...newAcc, name: e.target.value })} /></Field>

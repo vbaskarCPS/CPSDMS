@@ -1,14 +1,16 @@
-// /money/accounts — the accounts the CSVs come from. Archiving hides one; nothing is ever removed.
+// /money/accounts — the accounts: connected banks (Plaid) and the ones the CSVs come from. Archiving hides
+// one; nothing is ever removed. /plaid-oauth lands here too, to finish a bank's own sign-in page.
 import { useState } from 'react';
-import { Landmark, Plus, Archive, ArchiveRestore } from 'lucide-react';
+import { Landmark, Link2, Plus, Archive, ArchiveRestore } from 'lucide-react';
 import { Page, Header, Card, Button, Field, Input, Sheet, Empty, useToast, uid } from '../../../ui/primitives';
 import { useMoney } from '../useMoney';
 import { money, saveAccount } from '../lib';
 import type { Account, AccountType } from '../types';
+import { ConnectedBanks } from './Banks';
 
 const blank = (order: number): Account => ({ id: uid(), name: '', type: 'chequing', order });
 
-export function Accounts() {
+export function Accounts({ resume }: { resume?: boolean } = {}) {
   const { accounts, loading, reload } = useMoney('0000', '0000');
   const [edit, setEdit] = useState<Account | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,8 +27,8 @@ export function Accounts() {
 
   const row = (a: Account) => (
     <button key={a.id} type="button" className="mo-acct" style={{ width: '100%', background: 'none', border: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => setEdit({ ...a })}>
-      <div className="mo-acct__icon"><Landmark /></div>
-      <div className="pl-grow"><b>{a.name}</b><br /><small className="pl-muted">{a.type}{a.last4 ? ` ····${a.last4}` : ''}{a.balanceAsOf ? ` · balance as of ${a.balanceAsOf}` : ''}</small></div>
+      <div className="mo-acct__icon">{a.plaid && !a.plaid.removedAt ? <Link2 /> : <Landmark />}</div>
+      <div className="pl-grow"><b>{a.name}</b><br /><small className="pl-muted">{a.type}{a.last4 ? ` ····${a.last4}` : ''}{a.plaid && !a.plaid.removedAt ? ` · connected${a.plaid.institution ? ` to ${a.plaid.institution}` : ''}` : ''}{a.balanceAsOf ? ` · balance as of ${a.balanceAsOf}` : ''}</small></div>
       <span className="mo-amt">{a.balance === undefined ? '—' : money(a.balance)}</span>
     </button>
   );
@@ -34,8 +36,9 @@ export function Accounts() {
   return (
     <Page>
       <Header title="Accounts" eyebrow="Money" back="/money" right={<Button small primary onClick={() => setEdit(blank(accounts.length))}><Plus style={{ width: 16, height: 16 }} /> Add</Button>} />
+      <ConnectedBanks onChange={reload} resume={resume} />
       <Card>
-        {!loading && live.length === 0 ? <Empty icon={<Landmark />} title="No accounts yet" blurb="Add one here, or it's created on your first import." /> : <div className="pl-list">{live.map(row)}</div>}
+        {!loading && live.length === 0 ? <Empty icon={<Landmark />} title="No accounts yet" blurb="Connect a bank above, add one here, or it's created on your first import." /> : <div className="pl-list">{live.map(row)}</div>}
       </Card>
       {gone.length > 0 && <Card><p className="pl-eyebrow">Archived</p><div className="pl-list">{gone.map(row)}</div></Card>}
 
