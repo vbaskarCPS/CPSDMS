@@ -39,7 +39,7 @@ const TOUR: Record<Role, Step[]> = {
     { to: '/app/rep', title: 'Present and book', text: 'On a business, tap Present: the Taxifi deck with the owner’s questions and a proposal next to what they pay today. The last screen books the onboarding call into the host’s real open times.' },
     { to: '/app/rep/followups', title: 'Follow-ups', text: 'Everyone you promised to come back to or call, overdue first, with who to ask for. Add one to your calendar or open it on the map.' },
     { to: '/app/rep/inbox', title: 'Inbox', text: 'Emails with your businesses, filed on each one. Write a follow-up yourself or have Claude draft it from the visit.' },
-    { to: '/app/rep/me', title: 'Me', text: 'Today against your goals, your streak, earnings, the week’s board and your numbers. Then switch to the host (top of the screen) to see the calls you booked.' },
+    { to: '/app/rep/me', title: 'Me', text: 'Today against your goals, your streak, earnings, the week’s board and your numbers. Then switch to the host (the orange Demo button, bottom left) to see the calls you booked.' },
   ],
   host: [
     { to: '/app/host', title: 'Onboarding calls', text: 'The host takes the calls reps book from the deck. “How did it go?” lists the calls that have started: mark them Closed, No-show or Not a fit.' },
@@ -121,7 +121,7 @@ const Start: React.FC<{ onPick: (r: Role) => void }> = ({ onPick }) => (
       <button type="button" className="role" onClick={() => onPick('host')}>
         <Video size={26} /><span><b>Try it as a Host</b><em>Take the onboarding calls reps book, see what the owner answered, set your hours</em></span><ChevronRight size={20} />
       </button>
-      <p className="small">Book a call as the Rep, then switch to the Host from the Demo button at the top: it’s waiting there.</p>
+      <p className="small">Book a call as the Rep, then switch to the Host from the orange Demo button (bottom left): it’s waiting there.</p>
     </div>
   </div>
 );
