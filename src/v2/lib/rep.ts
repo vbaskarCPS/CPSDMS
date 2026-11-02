@@ -39,11 +39,10 @@ export const PIN: Record<PinState, { label: string; color: string }> = {
 };
 export const pinOf = (s: string | null | undefined) => PIN[(s as PinState) in PIN ? (s as PinState) : 'new'];
 
-/** Pins by stage (New → Talked to → Pitched → Booked → Won / Lost), amber while a follow-up is open. */
-export type StagePin = 'new' | 'talked' | 'pitched' | 'booked' | 'won' | 'lost' | 'follow_up' | 'off';
+/** Pins by stage (New → Pitched → Booked → Won, or Lost), amber while a follow-up is open. */
+export type StagePin = 'new' | 'pitched' | 'booked' | 'won' | 'lost' | 'follow_up' | 'off';
 export const STAGE_PIN: Record<StagePin, { label: string; color: string }> = {
   new: { label: 'New', color: '#ffffff' },
-  talked: { label: 'Talked to', color: '#94a3b8' },
   follow_up: { label: 'Follow-up', color: '#f59e0b' },
   pitched: { label: 'Pitched', color: '#2563eb' },
   booked: { label: 'Onboarding booked', color: '#86efac' },
@@ -63,7 +62,7 @@ export function stagePin(stage: string | null | undefined, s: PinState): StagePi
     case 'pending': return 'booked';
     case 'closed': return 'won';
     case 'not_interested': return 'lost';
-    default: return 'talked';
+    default: return 'new';
   }
 }
 /** Still worth a knock: never visited, come back, follow-up, interested, a rejected deal, and a "not
