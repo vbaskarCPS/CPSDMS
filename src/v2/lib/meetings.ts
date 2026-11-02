@@ -3,6 +3,13 @@
 // supabase/migrations/20261241100000_mainstreet_meetings.sql; emails: supabase/functions/ms-meetings.
 import { db, must } from './client';
 
+/** What the owner tapped on the deck's questions screen, and the proposal it made (built by the deck itself). */
+export interface DeckAnswers {
+  v: number; answers: Record<string, string | string[]>; summary: [string, string][];
+  proposal: null | { lines: [string, string][]; monthly: number; yearly: number; quoted: boolean; today_yearly: number | null; savings: number | null; fit: string };
+}
+export const hasAnswers = (a: DeckAnswers | null | undefined): a is DeckAnswers => !!a && !!a.answers && Object.keys(a.answers).length > 0;
+
 export type MeetingStatus = 'booked' | 'closed' | 'no_show' | 'not_fit' | 'cancelled';
 export const STATUS_LABEL: Record<MeetingStatus, string> = {
   booked: 'Booked', closed: 'Closed', no_show: 'No-show', not_fit: 'Not a fit', cancelled: 'Cancelled',
@@ -24,7 +31,7 @@ export interface Meeting {
   business: { id: string; name: string; address: string | null; phone: string | null };
   host: { id: string; name: string; email: string | null; zoom_url: string | null; timezone: string };
   rep: { id: string; name: string; phone: string | null; email: string | null } | null;
-  deal_id: string | null; deal_status: string | null; created_at: string;
+  deal_id: string | null; deal_status: string | null; created_at: string; answers?: DeckAnswers | null;
 }
 export interface Slots { length_min: number; timezone: string; days_ahead: number; hosts: number; slots: { start: string; hosts: number }[] }
 export interface Rules { campaign_id: string; length_min: number; buffer_min: number; notice_min: number; days_ahead: number; max_per_day: number | null; timezone: string }
@@ -51,6 +58,13 @@ export async function bookMeeting(b: BookInput): Promise<Meeting> {
   })) as Meeting;
   return m;
 }
+/** Saves the deck answers on the business (queued on the phone when there's no signal). */
+export async function saveDeckAnswers(business: string, campaign: string, data: DeckAnswers): Promise<void> {
+  const { sendOrQueue } = await import('./repQueue');
+  await sendOrQueue({ id: crypto.randomUUID(), rpc: 'ms_save_deck_answers', args: { p_business: business, p_campaign: campaign, p_data: data },
+    label: 'Deck answers', queued_at: Date.now() });
+}
+
 /** Emails the owner and the host (time, Zoom link, calendar invite). Never throws: the call is booked either way. */
 export async function notifyMeeting(id: string, kind: 'booked' | 'changed' | 'cancelled'): Promise<{ sent: string[]; skipped: string[] } | { error: string }> {
   try {

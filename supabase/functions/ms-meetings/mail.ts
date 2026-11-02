@@ -8,6 +8,7 @@ export interface MeetingNotice {
   business: { id: string; name: string; address: string | null; phone: string | null };
   host: { id: string; name: string; email: string | null; zoom_url: string | null; timezone: string };
   rep: { id: string; name: string; phone: string | null; email: string | null } | null;
+  answers?: { summary?: [string, string][]; proposal?: { yearly: number; quoted: boolean; lines: [string, string][] } | null } | null;
 }
 type Kind = 'booked' | 'changed' | 'cancelled';
 
@@ -38,6 +39,9 @@ export function meetingEmail(m: MeetingNotice, who: 'owner' | 'host', kind: Kind
        ['Owner', [m.owner_name, m.owner_phone, m.owner_email].filter(Boolean).join(' · ')],
        ...(m.rep ? [['Booked by', `${m.rep.name}${m.rep.phone ? ` · ${m.rep.phone}` : ''}`] as [string, string]] : []),
        ...(m.notes ? [['Rep’s notes', m.notes] as [string, string]] : []),
+       ...((m.answers?.summary || []).map(([q, a]) => [q, a] as [string, string])),
+       ...(m.answers?.proposal ? [['Proposal shown', `about $${Math.round(m.answers.proposal.yearly).toLocaleString('en-CA')} a year${m.answers.proposal.quoted ? ' plus Core (quoted)' : ''}: `
+         + m.answers.proposal.lines.map(([k, v]) => `${k} ${v}`).join(', ')] as [string, string]] : []),
        ['Your Zoom', zoom || 'No Zoom link saved yet: add it under My hours']];
   const intro = who === 'owner'
     ? (kind === 'cancelled' ? `Hi ${esc(first(m.owner_name))}, your onboarding call with ${esc(company)} has been cancelled. We’ll be in touch to find a new time.`

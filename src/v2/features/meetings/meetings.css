@@ -31,3 +31,12 @@
 .v2-meet-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
 .v2-meet-bar .v2-sel { width: auto; }
 .v2-meet a[href^='tel:'] { white-space: nowrap; }
+
+.v2-answers { margin-top: 6px; font-size: 13px; }
+.v2-answers summary { cursor: pointer; font-weight: 700; color: var(--link, #0f766e); }
+.v2-answers dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 3px 10px; margin: 6px 0; }
+.v2-answers dt { color: var(--mut, #6b7280); }
+.v2-answers dd { margin: 0; font-weight: 600; }
+.v2-answers .prop { border-top: 1px solid var(--line, #e5e7eb); padding-top: 6px; display: grid; gap: 2px; }
+.v2-answers .prop > div:not(.v2-small) { display: flex; justify-content: space-between; gap: 10px; }
+.v2-answers .prop .tot { font-weight: 800; border-top: 1px solid var(--line, #e5e7eb); padding-top: 3px; }

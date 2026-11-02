@@ -43,6 +43,14 @@ describe('the emails', () => {
     expect(e.text).toContain('Owns two locations');
     expect(e.text).toContain(whenLabel(m.starts_at, 'America/Vancouver'));
   });
+  it('gives the host the owner’s deck answers and the proposal they saw, and keeps them out of the owner’s email', () => {
+    const withA = { ...m, answers: { summary: [['Monthly business expenses', '$25K–$50K']] as [string, string][],
+      proposal: { yearly: 7783, quoted: false, lines: [['Core bookkeeping', '$549/mo']] as [string, string][] } } };
+    const h = meetingEmail(withA, 'host', 'booked').text;
+    expect(h).toContain('Monthly business expenses: $25K–$50K');
+    expect(h).toContain('Proposal shown: about $7,783 a year: Core bookkeeping $549/mo');
+    expect(meetingEmail(withA, 'owner', 'booked').text).not.toContain('25K');
+  });
   it('makes a calendar invite, and a cancellation', () => {
     const ics = icsFor(m, 'booked', new Date('2026-11-02T15:00:00Z'));
     expect(ics).toContain('DTSTART:20261103T193000Z');

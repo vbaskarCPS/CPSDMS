@@ -5,13 +5,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CalendarCheck, X } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { hereNow } from '../../lib/rep';
-import { bookMeeting, longDay, meetingSlots, notifyMeeting, slotsByDay, timeLabel, type Meeting } from '../../lib/meetings';
+import { db, must } from '../../lib/client';
+import { hasAnswers, bookMeeting, longDay, meetingSlots, notifyMeeting, slotsByDay, timeLabel, type DeckAnswers, type Meeting } from '../../lib/meetings';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 
 export const BookOnboarding: React.FC<{
-  campaign: string; business: string; businessName: string; owner: { name: string; phone: string; email: string };
+  campaign: string; business: string; businessName: string; answers?: DeckAnswers | null; owner: { name: string; phone: string; email: string };
   onClose: () => void; onBooked: (m: Meeting) => void;
-}> = ({ campaign, business, businessName, owner, onClose, onBooked }) => {
+}> = ({ campaign, business, businessName, answers, owner, onClose, onBooked }) => {
   const [tick, setTick] = useState(0);
   const slots = useLoad(() => meetingSlots(campaign, null, 14), [campaign, tick]);
   const days = useMemo(() => (slots.data ? slotsByDay(slots.data) : []), [slots.data]);
@@ -37,6 +38,8 @@ export const BookOnboarding: React.FC<{
     if (!email.trim() && !phone.trim()) { setError(new Error('An email or a phone number for the owner is needed.')); return; }
     setBusy(true); setError(null);
     try {
+      // the deck's answers go with the call (the host sees them in their email)
+      if (hasAnswers(answers)) must(await db.rpc('ms_save_deck_answers', { p_business: business, p_campaign: campaign, p_data: answers }));
       const here = await hereNow(5000);
       const m = await bookMeeting({ campaign, business, start, name, phone, email, notes, lat: here?.lat, lng: here?.lng, accuracy: here?.accuracy });
       const r = await notifyMeeting(m.id, 'booked');
