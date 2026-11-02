@@ -228,6 +228,21 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 .sheet .obj span { color: var(--mut); }
 .sheet .close { float: right; border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 6px 12px; font-weight: 600; cursor: pointer; }
 .sheet .warn { color: var(--warn); }
+.pv-tag { display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--warn); border: 1px solid currentColor; border-radius: 6px; padding: 2px 7px; margin-bottom: 8px; }
+.pv-days { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 8px; scrollbar-width: none; }
+.pv-days button, .pv-times button { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; cursor: pointer; font-weight: 600; }
+.pv-days button { flex: 0 0 auto; min-width: 68px; padding: 8px 6px; display: grid; gap: 1px; text-align: center; }
+.pv-days button small { font-size: 11.5px; color: var(--mut); font-weight: 500; }
+.pv-days button b { font-family: var(--mono); font-size: 18px; }
+.pv-times { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.pv-times button { padding: 10px 6px; font-family: var(--mono); font-size: 14px; }
+.pv-days button[aria-pressed="true"], .pv-times button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.pv-days button[aria-pressed="true"] small { color: inherit; }
+.pv-form { display: grid; gap: 8px; margin-top: 6px; }
+.pv-form input { border: 1.5px solid var(--line); background: var(--bg); border-radius: 12px; padding: 11px 12px; font-size: 16px; min-width: 0; }
+.pv-done { text-align: center; padding: 18px 0 6px; }
+.pv-done .tick { margin: 0 auto 10px; width: 52px; height: 52px; }
+.pv-done .tick svg { width: 28px; height: 28px; }
 .field { display: grid; gap: 6px; margin-top: 8px; }
 .field input { border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); font-family: var(--mono); text-transform: uppercase; }
 
@@ -401,7 +416,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
         <div class="kicker">Next step</div>
         <h2>Let's book your onboarding call.</h2>
         <button type="button" class="cta primary" id="cta-book">Book onboarding<small>Pick a day and time together, takes a minute</small></button>
-        <p class="small" id="book-hint" hidden>Your MainstreetAI rep books this with you from their app.</p>
+        
         <div class="call">
           <b>On the call</b>
           <ol>
@@ -420,6 +435,35 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     <div class="dots" id="dots"></div>
     <button type="button" class="arrow" id="next" aria-label="Next slide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
   </nav>
+</div>
+
+<div class="sheet-bg" id="pv" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pv-title">
+    <button type="button" class="close" id="pv-close">Close</button>
+    <span class="pv-tag">Preview</span>
+    <h3 id="pv-title">Book the onboarding call</h3>
+    <div id="pv-pick">
+      <p class="small" style="margin:6px 0 0">In the rep app these are the open times of the taxifi team. Here they’re examples, and nothing is booked.</p>
+      <h4>Pick a day</h4>
+      <div class="pv-days" id="pv-days" role="group" aria-label="Day"></div>
+      <h4>Pick a time <span id="pv-tz" style="text-transform:none;letter-spacing:0;color:var(--mut)">Eastern time</span></h4>
+      <div class="pv-times" id="pv-times" role="group" aria-label="Time"></div>
+      <h4>The owner</h4>
+      <div class="pv-form">
+        <input id="pv-name" placeholder="Name" aria-label="Owner’s name">
+        <input id="pv-phone" type="tel" inputmode="tel" placeholder="Phone" aria-label="Owner’s phone">
+        <input id="pv-email" type="email" inputmode="email" autocapitalize="none" placeholder="Email" aria-label="Owner’s email">
+      </div>
+      <p class="small" id="pv-err" style="color:var(--warn);margin:8px 0 0" hidden></p>
+      <button type="button" class="cta primary" id="pv-book" style="margin-top:14px" disabled>Book the call</button>
+    </div>
+    <div id="pv-done" class="pv-done" hidden>
+      <span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span>
+      <h3 id="pv-when"></h3>
+      <p class="small" id="pv-what" style="margin:8px 0 0"></p>
+      <p class="small" style="margin:10px 0 0">In the rep app: a taxifi host is picked for the call, the owner and the host get the Zoom link and a calendar invite by email, and the visit is saved as a closed deal (“Onboarding booked”) with the answers and proposal.</p>
+    </div>
+  </div>
 </div>
 
 <div class="sheet-bg" id="notes" hidden>
@@ -498,6 +542,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   document.addEventListener('keydown', function (e) {
     if (e.target && /input/i.test(e.target.tagName)) return;
     if (!document.getElementById('notes').hidden) { if (e.key === 'Escape') closeNotes(); return; }
+    if (!document.getElementById('pv').hidden) return;
     if (e.key === 'ArrowRight') go(current + 1);
     if (e.key === 'ArrowLeft') go(current - 1);
   });
@@ -637,8 +682,71 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   });
   document.getElementById('cta-book').addEventListener('click', function () {
     if (embedded) { share(); window.parent.postMessage({ type: 'ms-book-onboarding' }, '*'); return; }
-    document.getElementById('book-hint').hidden = false;
+    openPreview();
   });
+
+  // outside the rep app: a preview of the booking step (example times; nothing is booked)
+  var pv = document.getElementById('pv'), pvDay = null, pvTime = null;
+  function pvDays() {
+    var out = [], d = new Date(); d.setHours(0, 0, 0, 0);
+    while (out.length < 6) { d.setDate(d.getDate() + 1); if (d.getDay() !== 0 && d.getDay() !== 6) out.push(new Date(d)); }
+    return out;
+  }
+  function pvTimes(i) {   // a few example openings, different each day
+    var all = ['9:00 AM', '9:30 AM', '10:00 AM', '10:30 AM', '11:00 AM', '1:00 PM', '1:30 PM', '2:00 PM', '3:00 PM', '3:30 PM', '4:00 PM', '4:30 PM'];
+    return all.filter(function (_, j) { return (j + i) % 3 !== 0; });
+  }
+  function pvCheck() {
+    var ok = pvDay != null && pvTime && document.getElementById('pv-name').value.trim()
+      && (document.getElementById('pv-email').value.trim() || document.getElementById('pv-phone').value.trim());
+    document.getElementById('pv-book').disabled = !ok;
+  }
+  function pvRenderTimes() {
+    var box = document.getElementById('pv-times'); box.innerHTML = ''; pvTime = null;
+    pvTimes(pvDay).forEach(function (t) {
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = t; b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', function () {
+        Array.prototype.forEach.call(box.children, function (x) { x.setAttribute('aria-pressed', 'false'); });
+        b.setAttribute('aria-pressed', 'true'); pvTime = t; pvCheck();
+      });
+      box.appendChild(b);
+    });
+    pvCheck();
+  }
+  function openPreview() {
+    var days = pvDays(), box = document.getElementById('pv-days'); box.innerHTML = '';
+    days.forEach(function (d, i) {
+      var b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
+      var a = document.createElement('small'); a.textContent = d.toLocaleDateString('en-CA', { weekday: 'short' });
+      var n = document.createElement('b'); n.textContent = d.getDate();
+      var m = document.createElement('small'); m.textContent = d.toLocaleDateString('en-CA', { month: 'short' });
+      b.appendChild(a); b.appendChild(n); b.appendChild(m);
+      b.addEventListener('click', function () {
+        Array.prototype.forEach.call(box.children, function (x) { x.setAttribute('aria-pressed', 'false'); });
+        b.setAttribute('aria-pressed', 'true'); pvDay = i; pvRenderTimes();
+      });
+      box.appendChild(b);
+    });
+    pv.days = days; pvDay = 0; pvRenderTimes();
+    // the owner's details come over from the questions screen
+    document.getElementById('pv-name').value = document.getElementById('w-name').value;
+    document.getElementById('pv-phone').value = document.getElementById('w-phone').value;
+    document.getElementById('pv-email').value = document.getElementById('w-email').value;
+    document.getElementById('pv-pick').hidden = false; document.getElementById('pv-done').hidden = true;
+    pvCheck(); pv.hidden = false; document.getElementById('pv-close').focus();
+  }
+  ['pv-name', 'pv-phone', 'pv-email'].forEach(function (id) { document.getElementById(id).addEventListener('input', pvCheck); });
+  document.getElementById('pv-book').addEventListener('click', function () {
+    var d = pv.days[pvDay];
+    document.getElementById('pv-when').textContent = d.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' }) + ' at ' + pvTime;
+    var who = document.getElementById('pv-name').value.trim(), to = document.getElementById('pv-email').value.trim() || document.getElementById('pv-phone').value.trim();
+    document.getElementById('pv-what').textContent = '30-minute onboarding call with ' + who + '. The invite would go to ' + to + '.';
+    document.getElementById('pv-pick').hidden = true; document.getElementById('pv-done').hidden = false;
+  });
+  function closePreview() { pv.hidden = true; document.getElementById('cta-book').focus(); }
+  document.getElementById('pv-close').addEventListener('click', closePreview);
+  pv.addEventListener('click', function (e) { if (e.target === pv) closePreview(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pv.hidden) closePreview(); });
 
   // rep notes
   var notes = document.getElementById('notes');
