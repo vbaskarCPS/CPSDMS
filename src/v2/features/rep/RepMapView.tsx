@@ -4,12 +4,12 @@
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { STAGE_PIN, type StagePin } from '../../lib/rep';
+import { FOLLOW_UP_RING, STAGE_PIN, type StagePin } from '../../lib/rep';
 import { RM_STYLE, tidyRmBaseMap } from '../../../lib/rmMapStyle';
 import { BLANK_STYLE, EMPTY, removeMap } from '../bookings/mbMap';
 
 export interface MapZone { id: string; name: string; color: string; polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon }
-export interface MapPin { id: string; name: string; state: StagePin; lat: number; lng: number; dim?: boolean; lead?: boolean }
+export interface MapPin { id: string; name: string; state: StagePin; fu?: boolean; lat: number; lng: number; dim?: boolean; lead?: boolean }
 export interface RepMapHandle { flyTo: (p: { lat: number; lng: number }, zoom?: number) => void }
 
 const STATE_COLOR: unknown[] = ['match', ['get', 'state'], ...Object.entries(STAGE_PIN).flatMap(([k, v]) => [k, v.color]), '#ffffff'];
@@ -65,8 +65,8 @@ export const RepMapView = React.forwardRef<RepMapHandle, {
         m.addLayer({ id: 'rep-pins', type: 'circle', source: 'rep-pins', paint: {
           'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, 2.5, 14, 5, 17, 9.5], 'circle-color': STATE_COLOR as never,
           'circle-opacity': ['case', ['==', ['get', 'dim'], 1], 0.35, 1],
-          'circle-stroke-color': ['case', ['==', ['get', 'lead'], 1], '#0f766e', '#111827'],
-          'circle-stroke-width': ['case', ['==', ['get', 'lead'], 1], 2.5, 1.4],
+          'circle-stroke-color': ['case', ['==', ['get', 'fu'], 1], FOLLOW_UP_RING, ['==', ['get', 'lead'], 1], '#0f766e', '#111827'],
+          'circle-stroke-width': ['case', ['==', ['get', 'fu'], 1], 3.2, ['==', ['get', 'lead'], 1], 2.5, 1.4],
           'circle-stroke-opacity': ['case', ['==', ['get', 'dim'], 1], 0.4, 1] } });
         m.addLayer({ id: 'rep-names', type: 'symbol', source: 'rep-pins', minzoom: 16, layout: {
           'text-field': ['get', 'name'], 'text-size': 11.5, 'text-offset': [0, 1.2], 'text-anchor': 'top', 'text-font': ['DIN Pro Medium', 'Arial Unicode MS Regular'] },
@@ -112,10 +112,11 @@ export const RepMapView = React.forwardRef<RepMapHandle, {
   useEffect(() => {
     const m = map.current; if (!ready || !m) return;
     (m.getSource('rep-pins') as mapboxgl.GeoJSONSource).setData({ type: 'FeatureCollection', features: pins.map(b => ({
-      type: 'Feature', properties: { id: b.id, name: b.name, state: b.state, dim: b.dim ? 1 : 0, lead: b.lead ? 1 : 0 },
+      type: 'Feature', properties: { id: b.id, name: b.name, state: b.state, dim: b.dim ? 1 : 0, lead: b.lead ? 1 : 0, fu: b.fu ? 1 : 0 },
       geometry: { type: 'Point', coordinates: [b.lng, b.lat] } })) });
   }, [ready, pins]);
 
+  const fuCount = useMemo(() => pins.filter(b => b.fu).length, [pins]);
   const counts = useMemo(() => { const c: Partial<Record<StagePin, number>> = {}; for (const b of pins) c[b.state] = (c[b.state] || 0) + 1; return c; }, [pins]);
   return (
     <div className="v2-rep-map">
@@ -124,6 +125,7 @@ export const RepMapView = React.forwardRef<RepMapHandle, {
       {showCounts && (
         <div className="v2-rep-legend">
           {(Object.keys(STAGE_PIN) as StagePin[]).filter(k => counts[k]).map(k => <span key={k}><i className="v2-rep-dot" style={{ background: STAGE_PIN[k].color }} />{STAGE_PIN[k].label} {counts[k]}</span>)}
+          {fuCount > 0 && <span><i className="v2-rep-dot" style={{ background: '#fff', boxShadow: `inset 0 0 0 3px ${FOLLOW_UP_RING}` }} />Follow-up open {fuCount}</span>}
           {!pins.length && <span>Nothing left to visit here.</span>}
         </div>)}
       {children}

@@ -26,6 +26,10 @@ export interface TimelineItem { at: string; kind: string; title?: string; outcom
 export async function businessState(business: string, campaign: string): Promise<BizState> {
   return must(await db.rpc('ms_business_state', { p_business: business, p_campaign: campaign })) as BizState;
 }
+/** The rep presented the deck: the business is Pitched from now on. */
+export async function markPitched(business: string, campaign: string): Promise<BizState> {
+  return must(await db.rpc('ms_mark_pitched', { p_business: business, p_campaign: campaign })) as BizState;
+}
 export async function setLost(business: string, campaign: string, reason: string | null): Promise<BizState> {
   return must(await db.rpc('ms_set_lost', { p_business: business, p_campaign: campaign, p_reason: reason })) as BizState;
 }

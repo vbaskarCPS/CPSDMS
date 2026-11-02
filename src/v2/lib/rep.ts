@@ -39,25 +39,25 @@ export const PIN: Record<PinState, { label: string; color: string }> = {
 };
 export const pinOf = (s: string | null | undefined) => PIN[(s as PinState) in PIN ? (s as PinState) : 'new'];
 
-/** Pins by stage (New → Pitched → Booked → Won, or Lost), amber while a follow-up is open. */
-export type StagePin = 'new' | 'pitched' | 'booked' | 'won' | 'lost' | 'follow_up' | 'off';
+/** Pins by stage (New → Pitched → Booked → Won, or Lost). A follow-up can be open at any stage (before the
+ *  pitch, after it, or the host's after the call): the pin keeps its stage colour and gets an amber ring. */
+export type StagePin = 'new' | 'pitched' | 'booked' | 'won' | 'lost' | 'off';
+export const FOLLOW_UP_RING = '#f59e0b';
 export const STAGE_PIN: Record<StagePin, { label: string; color: string }> = {
   new: { label: 'New', color: '#ffffff' },
-  follow_up: { label: 'Follow-up', color: '#f59e0b' },
   pitched: { label: 'Pitched', color: '#2563eb' },
   booked: { label: 'Onboarding booked', color: '#86efac' },
   won: { label: 'Won', color: '#16a34a' },
   lost: { label: 'Lost', color: '#dc2626' },
   off: { label: 'Can’t sell here', color: '#111827' },
 };
-/** The pin for a business: its stage (from the server, when it sends one), with an open follow-up shown amber;
- *  without a stage (an older copy on the phone), worked out from the last visit. */
+/** The pin for a business: its stage (from the server, when it sends one); without a stage (an older copy on
+ *  the phone), worked out from the last visit. */
 export function stagePin(stage: string | null | undefined, s: PinState): StagePin {
   if (s === 'cant_sell') return 'off';
-  if (s === 'follow_up' && stage !== 'won' && stage !== 'lost' && stage !== 'booked') return 'follow_up';
   if (stage && stage in STAGE_PIN) return stage as StagePin;
   switch (s) {
-    case 'new': return 'new';
+    case 'new': case 'follow_up': return 'new';
     case 'interested': case 'rejected': return 'pitched';
     case 'pending': return 'booked';
     case 'closed': return 'won';

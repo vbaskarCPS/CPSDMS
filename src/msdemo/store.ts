@@ -68,6 +68,7 @@ const S = {
   },
   threads: [] as (Thread & { last_at: string; unread: number; business_id: string })[],
   lost: new Map<string, string>(),   // business → the lost reason
+  pitched: new Set<string>(),         // businesses the deck was presented at
 };
 
 const OWNERS = ['Maria Lopez', 'Dev Patel', 'Jordan Lee', 'Priya Sharma', 'Tom Reyes', 'Lina Haddad', 'Marco Bianchi', 'Grace Kim', 'Omar Siddiqui', 'Hannah Wright', 'Chris Novak', 'Aisha Bello'];
@@ -256,7 +257,7 @@ function bizState(bid: string) {
   const m = S.meetings.filter(x => x.business.id === bid).sort((a, b) => b.starts_at.localeCompare(a.starts_at))[0];
   const s = stateOf(bid);
   const stage = S.lost.has(bid) || m?.status === 'not_fit' ? 'lost' : s.state === 'closed' || m?.status === 'closed' ? 'won' : m && m.status === 'booked' ? 'booked'
-    : s.state === 'not_interested' || s.state === 'cant_sell' ? 'lost' : s.state === 'interested' || s.state === 'follow_up' || s.state === 'pending' ? 'pitched'
+    : s.state === 'not_interested' || s.state === 'cant_sell' ? 'lost' : s.state === 'interested' || s.state === 'pending' || S.pitched.has(bid) || S.answers.has(bid) ? 'pitched'
     : 'new';
   const heat = stage === 'booked' || stage === 'pitched' ? (s.state === 'interested' ? 'hot' : 'warm') : stage === 'new' && vs.length ? 'cold' : undefined;
   const a = S.answers.get(bid);
@@ -339,6 +340,10 @@ export function rpc(name: string, a: Args): unknown {
     }
     case 'ms_get_goals': return { visits_per_day: 40, deals_per_day: 2 };
     case 'ms_rep_add_lead': {
+      // a known business with the same name within 60 m becomes the rep's (like the real thing), not a copy
+      const lat = Number(a.p_lat), lng = Number(a.p_lng), nm = str(a.p_name).trim().toLowerCase();
+      const same = seed.businesses.find(b => b.n.trim().toLowerCase() === nm && Math.hypot((b.lat - lat) * 111320, (b.lng - lng) * 80000) <= 60);
+      if (same) { added.add(same.id); return { id: same.id, zone_id: same.z, zone_name: zoneById.get(same.z)?.name || null, campaign_id: camp.id, in_my_zone: true }; }
       const z = seed.zones[0];
       const l: Lead = { id: uid(), n: str(a.p_name), a: str(a.p_address) || null, lat: Number(a.p_lat), lng: Number(a.p_lng), k: str(a.p_kind) || 'other', p: null, pid: null, z: z.id, ph: str(a.p_phone) || null, w: str(a.p_website) || null, h: null, lead: true };
       S.leads.push(l);
@@ -349,6 +354,13 @@ export function rpc(name: string, a: Args): unknown {
     case 'ms_save_deck_answers': S.answers.set(str(a.p_business), a.p_data as DeckAnswers); return null;
     case 'ms_business_state': return bizState(str(a.p_business));
     case 'ms_business_timeline': return timeline(str(a.p_business));
+    case 'ms_mark_pitched': S.pitched.add(str(a.p_business)); return bizState(str(a.p_business));
+    case 'ms_rep_known_near': {
+      const lat = Number(a.p_lat), lng = Number(a.p_lng), on = new Set(allBiz().map(b => b.id));
+      const m = (b: SeedBiz) => Math.round(Math.hypot((b.lat - lat) * 111320, (b.lng - lng) * 111320 * Math.cos(lat * Math.PI / 180)));
+      return seed.businesses.filter(b => !on.has(b.id)).map(b => ({ b, d: m(b) })).filter(x => x.d <= 90).sort((x, y) => x.d - y.d).slice(0, 12)
+        .map(({ b, d }) => ({ id: b.id, name: b.n, address: b.a || undefined, kind: b.k, phone: b.ph || undefined, website: b.w || undefined, lat: b.lat, lng: b.lng, m: d }));
+    }
     case 'ms_set_lost': { const r = str(a.p_reason); if (r) S.lost.set(str(a.p_business), r); else S.lost.delete(str(a.p_business)); return bizState(str(a.p_business)); }
     case 'ms_set_do_not_knock': return null;
     case 'ms_business_set_website': return null;
@@ -393,6 +405,12 @@ export function rpc(name: string, a: Args): unknown {
     case 'ms_meetings_list': {
       const from = a.p_from ? new Date(str(a.p_from)).getTime() : 0, to = a.p_to ? new Date(str(a.p_to)).getTime() : Infinity;
       return S.meetings.filter(m => { const t = new Date(m.starts_at).getTime(); return t >= from && t <= to; }).sort((x, y) => x.starts_at.localeCompare(y.starts_at)).map(freshMeeting);
+    }
+    case 'ms_meeting_follow_up': {
+      const m = S.meetings.find(x => x.id === str(a.p_meeting)); if (!m) throw new Error('Not found');
+      m.status = 'booked'; m.follow_up_at = a.p_at ? str(a.p_at) : null; if (str(a.p_note)) m.outcome_note = str(a.p_note);
+      m.outcome_by = a.p_at ? HOST.name : null; m.outcome_at = a.p_at ? iso(Date.now()) : null;
+      return freshMeeting(m);
     }
     case 'ms_meeting_outcome': {
       const m = S.meetings.find(x => x.id === str(a.p_meeting)); if (!m) throw new Error('Not found');

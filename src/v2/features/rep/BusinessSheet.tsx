@@ -15,7 +15,7 @@ import {
 import {
   followUpIcs, newId, parseCard,
 } from '../../lib/repField';
-import { LOST_REASONS, setLost } from '../../lib/msPipeline';
+import { LOST_REASONS, markPitched, setLost } from '../../lib/msPipeline';
 import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BookOnboarding } from './BookOnboarding';
@@ -43,7 +43,9 @@ export const BusinessSheet: React.FC<{
   id: string; campaign: string; fallback?: SheetFallback | null; onClose: () => void; onSaved: (v: SavedVisit) => void;
   /** it came off the list (do not knock) */
   onGone?: () => void;
-}> = ({ id, campaign, fallback, onClose, onSaved, onGone }) => {
+  /** its stage changed here without a visit (presenting the deck makes it Pitched) */
+  onStage?: (stage: string) => void;
+}> = ({ id, campaign, fallback, onClose, onSaved, onGone, onStage }) => {
   const { session } = useAuth();
   const { toast } = useRep();
   const b = useLoad(() => repBusiness(id, campaign), [id, campaign]);
@@ -171,7 +173,11 @@ export const BusinessSheet: React.FC<{
 
       {!offline && <StageCard business={id} campaign={campaign} tick={peopleTick} />}
       <div className="v2-rep-cards">
-        <button type="button" className="v2-rep-card present" disabled={!kit.data?.present_url} onClick={() => setPresenting(true)}>
+        <button type="button" className="v2-rep-card present" disabled={!kit.data?.present_url} onClick={() => {
+          setPresenting(true);
+          // showing the deck is the pitch: the stage (and the pin) move to Pitched now
+          markPitched(id, campaign).then(st => { setPeopleTick(t => t + 1); onStage?.(st.stage); }).catch(() => undefined);
+        }}>
           <Presentation size={26} /><span><b>Present</b><em>{kit.data && !kit.data.present_url ? 'No presentation for this campaign yet' : 'Show the owner and book a call'}</em></span><ChevronRight size={20} />
         </button>
       </div>
