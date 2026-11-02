@@ -9,6 +9,7 @@ import {
   BookOpen, Users, Trash2,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { db } from '../../v2/lib/client';
 import { googleAuthService } from '../../lib/googleAuthService';
 import { loadAndCacheMapPCL, getMapPCLCounts, recalibrateMapPCL } from '../../lib/pclCacheService';
 import { firstFree, ownedNumbers, runsLabel, takenNumbers, type Drawn } from '../../lib/areaNumbers';
@@ -251,16 +252,19 @@ async function fetchOverpass(bbox: string): Promise<OsmWay[]> {
 }
 
 // Roads for a box: from our saved copy where somebody already loaded that ground, Overpass for the rest.
+// The cache functions check who is signed in, so they go through the signed-in client (`db`); the
+// legacy client here carries no session, and through it every call was "permission denied" — the
+// cache stayed empty and every open waited on Overpass.
 function fetchRoads(bbox: string): Promise<OsmWay[]> {
   return fetchRoadsCached(bbox, {
     overpass: fetchOverpass,
     get: async (cells, b) => {
-      const { data, error } = await supabase.rpc('road_cache_get', { p_cells: cells, p_s: b.s, p_w: b.w, p_n: b.n, p_e: b.e });
+      const { data, error } = await db.rpc('road_cache_get', { p_cells: cells, p_s: b.s, p_w: b.w, p_n: b.n, p_e: b.e });
       if (error) throw error;
       return data;
     },
     put: async (cells, ways) => {
-      const { error } = await supabase.rpc('road_cache_put', { p_cells: cells, p_ways: ways });
+      const { error } = await db.rpc('road_cache_put', { p_cells: cells, p_ways: ways });
       if (error) throw error;
     },
     onSaveError: e => console.warn('[Map Builder] saving roads failed:', e),
@@ -906,7 +910,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       if (maxX - minX > 5 && maxY - minY > 5) {
         const map = mapRef.current;
         if (map) {
-          const features = map.queryRenderedFeatures([{ x: minX, y: minY }, { x: maxX, y: maxY }], { layers: ['roads-base', 'roads-unnamed', 'roads-selected'] });
+          const features = map.queryRenderedFeatures([[minX, minY], [maxX, maxY]], { layers: ['roads-base', 'roads-unnamed', 'roads-selected'] });
           const hitIds = new Set<number>(features.map(f => f.properties?.id as number).filter(Boolean));
           const hitNames = new Set<string>(features.map(f => f.properties?.name as string).filter(Boolean));
           const routeNum = activeRouteNumRef.current;
