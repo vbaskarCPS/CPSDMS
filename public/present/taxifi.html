@@ -139,6 +139,8 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 .num input { width: 110px; border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 11px 12px; font-size: 17px; font-family: var(--mono); font-weight: 700; text-align: right; }
 .num input:focus { border-color: var(--accent); outline: none; }
 .num span { color: var(--mut); font-size: 15px; }
+.num.exact { margin-top: 8px; }
+.num.exact .pre { color: var(--ink); font-weight: 700; font-family: var(--mono); font-size: 17px; margin-right: -6px; }
 @media (max-width: 380px) { .talk { grid-template-columns: 1fr; } }
 .qnext { align-self: flex-start; border: 0; background: var(--ink); color: var(--bg); border-radius: 12px; padding: 12px 18px; font-weight: 700; cursor: pointer; }
 /* proposal (slide 7) */
@@ -555,9 +557,21 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   var YE = { u1000: 750, '1000_2000': 1500, '2000_3500': 2750, o3500: 4500 }; // the middle of each band, a year
   var answers = {};
   function money(v) { return '$' + Math.round(v).toLocaleString('en-CA'); }
+  // "Exact number" beside each range: the number is kept (answers[key + '_n']) and also placed in its range, so the
+  // proposal still works; for what they pay now and for year-end, the exact amount is used instead of the band's middle.
+  var EXACT = {
+    years: { unit: 'years', max: 200, band: function (n) { return n < 1 ? 'u1' : n < 3 ? '1_3' : n < 5 ? '3_5' : n < 10 ? '5_10' : '10'; } },
+    owned_years: { unit: 'years', max: 200, band: function (n) { return n < 1 ? 'u1' : n < 3 ? '1_3' : n < 5 ? '3_5' : n < 10 ? '5_10' : '10'; } },
+    expenses: { dollars: true, unit: 'a month', max: 100000000, band: function (n) { return n < 10000 ? 'u10' : n < 25000 ? '10_25' : n < 50000 ? '25_50' : n < 100000 ? '50_100' : 'o100'; } },
+    pay_now: { dollars: true, unit: 'a month', max: 1000000, band: function (n) { return n < 300 ? 'u300' : n < 600 ? '300_600' : n < 1000 ? '600_1000' : 'o1000'; } },
+    year_end: { dollars: true, unit: 'a year', max: 1000000, band: function (n) { return n < 1000 ? 'u1000' : n < 2000 ? '1000_2000' : n < 3500 ? '2000_3500' : 'o3500'; } },
+    admin_hours: { unit: 'hrs a week', max: 1000, band: function (n) { return n <= 10 ? 'u10' : n <= 40 ? '11_40' : 'o40'; } },
+  };
+  function exactText(key, n) { var x = EXACT[key]; return (x.dollars ? money(n) : String(n)) + ' ' + x.unit; }
   function label(key) {
     var g = document.querySelector('.q[data-q="' + key + '"]'); if (!g || g.hidden) return null;
     if (g.hasAttribute('data-num')) return answers[key] == null ? null : { q: g.querySelector('b').textContent.replace(/how many.*$/, '').trim(), a: String(answers[key]) };
+    if (EXACT[key] && answers[key + '_n'] != null) return { q: g.querySelector('b').firstChild.textContent.trim(), a: exactText(key, answers[key + '_n']) };
     var picked = Array.prototype.filter.call(g.querySelectorAll('button'), function (b) { return b.getAttribute('aria-pressed') === 'true'; });
     return picked.length ? { q: g.querySelector('b').firstChild.textContent.trim(), a: picked.map(function (b) { return b.textContent; }).join(', ') } : null;
   }
@@ -575,7 +589,9 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     if (pay) lines.push(['Payroll', money(pay) + '/mo', '$49 + $10 a person, ' + staff + (staff === 1 ? ' person' : ' people')]);
     lines.push(['Bundle discount', '\u2212' + Math.round(disc * 100) + '%', services + ' services', 'disc']);
     var yearly = ((core || 0) * 12 + T2 + pay * 12) * (1 - disc);
-    var today = a.pay_now ? NOW[a.pay_now] * 12 + (a.year_end ? YE[a.year_end] : 0) : null;
+    var nowM = a.pay_now_n != null ? a.pay_now_n : a.pay_now ? NOW[a.pay_now] : null;
+    var nowYE = a.year_end_n != null ? a.year_end_n : a.year_end ? YE[a.year_end] : null;
+    var today = nowM != null ? nowM * 12 + (nowYE || 0) : null;
     var fit = { me: 'No more doing the books at night: taxifi keeps them current every day.',
       bookkeeper: 'taxifi takes over the monthly bookkeeping, with a Canadian accountant signing every month.',
       accountant: 'Like your accountant? Keep them for year-end; taxifi can cover the other eleven months.',
@@ -583,7 +599,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
       nobody: 'Behind on the books? taxifi catches you up first. Catch-up is scoped on your onboarding call.' }[a.books] || 'Books current every day, with a Canadian accountant behind every number.';
     return { lines: lines, monthly: Math.round(yearly / 12), yearly: Math.round(yearly), quoted: core == null, discount: disc,
       today_yearly: today, year_end_in: !!a.year_end, core: core, pay: pay, staff: staff, t2: T2, services: services,
-      now_month: a.pay_now ? NOW[a.pay_now] : null, now_ye: a.year_end ? YE[a.year_end] : null, savings: today != null && core != null ? Math.round(today - yearly) : null, fit: fit };
+      now_month: nowM, now_ye: nowYE, exact_now: a.pay_now_n != null, exact_ye: a.year_end_n != null, savings: today != null && core != null ? Math.round(today - yearly) : null, fit: fit };
   }
   function render() {
     var p = proposal();
@@ -603,23 +619,24 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
       r.appendChild(lab); r.appendChild(cell('now', now, nowSub)); r.appendChild(cell('us', us, usSub)); box.appendChild(r);
     }
     var dash = '—';
-    row('', 'Bookkeeping', 'a month', p.now_month != null ? '~' + money(p.now_month) : dash, p.now_month != null ? 'with payroll' : 'not answered',
+    row('', 'Bookkeeping', 'a month', p.now_month != null ? (p.exact_now ? '' : '~') + money(p.now_month) : dash, p.now_month != null ? 'with payroll' : 'not answered',
       p.core == null ? 'Quoted' : money(p.core), p.core == null ? 'over $100K/mo' : 'Core, from');
     row('', 'Payroll', p.staff ? 'a month, ' + p.staff + (p.staff === 1 ? ' person' : ' people') : 'a month', p.now_month != null ? 'incl.' : dash, p.now_month != null ? 'in bookkeeping' : null,
       p.pay ? money(p.pay) : '$0', p.pay ? '$49 + $10 each' : 'no staff');
-    row('', 'Corporate return', 'a year', p.now_ye != null ? '~' + money(p.now_ye) : dash, p.now_ye != null ? null : 'not answered',
+    row('', 'Corporate return', 'a year', p.now_ye != null ? (p.exact_ye ? '' : '~') + money(p.now_ye) : dash, p.now_ye != null ? null : 'not answered',
       money(p.t2), 'T2 Standard, from');
     row('', 'Software', 'QuickBooks or similar', dash, null, '$0', 'included');
     row('disc', 'Bundle discount', 'on the taxifi quote', '', null, '−' + Math.round(p.discount * 100) + '%', p.services + ' services');
     var t = el('div', 'sbs-t'); t.setAttribute('role', 'row');
     t.appendChild(el('span', null, p.quoted ? 'A year, plus Core' : 'A year'));
-    t.appendChild(el('b', null, p.today_yearly != null ? '~' + money(p.today_yearly) : dash));
+    t.appendChild(el('b', null, p.today_yearly != null ? (p.exact_now && (p.exact_ye || !p.year_end_in) ? '' : '~') + money(p.today_yearly) : dash));
     t.appendChild(el('b', 'us', money(p.yearly)));
     box.appendChild(t);
     var save = document.getElementById('p-save'), vs = document.getElementById('p-vs');
     save.hidden = !(p.savings > 0);
     if (p.savings > 0) document.getElementById('p-save-n').textContent = money(p.savings);
-    vs.textContent = p.today_yearly == null ? '' : p.quoted ? '' : 'You pay about ' + money(p.today_yearly) + ' a year now' + (p.year_end_in ? '' : ' before year-end') + ' (the middle of the ranges you picked).'
+    vs.textContent = p.today_yearly == null ? '' : p.quoted ? '' : 'You pay about ' + money(p.today_yearly) + ' a year now' + (p.year_end_in ? '' : ' before year-end')
+      + (p.exact_now && (p.exact_ye || !p.year_end_in) ? '.' : p.exact_now || p.exact_ye ? ' (your number, and the middle of the range you picked).' : ' (the middle of the ranges you picked).')
       + (p.savings > 0 ? '' : -p.savings <= p.yearly * 0.1 ? ' taxifi costs about the same, with an accountant reviewing every month and your T2 filed.'
         : ' taxifi costs more, and adds an accountant reviewing every month, HST filed and your T2 signed and filed.');
     document.getElementById('p-fit').textContent = p.fit;
@@ -654,13 +671,47 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
           .map(function (x) { return x.getAttribute('data-v'); });
         if (multi) { if (vals.length) answers[key] = vals; else delete answers[key]; }
         else if (vals.length) answers[key] = vals[0]; else delete answers[key];
+        if (EXACT[key]) closeExact(key);
         if (key === 'owned_whole') {
           var oy = document.querySelector('.q[data-q="owned_years"]'); oy.hidden = answers.owned_whole !== 'no';
-          if (oy.hidden) { delete answers.owned_years; Array.prototype.forEach.call(oy.querySelectorAll('button'), function (x) { x.setAttribute('aria-pressed', 'false'); }); }
+          if (oy.hidden) { delete answers.owned_years; closeExact('owned_years'); Array.prototype.forEach.call(oy.querySelectorAll('button'), function (x) { x.setAttribute('aria-pressed', 'false'); }); }
         }
         render(); share();
       });
     });
+  });
+  // the "Exact number" chip and its field, beside each range
+  function closeExact(key) {
+    var g = document.querySelector('.q[data-q="' + key + '"]'); if (!g) return;
+    var b = g.querySelector('button[data-v="exact"]'), box = g.querySelector('.num.exact');
+    if (b) b.setAttribute('aria-pressed', 'false');
+    if (box) { box.hidden = true; box.querySelector('input').value = ''; }
+    delete answers[key + '_n'];
+  }
+  Object.keys(EXACT).forEach(function (key) {
+    var x = EXACT[key], g = document.querySelector('.q[data-q="' + key + '"]'); if (!g) return;
+    var b = document.createElement('button');
+    b.type = 'button'; b.setAttribute('data-v', 'exact'); b.setAttribute('aria-pressed', 'false'); b.textContent = 'Exact number';
+    g.querySelector('.opts').appendChild(b);
+    var box = document.createElement('div'); box.className = 'num exact'; box.hidden = true;
+    var id = 'w-exact-' + key;
+    box.innerHTML = (x.dollars ? '<span class="pre">$</span>' : '') + '<input id="' + id + '" type="number" inputmode="' + (x.dollars ? 'decimal' : 'numeric') + '" min="0" step="1" placeholder="0" aria-label="'
+      + g.querySelector('b').firstChild.textContent.trim().replace(/"/g, '') + ', exact"><span>' + x.unit + '</span>';
+    g.appendChild(box);
+    var input = box.querySelector('input');
+    function apply() {
+      var n = parseFloat(input.value);
+      if (isFinite(n) && n >= 0) { n = Math.min(Math.round(n * 100) / 100, x.max); answers[key + '_n'] = n; answers[key] = x.band(n); }
+      else { delete answers[key + '_n']; delete answers[key]; }
+    }
+    b.addEventListener('click', function () {
+      var on = b.getAttribute('aria-pressed') !== 'true';
+      Array.prototype.forEach.call(g.querySelectorAll('.opts button'), function (o) { o.setAttribute('aria-pressed', 'false'); });
+      if (on) { b.setAttribute('aria-pressed', 'true'); box.hidden = false; apply(); input.focus(); }
+      else { closeExact(key); delete answers[key]; }
+      render(); share();
+    });
+    input.addEventListener('input', function () { apply(); render(); clearTimeout(shareT); shareT = setTimeout(share, 400); });
   });
   document.getElementById('w-staff').addEventListener('input', function (e) {
     var n = parseInt(e.target.value, 10);
