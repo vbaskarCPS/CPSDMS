@@ -48,7 +48,7 @@ describe('rep · pins', () => {
   });
   it('an unknown state shows as not visited', () => {
     expect(pinOf('bogus').label).toBe('Not visited');
-    expect(pinOf('pending').label).toMatch(/approval/);
+    expect(pinOf('pending').label).toBe('Deal saved');
   });
   it('says today / tomorrow / yesterday', () => {
     const now = new Date('2026-10-28T12:00:00');

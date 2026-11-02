@@ -13,7 +13,7 @@ export const OUTCOMES: { key: Outcome; label: string; hint: string; color: strin
   { key: 'not_interested', label: 'Not interested', hint: 'They said no', color: '#dc2626' },
   { key: 'follow_up', label: 'Follow-up', hint: 'A time to come back or call, and who to ask for', color: '#f59e0b' },
   { key: 'interested', label: 'Interested', hint: 'Sent them information', color: '#2563eb' },
-  { key: 'closed', label: 'Closed deal', hint: 'Goes to an admin to approve', color: '#16a34a' },
+  { key: 'closed', label: 'Closed deal', hint: 'Booked from Present', color: '#16a34a' },
   { key: 'cant_sell', label: 'Can’t sell here', hint: 'Shut down, wrong type, head office only: comes off your list', color: '#111827' },
 ];
 export const outcomeOf = (k: string | null | undefined) => OUTCOMES.find(o => o.key === k) || null;
@@ -32,7 +32,7 @@ export const PIN: Record<PinState, { label: string; color: string }> = {
   not_interested: { label: 'Not interested', color: '#dc2626' },
   follow_up: { label: 'Follow-up', color: '#f59e0b' },
   interested: { label: 'Interested', color: '#2563eb' },
-  pending: { label: 'Deal waiting for approval', color: '#86efac' },
+  pending: { label: 'Deal saved', color: '#86efac' },
   closed: { label: 'Closed deal', color: '#16a34a' },
   rejected: { label: 'Deal not approved', color: '#a855f7' },
   cant_sell: { label: 'Can’t sell here', color: '#111827' },

@@ -49,7 +49,7 @@ const COACH: CoachStep[] = [
   { title: 'Present', text: 'It’s on your map now, at New. Tap Present to show the owner the deck.', done: () => q('.v2-rep-present') },
   { title: 'Ask, propose, book', text: 'Swipe through with the owner. The questions screen builds their proposal next to what they pay today. On the last screen, tap Book onboarding and pick a time.',
     done: () => q('.v2-rep-booked') },
-  { title: 'Booked', text: 'That’s the close: the deal goes to an admin to approve. Tap Done, and the pin turns light green: Onboarding booked.',
+  { title: 'Booked', text: 'That’s the close: the onboarding is the deal, no approval needed. Tap Done, and the pin turns light green: Onboarding booked.',
     done: () => !q('.v2-rep-present') && !q('.v2-rep-page') && !q('.v2-rep-book') },
   { title: 'Now the host', text: 'The call is waiting in the host’s calls, with the owner’s answers and the proposal. Or keep going: add another, or try No one to talk to, Talked, follow up and Not interested on a business.' },
 ];

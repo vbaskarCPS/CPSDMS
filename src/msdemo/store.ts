@@ -400,9 +400,9 @@ export function rpc(name: string, a: Args): unknown {
       if (!slots().slots.some(s => new Date(s.start).getTime() === t)) throw new Error('That time was just taken. Pick another.');
       const m = meetingFor(b, t, str(a.p_name), str(a.p_phone) || null, str(a.p_email) || null, 'booked', { notes: str(a.p_notes) || null, created_at: iso(Date.now()) });
       S.meetings.push(m);
-      // booking is the close: the visit is saved as a deal waiting for approval
+      // booking is the close: the visit is saved as the deal, approved (no admin approval for onboardings)
       const v = addVisit(b, 'closed', Date.now(), { contact_name: m.owner_name, contact_phone: m.owner_phone || undefined, contact_email: m.owner_email || undefined, notes: 'Onboarding booked from the deck' });
-      S.deals.set(v.id, { status: 'pending', at: v.at });
+      S.deals.set(v.id, { status: 'approved', at: v.at });
       return m;
     }
 
