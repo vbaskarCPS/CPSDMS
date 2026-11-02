@@ -92,9 +92,21 @@ self.addEventListener('fetch', e => {
       const hit = await fromCache(req);
       if (hit) return hit;
       const res = await fetch(req);
-      if (res.ok && url.pathname.startsWith('/assets/')) {
-        const name = await currentCacheName();
-        if (name) (await caches.open(name)).put(req, res.clone());
+      if (url.pathname.startsWith('/assets/')) {
+        const type = res.headers.get('content-type') || '';
+        // The server has no such file (it answers with the app's page instead): this copy of the app is
+        // from an older build the server no longer has. Drop the copy so the next load is a clean one.
+        if (/\.(js|css)$/.test(url.pathname) && (!res.ok || /text\/html/.test(type))) {
+          const keys = await caches.keys();
+          await Promise.all(keys.filter(k => k.startsWith(PREFIX)).map(k => caches.delete(k)));
+          VERSION = null;
+          self.registration.update().catch(() => undefined);
+          return Response.error();
+        }
+        if (res.ok) {
+          const name = await currentCacheName();
+          if (name) (await caches.open(name)).put(req, res.clone());
+        }
       }
       return res;
     })());
