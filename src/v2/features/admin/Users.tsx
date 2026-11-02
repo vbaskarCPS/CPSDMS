@@ -8,7 +8,7 @@ import { listUsers, listCenters, createUser, updateUser, resetPassword, sendSetu
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tag, Toggle } from '../../ui';
 import { Mailboxes, UserMailboxes } from './Mailboxes';
 
-// MainstreetAI reps are added and managed in MainstreetAI › Reps, so they're not listed here and their
+// MainstreetAI reps and hosts are added and managed in MainstreetAI › Users, so they're not listed here and their
 // permission isn't offered as a checkbox (a staff member who also has it keeps it when saved).
 const STAFF_PERMISSIONS = PERMISSIONS.filter(p => p.key !== 'mainstreet_rep');
 const repOnly = (u: UserRow) => u.permissions.length > 0 && u.permissions.every(p => p === 'mainstreet_rep') && !u.is_super_admin;
@@ -61,7 +61,7 @@ export const Users: React.FC = () => {
               {rows.length === 0 && <tr><td colSpan={5 + STAFF_PERMISSIONS.length} className="v2-mut">No users{q ? ' match' : ' yet'}.</td></tr>}
             </tbody>
           </table></div>
-          {reps > 0 && <div className="v2-note" style={{ margin: '6px 4px 8px' }}>{reps} MainstreetAI rep{reps === 1 ? ' isn’t' : 's aren’t'} listed here; they’re managed in <Link className="v2-link" to="/app/mainstreet/reps">MainstreetAI › Reps</Link>.</div>}
+          {reps > 0 && <div className="v2-note" style={{ margin: '6px 4px 8px' }}>{reps} MainstreetAI rep{reps === 1 ? ' isn’t' : 's aren’t'} listed here; they’re managed in <Link className="v2-link" to="/app/mainstreet/reps">MainstreetAI › Users</Link>.</div>}
         </Card>
       )}
       {users.data && <Mailboxes users={users.data} />}

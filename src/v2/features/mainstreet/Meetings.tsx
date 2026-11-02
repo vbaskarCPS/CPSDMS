@@ -21,7 +21,7 @@ export const Meetings: React.FC = () => {
   const active = useMemo(() => (campaigns.data || []).filter(c => c.is_active), [campaigns.data]);
   const [campaign, setCampaign] = useState<string>('');
   useEffect(() => { if (!campaign && active.length) setCampaign(active[0].id); }, [active, campaign]);
-  const [view, setView] = useState<View>('calendar');
+  const [view, setView] = useState<View>(() => (['calendar', 'hosts', 'rules'] as View[]).find(v => v === new URLSearchParams(window.location.search).get('view')) || 'calendar');
   return (
     <div className="v2-main v2-ms">
       <div className="v2-head" style={{ flexWrap: 'wrap', gap: 8 }}>
