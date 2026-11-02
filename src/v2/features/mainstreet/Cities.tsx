@@ -7,7 +7,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, Loader2, Plus, RefreshCw, Square } from 'lucide-react';
 import { useLoad } from '../../lib/data';
-import { cityJob, fetchBoundary, fetchLines, fetchPlazas, joinAreas, listCities, queueCityBuild, replaceLines, replacePlazas, saveCity, searchAreas, setCityStatus, type AreaHit, type City, type CityJob } from '../../lib/msCity';
+import { cityJob, cityLineCount, fetchBoundary, fetchLines, fetchPlazas, joinAreas, listCities, queueCityBuild, replaceLines, replacePlazas, saveCity, searchAreas, setCityStatus, type AreaHit, type City, type CityJob } from '../../lib/msCity';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 
 type StepState = 'todo' | 'running' | 'done' | 'failed';
@@ -176,9 +176,14 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
         geometry = b.geometry;
         set('boundary', 'done', b.name);
       }
-      set('lines', 'running');
-      const lines = await fetchLines(bboxOf(geometry), ctrl.signal, (d, of) => set('lines', 'running', `OpenStreetMap · part ${d} of ${of}`));
-      set('lines', 'done', `${await replaceLines(city.id, lines)} road pieces`);
+      // streets already saved (the boundary didn't change): keep them
+      const have = city.boundary ? await cityLineCount(city.id) : 0;
+      if (have > 0) set('lines', 'done', `${have.toLocaleString('en-CA')} road pieces, already saved`);
+      else {
+        set('lines', 'running');
+        const lines = await fetchLines(bboxOf(geometry), ctrl.signal, (d, of) => set('lines', 'running', `OpenStreetMap · part ${d} of ${of}`));
+        set('lines', 'done', `${await replaceLines(city.id, lines)} road pieces`);
+      }
       set('land', 'running');
       const land = await fetchPlazas(bboxOf(geometry), ctrl.signal, (d, of) => set('land', 'running', `OpenStreetMap · part ${d} of ${of}`));
       set('land', 'done', `${await replacePlazas(city.id, land)} areas`);

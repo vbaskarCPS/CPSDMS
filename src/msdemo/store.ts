@@ -92,8 +92,8 @@ function addVisit(b: SeedBiz, outcome: RepVisit['outcome'], at: number, extra: P
   return v;
 }
 
-// a believable last two weeks for the demo rep
-(function seedHistory() {
+// a believable last two weeks for a rep: kept for a fuller demo, but the demo starts blank (the rep adds the first one)
+export function seedHistory() {
   const now = Date.now();
   const list = [...seed.businesses];
   // walk a few streets: every 6th business or so has been visited
@@ -140,7 +140,7 @@ function addVisit(b: SeedBiz, outcome: RepVisit['outcome'], at: number, extra: P
     S.threads.push({ id: uid(), subject: `Following up from today, ${b.n}`, contact_email: v.contact_email, contact_name: v.contact_name, starred: false, archived: false, opted_out: false,
       business: { id: b.id, name: b.n, address: b.a || undefined, kind: b.k, phone: b.ph || undefined }, campaign: camp, messages: msgs, last_at: last.at, unread: last.dir === 'in' ? 1 : 0, business_id: b.id });
   });
-})();
+}
 
 function meetingFor(b: SeedBiz, start: number, owner: string, phone: string | null, email: string | null, status: MeetingStatus = 'booked', extra: Partial<Meeting> = {}): Meeting {
   return {
@@ -156,7 +156,7 @@ function meetingFor(b: SeedBiz, start: number, owner: string, phone: string | nu
 // ───────────── reading the state ─────────────
 // Like the real app, reps only see businesses reps have added (plus anything already visited): the ones
 // visited in the sample history, about as many more that other reps added, and whatever is added in the demo.
-const added = new Set(seed.businesses.filter((_, i) => i % 6 === 3).slice(0, 120).map(b => b.id));
+const added = new Set<string>();   // the demo starts blank: businesses appear as the rep adds them
 const allBiz = (): SeedBiz[] => [...seed.businesses.filter(b => added.has(b.id) || S.visits.some(v => v.business_id === b.id)), ...S.leads];
 const visitsOf = (bid: string) => S.visits.filter(v => v.business_id === bid).sort((a, b) => b.at.localeCompare(a.at));
 const retryDays = () => Number(seed.campaign.kit.retry_days) || 30;

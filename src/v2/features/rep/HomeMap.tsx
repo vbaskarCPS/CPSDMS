@@ -33,6 +33,8 @@ export const HomeMap: React.FC = () => {
   const openId = sp.get('b');
   const setOpen = (id: string | null) => { const n = new URLSearchParams(sp); if (id) n.set('b', id); else n.delete('b'); setSp(n, { replace: !id }); };
   const [show, setShow] = useState<'open' | 'all'>('open');
+  // businesses changed here stay on the map in their new colour (a Lost one doesn't just vanish from To visit)
+  const [touched, setTouched] = useState<Set<string>>(() => new Set());
   const [camp, setCamp] = useState<string | null>(null);
   const [adding, setAdding] = useState<null | { pick?: boolean; at?: { lat: number; lng: number } }>(null);
   const mapRef = useRef<RepMapHandle>(null);
@@ -48,7 +50,7 @@ export const HomeMap: React.FC = () => {
     return [...seen.values()];
   }, [m, camp]);
   const shown = useMemo(() => (m?.data.businesses || []).filter(b =>
-    (!camp || b.c === camp) && (show === 'all' || isOpen(b.s))), [m, camp, show]);
+    (!camp || b.c === camp) && (show === 'all' || isOpen(b.s) || touched.has(`${b.id}|${b.c}`))), [m, camp, show, touched]);
   const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.n, state: stagePin(b.st, b.s), fu: b.s === 'follow_up', lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
   const left = useMemo(() => (m?.data.businesses || []).filter(b => (!camp || b.c === camp) && isOpen(b.s)).length, [m, camp]);
 
@@ -63,6 +65,7 @@ export const HomeMap: React.FC = () => {
   const onSaved = useCallback((v: SavedVisit) => {
     const cid = open?.campaign;
     // the pin changes as soon as the visit is saved: Not interested is Lost, a booking is Booked, the rest keep their stage
+    setTouched(t => new Set(t).add(`${v.business}|${cid}`));
     const st = (cur?: string) => (v.outcome === 'not_interested' ? 'lost' : v.outcome === 'closed' ? 'booked' : cur);
     setM(cur => cur && { ...cur, data: { ...cur.data, businesses: cur.data.businesses.map(b => (b.id === v.business && b.c === cid
       ? { ...b, s: v.state, st: st(b.st), f: v.outcome === 'follow_up' ? b.f || new Date().toISOString() : undefined, at: new Date().toISOString() } : b)) } });

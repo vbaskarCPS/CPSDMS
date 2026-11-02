@@ -31,21 +31,43 @@ function authFor(role: Role, exit: () => void): AuthState {
 // ───────────── the tour ─────────────
 interface Step { to: string; title: string; text: string }
 const TOUR: Record<Role, Step[]> = {
-  rep: [
-    { to: '/app/rep', title: 'The map', text: 'Your zones and the businesses reps have added in them, coloured by stage: white new, blue pitched, light green booked, green won (red lost), amber while a follow-up is open. Tap any pin to open it.' },
-    { to: '/app/rep', title: 'Add a business at the door', text: 'Walking past one that isn’t on the map? Tap Add: drop the pin where you are, give it a name and type, and it’s yours to visit. In the demo you’re standing at one of Oakville’s plazas.' },
-    { to: '/app/rep/zones', title: 'Your zones', text: 'Each zone shows how many are left to visit, follow-ups due and deals. Open one to walk it as a list, plaza by plaza, street by street.' },
-    { to: '/app/rep', title: 'A business', text: 'Open a pin to see its stage (New → Pitched → Booked → Won). What happened? is just three taps: No one to talk to, Talked (set the follow-up and who to ask for), or Not interested (marks it lost, with why). Add the people you met, photos and notes.' },
-    { to: '/app/rep', title: 'Present and book', text: 'On a business, tap Present: everything is in the Taxifi deck: the pitch, the owner’s questions, a proposal next to what they pay today, and the onboarding call, booked into the host’s real open times on the last screen.' },
-    { to: '/app/rep/followups', title: 'Follow-ups', text: 'Everyone you promised to come back to or call, overdue first, with who to ask for. Add one to your calendar or open it on the map.' },
-    { to: '/app/rep/inbox', title: 'Inbox', text: 'Emails with your businesses, filed on each one. Write a follow-up yourself or have Claude draft it from the visit.' },
-    { to: '/app/rep/me', title: 'Visits & Onboardings', text: 'The leaderboards for onboardings booked and visits (today, this week, this month), today against your own visits goal, and your numbers. Then switch to the host (the orange Demo button, bottom left) to see the calls you booked.' },
-  ],
+  rep: [],   // the rep gets the guided walk-through (Coach) instead
   host: [
-    { to: '/app/host', title: 'Onboarding calls', text: 'The host takes the calls reps book from the deck. “How did it go?” lists the calls that have started: mark them Closed, No-show or Not a fit.' },
-    { to: '/app/host', title: 'Everything the rep learned', text: 'Each call has the owner’s details, who booked it, the rep’s notes and “Their answers”: the deck questions and the proposal they saw. Join from the Zoom button.' },
-    { to: '/app/host', title: 'My hours', text: 'Open My hours: the Zoom link, time zone, weekly hours and days off. These hours are exactly the open times reps see when they tap Book onboarding.' },
+    { to: '/app/host', title: 'Onboarding calls', text: 'The calls reps book from the deck land here, with everything the owner answered. After a call: Closed, Follow up, No-show or Not a fit. (No calls yet? Book one as the Rep first.)' },
+    { to: '/app/host', title: 'My hours', text: 'Open My hours: your Zoom link, weekly hours and days off. These hours are exactly the open times a rep sees when they tap Book onboarding.' },
   ],
+};
+
+// ───────────── the rep's walk-through: one step at a time, moving on by itself as each one is done ─────────────
+const q = (sel: string) => !!document.querySelector(sel);
+interface CoachStep { title: string; text: string; done?: () => boolean }
+const COACH: CoachStep[] = [
+  { title: 'Add your first business', text: 'Your zones start empty: you add businesses as you walk in. You’re standing at a plaza in Oakville. Tap + Add, bottom right.',
+    done: () => q('[role="dialog"][aria-label="Add a business"]') },
+  { title: 'Pick the one you’re in', text: 'Businesses here are the ones we already know at your spot. Tap the one you walked into (pick its type if it isn’t set), then Add it.',
+    done: () => q('.v2-rep-page') },
+  { title: 'Present', text: 'It’s on your map now, at New. Tap Present to show the owner the deck.', done: () => q('.v2-rep-present') },
+  { title: 'Ask, propose, book', text: 'Swipe through with the owner. The questions screen builds their proposal next to what they pay today. On the last screen, tap Book onboarding and pick a time.',
+    done: () => q('.v2-rep-booked') },
+  { title: 'Booked', text: 'That’s the close: the deal goes to an admin to approve. Tap Done, and the pin turns light green: Onboarding booked.',
+    done: () => !q('.v2-rep-present') && !q('.v2-rep-page') && !q('.v2-rep-book') },
+  { title: 'Now the host', text: 'The call is waiting in the host’s calls, with the owner’s answers and the proposal. Or keep going: add another, or try No one to talk to, Talked, follow up and Not interested on a business.' },
+];
+const Coach: React.FC<{ onClose: () => void; onHost: () => void }> = ({ onClose, onHost }) => {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI(n => (COACH[n]?.done?.() ? Math.min(n + 1, COACH.length - 1) : n)), 400);
+    return () => clearInterval(t);
+  }, []);
+  const s = COACH[i];
+  const last = i === COACH.length - 1;
+  return (
+    <div className="msd-tour coach" role="status" aria-live="polite">
+      <div className="h"><b>{s.title}</b><span>{i + 1} of {COACH.length}</span><button type="button" aria-label="Close the walk-through" onClick={onClose}><X size={16} /></button></div>
+      <p>{s.text}</p>
+      {last && <div className="f"><button type="button" onClick={onClose}>Keep exploring</button><button type="button" className="on" onClick={onHost}>Switch to Host<ChevronRight size={16} /></button></div>}
+    </div>
+  );
 };
 
 const Pill: React.FC<{ role: Role; onSwitch: () => void; onTour: () => void; onExit: () => void; onReset: () => void }> = ({ role, onSwitch, onTour, onExit, onReset }) => {
@@ -102,7 +124,7 @@ const Demo: React.FC<{ role: Role; onRole: (r: Role) => void; onExit: () => void
           <Route path="*" element={<Navigate to={role === 'rep' ? '/app/rep' : '/app/host'} replace />} />
         </Routes>
         <Pill role={role} onSwitch={() => onRole(role === 'rep' ? 'host' : 'rep')} onTour={() => setTour(true)} onExit={onExit} onReset={onReset} />
-        {tour && <Tour role={role} onClose={close} />}
+        {tour && (role === 'rep' ? <Coach onClose={close} onHost={() => { close(); onRole('host'); }} /> : <Tour role={role} onClose={close} />)}
       </MemoryRouter>
     </DemoAuthProvider>
   );
