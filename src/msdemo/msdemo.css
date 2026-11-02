@@ -12,7 +12,7 @@
 .msd-start .role b { font-size: 16px; }
 .msd-start .role em { font-style: normal; font-size: 13px; color: #6b7280; }
 
-.msd-pill { position: fixed; bottom: 74px; left: 10px; z-index: 70; font: 13px/1.3 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+.msd-pill { position: fixed; bottom: 124px; left: 10px; z-index: 70; font: 13px/1.3 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
 .msd-pill .tag { border: 0; border-radius: 999px; padding: 6px 11px; opacity: .95; background: #f59e0b; color: #111827; font-weight: 800; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.25); white-space: nowrap; }
 .msd-pill .menu { position: absolute; bottom: 38px; left: 0; background: #fff; border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.25);
   padding: 6px; min-width: 200px; display: grid; }

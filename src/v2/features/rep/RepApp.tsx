@@ -8,10 +8,10 @@ import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, 
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
-  hereNow, hoursLabel, isOpen, kindLabel, money, pinOf, repBoard, repFollowups, repHome, repNumbers, repZone, walkOrder, whenLabel,
+  hereNow, isOpen, kindLabel, money, pinOf, repBoard, repFollowups, repHome, repNumbers, repZone, walkOrder, whenLabel,
   type FollowUp, type RepBusiness,
 } from '../../lib/rep';
-import { followUpIcs, metres, openAt } from '../../lib/repField';
+import { followUpIcs, metres } from '../../lib/repField';
 import { cacheGet } from '../../lib/repQueue';
 import { drop } from '../../lib/repQueue';
 import { inboxCounts } from '../../lib/mail';
@@ -119,7 +119,7 @@ const ZoneScreen: React.FC = () => {
 
   const shown = useMemo(() => (z.data?.businesses || []).filter(b => show === 'all' || isOpen(b.state)), [z.data, show]);
   const left = (z.data?.businesses || []).filter(b => isOpen(b.state)).length;
-  const pins = useMemo(() => shown.map(b => ({ id: b.id, name: b.name, state: b.state, lat: b.lat, lng: b.lng, lead: b.lead, dim: openAt(b.hours) === false })), [shown]);
+  const pins = useMemo(() => shown.map(b => ({ id: b.id, name: b.name, state: b.state, lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
   const fb = z.data?.businesses.find(b => b.id === openId);
 
   return (
@@ -160,13 +160,12 @@ const ZoneList: React.FC<{ items: RepBusiness[]; onPick: (id: string) => void }>
       <div key={g.group}>
         <div className="v2-rep-group">{g.group} · {g.items.length}</div>
         {g.items.map(b => {
-          const shut = openAt(b.hours) === false;
           return (
-            <button key={b.id} type="button" className="v2-rep-item" onClick={() => onPick(b.id)} style={shut ? { opacity: 0.6 } : undefined}>
+            <button key={b.id} type="button" className="v2-rep-item" onClick={() => onPick(b.id)}>
               <i className="v2-rep-dot" style={{ background: pinOf(b.state).color, width: 14, height: 14 }} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="n">{b.name}</div>
-                <div className="a">{b.address || kindLabel(b.kind)}{shut ? ' · closed now' : ''}</div>
+                <div className="a">{b.address || kindLabel(b.kind)}</div>
               </div>
               <div className="v2-small v2-mut" style={{ textAlign: 'right' }}>
                 {b.state === 'follow_up' && b.follow_up_at ? whenLabel(b.follow_up_at) : b.state !== 'new' ? pinOf(b.state).label : ''}
@@ -273,8 +272,7 @@ const Me: React.FC = () => {
         </div>)}
       {today && (
         <div className="v2-rep-zone">
-          <div className="row"><b>Today</b><span className="v2-small v2-mut" style={{ marginLeft: 'auto' }}>
-            {today.started_at ? `${hoursLabel(today.minutes)} out${today.ended_at ? ' · done' : ''}` : 'Day not started'}</span></div>
+          <div className="row"><b>Today</b></div>
           <div className="v2-rep-goal"><span>Visits <b>{today.visits}</b> / {today.goal_visits}</span><div className="v2-rep-bar"><b style={{ width: pct(today.visits, today.goal_visits) }} /></div></div>
           <div className="v2-rep-goal"><span>Deals <b>{today.deals}</b> / {today.goal_deals}</span><div className="v2-rep-bar"><b style={{ width: pct(today.deals, today.goal_deals), background: '#16a34a' }} /></div></div>
         </div>)}

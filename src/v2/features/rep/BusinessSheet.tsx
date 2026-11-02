@@ -1,13 +1,11 @@
 // src/v2/features/rep/BusinessSheet.tsx — one business, as a full page: directions, call, hours; the
-// pitch cards (Present first, then Kit, Share info, Email); log a visit (with photos, and a business
+// Present (the deck: pitch, questions, proposal, booking); log a visit (with photos, and a business
 // card read into the contact); the email conversations with it; and the rep's own history there.
 // Works with no signal: the visit waits on the phone.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import QRCode from 'qrcode';
-import { ArrowLeft, BookOpen, Camera, ChevronRight, Copy, ExternalLink, Globe, Mail, MapPin, MessageCircle, MessageSquare, Navigation, Phone, Presentation, QrCode, ScanLine, Send, X } from 'lucide-react';
+import { ArrowLeft, Camera, ChevronRight, ExternalLink, Globe, MapPin, Navigation, Phone, Presentation, ScanLine, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { inbox, mailWhen } from '../../lib/mail';
-import { Composer, type ComposeInit } from '../mail/Composer';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
@@ -15,7 +13,7 @@ import {
   type Kit, type LoggedVisit, type Outcome, type PinState, type RepBusinessView,
 } from '../../lib/rep';
 import {
-  DEFAULT_EMAIL_BODY, DEFAULT_EMAIL_SUBJECT, DEFAULT_SMS, fillTemplate, followUpIcs, hoursToday, newId, openAt, parseCard, refLink, smsHref,
+  followUpIcs, newId, parseCard,
 } from '../../lib/repField';
 import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
@@ -57,10 +55,7 @@ export const BusinessSheet: React.FC<{
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [pitch, setPitch] = useState<null | 'kit' | 'share'>(null);
-  const [composing, setComposing] = useState<ComposeInit | null>(null);
-  const [mailTick, setMailTick] = useState(0);
-  const mail = useLoad(() => inbox('inbox', undefined, id).catch(() => []), [id, mailTick]);
+  const mail = useLoad(() => inbox('inbox', undefined, id).catch(() => []), [id]);
   const [presenting, setPresenting] = useState(false);
   const [booking, setBooking] = useState(false);
   const booked = React.useRef(false);
@@ -147,26 +142,12 @@ export const BusinessSheet: React.FC<{
     } catch (e) { setError(e); } finally { setBusy(false); }
   }, [outcome, notes, cName, cPhone, cEmail, when, photos, id, campaign, d, session, toast, onSaved]);
 
-  const emailInit = (): ComposeInit => {
-    const name = d?.name || '';
-    const to = cEmail || (d ? lastEmail(d) : '');
-    const k = kit.data;
-    const vars = { business: name, link: k ? refLink(k.info_url, k.ref) : '', rep: '', contact: cName.split(' ')[0] || undefined };
-    return {
-      key: `biz:${id}`, title: 'New email', business_id: id, campaign_id: campaign, to: to ? [to] : [],
-      subject: k ? fillTemplate(k.info_email_subject || DEFAULT_EMAIL_SUBJECT, vars) : '',
-      html: k ? fillTemplate(k.info_email_body || DEFAULT_EMAIL_BODY, vars).replace(/\{rep\}/g, '').split(/\n{2,}/).map(par => `<p>${par.replace(/\n/g, '<br>')}</p>`).join('') : '',
-      context: `${name}${k ? ` · ${k.name}` : ''}`,
-      quick: ['Thanks for your time today, send the info and suggest a short call', 'Follow up: we spoke last week, still interested?', 'Book the 30-minute call this week'],
-    };
-  };
+
 
   if (!d) return (
     <Sheet onClose={onClose} label="Business"><ErrorBox error={b.error} />{!b.error && <Loading />}</Sheet>);
 
   const dirs = `https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lng}`;
-  const open = openAt(d.hours);
-  const today = hoursToday(d.hours);
   return (
     <Sheet onClose={onClose} label={d.name}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
@@ -174,8 +155,6 @@ export const BusinessSheet: React.FC<{
           <h1 className="v2-rep-bname">{d.name}</h1>
           <div className="v2-small v2-mut">{kindLabel(d.kind)}{d.plaza ? ` · ${d.plaza}` : ''}{d.lead ? ' · a lead you added' : ''}</div>
           {d.address && <div className="v2-small">{d.address}</div>}
-          {today && <div className="v2-small" style={{ marginTop: 2 }}>
-            {open != null && <b style={{ color: open ? '#15803d' : '#b91c1c' }}>{open ? 'Open now' : 'Closed now'} · </b>}<span className="v2-mut">Today {today}</span></div>}
         </div>
       </div>
       {offline && <div className="v2-rep-note">No signal: you can still log a visit, it sends later.</div>}
@@ -190,16 +169,7 @@ export const BusinessSheet: React.FC<{
         <button type="button" className="v2-rep-card present" disabled={!kit.data?.present_url} onClick={() => setPresenting(true)}>
           <Presentation size={26} /><span><b>Present</b><em>{kit.data && !kit.data.present_url ? 'No presentation for this campaign yet' : 'Show the owner and book a call'}</em></span><ChevronRight size={20} />
         </button>
-        <button type="button" className={`v2-rep-card${pitch === 'kit' ? ' on' : ''}`} onClick={() => setPitch(pitch === 'kit' ? null : 'kit')} aria-expanded={pitch === 'kit'}>
-          <BookOpen size={22} /><span><b>Kit</b><em>Pitch, objections, one-pager</em></span></button>
-        <button type="button" className={`v2-rep-card${pitch === 'share' ? ' on' : ''}`} onClick={() => setPitch(pitch === 'share' ? null : 'share')} aria-expanded={pitch === 'share'}>
-          <Send size={22} /><span><b>Share info</b><em>Text, WhatsApp, QR</em></span></button>
-        <button type="button" className="v2-rep-card" disabled={offline} onClick={() => setComposing(emailInit())}>
-          <Mail size={22} /><span><b>Email</b><em>{offline ? 'Needs signal' : 'Write it, or let AI'}</em></span></button>
       </div>
-      {pitch === 'kit' && <KitPanel kit={kit.data} error={kit.error} />}
-      {pitch === 'share' && <SendInfo kit={kit.data} error={kit.error} business={d.name} businessId={id} campaign={campaign}
-        phone={cPhone || d.phone || ''} email={cEmail || lastEmail(d)} contact={cName} onEmail={() => setComposing(emailInit())} />}
       {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref}
         onClose={() => { keepAnswers(); setPresenting(false); }} onBook={() => setBooking(true)} onAnswers={onDeckAnswers} />}
       {booking && <BookOnboarding campaign={campaign} business={id} businessName={d.name} answers={answers.current}
@@ -210,7 +180,6 @@ export const BusinessSheet: React.FC<{
           // once booked, the visit is saved as a closed deal: close the deck and the business like any saved visit
           if (booked.current) { booked.current = false; keepAnswers(); setPresenting(false); toast('Onboarding booked. The deal is with an admin to approve.'); onSaved({ business: id, outcome: 'closed', state: stateAfter('closed'), here: null, queued: false }); }
         }} />}
-      {composing && <Composer init={composing} onClose={() => setComposing(null)} onSent={() => { setComposing(null); setMailTick(t => t + 1); toast('Email sent.'); }} />}
 
       {!!mail.data?.length && (
         <div className="v2-rep-mail">
@@ -289,70 +258,6 @@ const Sheet: React.FC<{ onClose: () => void; label: string; children: React.Reac
     </div>
   );
 };
-
-// ───────────── the pitch kit ─────────────
-const KitPanel: React.FC<{ kit: Kit | null; error: unknown }> = ({ kit, error }) => {
-  if (!kit) return error ? <ErrorBox error={error} /> : <Loading />;
-  const empty = !kit.pitch && !kit.objections.length && !kit.onepager_url;
-  return (
-    <div className="v2-rep-kit">
-      {empty && <div className="v2-small v2-mut">No pitch kit for {kit.name} yet. Your admin adds it.</div>}
-      {kit.pitch && <div className="pitch">{kit.pitch}</div>}
-      {kit.objections.map((o, i) => (
-        <details key={i}><summary>“{o.q}”</summary><div>{o.a}</div></details>))}
-      {kit.onepager_url && <a href={kit.onepager_url} target="_blank" rel="noreferrer" className="v2-rep-mini"><ExternalLink size={13} />Open the one-pager</a>}
-    </div>
-  );
-};
-
-// ───────────── share info: every channel, each one logged ─────────────
-type Channel = 'sms' | 'email' | 'whatsapp' | 'link' | 'qr';
-const SendInfo: React.FC<{ kit: Kit | null; error: unknown; business: string; businessId: string; campaign: string; phone: string; email: string; contact: string; onEmail: () => void }> =
-  ({ kit, error, business, businessId, campaign, phone, email, contact, onEmail }) => {
-    const { profile } = useAuth();
-    const [to, setTo] = useState('');
-    const [qr, setQr] = useState<string | null>(null);
-    const [showQr, setShowQr] = useState(false);
-    const [copied, setCopied] = useState(false);
-    const link = kit ? refLink(kit.info_url, kit.ref) : '';
-    const rep = profile?.full_name?.split(' ')[0] || '';
-    const vars = { business, link, rep, contact: contact.split(' ')[0] || undefined };
-    const typed = to.trim();
-    const mobile = (typed && !/@/.test(typed) ? typed : phone).trim();
-    const mail = (typed && /@/.test(typed) ? typed : email).trim();
-    const sms = kit ? fillTemplate(kit.info_sms || DEFAULT_SMS, vars) : '';
-    const digits = mobile.replace(/[^0-9]/g, '');
-    const wa = `https://wa.me/${digits.length === 10 ? `1${digits}` : digits}?text=${encodeURIComponent(sms)}`;
-    const log = (channel: Channel, dest: string) => {
-      sendOrQueue({ id: newId(), rpc: 'ms_rep_log_send', args: { p_business: businessId, p_campaign: campaign, p_channel: channel, p_to: dest || null },
-        label: `Sent info to ${business}`, queued_at: Date.now() }).catch(() => {});
-    };
-    useEffect(() => {
-      if (!showQr || !link) return;
-      QRCode.toDataURL(link, { width: 260, margin: 1 }).then(setQr).catch(() => setQr(null));
-    }, [showQr, link]);
-    const copy = async () => {
-      try { await navigator.clipboard.writeText(sms || link); setCopied(true); setTimeout(() => setCopied(false), 1800); log('link', ''); } catch { /* the link is shown to select by hand */ }
-    };
-    if (!kit) return error ? <ErrorBox error={error} /> : <Loading />;
-    if (!link) return <div className="v2-small v2-mut">Your admin hasn’t added the {kit.name} link yet.</div>;
-    return (
-      <div className="v2-rep-send">
-        <div className="v2-rep-row"><b style={{ fontSize: 13.5 }}>Share info</b><span className="v2-small v2-mut">Your code {kit.ref} is on the link</span></div>
-        <input className="v2-input" placeholder={phone || email || 'Their mobile or email'} value={to} onChange={e => setTo(e.target.value)} inputMode="email" autoComplete="off" aria-label="Their mobile or email" />
-        <div className="v2-rep-channels">
-          <a className={mobile ? '' : 'off'} href={mobile ? smsHref(mobile, sms) : undefined} onClick={() => mobile && log('sms', mobile)} aria-disabled={!mobile}><MessageSquare size={18} />Text</a>
-          <button type="button" onClick={onEmail}><Mail size={18} />Email</button>
-          <a className={digits.length >= 10 ? '' : 'off'} href={digits.length >= 10 ? wa : undefined} target="_blank" rel="noreferrer" onClick={() => digits.length >= 10 && log('whatsapp', mobile)} aria-disabled={digits.length < 10}><MessageCircle size={18} />WhatsApp</a>
-          <button type="button" onClick={copy}><Copy size={18} />{copied ? 'Copied' : 'Copy'}</button>
-          <button type="button" className={showQr ? 'on' : ''} onClick={() => { if (!showQr) log('qr', ''); setShowQr(!showQr); }}><QrCode size={18} />QR</button>
-        </div>
-        {!mobile && !mail && <div className="v2-small v2-mut">Type their mobile or email above to text, email or WhatsApp. Ask first: Canada’s anti-spam law needs their OK.</div>}
-        {showQr && <div className="v2-rep-qr">{qr ? <img src={qr} alt="QR code for the information link" /> : <Loading />}<div className="v2-small v2-mut">They scan it with their camera.</div></div>}
-        <div className="v2-small v2-mut" style={{ overflowWrap: 'anywhere', marginTop: 6 }}>{link}</div>
-      </div>
-    );
-  };
 
 // ───────────── present: the campaign's deck, full screen ─────────────
 const Presenter: React.FC<{ url: string; code: string; onClose: () => void; onBook: () => void; onAnswers: (a: DeckAnswers) => void }> = ({ url, code, onClose, onBook, onAnswers }) => {

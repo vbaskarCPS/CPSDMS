@@ -1,17 +1,16 @@
-// src/v2/features/rep/HomeMap.tsx — the rep's home: one map of every zone they're assigned, every
-// business on it. Start / end the day, filter (to visit, open now, campaign), jump to the nearest
-// business, and add a business that isn't on the map. Opens from the phone's copy with no signal.
+// src/v2/features/rep/HomeMap.tsx — the rep's home: one map of every zone they're assigned and the businesses
+// reps have added there. Filter (to visit, campaign) and add a business at the door. Opens from the phone's copy
+// with no signal. (Start / end the day, Nearest, Open now and roads walked were taken out: they leaned on the
+// preloaded city businesses and the day's location tracking.)
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Crosshair, LocateFixed, Navigation, Play, Plus, Square, X } from 'lucide-react';
+import { Crosshair, LocateFixed, Plus, X } from 'lucide-react';
 import {
-  addLead, dayEnd, dayStart, geocode, hereNow, hoursLabel, isOpen, repMap, reverseGeocode,
-  type MapBiz, type RepMap, type RepToday,
+  addLead, geocode, hereNow, isOpen, repMap, reverseGeocode,
+  type MapBiz, type RepMap,
 } from '../../lib/rep';
-import { distLabel, nearest, openAt } from '../../lib/repField';
 import { BUSINESS_KINDS, kindLabel } from '../../lib/msCity';
 import { mapPlaces, nearbyAdded, type MapPlace, type NearbyBiz } from '../../lib/msField';
-import { km, zoneWalked } from '../../lib/msSplit';
 import { cacheGet, cacheSet } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BusinessSheet, type SavedVisit } from './BusinessSheet';
@@ -25,7 +24,7 @@ async function loadMap(): Promise<Loaded> {
 }
 
 export const HomeMap: React.FC = () => {
-  const { mapTick, toast } = useRep();
+  const { mapTick } = useRep();
   const [m, setM] = useState<Loaded | null>(null);
   const [error, setError] = useState<unknown>(null);
   useEffect(() => { let live = true; loadMap().then(r => { if (live) { setM(r); setError(null); } }).catch(e => { if (live) setError(e); }); return () => { live = false; }; }, [mapTick]);
@@ -34,10 +33,7 @@ export const HomeMap: React.FC = () => {
   const openId = sp.get('b');
   const setOpen = (id: string | null) => { const n = new URLSearchParams(sp); if (id) n.set('b', id); else n.delete('b'); setSp(n, { replace: !id }); };
   const [show, setShow] = useState<'open' | 'all'>('open');
-  const [openNow, setOpenNow] = useState(false);
   const [camp, setCamp] = useState<string | null>(null);
-  const [clock, setClock] = useState(() => new Date());
-  useEffect(() => { const t = setInterval(() => setClock(new Date()), 5 * 60000); return () => clearInterval(t); }, []);
   const [adding, setAdding] = useState<null | { pick?: boolean; at?: { lat: number; lng: number } }>(null);
   const mapRef = useRef<RepMapHandle>(null);
 
@@ -51,24 +47,9 @@ export const HomeMap: React.FC = () => {
     for (const p of m?.data.pairs || []) if (!camp || p.campaign_id === camp) if (!seen.has(p.zone_id)) seen.set(p.zone_id, { id: p.zone_id, name: p.zone_name, color: p.color, polygon: p.polygon });
     return [...seen.values()];
   }, [m, camp]);
-  // road zones: each road walked, partly walked or not yet (from where the phone was during the day)
-  const [walked, setWalked] = useState<{ roads: GeoJSON.FeatureCollection; total: number; done: number } | null>(null);
-  const zoneKey = zones.map(z => z.id).join(',');
-  useEffect(() => {
-    if (!zoneKey || m?.cached) { setWalked(null); return; }
-    let live = true;
-    Promise.all(zoneKey.split(',').map(z => zoneWalked(z).catch(() => null))).then(ws => {
-      if (!live) return;
-      const got = ws.filter((w): w is NonNullable<typeof w> => !!w && w.total_m > 0);
-      setWalked(got.length ? { roads: { type: 'FeatureCollection', features: got.flatMap(w => w.roads) },
-        total: got.reduce((t, w) => t + w.total_m, 0), done: got.reduce((t, w) => t + w.walked_m, 0) } : null);
-    });
-    return () => { live = false; };
-  }, [zoneKey, mapTick, m?.cached]);
   const shown = useMemo(() => (m?.data.businesses || []).filter(b =>
-    (!camp || b.c === camp) && (show === 'all' || isOpen(b.s)) && (!openNow || openAt(b.h, clock) !== false)), [m, camp, show, openNow, clock]);
-  const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.n, state: b.s, lat: b.lat, lng: b.lng, lead: b.lead,
-    dim: openAt(b.h, clock) === false })), [shown, clock]);
+    (!camp || b.c === camp) && (show === 'all' || isOpen(b.s))), [m, camp, show]);
+  const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.n, state: b.s, lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
   const left = useMemo(() => (m?.data.businesses || []).filter(b => (!camp || b.c === camp) && isOpen(b.s)).length, [m, camp]);
 
   const open = useMemo(() => {
@@ -79,41 +60,20 @@ export const HomeMap: React.FC = () => {
     return campaign ? { id: bid, b, campaign } : null;
   }, [openId, m]);
 
-  // nearest one still to visit (open now first, when hours are known)
-  const goNearest = useCallback(async (from?: { lat: number; lng: number } | null, skip: string[] = []) => {
-    const here = from || await hereNow();
-    if (!here) { toast('Your location isn’t available. Allow location for MainstreetAI.'); return; }
-    const todo = (m?.data.businesses || []).filter(b => (!camp || b.c === camp) && isOpen(b.s));
-    const pool = todo.filter(b => openAt(b.h) !== false);
-    const n = nearest(here, (pool.length ? pool : todo).map(b => ({ ...b, id: `${b.id}|${b.c}` })), skip);
-    if (!n) { toast('Nothing left to visit. Nice work.'); return; }
-    mapRef.current?.flyTo(n.item);
-    return n;
-  }, [m, camp, toast]);
-
   const onSaved = useCallback((v: SavedVisit) => {
     const cid = open?.campaign;
     setM(cur => cur && { ...cur, data: { ...cur.data, businesses: cur.data.businesses.map(b => (b.id === v.business && b.c === cid ? { ...b, s: v.state, at: new Date().toISOString() } : b)) } });
     setOpen(null);
-    // the next one, from where they're standing
-    if (v.here) {
-      setTimeout(async () => {
-        const n = await goNearest(v.here, [`${v.business}|${cid}`]);
-        if (n) toast({ msg: `Next: ${n.item.n} · ${distLabel(n.m)}`, actions: [{ label: 'Open', onClick: () => setOpen(n.item.id) }] });
-      }, 1200);
-    }
-  }, [open, goNearest, toast]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
-      <DayBar />
+      <SendQueue />
       <div className="v2-rep-bar2 v2-rep-filters">
         <div className="v2-rep-seg">
           <button type="button" className={show === 'open' ? 'on' : ''} onClick={() => setShow('open')}>To visit{m ? ` ${left}` : ''}</button>
           <button type="button" className={show === 'all' ? 'on' : ''} onClick={() => setShow('all')}>All</button>
         </div>
-        <button type="button" className={`v2-rep-pill${openNow ? ' on' : ''}`} onClick={() => setOpenNow(v => !v)} aria-pressed={openNow}>Open now</button>
-        {walked && <span className="v2-rep-pill" title="Your main roads walked so far">Walked {km(walked.done)} of {km(walked.total)}</span>}
         {campaigns.length > 1 && campaigns.map(c => (
           <button key={c.id} type="button" className={`v2-rep-pill${camp === c.id ? ' on' : ''}`} onClick={() => setCamp(camp === c.id ? null : c.id)}>
             <i style={{ background: c.color }} />{c.name}</button>))}
@@ -124,15 +84,13 @@ export const HomeMap: React.FC = () => {
         m.data.pairs.length === 0 && m.data.businesses.length === 0
           ? <div className="v2-rep-body"><div className="v2-rep-zone"><b>No zones yet.</b><div className="v2-mut v2-small">Your admin assigns your zones. They’ll show here.</div></div></div>
           : (
-            <RepMapView ref={mapRef} zones={zones} pins={pins} roads={walked?.roads} fitKey={zones.map(z => z.id).join(',')} showCounts={!adding?.pick}
+            <RepMapView ref={mapRef} zones={zones} pins={pins} fitKey={zones.map(z => z.id).join(',')} showCounts={!adding?.pick}
               onPick={id => setOpen(id)}
               onMapTap={adding?.pick ? p => setAdding({ at: p }) : null}>
               {adding?.pick
                 ? <div className="v2-rep-pickbar"><Crosshair size={16} /> Tap where the business is<button type="button" onClick={() => setAdding(null)}>Cancel</button></div>
                 : (
                   <div className="v2-rep-fabs">
-                    <button type="button" className="v2-rep-fab" onClick={async () => { const n = await goNearest(); if (n) setOpen(n.item.id); }}>
-                      <Navigation size={18} />Nearest</button>
                     <button type="button" className="v2-rep-fab dark" onClick={() => setAdding({})} aria-label="Add a business"><Plus size={20} />Add</button>
                   </div>)}
             </RepMapView>))}
@@ -155,64 +113,16 @@ export const HomeMap: React.FC = () => {
   );
 };
 
-// ───────────── start / end the day ─────────────
-const DayBar: React.FC = () => {
-  const { today, setToday, queue, flushNow, toast } = useRep();
-  const [busy, setBusy] = useState(false);
-  const [summary, setSummary] = useState<RepToday | null>(null);
+// ───────────── visits still on the phone ─────────────
+const SendQueue: React.FC = () => {
+  const { queue, flushNow } = useRep();
   const waiting = queue.filter(q => !q.error).length;
   const failed = queue.filter(q => q.error).length;
-  const on = !!today?.started_at && !today.ended_at;
-  const act = async (start: boolean) => {
-    setBusy(true);
-    try {
-      const here = await hereNow(6000);
-      if (start) { setToday(await dayStart(here)); toast('Day started. Good luck out there.'); }
-      else { const t = await dayEnd(here); setToday(t); setSummary(t); }
-    } catch (e) { toast(e instanceof Error ? e.message : 'That didn’t go through. Check your signal.'); }
-    finally { setBusy(false); }
-  };
+  if (!waiting && !failed) return null;
   return (
-    <>
-      <div className="v2-rep-day">
-        {!today ? <span className="v2-mut">…</span> : on ? (
-          <>
-            <span className="live" />
-            <div className="t"><b>{hoursLabel(today.minutes)}</b> · {today.visits}/{today.goal_visits} visits{today.deals ? ` · ${today.deals} deal${today.deals === 1 ? '' : 's'}` : ''}{today.distance_m >= 100 ? ` · ${distLabel(today.distance_m)}` : ''}</div>
-            <button type="button" className="end" disabled={busy} onClick={() => act(false)}><Square size={13} />End day</button>
-          </>
-        ) : today.ended_at ? (
-          <>
-            <div className="t">Day done: <b>{hoursLabel(today.minutes)}</b> · {today.visits} visits</div>
-            <button type="button" className="start" disabled={busy} onClick={() => act(true)}><Play size={13} />Back on</button>
-          </>
-        ) : (
-          <>
-            <div className="t">{today.visits ? `${today.visits} visits today` : 'Ready when you are'}</div>
-            <button type="button" className="start" disabled={busy} onClick={() => act(true)}><Play size={13} />Start day</button>
-          </>)}
-      </div>
-      {(waiting > 0 || failed > 0) && (
-        <button type="button" className="v2-rep-wait" onClick={flushNow}>
-          {waiting > 0 && <>{waiting} waiting to send · tap to try now</>}{waiting > 0 && failed > 0 && ' · '}{failed > 0 && <>{failed} couldn’t send: see Me</>}
-        </button>)}
-      {summary && (
-        <div className="v2-rep-sheet-bg" onClick={() => setSummary(null)}>
-          <div className="v2-rep-sheet" role="dialog" aria-label="Your day" onClick={e => e.stopPropagation()}>
-            <h2>Your day</h2>
-            <div className="v2-rep-stat" style={{ marginTop: 12 }}>
-              <div><b>{hoursLabel(summary.minutes)}</b><span>Out</span></div>
-              <div><b>{summary.visits}</b><span>Visits (goal {summary.goal_visits})</span></div>
-              <div><b>{summary.deals}</b><span>Deals (goal {summary.goal_deals})</span></div>
-              <div><b>{summary.followups}</b><span>Follow-ups set</span></div>
-              <div><b>{distLabel(summary.distance_m)}</b><span>Walked</span></div>
-              <div><b>{summary.minutes ? (summary.visits / (summary.minutes / 60)).toFixed(1) : '0'}</b><span>Visits an hour</span></div>
-            </div>
-            <div className="v2-small v2-mut" style={{ marginBottom: 12 }}>{summary.visits >= summary.goal_visits ? 'You hit your visit goal today.' : `${summary.goal_visits - summary.visits} short of the visit goal.`}</div>
-            <Btn onClick={() => setSummary(null)} style={{ width: '100%', justifyContent: 'center' }}>Done</Btn>
-          </div>
-        </div>)}
-    </>
+    <button type="button" className="v2-rep-wait" onClick={flushNow}>
+      {waiting > 0 && <>{waiting} waiting to send · tap to try now</>}{waiting > 0 && failed > 0 && ' · '}{failed > 0 && <>{failed} couldn’t send: see Me</>}
+    </button>
   );
 };
 

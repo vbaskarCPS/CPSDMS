@@ -152,7 +152,10 @@ function meetingFor(b: SeedBiz, start: number, owner: string, phone: string | nu
 }
 
 // ───────────── reading the state ─────────────
-const allBiz = (): SeedBiz[] => [...seed.businesses, ...S.leads];
+// Like the real app, reps only see businesses reps have added (plus anything already visited): the ones
+// visited in the sample history, about as many more that other reps added, and whatever is added in the demo.
+const added = new Set(seed.businesses.filter((_, i) => i % 6 === 3).slice(0, 120).map(b => b.id));
+const allBiz = (): SeedBiz[] => [...seed.businesses.filter(b => added.has(b.id) || S.visits.some(v => v.business_id === b.id)), ...S.leads];
 const visitsOf = (bid: string) => S.visits.filter(v => v.business_id === bid).sort((a, b) => b.at.localeCompare(a.at));
 const retryDays = () => Number(seed.campaign.kit.retry_days) || 30;
 function stateOf(bid: string): { state: PinState; last_at: string | null; follow_up_at: string | null; visits: number } {
