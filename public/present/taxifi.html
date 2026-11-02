@@ -132,7 +132,13 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 .talk { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .talk input { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 11px 12px; font-size: 16px; min-width: 0; }
 .talk input:first-child { grid-column: 1 / -1; }
+.talk.two input:first-child { grid-column: auto; }
+@media (max-width: 380px) { .talk.two { grid-template-columns: 1fr; } }
 .talk input:focus { border-color: var(--accent); outline: none; }
+.num { display: flex; align-items: center; gap: 10px; }
+.num input { width: 110px; border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 11px 12px; font-size: 17px; font-family: var(--mono); font-weight: 700; text-align: right; }
+.num input:focus { border-color: var(--accent); outline: none; }
+.num span { color: var(--mut); font-size: 15px; }
 @media (max-width: 380px) { .talk { grid-template-columns: 1fr; } }
 .qnext { align-self: flex-start; border: 0; background: var(--ink); color: var(--bg); border-radius: 12px; padding: 12px 18px; font-weight: 700; cursor: pointer; }
 /* proposal (slide 7) */
@@ -316,22 +322,26 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
           <div class="sep" style="border-top:0;padding-top:0">Who we’re talking to</div>
           <div class="talk">
             <input id="w-name" placeholder="Name" autocomplete="off" aria-label="Name">
-            <input id="w-phone" type="tel" inputmode="tel" placeholder="Phone" autocomplete="off" aria-label="Phone">
-            <input id="w-email" type="email" inputmode="email" placeholder="Email" autocomplete="off" autocapitalize="none" aria-label="Email">
           </div>
-          <div class="q" data-q="role" role="group" aria-label="Their role"><b>Their role</b><div class="opts"><button type="button" data-v="Owner" aria-pressed="false">Owner</button><button type="button" data-v="Partner" aria-pressed="false">Partner</button><button type="button" data-v="Manager" aria-pressed="false">Manager</button><button type="button" data-v="Bookkeeper" aria-pressed="false">Bookkeeper</button><button type="button" data-v="Other" aria-pressed="false">Other</button></div></div>
+          <div class="q" data-q="role" role="group" aria-label="Their role"><b>Their role</b><div class="opts"><button type="button" data-v="Owner" aria-pressed="false">Owner</button><button type="button" data-v="Partner" aria-pressed="false">Partner</button><button type="button" data-v="Manager" aria-pressed="false">Manager</button><button type="button" data-v="Bookkeeper" aria-pressed="false">Bookkeeper</button><button type="button" data-v="Employee" aria-pressed="false">Employee</button></div></div>
           <div class="sep">About the business</div>
           <div class="q" data-q="years" role="group" aria-label="How long you’ve been in business"><b>How long you’ve been in business</b><div class="opts"><button type="button" data-v="u1" aria-pressed="false">Under 1 year</button><button type="button" data-v="1_3" aria-pressed="false">1–3 years</button><button type="button" data-v="3_5" aria-pressed="false">3–5 years</button><button type="button" data-v="5_10" aria-pressed="false">5–10 years</button><button type="button" data-v="10" aria-pressed="false">10+ years</button></div></div>
-          <div class="q" data-q="owned_whole" role="group" aria-label="Owned it the whole time?"><b>Owned it the whole time?</b><div class="opts"><button type="button" data-v="yes" aria-pressed="false">Yes</button><button type="button" data-v="no" aria-pressed="false">No, we bought it</button></div></div>
+          <div class="q" data-q="owned_whole" role="group" aria-label="Owned it the whole time?"><b>Owned it the whole time?</b><div class="opts"><button type="button" data-v="yes" aria-pressed="false">Original owner</button><button type="button" data-v="no" aria-pressed="false">No, we bought it</button></div></div>
           <div class="q" data-q="owned_years" hidden role="group" aria-label="How long you’ve owned it"><b>How long you’ve owned it</b><div class="opts"><button type="button" data-v="u1" aria-pressed="false">Under 1 year</button><button type="button" data-v="1_3" aria-pressed="false">1–3 years</button><button type="button" data-v="3_5" aria-pressed="false">3–5 years</button><button type="button" data-v="5_10" aria-pressed="false">5–10 years</button><button type="button" data-v="10" aria-pressed="false">10+ years</button></div></div>
           <div class="sep">The numbers</div>
           <div class="q" data-q="expenses" role="group" aria-label="Monthly business expenses"><b>Monthly business expenses <small>everything going out, roughly</small></b><div class="opts"><button type="button" data-v="u10" aria-pressed="false">Under $10K</button><button type="button" data-v="10_25" aria-pressed="false">$10K–$25K</button><button type="button" data-v="25_50" aria-pressed="false">$25K–$50K</button><button type="button" data-v="50_100" aria-pressed="false">$50K–$100K</button><button type="button" data-v="o100" aria-pressed="false">Over $100K</button></div></div>
-          <div class="q" data-q="staff" role="group" aria-label="Staff on payroll"><b>Staff on payroll</b><div class="opts"><button type="button" data-v="0" aria-pressed="false">None</button><button type="button" data-v="1_2" aria-pressed="false">1–2</button><button type="button" data-v="3_5" aria-pressed="false">3–5</button><button type="button" data-v="6_10" aria-pressed="false">6–10</button><button type="button" data-v="11" aria-pressed="false">11+</button></div></div>
-          <div class="q" data-q="books" role="group" aria-label="Who does the books now"><b>Who does the books now</b><div class="opts"><button type="button" data-v="me" aria-pressed="false">Me</button><button type="button" data-v="bookkeeper" aria-pressed="false">A bookkeeper</button><button type="button" data-v="accountant" aria-pressed="false">An accountant</button><button type="button" data-v="nobody" aria-pressed="false">Nobody, we’re behind</button></div></div>
-          <div class="q" data-q="pay_now" role="group" aria-label="What you pay now for books, payroll and year-end"><b>What you pay now for books, payroll and year-end <small>a month, all in</small></b><div class="opts"><button type="button" data-v="u300" aria-pressed="false">Under $300</button><button type="button" data-v="300_600" aria-pressed="false">$300–$600</button><button type="button" data-v="600_1000" aria-pressed="false">$600–$1,000</button><button type="button" data-v="o1000" aria-pressed="false">Over $1,000</button></div></div>
+          <div class="q" data-q="staff" data-num="1"><b><label for="w-staff">Staff on payroll</label> <small>how many people, 0 if none</small></b><div class="num"><input id="w-staff" type="number" inputmode="numeric" min="0" max="999" step="1" placeholder="0"><span>people</span></div></div>
+          <div class="q" data-q="books" role="group" aria-label="Who does the books now"><b>Who does the books now</b><div class="opts"><button type="button" data-v="me" aria-pressed="false">Me</button><button type="button" data-v="bookkeeper" aria-pressed="false">A bookkeeper</button><button type="button" data-v="accountant" aria-pressed="false">An accountant</button><button type="button" data-v="inhouse" aria-pressed="false">In-house staff</button><button type="button" data-v="nobody" aria-pressed="false">Nobody, we’re behind</button></div></div>
+          <div class="q" data-q="pay_now" role="group" aria-label="What you pay now for bookkeeping and payroll"><b>What you pay now for bookkeeping and payroll <small>a month</small></b><div class="opts"><button type="button" data-v="u300" aria-pressed="false">Under $300</button><button type="button" data-v="300_600" aria-pressed="false">$300–$600</button><button type="button" data-v="600_1000" aria-pressed="false">$600–$1,000</button><button type="button" data-v="o1000" aria-pressed="false">Over $1,000</button></div></div>
+          <div class="q" data-q="year_end" role="group" aria-label="What you pay for year-end"><b>What you pay for year-end <small>your corporate return, a year</small></b><div class="opts"><button type="button" data-v="u1000" aria-pressed="false">Under $1,000</button><button type="button" data-v="1000_2000" aria-pressed="false">$1,000–$2,000</button><button type="button" data-v="2000_3500" aria-pressed="false">$2,000–$3,500</button><button type="button" data-v="o3500" aria-pressed="false">Over $3,500</button></div></div>
           <div class="sep">Two more about the business</div>
           <div class="q" data-q="find" data-multi="1" role="group" aria-label="How customers find you"><b>How customers find you <small>pick any</small></b><div class="opts"><button type="button" data-v="walkin" aria-pressed="false">Walk-in</button><button type="button" data-v="google" aria-pressed="false">Google</button><button type="button" data-v="social" aria-pressed="false">Social media</button><button type="button" data-v="referrals" aria-pressed="false">Referrals</button></div></div>
           <div class="q" data-q="admin_hours" role="group" aria-label="Hours a week on admin"><b>Hours a week on admin <small>phone, email, scheduling</small></b><div class="opts"><button type="button" data-v="u2" aria-pressed="false">Under 2</button><button type="button" data-v="2_5" aria-pressed="false">2–5</button><button type="button" data-v="5_10" aria-pressed="false">5–10</button><button type="button" data-v="10" aria-pressed="false">10+</button></div></div>
+          <div class="sep">Best way to reach you</div>
+          <div class="talk two">
+            <input id="w-phone" type="tel" inputmode="tel" placeholder="Phone" autocomplete="off" aria-label="Phone">
+            <input id="w-email" type="email" inputmode="email" placeholder="Email" autocomplete="off" autocapitalize="none" aria-label="Email">
+          </div>
         </div>
         <button type="button" class="qnext" id="q-next">See your proposal</button>
       </div>
@@ -410,7 +420,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     <p style="margin:0">"Is the business incorporated?" No and never planning to: thank them and point to the free calculators at taxifi.ai/tools. "Not yet" with real revenue: keep going.</p>
 
     <h4>The questions</h4>
-    <p style="margin:0">Screen 6: you fill it in with the owner watching. Start with who you’re talking to (name, role, phone, email: none of it is required), then tap their answers. Expenses, not revenue: owners talk about what goes out more easily. Screen 7 then shows their proposal, with a rough savings figure from what they pay now. The answers are saved on the business, and with the onboarding call when you book it.</p>
+    <p style="margin:0">Screen 6: you fill it in with the owner watching. Start with their name and role, tap their answers, then take their phone and email at the bottom (none of it is required). Expenses, not revenue: owners talk about what goes out more easily. Screen 7 then shows their proposal, with a rough savings figure from what they pay now. The answers are saved on the business, and with the onboarding call when you book it.</p>
     <p class="small" style="margin-top:8px">On the booking screen: first name, cell and email. Never leave without the email.</p>
 
     <h4>Objections</h4>
@@ -478,19 +488,20 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   // questions → proposal. Prices: taxifi.ai/pricing (Nov 2026). Core is set by monthly expenses; over $100K is quoted.
   var CORE = { u10: 299, '10_25': 399, '25_50': 549, '50_100': 749, o100: null };
   var T2 = 1500, PAY_BASE = 49, PAY_EACH = 10;
-  var STAFF = { '0': 0, '1_2': 2, '3_5': 4, '6_10': 8, '11': 12 };          // about this many, for the payroll estimate
   var NOW = { u300: 200, '300_600': 450, '600_1000': 800, o1000: 1250 };   // the middle of each band, a month
+  var YE = { u1000: 750, '1000_2000': 1500, '2000_3500': 2750, o3500: 4500 }; // the middle of each band, a year
   var answers = {};
   function money(v) { return '$' + Math.round(v).toLocaleString('en-CA'); }
   function label(key) {
     var g = document.querySelector('.q[data-q="' + key + '"]'); if (!g || g.hidden) return null;
+    if (g.hasAttribute('data-num')) return answers[key] == null ? null : { q: g.querySelector('b').textContent.replace(/how many.*$/, '').trim(), a: String(answers[key]) };
     var picked = Array.prototype.filter.call(g.querySelectorAll('button'), function (b) { return b.getAttribute('aria-pressed') === 'true'; });
     return picked.length ? { q: g.querySelector('b').firstChild.textContent.trim(), a: picked.map(function (b) { return b.textContent; }).join(', ') } : null;
   }
   function proposal() {
     var a = answers;
     if (!a.expenses) return null;
-    var core = CORE[a.expenses], staff = a.staff ? STAFF[a.staff] : 0;
+    var core = CORE[a.expenses], staff = a.staff > 0 ? a.staff : 0;
     var pay = staff > 0 ? PAY_BASE + PAY_EACH * staff : 0;
     var services = 2 + (pay ? 1 : 0);                 // bookkeeping + T2 (+ payroll)
     var disc = services >= 3 ? 0.15 : 0.10;
@@ -498,16 +509,17 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
       ['Core bookkeeping', core == null ? 'Quoted' : money(core) + '/mo', core == null ? 'Over $100K a month in expenses: priced on your call' : 'Accountant-reviewed books, HST returns, year-round questions'],
       ['Corporate return (T2 Standard)', 'from ' + money(T2) + '/yr', 'Prepared, signed and filed'],
     ];
-    if (pay) lines.push(['Payroll', money(pay) + '/mo', '$49 + $10 a person, about ' + staff + (a.staff === '11' ? '+' : '') + ' staff']);
+    if (pay) lines.push(['Payroll', money(pay) + '/mo', '$49 + $10 a person, ' + staff + (staff === 1 ? ' person' : ' people')]);
     lines.push(['Bundle discount', '\u2212' + Math.round(disc * 100) + '%', services + ' services', 'disc']);
     var yearly = ((core || 0) * 12 + T2 + pay * 12) * (1 - disc);
-    var today = a.pay_now ? NOW[a.pay_now] * 12 : null;
+    var today = a.pay_now ? NOW[a.pay_now] * 12 + (a.year_end ? YE[a.year_end] : 0) : null;
     var fit = { me: 'No more doing the books at night: taxifi keeps them current every day.',
       bookkeeper: 'taxifi takes over the monthly bookkeeping, with a Canadian accountant signing every month.',
       accountant: 'Like your accountant? Keep them for year-end; taxifi can cover the other eleven months.',
+      inhouse: 'Your team gets its hours back: taxifi keeps the books current daily, and a Canadian accountant signs every month.',
       nobody: 'Behind on the books? taxifi catches you up first. Catch-up is scoped on your onboarding call.' }[a.books] || 'Books current every day, with a Canadian accountant behind every number.';
     return { lines: lines, monthly: Math.round(yearly / 12), yearly: Math.round(yearly), quoted: core == null, discount: disc,
-      today_yearly: today, savings: today != null && core != null ? Math.round(today - yearly) : null, fit: fit };
+      today_yearly: today, year_end_in: !!a.year_end, savings: today != null && core != null ? Math.round(today - yearly) : null, fit: fit };
   }
   function render() {
     var p = proposal();
@@ -526,7 +538,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     var save = document.getElementById('p-save'), vs = document.getElementById('p-vs');
     save.hidden = !(p.savings > 0);
     if (p.savings > 0) document.getElementById('p-save-n').textContent = money(p.savings);
-    vs.textContent = p.today_yearly == null ? '' : p.quoted ? '' : 'You pay about ' + money(p.today_yearly) + ' a year now (the middle of the range you picked).'
+    vs.textContent = p.today_yearly == null ? '' : p.quoted ? '' : 'You pay about ' + money(p.today_yearly) + ' a year now' + (p.year_end_in ? '' : ' before year-end') + ' (the middle of the ranges you picked).'
       + (p.savings > 0 ? '' : -p.savings <= p.yearly * 0.1 ? ' taxifi costs about the same, with an accountant reviewing every month and your T2 filed.'
         : ' taxifi costs more, and adds an accountant reviewing every month, HST filed and your T2 signed and filed.');
     document.getElementById('p-fit').textContent = p.fit;
@@ -544,13 +556,13 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     var summary = [];
     var c = contact();
     if (c) summary.push(['Talking with', [(c.name || 'No name') + (c.role ? ' (' + c.role + ')' : ''), c.phone, c.email].filter(Boolean).join(' · ')]);
-    ['years', 'owned_whole', 'owned_years', 'expenses', 'staff', 'books', 'pay_now', 'find', 'admin_hours'].forEach(function (k) { var l = label(k); if (l) summary.push([l.q, l.a]); });
+    ['years', 'owned_whole', 'owned_years', 'expenses', 'staff', 'books', 'pay_now', 'year_end', 'find', 'admin_hours'].forEach(function (k) { var l = label(k); if (l) summary.push([l.q, l.a]); });
     var p = proposal();
     window.parent.postMessage({ type: 'ms-deck-answers', data: { v: 1, answers: answers, summary: summary, contact: c,
       proposal: p && { lines: p.lines.map(function (l) { return [l[0], l[1]]; }), monthly: p.monthly, yearly: p.yearly, quoted: p.quoted,
         today_yearly: p.today_yearly, savings: p.savings, fit: p.fit } } }, '*');
   }
-  Array.prototype.forEach.call(document.querySelectorAll('.q'), function (g) {
+  Array.prototype.forEach.call(document.querySelectorAll('.q:not([data-num])'), function (g) {
     var key = g.getAttribute('data-q'), multi = g.hasAttribute('data-multi');
     Array.prototype.forEach.call(g.querySelectorAll('button'), function (b) {
       b.addEventListener('click', function () {
@@ -568,6 +580,11 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
         render(); share();
       });
     });
+  });
+  document.getElementById('w-staff').addEventListener('input', function (e) {
+    var n = parseInt(e.target.value, 10);
+    if (isFinite(n) && n >= 0) answers.staff = Math.min(n, 999); else delete answers.staff;
+    render(); clearTimeout(shareT); shareT = setTimeout(share, 400);
   });
   ['w-name', 'w-phone', 'w-email'].forEach(function (id) {
     document.getElementById(id).addEventListener('input', function () { clearTimeout(shareT); shareT = setTimeout(share, 400); });
