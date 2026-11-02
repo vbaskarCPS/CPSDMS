@@ -1,0 +1,33 @@
+/* Meetings: the host app and MainstreetAI › Meetings */
+.v2-meet { background: var(--card, #fff); border: 1px solid var(--line, #e5e7eb); border-radius: 12px; padding: 12px; margin-bottom: 8px; }
+.v2-meet.off { opacity: .6; }
+.v2-meet .h { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 4px; }
+.v2-meet .h .t { display: flex; flex-direction: column; min-width: 74px; }
+.v2-meet .h .t b { font-size: 15px; }
+.v2-meet .h .t span, .v2-meet .h .n span { font-size: 12.5px; color: var(--mut, #6b7280); }
+.v2-meet .h .n { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.v2-meet a { color: var(--link, #0f766e); }
+.v2-meet-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.v2-meet-acts .v2-input { flex: 1 1 180px; width: auto; padding: 6px 9px; }
+.v2-linkbtn { border: 0; background: none; padding: 0; color: var(--link, #2563eb); font-weight: 700; font-size: 12.5px; cursor: pointer; display: inline-flex; align-items: center; gap: 2px; }
+.v2-hours .row { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-top: 1px solid var(--line-soft, #f0f1f3); }
+.v2-hours .row:first-child { border-top: 0; }
+.v2-hours .d { width: 64px; flex-shrink: 0; font-weight: 700; display: flex; gap: 6px; align-items: center; padding-top: 5px; }
+.v2-hours .b { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.v2-hours .blk { display: inline-flex; gap: 4px; align-items: center; }
+.v2-hours input[type=time] { border: 1px solid #d1d5db; border-radius: 8px; padding: 5px 6px; font: inherit; }
+.v2-chipx { display: inline-flex; align-items: center; gap: 4px; background: #f1f5f9; border-radius: 99px; padding: 3px 4px 3px 10px; font-size: 12.5px; font-weight: 600; }
+.v2-chipx button { border: 0; background: none; padding: 2px; display: grid; place-items: center; cursor: pointer; color: #64748b; }
+.v2-meet-day { font-size: 12px; font-weight: 800; color: var(--mut, #6b7280); text-transform: uppercase; letter-spacing: .4px; margin: 14px 2px 6px; }
+.v2-cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.v2-cal .col { background: var(--card, #fff); border: 1px solid var(--line, #e5e7eb); border-radius: 10px; padding: 6px; min-height: 120px; }
+.v2-cal .col.today { border-color: #0f766e; }
+.v2-cal .col > b { display: block; font-size: 12px; margin-bottom: 4px; }
+.v2-cal .ev { display: block; width: 100%; text-align: left; border: 0; border-left: 3px solid #2563eb; background: #eff6ff; border-radius: 6px; padding: 4px 6px; margin-bottom: 4px; font-size: 11.5px; cursor: pointer; overflow: hidden; }
+.v2-cal .ev.closed { border-color: #16a34a; background: #f0fdf4; } .v2-cal .ev.no_show { border-color: #d97706; background: #fffbeb; }
+.v2-cal .ev.not_fit { border-color: #e11d48; background: #fff1f2; } .v2-cal .ev.cancelled { border-color: #94a3b8; background: #f8fafc; text-decoration: line-through; }
+.v2-cal .ev span { display: block; color: #475569; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) { .v2-cal { grid-template-columns: 1fr; } .v2-cal .col { min-height: 0; } }
+.v2-meet-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.v2-meet-bar .v2-sel { width: auto; }
+.v2-meet a[href^='tel:'] { white-space: nowrap; }

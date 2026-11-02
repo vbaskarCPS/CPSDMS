@@ -1,13 +1,15 @@
 // src/v2/app/Home.tsx — the dashboard: a large stat card per component the user may open;
 // "Open" on a card goes to that component's home.
 import React, { useEffect, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { hasLiveRouteManagerSeat } from '../lib/legacy';
 import { legacyManagerId } from '../lib/startSession';
 import { useAuth } from '../lib/auth';
 import { visibleComponents, homeOf } from './nav';
 import { StatCards } from './StatCards';
 import { EmailCard } from './EmailCard';
+import { useLoad } from '../lib/data';
+import { isHost } from '../lib/meetings';
 
 export const Home: React.FC = () => {
   const { profile, can, center } = useAuth();
@@ -32,6 +34,11 @@ export const Home: React.FC = () => {
       .catch(() => live && setChecking(false));
     return () => { live = false; };
   }, [fromLogin, profile, can, nav]);
+  // an onboarding host with nothing else to open goes straight to their calls
+  const host = useLoad(() => (profile ? isHost() : Promise.resolve(false)), [profile?.id]);
+  const onlyBasics = comps.every(c => c.perm === 'everyone');
+  if (host.data && onlyBasics) return <Navigate to="/app/host" replace />;
+  if (onlyBasics && host.loading) return <div className="v2-main v2-narrow"><div className="v2-mut" style={{ padding: 20 }}>Opening…</div></div>;
   if (checking) return <div className="v2-main v2-narrow"><div className="v2-mut" style={{ padding: 20 }}>Opening…</div></div>;
 
   return (
@@ -40,6 +47,7 @@ export const Home: React.FC = () => {
         <div className="v2-mut">{d.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })}{center ? ` · ${center.display_name}` : ''}</div>
         <div className="v2-h1">{greet}, {first}</div>
       </div>
+      {host.data && <Link to="/app/host" className="v2-card" style={{ display: 'block', marginBottom: 12 }}><b>Onboarding calls</b><div className="v2-small v2-mut">Your MainstreetAI calls and hours</div></Link>}
       {comps.length > 0 && <EmailCard />}
       <StatCards comps={comps} onOpen={c => nav(homeOf(c))} />
       {comps.length === 0 && <div className="v2-card">Your account has no permissions yet. Ask the Super Admin to set them in User Management.</div>}

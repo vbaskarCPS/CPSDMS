@@ -162,3 +162,17 @@
 .v2-rep-mailrow.unread .s { font-weight: 800; }
 .v2-rep-nav .badge.blue { background: #0b57d0; }
 .v2-rep-body.mail { padding: 0 0 62px; max-width: none; min-width: 0; overflow: hidden; display: flex; flex-direction: column; height: calc(100vh - 57px); }
+
+/* book onboarding: over the presentation */
+.v2-rep-book { z-index: 50; }
+.v2-rep-bookdays { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.v2-rep-bookdays button { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; min-width: 62px; border: 1.5px solid var(--line); background: #fff; border-radius: 12px; padding: 8px 6px; cursor: pointer; color: var(--ink); }
+.v2-rep-bookdays button b { font-size: 13px; }
+.v2-rep-bookdays button span { font-size: 12px; color: var(--mut); }
+.v2-rep-bookdays button.on { border-color: var(--brand); background: #f0fdfa; }
+.v2-rep-booktimes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
+.v2-rep-booktimes button { border: 1.5px solid var(--brand); background: #fff; color: var(--brand); border-radius: 10px; padding: 12px 4px; font-weight: 800; font-size: 14.5px; cursor: pointer; }
+.v2-rep-bookwhen { display: flex; align-items: center; gap: 8px; background: #f0fdfa; border: 1px solid #99f6e4; color: #134e4a; border-radius: 10px; padding: 10px 12px; margin: 4px 0 10px; font-size: 14.5px; }
+.v2-rep-booked { text-align: center; padding: 10px 4px 4px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.v2-rep-booked svg { color: var(--brand); }
+.v2-rep-booked p { margin: 4px 0; max-width: 420px; }
