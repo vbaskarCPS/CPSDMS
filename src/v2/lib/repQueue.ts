@@ -2,6 +2,7 @@
 // "sent info" logs that can't reach us wait on the phone (IndexedDB) and go when the signal's back.
 // Each visit carries an id made on the phone and the time it happened, so one sent twice is kept once.
 // The home map is kept on the phone too, so it opens with no signal.
+import { msDemo } from '../../lib/msDemoFlag';
 import { db } from './client';
 import { isOffline } from './repField';
 
@@ -28,7 +29,8 @@ function open(): Promise<IDBDatabase | null> {
   if (opening) return opening;
   opening = new Promise(resolve => {
     try {
-      if (typeof indexedDB === 'undefined') { resolve(null); return; }
+      // the public demo never reads or writes a real rep's saved visits or cache: memory only
+      if (typeof indexedDB === 'undefined' || msDemo) { resolve(null); return; }
       const r = indexedDB.open(DB, 1);
       r.onupgradeneeded = () => { for (const s of STORES) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s); };
       r.onsuccess = () => resolve(r.result);
