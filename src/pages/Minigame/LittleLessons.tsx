@@ -24,6 +24,7 @@ import type { GameProps } from './games';
 import { CHARACTER_CSS, Character, type Mood } from './chessCharacters';
 import { CastShape, LESSON_CHARACTER_CSS } from './lessonCharacters';
 import { MONKEY_CSS, MrMonkey, type Pose } from './monkey';
+import { afterStory, cheer as cheerWith, comfort, handoff, monkeyTap, monkeyWelcome, opener, stickerParty, thinking, type BanterLine } from '../../lib/littleLessons/banter';
 import { clipCount, englishVoices, hush, loadClips, onSpeaking, onVoicesReady, say, type VoiceInfo } from './voice';
 
 const BG = 'radial-gradient(120% 80% at 50% 0%, #0f766e 0%, #134e4a 55%, #042f2e 100%)';
@@ -46,6 +47,15 @@ const talk = (line: Line, on: boolean, onWord?: (i: number) => void, onEnd?: () 
     spoken: line.said || spokenFor(who, line.text, playerName),
   });
 };
+
+/** Say several lines one after another (a conversation); onEnd when the last one's done. */
+const talkMany = (lines: Line[], on: boolean, onEnd?: () => void) => {
+  const [first, ...rest] = lines;
+  if (!first) { onEnd?.(); return; }
+  talk(first, on, undefined, () => (rest.length ? talkMany(rest, on, onEnd) : onEnd?.()));
+};
+const asLine = (b: BanterLine): Line => ({ text: b.text, who: b.who, said: b.said });
+const rand = <T,>(list: T[]) => list[Math.floor(Math.random() * list.length)];
 
 // how long things wait (ms)
 const READ_AFTER = 1200;      // the sentence is read this long after a question starts
@@ -122,7 +132,7 @@ const LittleLessons: React.FC<GameProps<Partial<LessonProgress>>> = ({ progress,
   const [p, setP] = useState<LessonProgress>(() => applySettings(readProgress(progress as LessonProgress | null, (allProgress?.chess as Record<string, unknown>) || null), settings));
   const pRef = useRef(p); pRef.current = p;
   const [run, setRun] = useState<Run | null>(null);
-  const [sticker, setSticker] = useState<string | null>(null);
+  const [sticker, setSticker] = useState<{ got: string; cast: Cast } | null>(null);
   const [grownups, setGrownups] = useState(false);
   const update = useCallback((next: LessonProgress) => { pRef.current = next; setP(next); save(next); }, [save]);
   chosenVoice = p.voiceName; useRecorded = p.recorded; playerName = player;
@@ -150,8 +160,8 @@ const LittleLessons: React.FC<GameProps<Partial<LessonProgress>>> = ({ progress,
     if (left <= 0) {
       const got = stickerFor(next);
       update({ ...next, stickers: [...next.stickers, got] });
-      setRun(null); setSticker(got);
-      talk({ text: stickerLine(player) }, next.voice, undefined, () => talk({ text: HIGH_FIVE }, next.voice));
+      setRun(null); setSticker({ got, cast: run.q.cast });
+      talkMany([{ text: stickerLine(player) }, { text: HIGH_FIVE }, ...stickerParty(run.q.cast).map(asLine)], next.voice);
       return;
     }
     update(next);
@@ -166,7 +176,7 @@ const LittleLessons: React.FC<GameProps<Partial<LessonProgress>>> = ({ progress,
       {run && intro
         ? <StoryCard key={`story-${intro.id}`} level={intro} voice={p.voice} onDone={heardStory} onQuit={() => { hush(); setRun(null); }} />
         : run
-          ? <Play key={`${run.left}-${run.q.level}`} q={run.q} at={run.total - run.left} total={run.total} name={player} voice={p.voice} onDone={answered} onQuit={() => { hush(); setRun(null); }} />
+          ? <Play key={`${run.left}-${run.q.level}`} q={run.q} at={run.total - run.left} total={run.total} name={player} voice={p.voice} first={run.k === 0} onDone={answered} onQuit={() => { hush(); setRun(null); }} />
           : <Home p={p} name={player} onPlay={start} onExit={() => { hush(); exit(); }} onGrownups={() => setGrownups(true)} />}
 
       {sticker && (
@@ -174,7 +184,8 @@ const LittleLessons: React.FC<GameProps<Partial<LessonProgress>>> = ({ progress,
           <div className="rounded-[40px] bg-teal-950/95 border-4 border-yellow-300 px-10 py-8 text-center shadow-2xl" style={{ animation: 'lc-pop .5s ease-out' }}>
             <div className="flex items-end justify-center gap-2">
               <StickerMonkey voice={p.voice} />
-              <div style={{ fontSize: 'clamp(110px, 22vw, 200px)', lineHeight: 1, animation: 'lc-float 2s ease-in-out infinite' }}>{sticker}</div>
+              <div style={{ fontSize: 'clamp(110px, 22vw, 200px)', lineHeight: 1, animation: 'lc-float 2s ease-in-out infinite' }}>{sticker.got}</div>
+              <CastShape who={sticker.cast} size={Math.round(Math.min(window.innerHeight * 0.26, window.innerWidth * 0.3))} mood="happy" style={{ animation: 'lc-bounce 1.4s ease-in-out infinite', transformOrigin: '50% 100%' }} />
             </div>
             <div className="font-black mt-4" style={{ fontSize: 'clamp(30px, 5vw, 52px)' }}>{stickerLine(player)}</div>
             <button type="button" onClick={e => { e.stopPropagation(); setSticker(null); }} className="mt-6 px-10 py-4 rounded-full bg-yellow-300 text-teal-950 font-black text-3xl">YAY!</button>
@@ -233,9 +244,9 @@ const MonkeyStage: React.FC<{ name: string; voice: boolean }> = ({ name, voice }
   const tap = () => {
     if (a.reaction || play === 'hello' || play === 'slap') return;
     if (play === 'hand') { setPlay('slap'); talk({ text: YEAH }, voice); window.setTimeout(() => setPlay('none'), 1500); return; }
-    // every other tap he says hello; otherwise straight to the high five
-    if (hits.current++ % 2 === 1) { setPlay('hello'); talk({ text: monkeyHello(name) }, voice, undefined, () => { setPlay('hand'); talk({ text: HIGH_FIVE }, voice); }); }
-    else { setPlay('hand'); talk({ text: HIGH_FIVE }, voice); }
+    // most taps get one of his own little lines; every third one is a high five
+    if (hits.current++ % 3 === 2) { setPlay('hand'); talk({ text: HIGH_FIVE }, voice); }
+    else { setPlay('hello'); talk(asLine(rand(monkeyTap(name))), voice, undefined, () => setPlay('none')); }
   };
   const pose: Pose = play === 'hand' ? 'highfive' : play === 'slap' ? 'cheer' : play === 'hello' ? 'wave'
     : a.reaction === 'right' ? 'highfive' : a.reaction === 'wrong' ? 'shrug' : monkeyTalks || a.thinking ? 'point' : hostTalks ? 'wave' : 'idle';
@@ -269,10 +280,21 @@ const Greeter: React.FC<{ name: string; voice: boolean }> = ({ name, voice }) =>
   const [step, setStep] = useState<'wave' | 'hello' | 'hand' | 'slap'>('wave');
   const talking = useTalking();
   // the first time the home screen opens in a visit, he explains the game himself
-  useEffect(() => { if (!voice || greeted) return; greeted = true; const t = window.setTimeout(() => { setStep('hello'); talk({ text: monkeyHello(name) }, voice, undefined, () => { setStep('hand'); talk({ text: HIGH_FIVE }, voice); }); }, 700); return () => window.clearTimeout(t); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const hits = useRef(0);
+  useEffect(() => {
+    if (!voice || greeted) return;
+    greeted = true;
+    const t = window.setTimeout(() => { setStep('hello'); talkMany(monkeyWelcome(name).slice(0, 4).map(asLine), voice, () => { setStep('hand'); talk({ text: HIGH_FIVE }, voice); }); }, 700);
+    return () => window.clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const tap = () => {
-    if (step === 'wave') { setStep('hello'); talk({ text: monkeyHello(name) }, voice, undefined, () => { setStep('hand'); talk({ text: HIGH_FIVE }, voice); }); }
-    else if (step === 'hand') { setStep('slap'); talk({ text: YEAH }, voice); window.setTimeout(() => setStep('wave'), 1600); }
+    if (step === 'hello' || step === 'slap') return;
+    if (step === 'hand') { setStep('slap'); talk({ text: YEAH }, voice); window.setTimeout(() => setStep('wave'), 1600); return; }
+    const n = hits.current++;
+    if (n % 3 === 2) { setStep('hand'); talk({ text: HIGH_FIVE }, voice); return; }
+    setStep('hello');
+    const l = n === 0 ? monkeyHello(name) : null;
+    talk(l ? { text: l } : asLine(rand([...monkeyTap(name), ...monkeyWelcome(name).slice(2)])), voice, undefined, () => setStep('wave'));
   };
   const pose: Pose = step === 'hand' ? 'highfive' : step === 'slap' ? 'cheer' : step === 'hello' ? 'idle' : 'wave';
   const mood: Mood = step === 'slap' ? 'happy' : talking && (step === 'hello' || step === 'hand') ? 'talk' : 'idle';
@@ -330,8 +352,8 @@ const StoryCard: React.FC<{ level: Intro; voice: boolean; onDone: () => void; on
   useEffect(() => {
     let done = false;
     const go = () => { if (!done) { done = true; setReady(true); } };
-    const t1 = window.setTimeout(() => talk(storyLine(level), voice, undefined, go), 600);
-    const t2 = window.setTimeout(go, voice ? STORY_MAX : 4000);
+    const t1 = window.setTimeout(() => talk(storyLine(level), voice, undefined, () => talkMany(afterStory(level.cast).map(asLine), voice, go)), 600);
+    const t2 = window.setTimeout(go, voice ? STORY_MAX + 8000 : 4000);
     return () => { window.clearTimeout(t1); window.clearTimeout(t2); hush(); };
   }, [level, voice]);
   useEffect(() => { if (ready) return; const t = window.setInterval(() => setLit(n => (n + 1) % 6), 700); return () => window.clearInterval(t); }, [ready]);
@@ -400,7 +422,7 @@ const LOCK_ICON: Record<Exclude<Lock, null>, string> = { listen: '👂', think: 
 const isChess = (q: Question): q is Exclude<Round, { kind: 'hello' }> & Question => ['find', 'word', 'shadow', 'peek', 'board', 'show'].includes(q.kind);
 type ChessQ = Question & ChessRound;
 
-const Play: React.FC<{ q: Question; at: number; total: number; name: string; voice: boolean; onDone: (right: boolean) => void; onQuit: () => void }> = ({ q, at, total, name, voice, onDone, onQuit }) => {
+const Play: React.FC<{ q: Question; at: number; total: number; name: string; voice: boolean; first?: boolean; onDone: (right: boolean) => void; onQuit: () => void }> = ({ q, at, total, name, voice, first, onDone, onQuit }) => {
   const [lit, setLit] = useState(-1);
   const [flash, setFlash] = useState<string | null>(null);
   const [hint, setHint] = useState(false);
@@ -421,14 +443,18 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
   const setLock = (l: Lock) => { lockRef.current = l; setLockState(l); };
 
   // if nothing happens for a while, hint and read again (never while he's waiting)
+  const mused = useRef(false);
   const nudge = useCallback(() => {
     if (idle.current) window.clearTimeout(idle.current);
     if (lockRef.current) return;
-    idle.current = window.setTimeout(() => { setHint(true); talk(line, voice, setLit); }, 9000);
+    idle.current = window.setTimeout(() => {
+      if (!mused.current && voice) { mused.current = true; talk(asLine(thinking()), voice); nudge(); return; }   // Mr Monkey: "hmm, which one?"
+      setHint(true); talk(line, voice, setLit);
+    }, mused.current ? 9000 : 5000);
   }, [line.text, voice]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Wait (answers away) for at least `ms`, and until `say` has been said; then bring them back. */
-  const wait = (kind: Exclude<Lock, null>, ms: number, sayIt?: Line & { words?: boolean }, delay = 0) => {
+  const wait = (kind: Exclude<Lock, null>, ms: number, sayIt?: Line & { words?: boolean; before?: Line[]; after?: Line[] }, delay = 0) => {
     const id = ++seq.current;
     if (idle.current) window.clearTimeout(idle.current);
     setLock(kind);
@@ -440,13 +466,16 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
     };
     later(() => { waited = true; wake(); }, ms);
     if (sayIt && voice) {
-      later(() => { if (seq.current === id) talk(sayIt, voice, sayIt.words ? setLit : undefined, () => { said = true; wake(); }); }, delay);
-      later(() => { said = true; wake(); }, delay + VOICE_MAX);
+      // a conversation around the line: what's said before it (an opener or a handoff) and after it
+      const run = () => { if (seq.current !== id) return; talk(sayIt, voice, sayIt.words ? setLit : undefined, () => talkMany(sayIt.after || [], voice, () => { said = true; wake(); })); };
+      later(() => { if (seq.current === id) talkMany(sayIt.before || [], voice, run); }, delay);
+      later(() => { said = true; wake(); }, delay + VOICE_MAX + (sayIt.before?.length || 0) * 4000 + (sayIt.after?.length || 0) * 4000);
     }
   };
 
   useEffect(() => {
-    wait('listen', voice ? READ_AFTER : LISTEN_QUIET, { ...line, words: true }, READ_AFTER);
+    const before = voice ? (first ? opener(host) : Math.random() < 0.35 ? handoff(host) : []).map(asLine) : [];   // a hello at a lesson's start; a handoff now and then
+    wait('listen', voice ? READ_AFTER : LISTEN_QUIET, { ...line, words: true, before }, READ_AFTER);
     return () => { seq.current++; timers.current.forEach(t => window.clearTimeout(t)); timers.current = []; if (idle.current) window.clearTimeout(idle.current); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -463,7 +492,7 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
       : lessonOops(q, tapped as number | string);
     setFlash(l.text);
     setReaction('wrong'); later(() => setReaction(r => (r === 'wrong' ? null : r)), 1300);
-    wait('think', THINK, l);
+    wait('think', THINK, { ...l, after: comfort(host).map(asLine) });
   };
   const won = () => {
     seq.current++; setLock(null);
@@ -471,10 +500,13 @@ const Play: React.FC<{ q: Question; at: number; total: number; name: string; voi
     setFlash(null);
     const c = cheers(name)[Math.floor(Math.random() * 5)];
     setCheer(c); setReaction('right');
-    talk({ text: c, who: q.cast }, voice);   // the question's character cheers in its own voice
-    try { navigator.vibrate?.(40); } catch { /* ignore */ }
     const right = misses.current.length === 0;
-    window.setTimeout(() => { setCheer(null); onDone(right); }, 1500);
+    let moved = false;
+    const next = () => { if (moved) return; moved = true; setCheer(null); onDone(right); };
+    // the question's character cheers in its own voice, then it and Mr Monkey have a word; the next question waits for them (not forever)
+    talkMany([{ text: c, who: q.cast }, ...cheerWith(host).map(asLine)], voice, () => window.setTimeout(next, 300));
+    try { navigator.vibrate?.(40); } catch { /* ignore */ }
+    window.setTimeout(next, voice ? 9000 : 1500);
   };
   const listening = lock === 'listen';
   const act: Act = { talking, reaction, thinking: lock === 'think', who: nowTalking };
