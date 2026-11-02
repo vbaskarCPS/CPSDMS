@@ -20,7 +20,7 @@ import {
 import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BookOnboarding } from './BookOnboarding';
-import { hasAnswers, saveDeckAnswers, type DeckAnswers } from '../../lib/meetings';
+import { businessContacts, hasAnswers, saveDeckAnswers, type DeckAnswers } from '../../lib/meetings';
 import { download, useRep } from './repContext';
 
 /** What's known from the map, for when the business can't be loaded (no signal). */
@@ -62,12 +62,20 @@ export const BusinessSheet: React.FC<{
   // the deck's questions screen: the latest answers, saved on the business when the deck closes (and before booking)
   const answers = React.useRef<DeckAnswers | null>(null);
   const savedAnswers = React.useRef('');
+  const [peopleTick, setPeopleTick] = useState(0);
+  const people = useLoad(() => businessContacts(id, campaign).catch(() => []), [id, campaign, peopleTick]);
   const keepAnswers = useCallback(() => {
     const a = answers.current; if (!hasAnswers(a)) return;
     const k = JSON.stringify(a); if (k === savedAnswers.current) return;
     savedAnswers.current = k;
-    saveDeckAnswers(id, campaign, a).catch(() => { savedAnswers.current = ''; });
+    saveDeckAnswers(id, campaign, a).then(() => setPeopleTick(t => t + 1)).catch(() => { savedAnswers.current = ''; });
   }, [id, campaign]);
+  // what the rep typed on the deck fills the visit and booking forms
+  const onDeckAnswers = useCallback((a: DeckAnswers) => {
+    answers.current = a;
+    const c = a.contact;
+    if (c) { if (c.name) setCName(c.name); if (c.phone) setCPhone(c.phone); if (c.email) setCEmail(c.email); }
+  }, []);
   useEffect(() => () => photos.forEach(p => URL.revokeObjectURL(p.url)), []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const d: (RepBusinessView | (SheetFallback & { phone?: null; website?: null; plaza?: null; visits: []; sends: [] })) | null =
@@ -188,7 +196,7 @@ export const BusinessSheet: React.FC<{
       {pitch === 'share' && <SendInfo kit={kit.data} error={kit.error} business={d.name} businessId={id} campaign={campaign}
         phone={cPhone || d.phone || ''} email={cEmail || lastEmail(d)} contact={cName} onEmail={() => setComposing(emailInit())} />}
       {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref}
-        onClose={() => { keepAnswers(); setPresenting(false); }} onBook={() => setBooking(true)} onAnswers={a => { answers.current = a; }} />}
+        onClose={() => { keepAnswers(); setPresenting(false); }} onBook={() => setBooking(true)} onAnswers={onDeckAnswers} />}
       {booking && <BookOnboarding campaign={campaign} business={id} businessName={d.name} answers={answers.current}
         owner={{ name: cName, phone: cPhone || d.phone || '', email: cEmail || lastEmail(d) }}
         onBooked={() => { booked.current = true; }}
@@ -251,6 +259,16 @@ export const BusinessSheet: React.FC<{
       {outcome && <Btn onClick={save} disabled={busy || scanning} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e', marginTop: 6 }}>
         {busy ? 'Saving…' : outcome === 'closed' ? 'Save deal for approval' : 'Save visit'}</Btn>}
 
+      {!!people.data?.length && (
+        <>
+          <div style={{ fontWeight: 800, margin: '16px 0 2px' }}>People here</div>
+          {people.data.map(c => (
+            <div key={c.id} className="v2-small v2-rep-visit">
+              <b>{c.name || 'No name'}</b>{c.role ? ` · ${c.role}` : ''}
+              {c.phone && <> · <a href={`tel:${c.phone.replace(/[^0-9+]/g, '')}`}>{c.phone}</a></>}
+              {c.email && <> · <a href={`mailto:${c.email}`}>{c.email}</a></>}
+            </div>))}
+        </>)}
       {!offline && <History d={d as RepBusinessView} loading={b.loading && !b.data} />}
     </Sheet>
   );

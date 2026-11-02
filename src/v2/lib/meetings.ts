@@ -6,9 +6,17 @@ import { db, must } from './client';
 /** What the owner tapped on the deck's questions screen, and the proposal it made (built by the deck itself). */
 export interface DeckAnswers {
   v: number; answers: Record<string, string | string[]>; summary: [string, string][];
+  contact?: { name: string; role: string; phone: string; email: string } | null;
   proposal: null | { lines: [string, string][]; monthly: number; yearly: number; quoted: boolean; today_yearly: number | null; savings: number | null; fit: string };
 }
-export const hasAnswers = (a: DeckAnswers | null | undefined): a is DeckAnswers => !!a && !!a.answers && Object.keys(a.answers).length > 0;
+export const hasAnswers = (a: DeckAnswers | null | undefined): a is DeckAnswers =>
+  !!a && ((!!a.answers && Object.keys(a.answers).length > 0) || !!a.contact);
+
+/** The people at a business (the deck's "Who we're talking to"). */
+export interface BizContact { id: string; name?: string; role?: string; phone?: string; email?: string; updated_at: string }
+export async function businessContacts(business: string, campaign: string): Promise<BizContact[]> {
+  return (must(await db.rpc('ms_business_contacts_list', { p_business: business, p_campaign: campaign })) as BizContact[]) || [];
+}
 
 export type MeetingStatus = 'booked' | 'closed' | 'no_show' | 'not_fit' | 'cancelled';
 export const STATUS_LABEL: Record<MeetingStatus, string> = {

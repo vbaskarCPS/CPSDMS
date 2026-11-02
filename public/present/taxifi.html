@@ -129,6 +129,11 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 .opts button { border: 1.5px solid var(--line); background: var(--card); border-radius: 999px; padding: 8px 13px; font-size: 14.5px; font-weight: 600; cursor: pointer; color: var(--ink); }
 .opts button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .qs .sep { border-top: 1px dashed var(--line); padding-top: 12px; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); }
+.talk { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.talk input { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 11px 12px; font-size: 16px; min-width: 0; }
+.talk input:first-child { grid-column: 1 / -1; }
+.talk input:focus { border-color: var(--accent); outline: none; }
+@media (max-width: 380px) { .talk { grid-template-columns: 1fr; } }
 .qnext { align-self: flex-start; border: 0; background: var(--ink); color: var(--bg); border-radius: 12px; padding: 12px 18px; font-weight: 700; cursor: pointer; }
 /* proposal (slide 7) */
 .prop { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
@@ -306,8 +311,20 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     <section class="slide" aria-label="6 of 9">
       <div class="inner">
         <div class="kicker">A few quick questions</div>
-        <h2>Tell us about the business.</h2>
+        <h2>Tell us about you and the business.</h2>
         <div class="qs" id="qs">
+          <div class="sep" style="border-top:0;padding-top:0">Who we’re talking to</div>
+          <div class="talk">
+            <input id="w-name" placeholder="Name" autocomplete="off" aria-label="Name">
+            <input id="w-phone" type="tel" inputmode="tel" placeholder="Phone" autocomplete="off" aria-label="Phone">
+            <input id="w-email" type="email" inputmode="email" placeholder="Email" autocomplete="off" autocapitalize="none" aria-label="Email">
+          </div>
+          <div class="q" data-q="role" role="group" aria-label="Their role"><b>Their role</b><div class="opts"><button type="button" data-v="Owner" aria-pressed="false">Owner</button><button type="button" data-v="Partner" aria-pressed="false">Partner</button><button type="button" data-v="Manager" aria-pressed="false">Manager</button><button type="button" data-v="Bookkeeper" aria-pressed="false">Bookkeeper</button><button type="button" data-v="Other" aria-pressed="false">Other</button></div></div>
+          <div class="sep">About the business</div>
+          <div class="q" data-q="years" role="group" aria-label="How long you’ve been in business"><b>How long you’ve been in business</b><div class="opts"><button type="button" data-v="u1" aria-pressed="false">Under 1 year</button><button type="button" data-v="1_3" aria-pressed="false">1–3 years</button><button type="button" data-v="3_5" aria-pressed="false">3–5 years</button><button type="button" data-v="5_10" aria-pressed="false">5–10 years</button><button type="button" data-v="10" aria-pressed="false">10+ years</button></div></div>
+          <div class="q" data-q="owned_whole" role="group" aria-label="Owned it the whole time?"><b>Owned it the whole time?</b><div class="opts"><button type="button" data-v="yes" aria-pressed="false">Yes</button><button type="button" data-v="no" aria-pressed="false">No, we bought it</button></div></div>
+          <div class="q" data-q="owned_years" hidden role="group" aria-label="How long you’ve owned it"><b>How long you’ve owned it</b><div class="opts"><button type="button" data-v="u1" aria-pressed="false">Under 1 year</button><button type="button" data-v="1_3" aria-pressed="false">1–3 years</button><button type="button" data-v="3_5" aria-pressed="false">3–5 years</button><button type="button" data-v="5_10" aria-pressed="false">5–10 years</button><button type="button" data-v="10" aria-pressed="false">10+ years</button></div></div>
+          <div class="sep">The numbers</div>
           <div class="q" data-q="expenses" role="group" aria-label="Monthly business expenses"><b>Monthly business expenses <small>everything going out, roughly</small></b><div class="opts"><button type="button" data-v="u10" aria-pressed="false">Under $10K</button><button type="button" data-v="10_25" aria-pressed="false">$10K–$25K</button><button type="button" data-v="25_50" aria-pressed="false">$25K–$50K</button><button type="button" data-v="50_100" aria-pressed="false">$50K–$100K</button><button type="button" data-v="o100" aria-pressed="false">Over $100K</button></div></div>
           <div class="q" data-q="staff" role="group" aria-label="Staff on payroll"><b>Staff on payroll</b><div class="opts"><button type="button" data-v="0" aria-pressed="false">None</button><button type="button" data-v="1_2" aria-pressed="false">1–2</button><button type="button" data-v="3_5" aria-pressed="false">3–5</button><button type="button" data-v="6_10" aria-pressed="false">6–10</button><button type="button" data-v="11" aria-pressed="false">11+</button></div></div>
           <div class="q" data-q="books" role="group" aria-label="Who does the books now"><b>Who does the books now</b><div class="opts"><button type="button" data-v="me" aria-pressed="false">Me</button><button type="button" data-v="bookkeeper" aria-pressed="false">A bookkeeper</button><button type="button" data-v="accountant" aria-pressed="false">An accountant</button><button type="button" data-v="nobody" aria-pressed="false">Nobody, we’re behind</button></div></div>
@@ -393,7 +410,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     <p style="margin:0">"Is the business incorporated?" No and never planning to: thank them and point to the free calculators at taxifi.ai/tools. "Not yet" with real revenue: keep going.</p>
 
     <h4>The questions</h4>
-    <p style="margin:0">Screen 6: tap their answers together. Expenses, not revenue: owners talk about what goes out more easily. Screen 7 then shows their proposal, with a rough savings figure from what they pay now. The answers are saved on the business, and with the onboarding call when you book it.</p>
+    <p style="margin:0">Screen 6: you fill it in with the owner watching. Start with who you’re talking to (name, role, phone, email: none of it is required), then tap their answers. Expenses, not revenue: owners talk about what goes out more easily. Screen 7 then shows their proposal, with a rough savings figure from what they pay now. The answers are saved on the business, and with the onboarding call when you book it.</p>
     <p class="small" style="margin-top:8px">On the booking screen: first name, cell and email. Never leave without the email.</p>
 
     <h4>Objections</h4>
@@ -466,7 +483,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   var answers = {};
   function money(v) { return '$' + Math.round(v).toLocaleString('en-CA'); }
   function label(key) {
-    var g = document.querySelector('.q[data-q="' + key + '"]'); if (!g) return null;
+    var g = document.querySelector('.q[data-q="' + key + '"]'); if (!g || g.hidden) return null;
     var picked = Array.prototype.filter.call(g.querySelectorAll('button'), function (b) { return b.getAttribute('aria-pressed') === 'true'; });
     return picked.length ? { q: g.querySelector('b').firstChild.textContent.trim(), a: picked.map(function (b) { return b.textContent; }).join(', ') } : null;
   }
@@ -516,12 +533,20 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   }
   // in the rep app, every change goes to the app: saved on the business, and with the onboarding call when it's booked
   var embedded = document.documentElement.classList.contains('embed') && window.parent !== window;
+  function contact() {
+    var v = function (id) { return document.getElementById(id).value.trim(); };
+    var c = { name: v('w-name'), phone: v('w-phone'), email: v('w-email'), role: answers.role || '' };
+    return c.name || c.phone || c.email ? c : null;
+  }
+  var shareT;
   function share() {
     if (!embedded) return;
     var summary = [];
-    ['expenses', 'staff', 'books', 'pay_now', 'find', 'admin_hours'].forEach(function (k) { var l = label(k); if (l) summary.push([l.q, l.a]); });
+    var c = contact();
+    if (c) summary.push(['Talking with', [(c.name || 'No name') + (c.role ? ' (' + c.role + ')' : ''), c.phone, c.email].filter(Boolean).join(' · ')]);
+    ['years', 'owned_whole', 'owned_years', 'expenses', 'staff', 'books', 'pay_now', 'find', 'admin_hours'].forEach(function (k) { var l = label(k); if (l) summary.push([l.q, l.a]); });
     var p = proposal();
-    window.parent.postMessage({ type: 'ms-deck-answers', data: { v: 1, answers: answers, summary: summary,
+    window.parent.postMessage({ type: 'ms-deck-answers', data: { v: 1, answers: answers, summary: summary, contact: c,
       proposal: p && { lines: p.lines.map(function (l) { return [l[0], l[1]]; }), monthly: p.monthly, yearly: p.yearly, quoted: p.quoted,
         today_yearly: p.today_yearly, savings: p.savings, fit: p.fit } } }, '*');
   }
@@ -536,9 +561,16 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
           .map(function (x) { return x.getAttribute('data-v'); });
         if (multi) { if (vals.length) answers[key] = vals; else delete answers[key]; }
         else if (vals.length) answers[key] = vals[0]; else delete answers[key];
+        if (key === 'owned_whole') {
+          var oy = document.querySelector('.q[data-q="owned_years"]'); oy.hidden = answers.owned_whole !== 'no';
+          if (oy.hidden) { delete answers.owned_years; Array.prototype.forEach.call(oy.querySelectorAll('button'), function (x) { x.setAttribute('aria-pressed', 'false'); }); }
+        }
         render(); share();
       });
     });
+  });
+  ['w-name', 'w-phone', 'w-email'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', function () { clearTimeout(shareT); shareT = setTimeout(share, 400); });
   });
   document.getElementById('q-next').addEventListener('click', function () { go(slides.indexOf(document.getElementById('p-body').closest('.slide'))); });
   render();
