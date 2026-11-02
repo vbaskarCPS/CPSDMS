@@ -24,7 +24,9 @@ function precacheManifest(): Plugin {
       // the planner (planner.html, src/planner) rides along so an installed planner opens offline too;
       // the Main Street AI website (mainstreetai.html) is its own page the field app's phones don't keep
       const files = Object.keys(bundle).filter(f => /\.(js|css|html|svg|png|woff2?)$/.test(f) && !f.endsWith('.map')
-        && !/^mainstreetai\.html$|\/mainstreetai-[^/]*\.(js|css)$/.test(f));
+        && !/^mainstreetai\.html$|\/mainstreetai-[^/]*\.(js|css)$/.test(f)
+        // nor the public MainstreetAI demo (src/msdemo, with its sample businesses): it's opened online, not in the field
+        && !/(^|\/)MsDemo-[^/]*\.css$/.test(f) && !(((bundle[f] as { moduleIds?: string[] }).moduleIds || []).some(id => /[\\/]src[\\/]msdemo[\\/]/.test(id))));
       const urls = ['/', '/index.html', '/planner.html', '/manifest.json', '/icon-192.png', '/icon-512.png', '/logo.svg', '/vijayplanner/manifest.json', '/vijayplanner/icon-192.png', '/roshplanner/manifest.json', '/roshplanner/icon-192.png', ...files.filter(f => f !== 'index.html').map(f => `/${f}`)];
       this.emitFile({ type: 'asset', fileName: 'precache.json', source: JSON.stringify({ version, urls: [...new Set(urls)] }) });
     },

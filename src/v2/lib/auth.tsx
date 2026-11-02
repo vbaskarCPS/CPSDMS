@@ -14,7 +14,7 @@ export interface Profile {
   id: string; username: string; full_name: string; phone: string | null; email: string | null;
   is_super_admin: boolean; rm_center_id: string | null; is_active: boolean; must_change_password: boolean;
 }
-interface AuthState {
+export interface AuthState {
   loading: boolean;
   session: Session | null;
   profile: Profile | null;
@@ -119,6 +119,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 };
+
+/** The public MainstreetAI demo (src/msdemo): a signed-in look with no Supabase session behind it. */
+export const DemoAuthProvider: React.FC<{ value: AuthState; children: React.ReactNode }> = ({ value, children }) =>
+  <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 
 export function useAuth(): AuthState {
   const v = useContext(Ctx);
