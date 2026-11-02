@@ -22,6 +22,7 @@ import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BookOnboarding } from './BookOnboarding';
 import { hasAnswers, saveDeckAnswers, type DeckAnswers } from '../../lib/meetings';
 import { DoNotKnock, People } from './People';
+import { StageCard, TimelineToggle } from './Stage';
 import { dnkLabel } from '../../lib/msField';
 import { download, useRep } from './repContext';
 
@@ -184,6 +185,7 @@ export const BusinessSheet: React.FC<{
         {d.website && <a href={/^https?:/i.test(d.website) ? d.website : `https://${d.website}`} target="_blank" rel="noreferrer"><Globe size={15} />Website<ExternalLink size={12} /></a>}
       </div>
 
+      {!offline && <StageCard business={id} campaign={campaign} tick={peopleTick} />}
       <div className="v2-rep-cards">
         <button type="button" className="v2-rep-card present" disabled={!kit.data?.present_url} onClick={() => setPresenting(true)}>
           <Presentation size={26} /><span><b>Present</b><em>{kit.data && !kit.data.present_url ? 'No presentation for this campaign yet' : 'Show the owner and book a call'}</em></span><ChevronRight size={20} />
@@ -264,6 +266,7 @@ export const BusinessSheet: React.FC<{
 
       <People business={id} campaign={campaign} offline={offline} tick={peopleTick} />
       {!offline && <History d={d as RepBusinessView} loading={b.loading && !b.data} />}
+      {!offline && <TimelineToggle business={id} campaign={campaign} tick={peopleTick} />}
       {!offline && <DoNotKnock business={id} campaign={campaign} name={d.name}
         onDone={r => { toast(`${d.name}: ${dnkLabel(r).toLowerCase()}. It’s off every rep’s list.`); (onGone || onClose)(); }} />}
     </Sheet>
