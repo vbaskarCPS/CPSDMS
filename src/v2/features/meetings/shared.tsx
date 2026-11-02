@@ -2,13 +2,31 @@
 import React, { useState } from 'react';
 import { Plus, Video, X } from 'lucide-react';
 import {
-  DAYS, STATUS_LABEL, STATUS_TONE, TIMEZONES, setOutcome, timeLabel, dayLabel, toHHMM, toMin, type Hours, type Meeting, type MeetingStatus,
+  hasAnswers, DAYS, STATUS_LABEL, STATUS_TONE, TIMEZONES, setOutcome, timeLabel, dayLabel, toHHMM, toMin, type DeckAnswers, type Hours, type Meeting, type MeetingStatus,
 } from '../../lib/meetings';
 import { Btn, ErrorBox, Tag } from '../../ui';
 
 const OUTCOMES: { key: Exclude<MeetingStatus, 'cancelled' | 'booked'>; label: string; kind?: 'o' | 'g' | 'r' }[] = [
   { key: 'closed', label: 'Closed', kind: 'g' }, { key: 'no_show', label: 'No-show', kind: 'o' }, { key: 'not_fit', label: 'Not a fit', kind: 'o' },
 ];
+
+/** What the owner answered on the deck, and the proposal it made. */
+export const AnswersPanel: React.FC<{ a: DeckAnswers | null | undefined; open?: boolean }> = ({ a, open }) => {
+  if (!hasAnswers(a)) return null;
+  const p = a.proposal;
+  const money = (n: number) => `$${Math.round(n).toLocaleString('en-CA')}`;
+  return (
+    <details className="v2-answers" open={open}>
+      <summary>Their answers{p ? ` · proposal about ${money(p.yearly)} a year${p.quoted ? ' plus Core (quoted)' : ''}` : ''}</summary>
+      <dl>{(a.summary || []).map(([q, v]) => <React.Fragment key={q}><dt>{q}</dt><dd>{v}</dd></React.Fragment>)}</dl>
+      {p && <div className="prop">
+        {p.lines.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
+        <div className="tot"><span>About a year</span><b>{money(p.yearly)}</b></div>
+        {p.today_yearly != null && <div className="v2-small v2-mut">Pays about {money(p.today_yearly)} a year now{p.savings != null && p.savings > 0 ? `: saves about ${money(p.savings)}` : ''}</div>}
+      </div>}
+    </details>
+  );
+};
 
 /** One call: when, the business and owner, who booked it, the Zoom link, and how it went. */
 export const MeetingCard: React.FC<{
@@ -40,6 +58,7 @@ export const MeetingCard: React.FC<{
         {showHost && <>Host {m.host.name} · </>}{m.rep ? <>Booked by {m.rep.name}{m.rep.phone ? <> · <a href={`tel:${m.rep.phone.replace(/[^0-9+]/g, '')}`}>{m.rep.phone}</a></> : ''}</> : 'Booked by an admin'} · {m.campaign.name}
       </div>
       {m.notes && <div className="v2-small" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{m.notes}</div>}
+      <AnswersPanel a={m.answers} />
       {m.status !== 'booked' && m.status !== 'cancelled' && !editing && (
         <div className="v2-small" style={{ marginTop: 4 }}>
           {m.outcome_by ? `${m.outcome_by} marked it ${STATUS_LABEL[m.status].toLowerCase()}` : STATUS_LABEL[m.status]}{m.outcome_note ? `: ${m.outcome_note}` : ''}

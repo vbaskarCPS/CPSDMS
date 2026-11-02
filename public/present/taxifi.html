@@ -121,29 +121,61 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 .vs .y { background: var(--accent); }
 .vs .y::after { content: ""; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px; border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: rotate(45deg); }
 
-/* side by side (slide 6) */
+/* questions (slide 6): tap to pick, nothing to type */
+.qs { display: flex; flex-direction: column; gap: 14px; }
+.q > b { display: block; font-size: 15.5px; margin-bottom: 7px; }
+.q > b small { font-weight: 500; color: var(--mut); font-size: 12.5px; margin-left: 4px; }
+.opts { display: flex; flex-wrap: wrap; gap: 7px; }
+.opts button { border: 1.5px solid var(--line); background: var(--card); border-radius: 999px; padding: 8px 13px; font-size: 14.5px; font-weight: 600; cursor: pointer; color: var(--ink); }
+.opts button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.qs .sep { border-top: 1px dashed var(--line); padding-top: 12px; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); }
+.talk { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.talk input { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 11px 12px; font-size: 16px; min-width: 0; }
+.talk input:first-child { grid-column: 1 / -1; }
+.talk.two input:first-child { grid-column: auto; }
+@media (max-width: 380px) { .talk.two { grid-template-columns: 1fr; } }
+.talk input:focus { border-color: var(--accent); outline: none; }
+.num { display: flex; align-items: center; gap: 10px; }
+.num input { width: 110px; border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 11px 12px; font-size: 17px; font-family: var(--mono); font-weight: 700; text-align: right; }
+.num input:focus { border-color: var(--accent); outline: none; }
+.num span { color: var(--mut); font-size: 15px; }
+@media (max-width: 380px) { .talk { grid-template-columns: 1fr; } }
+.qnext { align-self: flex-start; border: 0; background: var(--ink); color: var(--bg); border-radius: 12px; padding: 12px 18px; font-weight: 700; cursor: pointer; }
+/* proposal (slide 7) */
+.prop { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.prop-r { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 11px 14px; border-top: 1px solid var(--line); }
+.prop-r:first-child { border-top: 0; }
+.prop-r span { font-weight: 600; }
+.prop-r span small { display: block; font-weight: 400; font-size: 12.5px; color: var(--mut); }
+.prop-r b { font-family: var(--mono); color: var(--accent); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.prop-r.disc { background: var(--accent-soft); }
+.prop-r.tot { border-top: 2px solid var(--ink); }
+.prop-r.tot b { color: var(--ink); font-size: 18px; }
+.prop-r.tot b.us { color: var(--accent); }
 .sbs { background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
-.sbs-h, .sbs-r, .sbs-t { display: grid; grid-template-columns: 1fr 104px 104px; gap: 8px; align-items: center; padding: 0 12px; }
+.sbs-h, .sbs-r, .sbs-t { display: grid; grid-template-columns: 1fr 96px 104px; gap: 8px; align-items: center; padding: 0 12px; }
 .sbs-h { padding-top: 10px; padding-bottom: 6px; }
 .sbs-h span { font-family: var(--mono); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); text-align: right; }
 .sbs-h .us { color: var(--accent); }
 .sbs-r { border-top: 1px solid var(--line); padding-top: 10px; padding-bottom: 10px; }
-.sbs-r label b, .sbs-r .lab b { display: block; font-size: 15px; }
-.sbs-r label > span, .sbs-r .lab > span { display: block; font-size: 12px; line-height: 1.35; color: var(--mut); margin-top: 2px; }
-.sbs .money input { padding: 8px 4px; font-size: 15px; }
-.sbs .us { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
-.sbs .us b { font-family: var(--mono); font-size: 16px; color: var(--accent); font-variant-numeric: tabular-nums; }
-.sbs .us span { font-size: 11px; color: var(--mut); }
-.sbs .emp input { width: 34px; border: 1.5px solid var(--line); border-radius: 6px; background: var(--bg); padding: 1px 4px; font-family: var(--mono); font-size: 12px; font-weight: 700; text-align: center; }
+.sbs-r .lab b { display: block; font-size: 15px; }
+.sbs-r .lab small { display: block; font-size: 12px; line-height: 1.35; color: var(--mut); margin-top: 2px; }
+.sbs-r > .now, .sbs-r > .us { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+.sbs-r > .now b { font-family: var(--mono); font-size: 15px; font-variant-numeric: tabular-nums; }
+.sbs-r > .us b { font-family: var(--mono); font-size: 16px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.sbs-r > div small { font-size: 11px; color: var(--mut); }
 .sbs-r.disc { background: var(--accent-soft); }
 .sbs-t { border-top: 2px solid var(--ink); padding-top: 12px; padding-bottom: 12px; }
 .sbs-t span { font-weight: 700; }
 .sbs-t b { text-align: right; font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; }
-.sbs-t b.us { color: var(--accent); display: block; }
+.sbs-t b.us { color: var(--accent); }
+@media (max-width: 380px) { .sbs-h, .sbs-r, .sbs-t { grid-template-columns: 1fr 84px 88px; gap: 6px; padding: 0 10px; } }
+.fit { background: var(--accent-soft); border-radius: 12px; padding: 11px 14px; font-weight: 600; }
 .save { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; justify-content: center; text-align: center; background: var(--accent); color: var(--on-accent); border-radius: 16px; padding: 14px 16px; }
 .save span { font-weight: 600; }
 .save b { font-family: var(--mono); font-size: clamp(30px, 9vw, 40px); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-@media (max-width: 380px) { .sbs-h, .sbs-r, .sbs-t { grid-template-columns: 1fr 88px 84px; gap: 6px; padding: 0 10px; } .vs-h, .vs-r { grid-template-columns: 28% 1fr 1fr; } .vs-r > span { font-size: 13px; padding: 9px 8px; } }
+.empty { border: 1.5px dashed var(--line); border-radius: 16px; padding: 22px 16px; text-align: center; color: var(--mut); }
+@media (max-width: 380px) { .vs-h, .vs-r { grid-template-columns: 28% 1fr 1fr; } .vs-r > span { font-size: 13px; padding: 9px 8px; } .opts button { padding: 7px 11px; font-size: 14px; } }
 
 /* cost */
 .calc { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 6px 16px; }
@@ -196,6 +228,21 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 .sheet .obj span { color: var(--mut); }
 .sheet .close { float: right; border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 6px 12px; font-weight: 600; cursor: pointer; }
 .sheet .warn { color: var(--warn); }
+.pv-tag { display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--warn); border: 1px solid currentColor; border-radius: 6px; padding: 2px 7px; margin-bottom: 8px; }
+.pv-days { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 8px; scrollbar-width: none; }
+.pv-days button, .pv-times button { border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; cursor: pointer; font-weight: 600; }
+.pv-days button { flex: 0 0 auto; min-width: 68px; padding: 8px 6px; display: grid; gap: 1px; text-align: center; }
+.pv-days button small { font-size: 11.5px; color: var(--mut); font-weight: 500; }
+.pv-days button b { font-family: var(--mono); font-size: 18px; }
+.pv-times { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.pv-times button { padding: 10px 6px; font-family: var(--mono); font-size: 14px; }
+.pv-days button[aria-pressed="true"], .pv-times button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.pv-days button[aria-pressed="true"] small { color: inherit; }
+.pv-form { display: grid; gap: 8px; margin-top: 6px; }
+.pv-form input { border: 1.5px solid var(--line); background: var(--bg); border-radius: 12px; padding: 11px 12px; font-size: 16px; min-width: 0; }
+.pv-done { text-align: center; padding: 18px 0 6px; }
+.pv-done .tick { margin: 0 auto 10px; width: 52px; height: 52px; }
+.pv-done .tick svg { width: 28px; height: 28px; }
 .field { display: grid; gap: 6px; margin-top: 8px; }
 .field input { border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); font-family: var(--mono); text-transform: uppercase; }
 
@@ -219,7 +266,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   <main class="deck" id="deck" tabindex="-1" aria-roledescription="carousel" aria-label="Taxifi presentation">
 
     <!-- 1 -->
-    <section class="slide" aria-label="1 of 8" id="s-cover">
+    <section class="slide" aria-label="1 of 9" id="s-cover">
       <div class="inner cover">
         <div class="kicker">For incorporated Canadian businesses</div>
         <h1>Your books, current every day.</h1>
@@ -235,7 +282,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     </section>
 
     <!-- 2 -->
-    <section class="slide" aria-label="2 of 8">
+    <section class="slide" aria-label="2 of 9">
       <div class="inner">
         <div class="kicker">Sound familiar?</div>
         <h2>Running the business, then doing the books at night.</h2>
@@ -249,7 +296,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     </section>
 
     <!-- 3 -->
-    <section class="slide" aria-label="3 of 8">
+    <section class="slide" aria-label="3 of 9">
       <div class="inner">
         <div class="kicker">What taxifi does</div>
         <h2>One team for all of it.</h2>
@@ -265,7 +312,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     </section>
 
     <!-- 4 -->
-    <section class="slide" aria-label="4 of 8">
+    <section class="slide" aria-label="4 of 9">
       <div class="inner">
         <div class="kicker">How it works</div>
         <h2>AI does the daily work. An accountant signs.</h2>
@@ -279,7 +326,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     </section>
 
     <!-- 5 -->
-    <section class="slide" aria-label="5 of 8">
+    <section class="slide" aria-label="5 of 9">
       <div class="inner">
         <div class="kicker">Head to head</div>
         <h2>QuickBooks, next to taxifi.</h2>
@@ -300,38 +347,57 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     </section>
 
     <!-- 6 -->
-    <section class="slide" aria-label="6 of 8">
+    <section class="slide" aria-label="6 of 9">
       <div class="inner">
-        <div class="kicker">Let’s look at your numbers</div>
-        <h2>What you pay now, next to taxifi.</h2>
-        <div class="sbs" role="group" aria-label="Your costs today next to taxifi">
-          <div class="sbs-h"><span></span><span>Today</span><span class="us">taxifi</span></div>
-          <div class="sbs-r"><label for="c-book"><b>Bookkeeping</b><span>a month · typical $400 to $800</span></label>
-            <div class="money"><i>$</i><input id="c-book" inputmode="numeric" value="600"></div>
-            <div class="us"><b>$299</b><span>Core, from</span></div></div>
-          <div class="sbs-r"><label for="c-soft"><b>Software</b><span>a month · QuickBooks or similar</span></label>
-            <div class="money"><i>$</i><input id="c-soft" inputmode="numeric" value="60"></div>
-            <div class="us"><b>$0</b><span>included</span></div></div>
-          <div class="sbs-r"><label for="c-ye"><b>Corporate return</b><span>a year · typical $2,000 to $4,000</span></label>
-            <div class="money"><i>$</i><input id="c-ye" inputmode="numeric" value="3000"></div>
-            <div class="us"><b>$1,500</b><span>T2 Standard, from</span></div></div>
-          <div class="sbs-r"><label for="c-pay"><b>Payroll</b><span>a month · <span class="emp">for <input id="c-emp" inputmode="numeric" value="3" aria-label="Number of employees"> staff</span></span></label>
-            <div class="money"><i>$</i><input id="c-pay" inputmode="numeric" value="60"></div>
-            <div class="us"><b id="t-pay">$79</b><span>$49 + $10 each</span></div></div>
-          <div class="sbs-r"><label for="c-hrs"><b>Your time on the books</b><span>hours a month, at $50 an hour</span></label>
-            <div class="money"><input id="c-hrs" inputmode="numeric" value="6" style="text-align:right"><i>h</i></div>
-            <div class="us"><b>$0</b><span>the odd question</span></div></div>
-          <div class="sbs-r disc"><span class="lab"><b>Bundle discount</b><span>on the taxifi quote</span></span><span></span>
-            <div class="us"><b id="t-disc">−15%</b><span id="t-disc-n">3 services</span></div></div>
-          <div class="sbs-t"><span>A year</span><b id="c-total">$15,240</b><b class="us" id="t-total">$5,131</b></div>
+        <div class="kicker">A few quick questions</div>
+        <h2>Tell us about you and the business.</h2>
+        <div class="qs" id="qs">
+          <div class="sep" style="border-top:0;padding-top:0">Who we’re talking to</div>
+          <div class="talk">
+            <input id="w-name" placeholder="Name" autocomplete="off" aria-label="Name">
+          </div>
+          <div class="q" data-q="role" role="group" aria-label="Their role"><b>Their role</b><div class="opts"><button type="button" data-v="Owner" aria-pressed="false">Owner</button><button type="button" data-v="Partner" aria-pressed="false">Partner</button><button type="button" data-v="Manager" aria-pressed="false">Manager</button><button type="button" data-v="Bookkeeper" aria-pressed="false">Bookkeeper</button><button type="button" data-v="Employee" aria-pressed="false">Employee</button></div></div>
+          <div class="sep">About the business</div>
+          <div class="q" data-q="years" role="group" aria-label="How long you’ve been in business"><b>How long you’ve been in business</b><div class="opts"><button type="button" data-v="u1" aria-pressed="false">Under 1 year</button><button type="button" data-v="1_3" aria-pressed="false">1–3 years</button><button type="button" data-v="3_5" aria-pressed="false">3–5 years</button><button type="button" data-v="5_10" aria-pressed="false">5–10 years</button><button type="button" data-v="10" aria-pressed="false">10+ years</button></div></div>
+          <div class="q" data-q="owned_whole" role="group" aria-label="Owned it the whole time?"><b>Owned it the whole time?</b><div class="opts"><button type="button" data-v="yes" aria-pressed="false">Original owner</button><button type="button" data-v="no" aria-pressed="false">No, we bought it</button></div></div>
+          <div class="q" data-q="owned_years" hidden role="group" aria-label="How long you’ve owned it"><b>How long you’ve owned it</b><div class="opts"><button type="button" data-v="u1" aria-pressed="false">Under 1 year</button><button type="button" data-v="1_3" aria-pressed="false">1–3 years</button><button type="button" data-v="3_5" aria-pressed="false">3–5 years</button><button type="button" data-v="5_10" aria-pressed="false">5–10 years</button><button type="button" data-v="10" aria-pressed="false">10+ years</button></div></div>
+          <div class="sep">The numbers</div>
+          <div class="q" data-q="expenses" role="group" aria-label="Monthly business expenses"><b>Monthly business expenses <small>everything going out, roughly</small></b><div class="opts"><button type="button" data-v="u10" aria-pressed="false">Under $10K</button><button type="button" data-v="10_25" aria-pressed="false">$10K–$25K</button><button type="button" data-v="25_50" aria-pressed="false">$25K–$50K</button><button type="button" data-v="50_100" aria-pressed="false">$50K–$100K</button><button type="button" data-v="o100" aria-pressed="false">Over $100K</button></div></div>
+          <div class="q" data-q="staff" data-num="1"><b><label for="w-staff">Staff on payroll</label> <small>how many people, 0 if none</small></b><div class="num"><input id="w-staff" type="number" inputmode="numeric" min="0" max="999" step="1" placeholder="0"><span>people</span></div></div>
+          <div class="q" data-q="books" role="group" aria-label="Who does the books now"><b>Who does the books now</b><div class="opts"><button type="button" data-v="me" aria-pressed="false">Me</button><button type="button" data-v="bookkeeper" aria-pressed="false">A bookkeeper</button><button type="button" data-v="accountant" aria-pressed="false">An accountant</button><button type="button" data-v="inhouse" aria-pressed="false">In-house staff</button><button type="button" data-v="nobody" aria-pressed="false">Nobody, we’re behind</button></div></div>
+          <div class="q" data-q="pay_now" role="group" aria-label="What you pay now for bookkeeping and payroll"><b>What you pay now for bookkeeping and payroll <small>a month</small></b><div class="opts"><button type="button" data-v="u300" aria-pressed="false">Under $300</button><button type="button" data-v="300_600" aria-pressed="false">$300–$600</button><button type="button" data-v="600_1000" aria-pressed="false">$600–$1,000</button><button type="button" data-v="o1000" aria-pressed="false">Over $1,000</button></div></div>
+          <div class="q" data-q="year_end" role="group" aria-label="What you pay for year-end"><b>What you pay for year-end <small>your corporate return, a year</small></b><div class="opts"><button type="button" data-v="u1000" aria-pressed="false">Under $1,000</button><button type="button" data-v="1000_2000" aria-pressed="false">$1,000–$2,000</button><button type="button" data-v="2000_3500" aria-pressed="false">$2,000–$3,500</button><button type="button" data-v="o3500" aria-pressed="false">Over $3,500</button></div></div>
+          <div class="sep">Two more about the business</div>
+          <div class="q" data-q="find" data-multi="1" role="group" aria-label="How do the bulk of your customers find you"><b>How do the bulk of your customers find you? <small>pick the main ones</small></b><div class="opts"><button type="button" data-v="walkin" aria-pressed="false">Walk-in</button><button type="button" data-v="google" aria-pressed="false">Google</button><button type="button" data-v="social" aria-pressed="false">Social media</button><button type="button" data-v="referrals" aria-pressed="false">Referrals</button></div></div>
+          <div class="q" data-q="admin_hours" role="group" aria-label="Approximate staff hours a week on administrative duties"><b>Approximate staff hours a week on administrative duties <small>phone, email, scheduling, data entry, invoicing etc.</small></b><div class="opts"><button type="button" data-v="u10" aria-pressed="false">Under 10 hrs</button><button type="button" data-v="11_40" aria-pressed="false">11–40 hrs</button><button type="button" data-v="o40" aria-pressed="false">Over 40 hrs</button></div></div>
+          <div class="sep">Best way to reach you</div>
+          <div class="talk two">
+            <input id="w-phone" type="tel" inputmode="tel" placeholder="Phone" autocomplete="off" aria-label="Phone">
+            <input id="w-email" type="email" inputmode="email" placeholder="Email" autocomplete="off" autocapitalize="none" aria-label="Email">
+          </div>
         </div>
-        <div class="save" aria-live="polite"><span>You’d keep about</span><b id="t-save">$10,109</b><span>a year</span></div>
-        <p class="small" id="c-note">Sales tax returns and year-round questions to your accountant are included in Core. taxifi figures are the starting prices at taxifi.ai/pricing (CAD, before tax, August 2026); Core scales with your monthly expenses. Your exact price is quoted on the 30-minute call.</p>
+        <button type="button" class="qnext" id="q-next">See your proposal</button>
       </div>
     </section>
 
     <!-- 7 -->
-    <section class="slide" aria-label="7 of 8">
+    <section class="slide" aria-label="7 of 9">
+      <div class="inner">
+        <div class="kicker">Your proposal</div>
+        <h2>What taxifi would look like for you.</h2>
+        <div class="empty" id="p-empty">Answer the questions on the last screen and your proposal shows here.</div>
+        <div id="p-body" hidden>
+          <div class="sbs" id="p-lines" role="table" aria-label="What you pay now, next to taxifi"></div>
+          <div class="save" id="p-save" style="margin-top:12px" aria-live="polite"><span>You’d keep about</span><b id="p-save-n"></b><span>a year</span></div>
+          <p class="small" id="p-vs" style="margin:8px 0 0"></p>
+          <div class="fit" id="p-fit" style="margin-top:12px"></div>
+          <p class="small" style="margin-top:10px">Prices from taxifi.ai/pricing (CAD, before tax). Core is set by your monthly expenses; T2 and payroll are starting prices. Everything is confirmed on your onboarding call.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8 -->
+    <section class="slide" aria-label="8 of 9">
       <div class="inner">
         <div class="kicker">No risk to try</div>
         <h2>Easy to start. Easy to leave.</h2>
@@ -344,18 +410,18 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
       </div>
     </section>
 
-    <!-- 8 -->
-    <section class="slide" aria-label="8 of 8">
+    <!-- 9 -->
+    <section class="slide" aria-label="9 of 9">
       <div class="inner">
         <div class="kicker">Next step</div>
         <h2>Let's book your onboarding call.</h2>
         <button type="button" class="cta primary" id="cta-book">Book onboarding<small>Pick a day and time together, takes a minute</small></button>
-        <p class="small" id="book-hint" hidden>Your MainstreetAI rep books this with you from their app.</p>
+        
         <div class="call">
           <b>On the call</b>
           <ol>
             <li>A few questions about your business</li>
-            <li>Your flat monthly price, quoted live</li>
+            <li>Your price confirmed, and your setup started</li>
             <li>You decide. No pressure, no contract.</li>
           </ol>
         </div>
@@ -371,11 +437,40 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   </nav>
 </div>
 
+<div class="sheet-bg" id="pv" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pv-title">
+    <button type="button" class="close" id="pv-close">Close</button>
+    <span class="pv-tag">Preview</span>
+    <h3 id="pv-title">Book the onboarding call</h3>
+    <div id="pv-pick">
+      <p class="small" style="margin:6px 0 0">In the rep app these are the open times of the taxifi team. Here they’re examples, and nothing is booked.</p>
+      <h4>Pick a day</h4>
+      <div class="pv-days" id="pv-days" role="group" aria-label="Day"></div>
+      <h4>Pick a time <span id="pv-tz" style="text-transform:none;letter-spacing:0;color:var(--mut)">Eastern time</span></h4>
+      <div class="pv-times" id="pv-times" role="group" aria-label="Time"></div>
+      <h4>The owner</h4>
+      <div class="pv-form">
+        <input id="pv-name" placeholder="Name" aria-label="Owner’s name">
+        <input id="pv-phone" type="tel" inputmode="tel" placeholder="Phone" aria-label="Owner’s phone">
+        <input id="pv-email" type="email" inputmode="email" autocapitalize="none" placeholder="Email" aria-label="Owner’s email">
+      </div>
+      <p class="small" id="pv-err" style="color:var(--warn);margin:8px 0 0" hidden></p>
+      <button type="button" class="cta primary" id="pv-book" style="margin-top:14px" disabled>Book the call</button>
+    </div>
+    <div id="pv-done" class="pv-done" hidden>
+      <span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span>
+      <h3 id="pv-when"></h3>
+      <p class="small" id="pv-what" style="margin:8px 0 0"></p>
+      <p class="small" style="margin:10px 0 0">In the rep app: a taxifi host is picked for the call, the owner and the host get the Zoom link and a calendar invite by email, and the visit is saved as a closed deal (“Onboarding booked”) with the answers and proposal.</p>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-bg" id="notes" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="notes-title">
     <button type="button" class="close" id="notes-close">Close</button>
     <h3 id="notes-title">Rep notes</h3>
-    <p class="small">For you, not the owner. Swipe the deck with them, then book on the last screen.</p>
+    <p class="small">For you, not the owner. Swipe the deck with them, answer the questions together, then book on the last screen.</p>
 
     <h4>Your rep code</h4>
     <div class="field">
@@ -386,22 +481,13 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
     <h4>The gate</h4>
     <p style="margin:0">"Is the business incorporated?" No and never planning to: thank them and point to the free calculators at taxifi.ai/tools. "Not yet" with real revenue: keep going.</p>
 
-    <h4>The eight questions</h4>
-    <ol>
-      <li>Is the business incorporated?</li>
-      <li>Who keeps the books month to month?</li>
-      <li>Who files the corporate return in April?</li>
-      <li>Revenue band: under $250K, $250K to $1M, $1M to $5M, over?</li>
-      <li>Payroll: just you, 1 to 4, 5 to 10, more?</li>
-      <li>Registered for sales tax, and who files it?</li>
-      <li>Are the books current or behind?</li>
-      <li>What does all of this cost today?</li>
-    </ol>
-    <p class="small" style="margin-top:8px">Then first name, company, cell and email. Never leave without the email.</p>
+    <h4>The questions</h4>
+    <p style="margin:0">Screen 6: you fill it in with the owner watching. Start with their name and role, tap their answers, then take their phone and email at the bottom (none of it is required). Expenses, not revenue: owners talk about what goes out more easily. Screen 7 then shows their proposal, with a rough savings figure from what they pay now. The answers are saved on the business, and with the onboarding call when you book it.</p>
+    <p class="small" style="margin-top:8px">On the booking screen: first name, cell and email. Never leave without the email.</p>
 
     <h4>Objections</h4>
     <div class="obj"><b>"I already have an accountant."</b><span>Keep them if you like them. taxifi covers the other eleven months, and switching is free.</span></div>
-    <div class="obj"><b>"What does it cost?"</b><span>Screen 6 puts what they pay now next to taxifi’s published starting prices. Their exact price is quoted live on the call.</span></div>
+    <div class="obj"><b>"What does it cost?"</b><span>Screen 7: their proposal from taxifi’s published prices. Core is set by their monthly expenses; everything is confirmed on the onboarding call.</span></div>
     <div class="obj"><b>"So AI is doing my taxes?"</b><span>No. AI handles the daily volume. A Canadian accountant reviews, advises, signs and files. CRA EFILE authorized, data in Canada.</span></div>
     <div class="obj"><b>"I do it myself, it's fine."</b><span>It's costing your evenings. The first month is guaranteed.</span></div>
     <div class="obj"><b>"My partner handles that."</b><span>Get their email and send the two-line version with the call link.</span></div>
@@ -409,7 +495,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
 
     <h4>Never at the door</h4>
     <ul class="warn">
-      <li>A firm price, or a ballpark for catch-up work or over $5M / multiple corporations</li>
+      <li>A firm price beyond the proposal screen, or a ballpark for catch-up work or multiple corporations</li>
       <li>A tax outcome, refund, or tax advice</li>
       <li>Guarantees beyond: month to month, first month guaranteed, free switching</li>
       <li>Sole proprietors or non-Canadian businesses</li>
@@ -456,33 +542,136 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   document.addEventListener('keydown', function (e) {
     if (e.target && /input/i.test(e.target.tagName)) return;
     if (!document.getElementById('notes').hidden) { if (e.key === 'Escape') closeNotes(); return; }
+    if (!document.getElementById('pv').hidden) return;
     if (e.key === 'ArrowRight') go(current + 1);
     if (e.key === 'ArrowLeft') go(current - 1);
   });
   current = -1; mark();
 
-  // the cost tally: today next to taxifi's published starting prices (taxifi.ai/pricing)
-  var CORE = 299, T2 = 1500, PAY_BASE = 49, PAY_EACH = 10;
-  function num(id) { var v = parseFloat(String(document.getElementById(id).value).replace(/[^0-9.]/g, '')); return isFinite(v) ? v : 0; }
+  // questions → proposal. Prices: taxifi.ai/pricing (Nov 2026). Core is set by monthly expenses; over $100K is quoted.
+  var CORE = { u10: 299, '10_25': 399, '25_50': 549, '50_100': 749, o100: null };
+  var T2 = 1500, PAY_BASE = 49, PAY_EACH = 10;
+  var NOW = { u300: 200, '300_600': 450, '600_1000': 800, o1000: 1250 };   // the middle of each band, a month
+  var YE = { u1000: 750, '1000_2000': 1500, '2000_3500': 2750, o3500: 4500 }; // the middle of each band, a year
+  var answers = {};
   function money(v) { return '$' + Math.round(v).toLocaleString('en-CA'); }
-  function tally() {
-    var emp = Math.max(0, Math.round(num('c-emp')));
-    var today = num('c-book') * 12 + num('c-soft') * 12 + num('c-ye') + num('c-pay') * 12 + num('c-hrs') * 50 * 12;
-    var pay = emp > 0 ? PAY_BASE + PAY_EACH * emp : 0;
+  function label(key) {
+    var g = document.querySelector('.q[data-q="' + key + '"]'); if (!g || g.hidden) return null;
+    if (g.hasAttribute('data-num')) return answers[key] == null ? null : { q: g.querySelector('b').textContent.replace(/how many.*$/, '').trim(), a: String(answers[key]) };
+    var picked = Array.prototype.filter.call(g.querySelectorAll('button'), function (b) { return b.getAttribute('aria-pressed') === 'true'; });
+    return picked.length ? { q: g.querySelector('b').firstChild.textContent.trim(), a: picked.map(function (b) { return b.textContent; }).join(', ') } : null;
+  }
+  function proposal() {
+    var a = answers;
+    if (!a.expenses) return null;
+    var core = CORE[a.expenses], staff = a.staff > 0 ? a.staff : 0;
+    var pay = staff > 0 ? PAY_BASE + PAY_EACH * staff : 0;
     var services = 2 + (pay ? 1 : 0);                 // bookkeeping + T2 (+ payroll)
     var disc = services >= 3 ? 0.15 : 0.10;
-    var taxifi = (CORE * 12 + T2 + pay * 12) * (1 - disc);
-    var save = today - taxifi;
-    document.getElementById('t-pay').textContent = money(pay);
-    document.getElementById('t-disc').textContent = '\u2212' + Math.round(disc * 100) + '%';
-    document.getElementById('t-disc-n').textContent = services + ' services';
-    document.getElementById('c-total').textContent = money(today);
-    document.getElementById('t-total').textContent = money(taxifi);
-    document.getElementById('t-save').textContent = money(Math.max(0, save));
-    document.querySelector('.save').hidden = save <= 0;
+    var lines = [
+      ['Core bookkeeping', core == null ? 'Quoted' : money(core) + '/mo', core == null ? 'Over $100K a month in expenses: priced on your call' : 'Accountant-reviewed books, HST returns, year-round questions'],
+      ['Corporate return (T2 Standard)', 'from ' + money(T2) + '/yr', 'Prepared, signed and filed'],
+    ];
+    if (pay) lines.push(['Payroll', money(pay) + '/mo', '$49 + $10 a person, ' + staff + (staff === 1 ? ' person' : ' people')]);
+    lines.push(['Bundle discount', '\u2212' + Math.round(disc * 100) + '%', services + ' services', 'disc']);
+    var yearly = ((core || 0) * 12 + T2 + pay * 12) * (1 - disc);
+    var today = a.pay_now ? NOW[a.pay_now] * 12 + (a.year_end ? YE[a.year_end] : 0) : null;
+    var fit = { me: 'No more doing the books at night: taxifi keeps them current every day.',
+      bookkeeper: 'taxifi takes over the monthly bookkeeping, with a Canadian accountant signing every month.',
+      accountant: 'Like your accountant? Keep them for year-end; taxifi can cover the other eleven months.',
+      inhouse: 'Your team gets its hours back: taxifi keeps the books current daily, and a Canadian accountant signs every month.',
+      nobody: 'Behind on the books? taxifi catches you up first. Catch-up is scoped on your onboarding call.' }[a.books] || 'Books current every day, with a Canadian accountant behind every number.';
+    return { lines: lines, monthly: Math.round(yearly / 12), yearly: Math.round(yearly), quoted: core == null, discount: disc,
+      today_yearly: today, year_end_in: !!a.year_end, core: core, pay: pay, staff: staff, t2: T2, services: services,
+      now_month: a.pay_now ? NOW[a.pay_now] : null, now_ye: a.year_end ? YE[a.year_end] : null, savings: today != null && core != null ? Math.round(today - yearly) : null, fit: fit };
   }
-  ['c-book', 'c-soft', 'c-ye', 'c-pay', 'c-emp', 'c-hrs'].forEach(function (id) { document.getElementById(id).addEventListener('input', tally); });
-  tally();
+  function render() {
+    var p = proposal();
+    document.getElementById('p-empty').hidden = !!p;
+    document.getElementById('p-body').hidden = !p;
+    if (!p) return;
+    // what they pay now (the middle of the ranges they picked), next to taxifi's starting prices
+    var box = document.getElementById('p-lines'); box.innerHTML = '';
+    function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+    function cell(cls, val, sub) { var d = el('div', cls); d.setAttribute('role', 'cell'); d.appendChild(el('b', null, val)); if (sub) d.appendChild(el('small', null, sub)); return d; }
+    var h = el('div', 'sbs-h'); h.setAttribute('role', 'row');
+    [['', ''], ['Today', ''], ['taxifi', 'us']].forEach(function (c) { var x = el('span', c[1], c[0]); x.setAttribute('role', 'columnheader'); h.appendChild(x); });
+    box.appendChild(h);
+    function row(cls, name, sub, now, nowSub, us, usSub) {
+      var r = el('div', 'sbs-r' + (cls ? ' ' + cls : '')); r.setAttribute('role', 'row');
+      var lab = el('div', 'lab'); lab.setAttribute('role', 'rowheader'); lab.appendChild(el('b', null, name)); if (sub) lab.appendChild(el('small', null, sub));
+      r.appendChild(lab); r.appendChild(cell('now', now, nowSub)); r.appendChild(cell('us', us, usSub)); box.appendChild(r);
+    }
+    var dash = '—';
+    row('', 'Bookkeeping', 'a month', p.now_month != null ? '~' + money(p.now_month) : dash, p.now_month != null ? 'with payroll' : 'not answered',
+      p.core == null ? 'Quoted' : money(p.core), p.core == null ? 'over $100K/mo' : 'Core, from');
+    row('', 'Payroll', p.staff ? 'a month, ' + p.staff + (p.staff === 1 ? ' person' : ' people') : 'a month', p.now_month != null ? 'incl.' : dash, p.now_month != null ? 'in bookkeeping' : null,
+      p.pay ? money(p.pay) : '$0', p.pay ? '$49 + $10 each' : 'no staff');
+    row('', 'Corporate return', 'a year', p.now_ye != null ? '~' + money(p.now_ye) : dash, p.now_ye != null ? null : 'not answered',
+      money(p.t2), 'T2 Standard, from');
+    row('', 'Software', 'QuickBooks or similar', dash, null, '$0', 'included');
+    row('disc', 'Bundle discount', 'on the taxifi quote', '', null, '−' + Math.round(p.discount * 100) + '%', p.services + ' services');
+    var t = el('div', 'sbs-t'); t.setAttribute('role', 'row');
+    t.appendChild(el('span', null, p.quoted ? 'A year, plus Core' : 'A year'));
+    t.appendChild(el('b', null, p.today_yearly != null ? '~' + money(p.today_yearly) : dash));
+    t.appendChild(el('b', 'us', money(p.yearly)));
+    box.appendChild(t);
+    var save = document.getElementById('p-save'), vs = document.getElementById('p-vs');
+    save.hidden = !(p.savings > 0);
+    if (p.savings > 0) document.getElementById('p-save-n').textContent = money(p.savings);
+    vs.textContent = p.today_yearly == null ? '' : p.quoted ? '' : 'You pay about ' + money(p.today_yearly) + ' a year now' + (p.year_end_in ? '' : ' before year-end') + ' (the middle of the ranges you picked).'
+      + (p.savings > 0 ? '' : -p.savings <= p.yearly * 0.1 ? ' taxifi costs about the same, with an accountant reviewing every month and your T2 filed.'
+        : ' taxifi costs more, and adds an accountant reviewing every month, HST filed and your T2 signed and filed.');
+    document.getElementById('p-fit').textContent = p.fit;
+  }
+  // in the rep app, every change goes to the app: saved on the business, and with the onboarding call when it's booked
+  var embedded = document.documentElement.classList.contains('embed') && window.parent !== window;
+  function contact() {
+    var v = function (id) { return document.getElementById(id).value.trim(); };
+    var c = { name: v('w-name'), phone: v('w-phone'), email: v('w-email'), role: answers.role || '' };
+    return c.name || c.phone || c.email ? c : null;
+  }
+  var shareT;
+  function share() {
+    if (!embedded) return;
+    var summary = [];
+    var c = contact();
+    if (c) summary.push(['Talking with', [(c.name || 'No name') + (c.role ? ' (' + c.role + ')' : ''), c.phone, c.email].filter(Boolean).join(' · ')]);
+    ['years', 'owned_whole', 'owned_years', 'expenses', 'staff', 'books', 'pay_now', 'year_end', 'find', 'admin_hours'].forEach(function (k) { var l = label(k); if (l) summary.push([l.q, l.a]); });
+    var p = proposal();
+    window.parent.postMessage({ type: 'ms-deck-answers', data: { v: 1, answers: answers, summary: summary, contact: c,
+      proposal: p && { lines: p.lines.map(function (l) { return [l[0], l[1]]; }), monthly: p.monthly, yearly: p.yearly, quoted: p.quoted,
+        today_yearly: p.today_yearly, savings: p.savings, fit: p.fit } } }, '*');
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('.q:not([data-num])'), function (g) {
+    var key = g.getAttribute('data-q'), multi = g.hasAttribute('data-multi');
+    Array.prototype.forEach.call(g.querySelectorAll('button'), function (b) {
+      b.addEventListener('click', function () {
+        var on = b.getAttribute('aria-pressed') !== 'true';
+        if (!multi) Array.prototype.forEach.call(g.querySelectorAll('button'), function (x) { x.setAttribute('aria-pressed', 'false'); });
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        var vals = Array.prototype.filter.call(g.querySelectorAll('button'), function (x) { return x.getAttribute('aria-pressed') === 'true'; })
+          .map(function (x) { return x.getAttribute('data-v'); });
+        if (multi) { if (vals.length) answers[key] = vals; else delete answers[key]; }
+        else if (vals.length) answers[key] = vals[0]; else delete answers[key];
+        if (key === 'owned_whole') {
+          var oy = document.querySelector('.q[data-q="owned_years"]'); oy.hidden = answers.owned_whole !== 'no';
+          if (oy.hidden) { delete answers.owned_years; Array.prototype.forEach.call(oy.querySelectorAll('button'), function (x) { x.setAttribute('aria-pressed', 'false'); }); }
+        }
+        render(); share();
+      });
+    });
+  });
+  document.getElementById('w-staff').addEventListener('input', function (e) {
+    var n = parseInt(e.target.value, 10);
+    if (isFinite(n) && n >= 0) answers.staff = Math.min(n, 999); else delete answers.staff;
+    render(); clearTimeout(shareT); shareT = setTimeout(share, 400);
+  });
+  ['w-name', 'w-phone', 'w-email'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', function () { clearTimeout(shareT); shareT = setTimeout(share, 400); });
+  });
+  document.getElementById('q-next').addEventListener('click', function () { go(slides.indexOf(document.getElementById('p-body').closest('.slide'))); });
+  render();
 
   // rep code (kept for the rep's own reference) and the booking button: inside the rep app it asks the app to open booking
   var refInput = document.getElementById('ref');
@@ -491,11 +680,73 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   refInput.addEventListener('input', function () {
     try { localStorage.setItem('taxifi-door-ref', refInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); } catch (e) {}
   });
-  var embedded = document.documentElement.classList.contains('embed') && window.parent !== window;
   document.getElementById('cta-book').addEventListener('click', function () {
-    if (embedded) { window.parent.postMessage({ type: 'ms-book-onboarding' }, '*'); return; }
-    document.getElementById('book-hint').hidden = false;
+    if (embedded) { share(); window.parent.postMessage({ type: 'ms-book-onboarding' }, '*'); return; }
+    openPreview();
   });
+
+  // outside the rep app: a preview of the booking step (example times; nothing is booked)
+  var pv = document.getElementById('pv'), pvDay = null, pvTime = null;
+  function pvDays() {
+    var out = [], d = new Date(); d.setHours(0, 0, 0, 0);
+    while (out.length < 6) { d.setDate(d.getDate() + 1); if (d.getDay() !== 0 && d.getDay() !== 6) out.push(new Date(d)); }
+    return out;
+  }
+  function pvTimes(i) {   // a few example openings, different each day
+    var all = ['9:00 AM', '9:30 AM', '10:00 AM', '10:30 AM', '11:00 AM', '1:00 PM', '1:30 PM', '2:00 PM', '3:00 PM', '3:30 PM', '4:00 PM', '4:30 PM'];
+    return all.filter(function (_, j) { return (j + i) % 3 !== 0; });
+  }
+  function pvCheck() {
+    var ok = pvDay != null && pvTime && document.getElementById('pv-name').value.trim()
+      && (document.getElementById('pv-email').value.trim() || document.getElementById('pv-phone').value.trim());
+    document.getElementById('pv-book').disabled = !ok;
+  }
+  function pvRenderTimes() {
+    var box = document.getElementById('pv-times'); box.innerHTML = ''; pvTime = null;
+    pvTimes(pvDay).forEach(function (t) {
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = t; b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', function () {
+        Array.prototype.forEach.call(box.children, function (x) { x.setAttribute('aria-pressed', 'false'); });
+        b.setAttribute('aria-pressed', 'true'); pvTime = t; pvCheck();
+      });
+      box.appendChild(b);
+    });
+    pvCheck();
+  }
+  function openPreview() {
+    var days = pvDays(), box = document.getElementById('pv-days'); box.innerHTML = '';
+    days.forEach(function (d, i) {
+      var b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
+      var a = document.createElement('small'); a.textContent = d.toLocaleDateString('en-CA', { weekday: 'short' });
+      var n = document.createElement('b'); n.textContent = d.getDate();
+      var m = document.createElement('small'); m.textContent = d.toLocaleDateString('en-CA', { month: 'short' });
+      b.appendChild(a); b.appendChild(n); b.appendChild(m);
+      b.addEventListener('click', function () {
+        Array.prototype.forEach.call(box.children, function (x) { x.setAttribute('aria-pressed', 'false'); });
+        b.setAttribute('aria-pressed', 'true'); pvDay = i; pvRenderTimes();
+      });
+      box.appendChild(b);
+    });
+    pv.days = days; pvDay = 0; pvRenderTimes();
+    // the owner's details come over from the questions screen
+    document.getElementById('pv-name').value = document.getElementById('w-name').value;
+    document.getElementById('pv-phone').value = document.getElementById('w-phone').value;
+    document.getElementById('pv-email').value = document.getElementById('w-email').value;
+    document.getElementById('pv-pick').hidden = false; document.getElementById('pv-done').hidden = true;
+    pvCheck(); pv.hidden = false; document.getElementById('pv-close').focus();
+  }
+  ['pv-name', 'pv-phone', 'pv-email'].forEach(function (id) { document.getElementById(id).addEventListener('input', pvCheck); });
+  document.getElementById('pv-book').addEventListener('click', function () {
+    var d = pv.days[pvDay];
+    document.getElementById('pv-when').textContent = d.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' }) + ' at ' + pvTime;
+    var who = document.getElementById('pv-name').value.trim(), to = document.getElementById('pv-email').value.trim() || document.getElementById('pv-phone').value.trim();
+    document.getElementById('pv-what').textContent = '30-minute onboarding call with ' + who + '. The invite would go to ' + to + '.';
+    document.getElementById('pv-pick').hidden = true; document.getElementById('pv-done').hidden = false;
+  });
+  function closePreview() { pv.hidden = true; document.getElementById('cta-book').focus(); }
+  document.getElementById('pv-close').addEventListener('click', closePreview);
+  pv.addEventListener('click', function (e) { if (e.target === pv) closePreview(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pv.hidden) closePreview(); });
 
   // rep notes
   var notes = document.getElementById('notes');

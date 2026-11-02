@@ -10,7 +10,7 @@ export const PHOTO_BUCKET = 'ms-visit-photos';
 export interface QPhoto { name: string; blob: Blob; type: string }
 export interface QItem {
   id: string;
-  rpc: 'ms_rep_log_visit' | 'ms_rep_log_send';
+  rpc: 'ms_rep_log_visit' | 'ms_rep_log_send' | 'ms_save_deck_answers';
   args: Record<string, unknown>;
   photos?: QPhoto[];
   label: string;           // "Joe’s Plumbing: Interested"

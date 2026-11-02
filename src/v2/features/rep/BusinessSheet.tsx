@@ -20,6 +20,7 @@ import {
 import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BookOnboarding } from './BookOnboarding';
+import { businessContacts, hasAnswers, saveDeckAnswers, type DeckAnswers } from '../../lib/meetings';
 import { download, useRep } from './repContext';
 
 /** What's known from the map, for when the business can't be loaded (no signal). */
@@ -58,6 +59,23 @@ export const BusinessSheet: React.FC<{
   const [presenting, setPresenting] = useState(false);
   const [booking, setBooking] = useState(false);
   const booked = React.useRef(false);
+  // the deck's questions screen: the latest answers, saved on the business when the deck closes (and before booking)
+  const answers = React.useRef<DeckAnswers | null>(null);
+  const savedAnswers = React.useRef('');
+  const [peopleTick, setPeopleTick] = useState(0);
+  const people = useLoad(() => businessContacts(id, campaign).catch(() => []), [id, campaign, peopleTick]);
+  const keepAnswers = useCallback(() => {
+    const a = answers.current; if (!hasAnswers(a)) return;
+    const k = JSON.stringify(a); if (k === savedAnswers.current) return;
+    savedAnswers.current = k;
+    saveDeckAnswers(id, campaign, a).then(() => setPeopleTick(t => t + 1)).catch(() => { savedAnswers.current = ''; });
+  }, [id, campaign]);
+  // what the rep typed on the deck fills the visit and booking forms
+  const onDeckAnswers = useCallback((a: DeckAnswers) => {
+    answers.current = a;
+    const c = a.contact;
+    if (c) { if (c.name) setCName(c.name); if (c.phone) setCPhone(c.phone); if (c.email) setCEmail(c.email); }
+  }, []);
   useEffect(() => () => photos.forEach(p => URL.revokeObjectURL(p.url)), []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const d: (RepBusinessView | (SheetFallback & { phone?: null; website?: null; plaza?: null; visits: []; sends: [] })) | null =
@@ -177,14 +195,15 @@ export const BusinessSheet: React.FC<{
       {pitch === 'kit' && <KitPanel kit={kit.data} error={kit.error} />}
       {pitch === 'share' && <SendInfo kit={kit.data} error={kit.error} business={d.name} businessId={id} campaign={campaign}
         phone={cPhone || d.phone || ''} email={cEmail || lastEmail(d)} contact={cName} onEmail={() => setComposing(emailInit())} />}
-      {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref} onClose={() => setPresenting(false)} onBook={() => setBooking(true)} />}
-      {booking && <BookOnboarding campaign={campaign} business={id} businessName={d.name}
+      {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref}
+        onClose={() => { keepAnswers(); setPresenting(false); }} onBook={() => setBooking(true)} onAnswers={onDeckAnswers} />}
+      {booking && <BookOnboarding campaign={campaign} business={id} businessName={d.name} answers={answers.current}
         owner={{ name: cName, phone: cPhone || d.phone || '', email: cEmail || lastEmail(d) }}
         onBooked={() => { booked.current = true; }}
         onClose={() => {
           setBooking(false);
           // once booked, the visit is saved as a closed deal: close the deck and the business like any saved visit
-          if (booked.current) { booked.current = false; setPresenting(false); toast('Onboarding booked. The deal is with an admin to approve.'); onSaved({ business: id, outcome: 'closed', state: stateAfter('closed'), here: null, queued: false }); }
+          if (booked.current) { booked.current = false; keepAnswers(); setPresenting(false); toast('Onboarding booked. The deal is with an admin to approve.'); onSaved({ business: id, outcome: 'closed', state: stateAfter('closed'), here: null, queued: false }); }
         }} />}
       {composing && <Composer init={composing} onClose={() => setComposing(null)} onSent={() => { setComposing(null); setMailTick(t => t + 1); toast('Email sent.'); }} />}
 
@@ -240,6 +259,16 @@ export const BusinessSheet: React.FC<{
       {outcome && <Btn onClick={save} disabled={busy || scanning} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e', marginTop: 6 }}>
         {busy ? 'Saving…' : outcome === 'closed' ? 'Save deal for approval' : 'Save visit'}</Btn>}
 
+      {!!people.data?.length && (
+        <>
+          <div style={{ fontWeight: 800, margin: '16px 0 2px' }}>People here</div>
+          {people.data.map(c => (
+            <div key={c.id} className="v2-small v2-rep-visit">
+              <b>{c.name || 'No name'}</b>{c.role ? ` · ${c.role}` : ''}
+              {c.phone && <> · <a href={`tel:${c.phone.replace(/[^0-9+]/g, '')}`}>{c.phone}</a></>}
+              {c.email && <> · <a href={`mailto:${c.email}`}>{c.email}</a></>}
+            </div>))}
+        </>)}
       {!offline && <History d={d as RepBusinessView} loading={b.loading && !b.data} />}
     </Sheet>
   );
@@ -327,18 +356,21 @@ const SendInfo: React.FC<{ kit: Kit | null; error: unknown; business: string; bu
   };
 
 // ───────────── present: the campaign's deck, full screen ─────────────
-const Presenter: React.FC<{ url: string; code: string; onClose: () => void; onBook: () => void }> = ({ url, code, onClose, onBook }) => {
+const Presenter: React.FC<{ url: string; code: string; onClose: () => void; onBook: () => void; onAnswers: (a: DeckAnswers) => void }> = ({ url, code, onClose, onBook, onAnswers }) => {
   const src = `${url}#embed=1&ref=${encodeURIComponent(code)}`;
   const frame = React.useRef<HTMLIFrameElement>(null);
   useEffect(() => {
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('.v2-rep-book')) onClose(); };
     // the deck's last slide: "Book onboarding" (only from this deck's frame)
     const msg = (e: MessageEvent) => {
-      if (e.source === frame.current?.contentWindow && (e.data as { type?: string } | null)?.type === 'ms-book-onboarding') onBook();
+      if (e.source !== frame.current?.contentWindow) return;
+      const m = e.data as { type?: string; data?: DeckAnswers } | null;
+      if (m?.type === 'ms-deck-answers' && m.data && typeof m.data === 'object') onAnswers(m.data);
+      if (m?.type === 'ms-book-onboarding') onBook();
     };
     window.addEventListener('keydown', esc); window.addEventListener('message', msg);
     return () => { window.removeEventListener('keydown', esc); window.removeEventListener('message', msg); };
-  }, [onClose, onBook]);
+  }, [onClose, onBook, onAnswers]);
   return (
     <div className="v2-rep-present" role="dialog" aria-label="Presentation">
       <iframe ref={frame} src={src} title="Presentation" />
