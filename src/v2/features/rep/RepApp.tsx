@@ -8,7 +8,7 @@ import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, 
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
-  hereNow, isOpen, kindLabel, money, pinOf, repBoard, repFollowups, repHome, repNumbers, repZone, walkOrder, whenLabel,
+  hereNow, isOpen, kindLabel, STAGE_PIN, stagePin, money, pinOf, repBoard, repFollowups, repHome, repNumbers, repZone, walkOrder, whenLabel,
   type FollowUp, type RepBusiness,
 } from '../../lib/rep';
 import { followUpIcs, metres } from '../../lib/repField';
@@ -119,7 +119,7 @@ const ZoneScreen: React.FC = () => {
 
   const shown = useMemo(() => (z.data?.businesses || []).filter(b => show === 'all' || isOpen(b.state)), [z.data, show]);
   const left = (z.data?.businesses || []).filter(b => isOpen(b.state)).length;
-  const pins = useMemo(() => shown.map(b => ({ id: b.id, name: b.name, state: b.state, lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
+  const pins = useMemo(() => shown.map(b => ({ id: b.id, name: b.name, state: stagePin(b.stage, b.state), lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
   const fb = z.data?.businesses.find(b => b.id === openId);
 
   return (
@@ -162,7 +162,7 @@ const ZoneList: React.FC<{ items: RepBusiness[]; onPick: (id: string) => void }>
         {g.items.map(b => {
           return (
             <button key={b.id} type="button" className="v2-rep-item" onClick={() => onPick(b.id)}>
-              <i className="v2-rep-dot" style={{ background: pinOf(b.state).color, width: 14, height: 14 }} />
+              <i className="v2-rep-dot" style={{ background: STAGE_PIN[stagePin(b.stage, b.state)].color, width: 14, height: 14 }} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="n">{b.name}</div>
                 <div className="a">{b.address || kindLabel(b.kind)}</div>

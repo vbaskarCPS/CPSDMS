@@ -4,15 +4,15 @@
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { PIN, type PinState } from '../../lib/rep';
+import { STAGE_PIN, type StagePin } from '../../lib/rep';
 import { RM_STYLE, tidyRmBaseMap } from '../../../lib/rmMapStyle';
 import { BLANK_STYLE, EMPTY, removeMap } from '../bookings/mbMap';
 
 export interface MapZone { id: string; name: string; color: string; polygon: GeoJSON.Polygon | GeoJSON.MultiPolygon }
-export interface MapPin { id: string; name: string; state: PinState; lat: number; lng: number; dim?: boolean; lead?: boolean }
+export interface MapPin { id: string; name: string; state: StagePin; lat: number; lng: number; dim?: boolean; lead?: boolean }
 export interface RepMapHandle { flyTo: (p: { lat: number; lng: number }, zoom?: number) => void }
 
-const STATE_COLOR: unknown[] = ['match', ['get', 'state'], ...Object.entries(PIN).flatMap(([k, v]) => [k, v.color]), '#ffffff'];
+const STATE_COLOR: unknown[] = ['match', ['get', 'state'], ...Object.entries(STAGE_PIN).flatMap(([k, v]) => [k, v.color]), '#ffffff'];
 
 function boundsOf(zones: MapZone[], pins: MapPin[]): mapboxgl.LngLatBounds | null {
   const pts: [number, number][] = [];
@@ -116,14 +116,14 @@ export const RepMapView = React.forwardRef<RepMapHandle, {
       geometry: { type: 'Point', coordinates: [b.lng, b.lat] } })) });
   }, [ready, pins]);
 
-  const counts = useMemo(() => { const c: Partial<Record<PinState, number>> = {}; for (const b of pins) c[b.state] = (c[b.state] || 0) + 1; return c; }, [pins]);
+  const counts = useMemo(() => { const c: Partial<Record<StagePin, number>> = {}; for (const b of pins) c[b.state] = (c[b.state] || 0) + 1; return c; }, [pins]);
   return (
     <div className="v2-rep-map">
       <div ref={box} className="box" />
       {failed && <div className="v2-err" style={{ position: 'absolute', top: 8, left: 8, right: 8, zIndex: 3 }}>{failed}</div>}
       {showCounts && (
         <div className="v2-rep-legend">
-          {(Object.keys(PIN) as PinState[]).filter(k => counts[k]).map(k => <span key={k}><i className="v2-rep-dot" style={{ background: PIN[k].color }} />{PIN[k].label} {counts[k]}</span>)}
+          {(Object.keys(STAGE_PIN) as StagePin[]).filter(k => counts[k]).map(k => <span key={k}><i className="v2-rep-dot" style={{ background: STAGE_PIN[k].color }} />{STAGE_PIN[k].label} {counts[k]}</span>)}
           {!pins.length && <span>Nothing left to visit here.</span>}
         </div>)}
       {children}

@@ -32,10 +32,10 @@ function authFor(role: Role, exit: () => void): AuthState {
 interface Step { to: string; title: string; text: string }
 const TOUR: Record<Role, Step[]> = {
   rep: [
-    { to: '/app/rep', title: 'The map', text: 'Your zones and the businesses reps have added in them, colour-coded by what happened last: white not visited, amber follow-up, blue interested, green closed. Tap any pin to open it.' },
+    { to: '/app/rep', title: 'The map', text: 'Your zones and the businesses reps have added in them, coloured by stage: white new, grey talked to, blue pitched, light green booked, green won, red lost, amber while a follow-up is open. Tap any pin to open it.' },
     { to: '/app/rep', title: 'Add a business at the door', text: 'Walking past one that isn’t on the map? Tap Add: drop the pin where you are, give it a name and type, and it’s yours to visit. In the demo you’re standing at one of Oakville’s plazas.' },
     { to: '/app/rep/zones', title: 'Your zones', text: 'Each zone shows how many are left to visit, follow-ups due and deals. Open one to walk it as a list, plaza by plaza, street by street.' },
-    { to: '/app/rep', title: 'A business', text: 'Open a pin, then log the visit: Come back, Not interested, Follow-up (with a time), Interested (send the info link), or Closed. Add the people you met, photos and notes.' },
+    { to: '/app/rep', title: 'A business', text: 'Open a pin to see its stage (New → Talked to → Pitched → Booked → Won). What happened? is just three taps: No one to talk to, Talked (set the follow-up and who to ask for), or Not interested (marks it lost, with why). Add the people you met, photos and notes.' },
     { to: '/app/rep', title: 'Present and book', text: 'On a business, tap Present: everything is in the Taxifi deck: the pitch, the owner’s questions, a proposal next to what they pay today, and the onboarding call, booked into the host’s real open times on the last screen.' },
     { to: '/app/rep/followups', title: 'Follow-ups', text: 'Everyone you promised to come back to or call, overdue first, with who to ask for. Add one to your calendar or open it on the map.' },
     { to: '/app/rep/inbox', title: 'Inbox', text: 'Emails with your businesses, filed on each one. Write a follow-up yourself or have Claude draft it from the visit.' },

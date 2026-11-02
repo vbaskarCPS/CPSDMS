@@ -3,7 +3,7 @@
 // MainstreetAI › Pipeline.
 import React, { useState } from 'react';
 import { useLoad } from '../../lib/data';
-import { HEAT, LOST_REASONS, STAGES, setLost, timeline, businessState, type BizState, type TimelineItem } from '../../lib/msPipeline';
+import { HEAT, STAGES, setLost, timeline, businessState, type BizState, type TimelineItem } from '../../lib/msPipeline';
 import { outcomeOf, whenLabel } from '../../lib/rep';
 import { Btn, ErrorBox, Loading } from '../../ui';
 
@@ -12,14 +12,13 @@ const FLOW = STAGES.filter(s => s.key !== 'lost');
 export const StageCard: React.FC<{ business: string; campaign: string; tick?: number }> = ({ business, campaign, tick = 0 }) => {
   const [mine, setMine] = useState(0);
   const st = useLoad(() => businessState(business, campaign), [business, campaign, tick, mine]);
-  const [losing, setLosing] = useState(false);
   const [busy, setBusy] = useState(false); const [error, setError] = useState<unknown>(null);
   const s = st.data;
   if (!s) return st.error ? null : <div className="v2-stage"><span className="v2-small v2-mut">Loading…</span></div>;
   const at = FLOW.findIndex(f => f.key === s.stage);
   const lose = async (reason: string | null) => {
     setBusy(true); setError(null);
-    try { await setLost(business, campaign, reason); setLosing(false); setMine(t => t + 1); } catch (e) { setError(e); } finally { setBusy(false); }
+    try { await setLost(business, campaign, reason); setMine(t => t + 1); } catch (e) { setError(e); } finally { setBusy(false); }
   };
   return (
     <div className="v2-stage">
@@ -36,12 +35,7 @@ export const StageCard: React.FC<{ business: string; campaign: string; tick?: nu
         </>}
       {!!s.why?.length && <div className="why">{s.why.map(w => <span key={w}>{w}</span>)}</div>}
       {s.meeting && s.stage === 'booked' && <div className="v2-small">Onboarding call {whenLabel(s.meeting.starts_at)} with {s.meeting.host}</div>}
-      {s.stage !== 'lost' && s.stage !== 'won' && (losing ? (
-        <div className="v2-rep-kinds" style={{ marginTop: 8 }}>
-          {LOST_REASONS.map(r => <button key={r} type="button" className="v2-rep-pill" disabled={busy} onClick={() => lose(r)}>{r}</button>)}
-          <button type="button" className="v2-rep-pill" onClick={() => setLosing(false)}>Cancel</button>
-        </div>
-      ) : <button type="button" className="v2-linkbtn" style={{ marginTop: 6 }} onClick={() => setLosing(true)}>Mark lost…</button>)}
+      {/* lost is logged as Not interested under What happened? (Undo stays here) */}
       <ErrorBox error={error} />
     </div>
   );
