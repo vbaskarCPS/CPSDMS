@@ -96,7 +96,7 @@ const Zones: React.FC = () => {
             <div className="v2-rep-nums">
               <span><b>{z.left}</b> to visit</span><span><b>{z.visited}</b> of {z.total} visited</span>
               {z.followups_due > 0 && <span style={{ color: '#b45309' }}><b style={{ color: '#b45309' }}>{z.followups_due}</b> follow-up{z.followups_due === 1 ? '' : 's'} due</span>}
-              {(z.deals_pending > 0 || z.deals_approved > 0) && <span><b>{z.deals_approved}</b> deal{z.deals_approved === 1 ? '' : 's'}{z.deals_pending ? ` · ${z.deals_pending} waiting` : ''}</span>}
+              {(z.deals_pending > 0 || z.deals_approved > 0) && <span><b>{z.deals_approved}</b> won{z.deals_pending ? ` · ${z.deals_pending} booked` : ''}</span>}
               {!!z.leads && <span><b>{z.leads}</b> added by you</span>}
             </div>
           </Link>);
@@ -291,7 +291,7 @@ const Me: React.FC = () => {
               <BoardTable title="Onboardings booked" rows={onb} value={r => <><b>{r.approved}</b>{r.pending ? <span className="v2-mut"> +{r.pending}</span> : ''}</>} />
               <BoardTable title="Visits" rows={vis} value={r => <b>{r.visits}</b>} />
             </div>
-            <div className="v2-small v2-mut">Every onboarding booked counts; no approval needed.</div>
+            <div className="v2-small v2-mut">Onboardings count once the host marks the call won; +n are booked.</div>
           </>)}
       </div>
 
@@ -315,10 +315,10 @@ const Me: React.FC = () => {
               <div key={d.id} className="v2-rep-visit">
                 <div className="h"><b style={{ flex: 1 }}>{d.business}</b>
                   <span className="v2-small" style={{ fontWeight: 700, color: d.status === 'approved' ? '#15803d' : d.status === 'rejected' ? '#7e22ce' : '#6b7280' }}>
-                    {d.status === 'approved' ? 'Approved' : d.status === 'rejected' ? 'Not approved' : 'Saved'}</span></div>
+                    {d.status === 'approved' ? 'Won' : d.status === 'rejected' ? 'Not a fit' : 'Booked'}</span></div>
                 <div className="v2-small v2-mut">{d.campaign} · {whenLabel(d.at)}{d.note ? ` · ${d.note}` : ''}</div>
               </div>))}
-            {n.data.deals.rejected > 0 && <div className="v2-small v2-mut" style={{ marginTop: 6 }}>{n.data.deals.rejected} not approved in all.</div>}
+            {n.data.deals.rejected > 0 && <div className="v2-small v2-mut" style={{ marginTop: 6 }}>{n.data.deals.rejected} not a fit in all.</div>}
           </div>
           <div className="v2-small v2-mut">{n.data.visits_total} visits logged in all.</div>
         </>)}

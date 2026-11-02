@@ -32,9 +32,9 @@ export const PIN: Record<PinState, { label: string; color: string }> = {
   not_interested: { label: 'Not interested', color: '#dc2626' },
   follow_up: { label: 'Follow-up', color: '#f59e0b' },
   interested: { label: 'Interested', color: '#2563eb' },
-  pending: { label: 'Deal saved', color: '#86efac' },
+  pending: { label: 'Onboarding booked', color: '#86efac' },
   closed: { label: 'Closed deal', color: '#16a34a' },
-  rejected: { label: 'Deal not approved', color: '#a855f7' },
+  rejected: { label: 'Not a fit', color: '#a855f7' },
   cant_sell: { label: 'Can’t sell here', color: '#111827' },
 };
 export const pinOf = (s: string | null | undefined) => PIN[(s as PinState) in PIN ? (s as PinState) : 'new'];

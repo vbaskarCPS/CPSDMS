@@ -189,7 +189,7 @@ export const BusinessSheet: React.FC<{
         onClose={() => {
           setBooking(false);
           // once booked, the visit is saved as a closed deal: close the deck and the business like any saved visit
-          if (booked.current) { booked.current = false; keepAnswers(); setPresenting(false); toast('Onboarding booked: that’s the deal.'); onSaved({ business: id, outcome: 'closed', state: stateAfter('closed'), here: null, queued: false }); }
+          if (booked.current) { booked.current = false; keepAnswers(); setPresenting(false); toast('Onboarding booked. It’s won once the host closes it on the call.'); onSaved({ business: id, outcome: 'closed', state: stateAfter('closed'), here: null, queued: false }); }
         }} />}
 
       {!!mail.data?.length && (
@@ -318,7 +318,7 @@ const History: React.FC<{ d: RepBusinessView; loading: boolean }> = ({ d, loadin
             <div className="h"><i className="v2-rep-dot" style={{ background: o?.color }} /><b>{o?.label}</b><span className="v2-mut v2-small">{whenLabel(v.at)}</span>
               {v.far && <span className="v2-small" style={{ color: '#b45309', marginLeft: 'auto' }}><MapPin size={12} /> {v.distance_m != null ? `${v.distance_m} m away` : 'no location'}</span>}</div>
             {v.deal && <div className="v2-small" style={{ color: v.deal === 'approved' ? '#15803d' : v.deal === 'rejected' ? '#7e22ce' : '#6b7280' }}>
-              Deal {v.deal === 'pending' ? 'saved' : v.deal === 'approved' ? 'approved' : 'not approved'}{v.deal_note ? `: ${v.deal_note}` : ''}</div>}
+              {v.deal === 'pending' ? 'Onboarding booked' : v.deal === 'approved' ? 'Won' : 'Not a fit'}{v.deal_note ? `: ${v.deal_note}` : ''}</div>}
             {v.follow_up_at && <div className="v2-small">Follow up {whenLabel(v.follow_up_at)}</div>}
             {(v.contact_name || v.contact_phone || v.contact_email) && <div className="v2-small">{[v.contact_name, v.contact_phone, v.contact_email].filter(Boolean).join(' · ')}</div>}
             {v.notes && <div className="v2-small v2-mut">{v.notes}</div>}

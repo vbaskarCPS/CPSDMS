@@ -286,6 +286,8 @@ const threadRow = (t: typeof S.threads[number]): ThreadRow => {
 type Args = Record<string, unknown>;
 const str = (v: unknown) => (v == null ? '' : String(v));
 
+const dealOfMeeting = new Map<string, string>();   // a booked call → the visit saved as its deal
+
 export function rpc(name: string, a: Args): unknown {
   switch (name) {
     // ── the rep ──
@@ -400,9 +402,10 @@ export function rpc(name: string, a: Args): unknown {
       if (!slots().slots.some(s => new Date(s.start).getTime() === t)) throw new Error('That time was just taken. Pick another.');
       const m = meetingFor(b, t, str(a.p_name), str(a.p_phone) || null, str(a.p_email) || null, 'booked', { notes: str(a.p_notes) || null, created_at: iso(Date.now()) });
       S.meetings.push(m);
-      // booking is the close: the visit is saved as the deal, approved (no admin approval for onboardings)
+      // booking is the close: the visit is saved as the deal, open until the host marks the call won (no admin approval)
       const v = addVisit(b, 'closed', Date.now(), { contact_name: m.owner_name, contact_phone: m.owner_phone || undefined, contact_email: m.owner_email || undefined, notes: 'Onboarding booked from the deck' });
-      S.deals.set(v.id, { status: 'approved', at: v.at });
+      S.deals.set(v.id, { status: 'pending', at: v.at });
+      dealOfMeeting.set(m.id, v.id);
       return m;
     }
 
@@ -427,6 +430,9 @@ export function rpc(name: string, a: Args): unknown {
       const m = S.meetings.find(x => x.id === str(a.p_meeting)); if (!m) throw new Error('Not found');
       m.status = a.p_status as MeetingStatus; m.outcome_note = str(a.p_note) || null;
       m.outcome_by = m.status === 'booked' ? null : HOST.name; m.outcome_at = m.status === 'booked' ? null : iso(Date.now());
+      // the host's outcome decides the deal: won, lost, or still open
+      const dv = dealOfMeeting.get(m.id), d = dv ? S.deals.get(dv) : undefined;
+      if (d) d.status = m.status === 'closed' ? 'approved' : m.status === 'not_fit' ? 'rejected' : 'pending';
       return freshMeeting(m);
     }
 
