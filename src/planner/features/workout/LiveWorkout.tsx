@@ -45,7 +45,7 @@ function parsePlan(jsonText: string, w: Workout): Record<string, NextRx> | undef
     return Object.keys(out).length ? out : undefined;
   } catch { return undefined; }
 }
-import { durationMin, fmtNum, fmtSec, isUnilateral, setsDone, volumeOf, type Exercise, type NextRx, type SetLog, type Workout, type WorkoutExercise } from './types';
+import { durationMin, fmtNum, fmtSec, isAssisted, isUnilateral, setsDone, volumeOf, type Exercise, type NextRx, type SetLog, type Workout, type WorkoutExercise } from './types';
 import { CheckBig, ExercisePicker, RestTimer, Stepper, TimedSet } from './parts';
 import { useUnits } from './WorkoutHome';
 
@@ -93,8 +93,9 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     setTip({ ei, si, text: 'Coach Claude is looking at that set…', ai: false });
     const s = ex.sets[si];
     const last = exerciseHistory(history, ex.exerciseId, 1)[0];
-    const fmt = (x: SetLog) => `${x.weight} ${units} × ${x.reps}${x.repsR !== undefined ? ` L / ${x.repsR} R` : ''}${x.rpe ? ` @RPE ${x.rpe}` : ''}`;
-    const msg = `I just finished set ${si + 1} of ${ex.sets.length} of ${ex.name}: ${fmt(s)}. Target ${ex.sets.length} × ${ex.targetReps || '8-12'}, rest ${ex.restSec}s.` +
+    const assisted = isAssisted(ex) || isAssisted(findExercise(ex.exerciseId, custom));
+    const fmt = (x: SetLog) => `${x.weight} ${units}${assisted ? ' assist' : ''} × ${x.reps}${x.repsR !== undefined ? ` L / ${x.repsR} R` : ''}${x.rpe ? ` @RPE ${x.rpe}` : ''}`;
+    const msg = `I just finished set ${si + 1} of ${ex.sets.length} of ${ex.name}: ${fmt(s)}.${assisted ? ' (This is an assisted move: the weight is the counterweight, so less assist is harder and progress means taking assist away.)' : ''} Target ${ex.sets.length} × ${ex.targetReps || '8-12'}, rest ${ex.restSec}s.` +
       (si > 0 ? ` Earlier sets today: ${ex.sets.slice(0, si).filter(x => x.done).map(fmt).join(', ')}.` : '') +
       (last ? ` Last session: ${last.sets.map(fmt).join(', ')}${last.comment ? ` (my note: "${last.comment}")` : ''}.` : '') +
       (ex.note ? ` Plan cue: ${ex.note}.` : '') +
@@ -244,6 +245,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
         const lib = findExercise(ex.exerciseId, custom) || LIBRARY[0];
         const step = stepFor({ units, lower: isLower(lib), defaultStep: lib.defaultStep });
         const uni = isUnilateral(lib) || isUnilateral(ex);
+        const assisted = isAssisted(lib) || isAssisted(ex);   // the weight is the counterweight: less is harder
         const isOpen = open === ei || readOnly;
         const doneN = ex.sets.filter(s => s.done).length;
         return (
@@ -273,7 +275,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
                       : <Stepper value={s.reps} step={1} onChange={v => patchSet(ei, si, { reps: Math.round(v) })} disabled={readOnly} />}
                     <CheckBig on={s.done} onClick={() => toggleDone(ei, si)} disabled={readOnly} />
                     <div className="wo-set__prev">
-                      <span>{units} × {uni ? 'L / R reps' : 'reps'}</span>
+                      <span>{assisted ? `${units} assist` : units} × {uni ? 'L / R reps' : 'reps'}</span>
                       {s.prev && <span>last: {s.prev.weight} × {s.prev.reps}{uni && s.prev.repsR !== undefined ? ` / ${s.prev.repsR}` : ''}</span>}
                       {!readOnly && ex.sets.length > 1 && <button type="button" onClick={() => removeSet(ei, si)} style={{ border: 0, background: 'none', color: 'var(--ink-2)', padding: 0, marginLeft: 'auto' }} aria-label="Remove set"><Trash2 size={14} /></button>}
                     </div>

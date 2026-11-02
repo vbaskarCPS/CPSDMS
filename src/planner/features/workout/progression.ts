@@ -37,35 +37,41 @@ export function suggest(opts: {
   units: Units;
   lower: boolean;
   defaultStep?: number;
+  assisted?: boolean;               // the weight is assistance (counterweight / band): progress = less of it
 }): Suggestion {
   const { lo, hi } = parseReps(opts.targetReps);
   const step = stepFor(opts);
+  const a = !!opts.assisted;
   const sessions = opts.history.map(h => h.sets.filter(s => s.done && effReps(s) > 0)).filter(s => s.length > 0);
-  if (!sessions.length) return { weight: 0, reps: lo, reason: 'First time — pick a weight you can do for the low end with 2 reps in reserve.' };
+  if (!sessions.length) return { weight: 0, reps: lo, reason: a ? 'First time — set the assist so you can do the low end with 2 reps in reserve (more assist = easier).' : 'First time — pick a weight you can do for the low end with 2 reps in reserve.' };
 
   const last = sessions[0];
-  const top = Math.max(...last.map(s => s.weight));
+  // for an assisted move the working weight is the LEAST assistance used
+  const top = a ? Math.min(...last.map(s => s.weight)) : Math.max(...last.map(s => s.weight));
   const working = last.filter(s => s.weight === top);
   const setsAtTop = working.length;
   const allHitTop = setsAtTop >= Math.max(1, Math.min(opts.targetSets, working.length)) && working.every(s => effReps(s) >= hi && (s.rpe === undefined || s.rpe <= 8)) && setsAtTop >= opts.targetSets;
 
   if (allHitTop) {
+    if (a) { const w = Math.max(0, roundTo(top - step, step)); return { weight: w, reps: lo, reason: top <= 0 ? `Hit ${opts.targetSets} × ${hi} with no assist — time for the real thing.` : `Hit ${opts.targetSets} × ${hi} with ${top} assist — take ${step} off (${w}).` }; }
     return { weight: roundTo(top + step, step), reps: lo, reason: `Hit ${opts.targetSets} × ${hi} at ${top} — add ${step}.` };
   }
 
   const missed = (sets: SetLog[]) => sets.filter(s => effReps(s) < lo).length >= 2;
   if (sessions.length >= 2 && missed(sessions[0]) && missed(sessions[1])) {
+    if (a) { const w = roundTo(top + step, step); return { weight: w, reps: lo, reason: `Missed reps two sessions running — add ${step} assist (${w}) and build back.` }; }
     const w = Math.max(0, roundTo(top * 0.9, step));
     return { weight: w, reps: lo, reason: `Missed reps two sessions running — deload 10% to ${w} and build back.` };
   }
 
   const best = Math.max(...working.map(s => effReps(s)));
-  return { weight: top, reps: Math.min(hi, Math.max(lo, best + 1)), reason: best >= hi ? `Repeat ${top} and make every set reach ${hi}.` : `Stay at ${top} — aim for ${Math.min(hi, best + 1)}+ reps on each set.` };
+  const at = a ? `${top} assist` : `${top}`;
+  return { weight: top, reps: Math.min(hi, Math.max(lo, best + 1)), reason: best >= hi ? `Repeat ${at} and make every set reach ${hi}.` : `Stay at ${at} — aim for ${Math.min(hi, best + 1)}+ reps on each set.` };
 }
 
 /** One line for the NEXT set, from the set just done: reps vs the target range, RPE, and what came before.
  *  Instant and local; the coach (AI) may replace it a moment later. */
-export function nextSetTip(opts: { sets: SetLog[]; si: number; targetReps?: string; units: Units; lower: boolean; step?: number; mode?: 'reps' | 'time'; restSec?: number }): string {
+export function nextSetTip(opts: { sets: SetLog[]; si: number; targetReps?: string; units: Units; lower: boolean; step?: number; mode?: 'reps' | 'time'; restSec?: number; assisted?: boolean }): string {
   const { sets, si, units, mode } = opts;
   const s = sets[si];
   const isLast = si >= sets.length - 1;
@@ -73,9 +79,14 @@ export function nextSetTip(opts: { sets: SetLog[]; si: number; targetReps?: stri
   if (!s || !s.done) return '';
   const { lo, hi } = parseReps(opts.targetReps || '8-12');
   const step = stepFor({ units, lower: opts.lower, defaultStep: opts.step });
-  const u = units;
+  const u = opts.assisted ? `${units} assist` : units;
   const rpe = s.rpe;
   const next = isLast ? 'next session' : 'next set';
+  if (opts.assisted) {
+    // less assistance is the progression; more is the deload
+    if (effReps(s) >= hi && (rpe === undefined || rpe <= 8)) return s.weight <= 0 ? (isLast ? 'Top of the range with no assist — you own this one.' : `Easy — same again, ${hi} clean reps.`) : isLast ? `Hit the top of the range — take ${step} ${units} of assist off next session.` : `Easy — ${step} ${units} less assist for the ${next}, same ${hi} reps.`;
+    if (effReps(s) > 0 && effReps(s) < lo) return `Missed the range. Add ${step} ${units} assist for the ${next} and own ${lo}+ reps with clean form.`;
+  }
   if (si === 0 && sets.length > 1 && s.weight > 0 && (sets[1]?.weight || 0) > s.weight * 1.3) return `Warm-up done. Working set next: ${sets[1].weight} ${u}, aim for ${hi} clean reps.`;
   if (effReps(s) >= hi && (rpe === undefined || rpe <= 8)) return isLast ? `Hit the top of the range — add ${step} ${u} next session.` : `Easy — add ${step} ${u} for the ${next}, same ${hi} reps.`;
   if (effReps(s) >= hi && rpe !== undefined && rpe >= 9.5) return `Top of the range but all-out. Hold ${s.weight} ${u}, take the full rest, aim for ${hi} again.`;

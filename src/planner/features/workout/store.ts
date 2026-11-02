@@ -4,7 +4,7 @@ import { planFromText, type PlanResult } from '../../lib/ai';
 import { uid } from '../../ui/primitives';
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
 import { suggest, type Suggestion } from './progression';
-import { e1rm, type BodyWeight, type Exercise, type NextRx, type SetLog, type Template, type TemplateExercise, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
+import { e1rm, isAssisted, type BodyWeight, type Exercise, type NextRx, type SetLog, type Template, type TemplateExercise, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
 
 const DEFAULT_TEMPLATES: Omit<Template, 'id' | 'order'>[] = [
   { name: 'Upper body', days: [1, 4], exercises: [
@@ -78,7 +78,7 @@ export function exerciseHistory(workouts: Workout[], exerciseId: string, n = 3):
 
 export function nextTarget(workouts: Workout[], t: { exerciseId: string; targetSets: number; targetReps: string }, units: Units, custom: Exercise[] = []): Suggestion {
   const ex = findExercise(t.exerciseId, custom) || LIBRARY[0];
-  return suggest({ history: exerciseHistory(workouts, t.exerciseId), targetReps: t.targetReps, targetSets: t.targetSets, units, lower: isLower(ex), defaultStep: ex.defaultStep });
+  return suggest({ history: exerciseHistory(workouts, t.exerciseId), targetReps: t.targetReps, targetSets: t.targetSets, units, lower: isLower(ex), defaultStep: ex.defaultStep, assisted: isAssisted(ex) });
 }
 
 /** The coach's prescription for an exercise from the most recent completed session that has one (within 45 days). */
