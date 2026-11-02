@@ -33,8 +33,10 @@ const MyCalls: React.FC<{ tz: string }> = ({ tz }) => {
   if (list.loading && !list.data) return <Loading />;
   if (list.error) return <ErrorBox error={list.error} />;
   const now = Date.now();
-  const due = rows.filter(m => m.status === 'booked' && new Date(m.starts_at).getTime() <= now);
-  const next = rows.filter(m => m.status === 'booked' && new Date(m.starts_at).getTime() > now);
+  // after the call: the host's follow-ups (soonest first), then calls still waiting for how they went
+  const fups = rows.filter(m => m.status === 'booked' && m.follow_up_at).sort((a, b) => a.follow_up_at!.localeCompare(b.follow_up_at!));
+  const due = rows.filter(m => m.status === 'booked' && !m.follow_up_at && new Date(m.starts_at).getTime() <= now);
+  const next = rows.filter(m => m.status === 'booked' && !m.follow_up_at && new Date(m.starts_at).getTime() > now);
   const done = rows.filter(m => m.status !== 'booked').reverse();
   const put = (m: Meeting) => setRows(r => r.map(x => (x.id === m.id ? m : x)));
   const byDay = (ms: Meeting[]) => {
@@ -44,8 +46,9 @@ const MyCalls: React.FC<{ tz: string }> = ({ tz }) => {
   };
   return (
     <>
+      {!!fups.length && <><div className="v2-meet-day" style={{ color: '#b45309' }}>Follow-ups</div>{fups.map(m => <MeetingCard key={m.id} m={m} tz={tz} onChanged={put} />)}</>}
       {!!due.length && <><div className="v2-meet-day" style={{ color: '#b45309' }}>How did it go?</div>{due.map(m => <MeetingCard key={m.id} m={m} tz={tz} onChanged={put} />)}</>}
-      {!next.length && !due.length && <div className="v2-card v2-mut" style={{ marginTop: 10 }}>No calls coming up.</div>}
+      {!next.length && !due.length && !fups.length && <div className="v2-card v2-mut" style={{ marginTop: 10 }}>No calls coming up.</div>}
       {byDay(next).map(g => <React.Fragment key={g.day}><div className="v2-meet-day">{g.label}</div>{g.items.map(m => <MeetingCard key={m.id} m={m} tz={tz} onChanged={put} />)}</React.Fragment>)}
       {!!done.length && <><div className="v2-meet-day">Last two weeks</div>{done.map(m => <MeetingCard key={m.id} m={m} tz={tz} onChanged={put} />)}</>}
     </>

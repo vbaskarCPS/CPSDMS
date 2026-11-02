@@ -10,7 +10,7 @@ import {
   type MapBiz, type RepMap,
 } from '../../lib/rep';
 import { BUSINESS_KINDS, kindLabel } from '../../lib/msCity';
-import { mapPlaces, nearbyAdded, type MapPlace, type NearbyBiz } from '../../lib/msField';
+import { knownNear, mapPlaces, nearbyAdded, type KnownBiz, type MapPlace, type NearbyBiz } from '../../lib/msField';
 import { cacheGet, cacheSet } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BusinessSheet, type SavedVisit } from './BusinessSheet';
@@ -49,7 +49,7 @@ export const HomeMap: React.FC = () => {
   }, [m, camp]);
   const shown = useMemo(() => (m?.data.businesses || []).filter(b =>
     (!camp || b.c === camp) && (show === 'all' || isOpen(b.s))), [m, camp, show]);
-  const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.n, state: stagePin(b.st, b.s), lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
+  const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.n, state: stagePin(b.st, b.s), fu: b.s === 'follow_up', lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
   const left = useMemo(() => (m?.data.businesses || []).filter(b => (!camp || b.c === camp) && isOpen(b.s)).length, [m, camp]);
 
   const open = useMemo(() => {
@@ -62,9 +62,16 @@ export const HomeMap: React.FC = () => {
 
   const onSaved = useCallback((v: SavedVisit) => {
     const cid = open?.campaign;
-    setM(cur => cur && { ...cur, data: { ...cur.data, businesses: cur.data.businesses.map(b => (b.id === v.business && b.c === cid ? { ...b, s: v.state, at: new Date().toISOString() } : b)) } });
+    // the pin changes as soon as the visit is saved: Not interested is Lost, a booking is Booked, the rest keep their stage
+    const st = (cur?: string) => (v.outcome === 'not_interested' ? 'lost' : v.outcome === 'closed' ? 'booked' : cur);
+    setM(cur => cur && { ...cur, data: { ...cur.data, businesses: cur.data.businesses.map(b => (b.id === v.business && b.c === cid
+      ? { ...b, s: v.state, st: st(b.st), f: v.outcome === 'follow_up' ? b.f || new Date().toISOString() : undefined, at: new Date().toISOString() } : b)) } });
     setOpen(null);
   }, [open]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const onStage = useCallback((stage: string) => {
+    const cid = open?.campaign, bid = open?.id;
+    setM(cur => cur && { ...cur, data: { ...cur.data, businesses: cur.data.businesses.map(b => (b.id === bid && b.c === cid ? { ...b, st: stage } : b)) } });
+  }, [open]);
 
   return (
     <>
@@ -97,7 +104,7 @@ export const HomeMap: React.FC = () => {
       {open && (
         <BusinessSheet key={openId} id={open.id} campaign={open.campaign}
           fallback={open.b ? { id: open.b.id, name: open.b.n, address: open.b.a, kind: open.b.k, lat: open.b.lat, lng: open.b.lng, hours: open.b.h, lead: open.b.lead } : null}
-          onClose={() => setOpen(null)} onSaved={onSaved}
+          onClose={() => setOpen(null)} onSaved={onSaved} onStage={onStage}
           onGone={() => { const cid = open.campaign; setM(cur => cur && { ...cur, data: { ...cur.data, businesses: cur.data.businesses.filter(b => !(b.id === open.id && b.c === cid)) } }); setOpen(null); }} />)}
       {adding && !adding.pick && m && (
         <AddLead campaigns={campaigns} at={adding.at || null}
@@ -145,19 +152,24 @@ const AddLead: React.FC<{
   const [error, setError] = useState<unknown>(null);
   const [added, setAdded] = useState<NearbyBiz[]>([]);
   const [places, setPlaces] = useState<MapPlace[]>([]);
+  const [known, setKnown] = useState<KnownBiz[]>([]);
   const [picked, setPicked] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const near = useRef<{ lat: number; lng: number } | null>(null);
 
-  // what's at a spot: its address, what's already been added, and names from map data
-  const lookAround = useCallback(async (p: { lat: number; lng: number }) => {
+  // what's at a spot (where the rep is, a tap on the map, or a looked-up address): its address, what's already been
+  // added, the businesses we already know there, and names from map data
+  const lookAround = useCallback(async (p: { lat: number; lng: number }, keepAddress = false) => {
     setPoint(p); setHits([]);
-    const [a, ad, pl] = await Promise.all([reverseGeocode(p), nearbyAdded(p).catch(() => []), mapPlaces(p)]);
+    const [a, ad, kn, pl] = await Promise.all([keepAddress ? Promise.resolve(null) : reverseGeocode(p), nearbyAdded(p).catch(() => []), knownNear(p).catch(() => []), mapPlaces(p)]);
     if (a) setAddress(a);
     setAdded(ad.filter(x => x.m <= 60));
     // a name already added here isn't offered again
     const have = new Set(ad.map(x => x.name.toLowerCase()));
+    const k = kn.filter(x => !have.has(x.name.toLowerCase()));
+    setKnown(k);
+    for (const x of k) have.add(x.name.toLowerCase());
     setPlaces(pl.filter(x => !have.has(x.name.toLowerCase())));
   }, []);
   useEffect(() => {
@@ -182,6 +194,13 @@ const AddLead: React.FC<{
     setError(null);
     try { const h = await geocode(address, near.current || point); setHits(h); if (!h.length) setError(new Error('No match. Try the street number and name, or tap the map.')); }
     catch (e) { setError(e); }
+  };
+  const pickKnown = (x: KnownBiz) => {
+    setPicked(x.id); setName(x.name);
+    if (x.kind && BUSINESS_KINDS.some(k => k.key === x.kind)) setKind(x.kind);
+    if (x.address) setAddress(x.address);
+    if (x.phone) setPhone(x.phone);
+    setPoint({ lat: x.lat, lng: x.lng });   // its own spot, so adding it makes this one theirs instead of a copy
   };
   const pickPlace = (x: MapPlace) => {
     setPicked(x.name); setName(x.name);
@@ -216,8 +235,18 @@ const AddLead: React.FC<{
             {!x.dnk && <button type="button" onClick={() => openAdded(x)}>Open it</button>}
           </div>))}
         {note && <div className="v2-rep-note" style={{ marginTop: 0, marginBottom: 8 }}>{note}</div>}
+        {known.length > 0 && <>
+          <div className="v2-rep-label">Businesses here</div>
+          <div className="v2-add-near">
+            {known.map(x => (
+              <button key={x.id} type="button" className={`opt${picked === x.id ? ' on' : ''}`} onClick={() => pickKnown(x)}>
+                <span className="ic">{x.name.slice(0, 1).toUpperCase()}</span>
+                <span className="t"><b>{x.name}</b>{[kindLabel(x.kind), x.address?.split(',')[0], `${x.m} m`].filter(Boolean).join(' · ')}</span>
+              </button>))}
+          </div>
+        </>}
         {places.length > 0 && <>
-          <div className="v2-rep-label">Is it one of these?</div>
+          <div className="v2-rep-label">{known.length ? 'Or one of these?' : 'Is it one of these?'}</div>
           <div className="v2-add-near">
             {places.map(x => (
               <button key={x.name + x.lat} type="button" className={`opt${picked === x.name ? ' on' : ''}`} onClick={() => pickPlace(x)}>
@@ -243,7 +272,7 @@ const AddLead: React.FC<{
         </Field>
         {hits.length > 0 && (
           <div className="v2-rep-hits">{hits.map(h => (
-            <button key={h.label} type="button" onClick={() => { setPoint(h); setAddress(h.label); setHits([]); }}>{h.label}</button>))}</div>)}
+            <button key={h.label} type="button" onClick={() => { setAddress(h.label); lookAround(h, true); }}>{h.label}</button>))}</div>)}
         <div className="v2-rep-acts" style={{ margin: '0 0 6px' }}>
           <button type="button" onClick={here} disabled={busy}><LocateFixed size={15} />Use where I am</button>
           <button type="button" onClick={onPick}><Crosshair size={15} />Tap the map</button>

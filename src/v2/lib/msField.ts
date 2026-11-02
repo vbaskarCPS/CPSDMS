@@ -62,6 +62,11 @@ export async function uploadCard(uid: string, blob: Blob): Promise<string> {
 }
 
 // ───────────── what's at the rep's spot ─────────────
+/** Businesses already known at a spot (loaded with the city, not on the map yet): offered when adding one. */
+export interface KnownBiz { id: string; name: string; address?: string; kind: string; phone?: string; website?: string; lat: number; lng: number; m: number }
+export async function knownNear(p: { lat: number; lng: number }): Promise<KnownBiz[]> {
+  return (must(await db.rpc('ms_rep_known_near', { p_lat: p.lat, p_lng: p.lng })) as KnownBiz[]) || [];
+}
 export interface NearbyBiz { id: string; name: string; address?: string; kind: string; m: number; by?: string; at?: string; dnk?: string }
 export async function nearbyAdded(p: { lat: number; lng: number }): Promise<NearbyBiz[]> {
   return (must(await db.rpc('ms_rep_nearby', { p_lat: p.lat, p_lng: p.lng })) as NearbyBiz[]) || [];

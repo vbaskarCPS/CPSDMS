@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Plus, Video, X } from 'lucide-react';
 import {
-  hasAnswers, DAYS, STATUS_LABEL, STATUS_TONE, TIMEZONES, setOutcome, timeLabel, dayLabel, toHHMM, toMin, type DeckAnswers, type Hours, type Meeting, type MeetingStatus,
+  hasAnswers, DAYS, STATUS_LABEL, STATUS_TONE, TIMEZONES, setMeetingFollowUp, setOutcome, timeLabel, dayLabel, toHHMM, toMin, type DeckAnswers, type Hours, type Meeting, type MeetingStatus,
 } from '../../lib/meetings';
 import { Btn, ErrorBox, Tag } from '../../ui';
 
@@ -28,6 +28,9 @@ export const AnswersPanel: React.FC<{ a: DeckAnswers | null | undefined; open?: 
   );
 };
 
+/** "2026-11-03T14:30" for a datetime-local input, in this browser's time. */
+const toLocalInput = (iso: string) => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+
 /** One call: when, the business and owner, who booked it, the Zoom link, and how it went. */
 export const MeetingCard: React.FC<{
   m: Meeting; tz?: string; showHost?: boolean; onChanged: (m: Meeting) => void; actions?: React.ReactNode;
@@ -36,6 +39,13 @@ export const MeetingCard: React.FC<{
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [editing, setEditing] = useState(false);
+  const [fuOpen, setFuOpen] = useState(false);
+  const [fuAt, setFuAt] = useState(() => (m.follow_up_at ? toLocalInput(m.follow_up_at) : ''));
+  const followUp = async (clear = false) => {
+    if (!clear && !fuAt) { setError(new Error('When should you follow up?')); return; }
+    setBusy(true); setError(null);
+    try { onChanged(await setMeetingFollowUp(m.id, clear ? null : new Date(fuAt).toISOString(), note)); setFuOpen(false); } catch (e) { setError(e); } finally { setBusy(false); }
+  };
   const zone = tz || m.timezone;
   const started = new Date(m.starts_at).getTime() <= Date.now();
   const mark = async (s: Exclude<MeetingStatus, 'cancelled'>) => {
@@ -58,6 +68,11 @@ export const MeetingCard: React.FC<{
         {showHost && <>Host {m.host.name} · </>}{m.rep ? <>Booked by {m.rep.name}{m.rep.phone ? <> · <a href={`tel:${m.rep.phone.replace(/[^0-9+]/g, '')}`}>{m.rep.phone}</a></> : ''}</> : 'Booked by an admin'} · {m.campaign.name}
       </div>
       {m.notes && <div className="v2-small" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{m.notes}</div>}
+      {m.status === 'booked' && m.follow_up_at && (
+        <div className="v2-small" style={{ marginTop: 4, color: new Date(m.follow_up_at).getTime() < Date.now() ? '#b91c1c' : '#b45309', fontWeight: 700 }}>
+          Follow up {dayLabel(m.follow_up_at, zone)} at {timeLabel(m.follow_up_at, zone)}{m.outcome_note ? `: ${m.outcome_note}` : ''}
+          {' '}<button type="button" className="v2-linkbtn" disabled={busy} onClick={() => followUp(true)}>Clear</button>
+        </div>)}
       <AnswersPanel a={m.answers} />
       {m.status !== 'booked' && m.status !== 'cancelled' && !editing && (
         <div className="v2-small" style={{ marginTop: 4 }}>
@@ -69,6 +84,11 @@ export const MeetingCard: React.FC<{
         {open && m.status !== 'cancelled' && (started || editing) && <>
           <input className="v2-input" placeholder="Note (optional)" value={note} onChange={e => setNote(e.target.value)} />
           {OUTCOMES.map(o => <Btn key={o.key} kind={o.kind} size="sm" disabled={busy} onClick={() => mark(o.key)}>{o.label}</Btn>)}
+          {(m.status === 'booked' || m.status === 'no_show') && <Btn kind="o" size="sm" disabled={busy} onClick={() => setFuOpen(v => !v)}>Follow up</Btn>}
+          {fuOpen && <>
+            <input className="v2-input" type="datetime-local" value={fuAt} onChange={e => setFuAt(e.target.value)} aria-label="Follow up on" style={{ maxWidth: 230 }} />
+            <Btn size="sm" disabled={busy} onClick={() => followUp()}>Save follow-up</Btn>
+          </>}
           {editing && <Btn kind="o" size="sm" disabled={busy} onClick={() => mark('booked')}>Back to booked</Btn>}
         </>}
         {actions}

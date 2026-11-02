@@ -33,7 +33,7 @@ export const TIMEZONES = ['America/Toronto', 'America/Vancouver', 'America/Edmon
 
 export interface Meeting {
   id: string; status: MeetingStatus; starts_at: string; ends_at: string; length_min: number; timezone: string;
-  owner_name: string; owner_phone: string | null; owner_email: string | null; notes: string | null;
+  owner_name: string; owner_phone: string | null; owner_email: string | null; notes: string | null; follow_up_at?: string | null;
   outcome_note: string | null; outcome_at: string | null; outcome_by: string | null;
   campaign: { id: string; name: string; color: string | null };
   business: { id: string; name: string; address: string | null; phone: string | null };
@@ -90,6 +90,10 @@ export async function saveMyHours(zoom: string, timezone: string, hours: Hours, 
 }
 export async function meetingsList(from: string, to: string, host?: string | null, campaign?: string | null): Promise<Meeting[]> {
   return (must(await db.rpc('ms_meetings_list', { p_from: from, p_to: to, p_host: host || null, p_campaign: campaign || null })) as Meeting[]) || [];
+}
+/** The host's follow-up after the call (a time and a note); the call stays booked. Null clears it. */
+export async function setMeetingFollowUp(id: string, at: string | null, note?: string): Promise<Meeting> {
+  return must(await db.rpc('ms_meeting_follow_up', { p_meeting: id, p_at: at, p_note: note || null })) as Meeting;
 }
 export async function setOutcome(id: string, status: Exclude<MeetingStatus, 'cancelled'>, note?: string): Promise<Meeting> {
   return must(await db.rpc('ms_meeting_outcome', { p_meeting: id, p_status: status, p_note: note || null })) as Meeting;
