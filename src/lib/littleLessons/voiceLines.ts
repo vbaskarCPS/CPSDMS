@@ -4,6 +4,7 @@
 // story, Ollie's words, Benny's counting, Zip's sums, and everyone's cheers.
 import { LESSONS, MONKEY_LINES, NAME_ORDER, cheers, clipId, notThereLine, oopsLine, sentenceFor, slowLine, spokenFor, stickerLine, type Speaker } from '../littleChess/lessons';
 import { chessHost, lessonLines, type Cast } from './levels';
+import { allBanterLines } from './banter';
 
 export type VoiceLine = { speaker: string; text: string; id: string; spoken: string };
 const FRIENDS: Cast[] = ['ollie', 'benny', 'zip'];
@@ -25,5 +26,7 @@ export function allVoiceLines(names: string[]): VoiceLine[] {
     for (const m of MONKEY_LINES(name)) chess('narrator', m, name);   // Mr Monkey's own lines
     for (const who of [...NAME_ORDER, ...FRIENDS]) for (const c of cheers(name)) add(who, c, spokenFor('narrator', c, name));
   }
+  // Mr Monkey's own lines, and what he and the characters say to each other (banter.ts)
+  for (const l of allBanterLines(names)) add(l.who, l.text, l.said);
   return [...out.values()];
 }
