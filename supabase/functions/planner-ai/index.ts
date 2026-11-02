@@ -35,6 +35,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 type Msg = { role: 'user' | 'assistant'; content: unknown };
 
+// Some models think before they answer by default; that thinking counts against max_tokens and once ate the
+// whole budget (an empty reply). Thinking is switched off; if a model rejects the parameter, it's sent without.
+let thinkingParamOk = true;
 async function claudeRaw(system: string, messages: Msg[], maxTokens: number): Promise<{ text: string; stop: string }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
@@ -44,9 +47,14 @@ async function claudeRaw(system: string, messages: Msg[], maxTokens: number): Pr
     res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-      body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages }),
+      body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages, ...(thinkingParamOk ? { thinking: { type: 'disabled' } } : {}) }),
     });
     data = await res.json().catch(() => ({}));
+    if (res.status === 400 && thinkingParamOk && /thinking/i.test(data?.error?.message || '')) {
+      console.error('planner-ai: model rejects the thinking parameter, sending without it:', data?.error?.message);
+      thinkingParamOk = false;
+      continue;
+    }
     if (res.ok || !(res.status === 429 || res.status === 529 || res.status >= 500)) break;
     console.error(`planner-ai: Anthropic ${res.status} (${data?.error?.type || ''}: ${data?.error?.message || ''}), attempt ${attempt + 1}`);
     await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
@@ -66,7 +74,8 @@ async function claude(system: string, messages: Msg[], maxTokens = 1500): Promis
   // a history that ends in a blank assistant turn (an earlier failure) would be refused by the API
   const clean = messages.filter(m => !(m.role === 'assistant' && !String(m.content ?? '').trim()));
   let r = await claudeRaw(system, clean, maxTokens);
-  if (!r.text.trim()) r = await claudeRaw(system, clean, maxTokens);
+  // an empty answer that ran out of tokens (thinking used them up) is asked again with a much bigger budget
+  if (!r.text.trim()) r = await claudeRaw(system, clean, r.stop === 'max_tokens' ? Math.max(maxTokens * 4, 4000) : maxTokens);
   if (!r.text.trim()) throw new Error('Coach Claude didn’t answer — try again');
   if (r.stop === 'max_tokens') {
     const more = await claudeRaw(system, [...clean, { role: 'assistant', content: r.text }, { role: 'user', content: 'Continue exactly where you left off — no recap, no repeating what you already wrote.' }], maxTokens);
@@ -82,7 +91,7 @@ async function claudeJson<T>(system: string, messages: Msg[], schema: Record<str
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages,
+    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages, ...(thinkingParamOk ? { thinking: { type: 'disabled' } } : {}),
       tools: [{ name: 'answer', description: 'The structured answer.', input_schema: schema }], tool_choice: { type: 'tool', name: 'answer' } }),
   });
   const data = await res.json();
@@ -355,7 +364,7 @@ Deno.serve(async req => {
       return json({ reply });
     }
     if (action === 'reflect') {
-      const reply = await claude(REFLECT_SYSTEM, [{ role: 'user', content: `Today (JSON):\n${JSON.stringify(b.context ?? {}).slice(0, 12000)}` }], 400);
+      const reply = await claude(REFLECT_SYSTEM, [{ role: 'user', content: `Today (JSON):\n${JSON.stringify(b.context ?? {}).slice(0, 12000)}` }], 1500);
       return json({ reply });
     }
     if (action === 'statement') {
