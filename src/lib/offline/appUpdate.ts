@@ -15,6 +15,30 @@ export function applyUpdate() {
   waiting.postMessage('skipWaiting');
 }
 
+/** A part of the app that can't be fetched — the phone's copy is from an older build and the server no
+ *  longer has that build's files (a deploy while the app was open). Drop the copy and reload once. */
+async function recoverFromStaleBuild(): Promise<void> {
+  const KEY = 'cps-stale-reload';
+  let already = false;
+  try { already = sessionStorage.getItem(KEY) === '1'; sessionStorage.setItem(KEY, '1'); } catch { /* no storage */ }
+  if (already) return;   // reloaded once already: a real outage, leave the page as it is
+  try {
+    if ('serviceWorker' in navigator) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+    if ('caches' in window) for (const k of await caches.keys()) if (k.startsWith('cps-app-')) await caches.delete(k);
+  } catch { /* best effort */ }
+  window.location.reload();
+}
+
+export function watchForStaleBuild(): void {
+  // Vite raises this when a lazy part of the app (a page, a chunk) fails to load
+  window.addEventListener('vite:preloadError', e => { e.preventDefault(); recoverFromStaleBuild(); });
+  window.addEventListener('unhandledrejection', e => {
+    if (/Failed to fetch dynamically imported module|Importing a module script failed/.test(String(e.reason?.message || e.reason))) recoverFromStaleBuild();
+  });
+  // the app stayed up: the next stale build may reload once again
+  setTimeout(() => { try { sessionStorage.removeItem('cps-stale-reload'); } catch { /* no storage */ } }, 20_000);
+}
+
 export async function registerAppWorker(): Promise<void> {
   if (!('serviceWorker' in navigator)) return;
   try {
