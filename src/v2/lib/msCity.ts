@@ -55,6 +55,7 @@ export async function setCityStatus(cityId: string, status: City['status'], note
 export async function replaceLines(cityId: string, lines: LineRow[]): Promise<number> { return must(await db.rpc('ms_city_replace_lines', { p_city: cityId, p_lines: lines })) as number; }
 /** The heavy end of a build (blocks, density, which blocks touch) runs in the background, a minute at a time. */
 export interface CityJob { stage: 'blocks' | 'density' | 'adjacency' | 'done' | 'failed'; note: string | null; blocks: number; scored: number; updated_at: string }
+export async function cityLineCount(cityId: string): Promise<number> { return Number(must(await db.rpc('ms_city_line_count', { p_city: cityId }))) || 0; }
 export async function queueCityBuild(cityId: string): Promise<CityJob> { return must(await db.rpc('ms_city_queue_build', { p_city: cityId })) as CityJob; }
 export async function cityJob(cityId: string): Promise<CityJob | null> { return (must(await db.rpc('ms_city_job', { p_city: cityId })) as CityJob | null) || null; }
 export async function makeBlocks(cityId: string): Promise<number> { return must(await db.rpc('ms_city_make_blocks', { p_city: cityId })) as number; }
@@ -124,29 +125,33 @@ export function isOsmBusiness(tags: Record<string, string> | undefined): boolean
 
 // ───────────── OpenStreetMap ─────────────
 const OVERPASS_ENDPOINTS = [
-  { url: 'https://overpass-api.de/api/interpreter', ms: 75000 },
-  { url: 'https://overpass.private.coffee/api/interpreter', ms: 60000 },
-  { url: 'https://overpass.kumi.systems/api/interpreter', ms: 60000 },
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
 ];
 export interface OsmElement { type: 'node' | 'way' | 'relation'; id: number; lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: Record<string, string>; geometry?: { lat: number; lon: number }[] }
 
-export async function overpass(query: string, signal?: AbortSignal): Promise<OsmElement[]> {
+/** One Overpass query, trying each mirror in turn (each gets `ms` to answer). */
+export async function overpass(query: string, signal?: AbortSignal, ms = 35000): Promise<OsmElement[]> {
   let lastErr: unknown = null;
-  for (const { url, ms } of OVERPASS_ENDPOINTS) {
+  for (const url of OVERPASS_ENDPOINTS) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), ms);
     const onAbort = () => ctrl.abort(); signal?.addEventListener('abort', onAbort);
     try {
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(query), signal: ctrl.signal });
-      if (!res.ok) throw new Error(`Overpass ${res.status}`);
-      return ((await res.json()).elements || []) as OsmElement[];
+      if (!res.ok) throw new Error(`${new URL(url).host} said ${res.status}`);
+      const body = await res.json() as { elements?: OsmElement[]; remark?: string };
+      // Overpass answers 200 with a remark when its own time limit runs out: that piece is too big
+      if (body.remark && /timed out|out of memory/i.test(body.remark)) throw new Error(`${new URL(url).host}: ${body.remark}`);
+      return body.elements || [];
     } catch (e) {
       if (signal?.aborted) throw new Error('Stopped');
       lastErr = ctrl.signal.aborted ? new Error(`${new URL(url).host} didn’t answer within ${Math.round(ms / 1000)} s`) : e;
     }
     finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
   }
-  throw new Error(`OpenStreetMap didn’t answer (${lastErr instanceof Error ? lastErr.message : 'all mirrors failed'}). Wait a minute and press Start again: it carries on from this step.`);
+  throw new Error(`OpenStreetMap didn’t answer (${lastErr instanceof Error ? lastErr.message : 'all mirrors failed'}). Wait a minute and press Start again: it carries on from where it stopped.`);
 }
 /** The bbox cut into n × n tiles, so each OpenStreetMap request stays small and quick. */
 export function tiles(b: BBox, n: number): BBox[] {
@@ -154,11 +159,28 @@ export function tiles(b: BBox, n: number): BBox[] {
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) out.push({ s: b.s + i * dLat, n: b.s + (i + 1) * dLat, w: b.w + j * dLng, e: b.w + (j + 1) * dLng });
   return out;
 }
-/** Runs an Overpass query per tile and merges the elements by id. */
+/** Pieces already fetched (kept for this browser tab), so pressing Start again carries on instead of starting over. */
+const tileCache = new Map<string, OsmElement[]>();
+/** One piece; if it times out, its four quarters (and their quarters), so a dense area still comes through. */
+async function fetchTile(query: (b: string) => string, b: BBox, signal: AbortSignal | undefined, depth: number): Promise<OsmElement[]> {
+  const q = query(bb(b));
+  const hit = tileCache.get(q); if (hit) return hit;
+  try {
+    const els = await overpass(q, signal, depth === 0 ? 30000 : 45000);
+    tileCache.set(q, els); return els;
+  } catch (e) {
+    if (signal?.aborted || depth >= 2) throw e;
+    const out: OsmElement[] = [];
+    for (const t of tiles(b, 2)) out.push(...await fetchTile(query, t, signal, depth + 1));
+    tileCache.set(q, out); return out;
+  }
+}
+/** Runs an Overpass query per tile (about 0.15° each, so a big city gets more of them) and merges the elements by id. */
 async function overpassTiled(bbox: BBox, query: (b: string) => string, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<OsmElement[]> {
-  const parts = tiles(bbox, 3); const seen = new Map<string, OsmElement>();
+  const n = Math.min(6, Math.max(2, Math.ceil(Math.max(bbox.n - bbox.s, bbox.e - bbox.w) / 0.15)));
+  const parts = tiles(bbox, n); const seen = new Map<string, OsmElement>();
   for (let i = 0; i < parts.length; i++) {
-    const els = await overpass(query(bb(parts[i])), signal);
+    const els = await fetchTile(query, parts[i], signal, 0);
     for (const e of els) seen.set(`${e.type}${e.id}`, e);
     onTile?.(i + 1, parts.length);
   }
@@ -206,7 +228,7 @@ export function lineKind(tags: Record<string, string>): LineKind | null {
   return null;
 }
 export async function fetchLines(bbox: BBox, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<LineRow[]> {
-  const els = await overpassTiled(bbox, b => `[out:json][timeout:60];(
+  const els = await overpassTiled(bbox, b => `[out:json][timeout:25];(
   way["highway"~"^(motorway|trunk|primary|secondary|tertiary|motorway_link|trunk_link|primary_link|secondary_link)$"](${b});
   way["railway"="rail"](${b});
   way["waterway"~"^(river|canal)$"](${b});
@@ -218,7 +240,7 @@ export async function fetchLines(bbox: BBox, signal?: AbortSignal, onTile?: (don
   });
 }
 export async function fetchPlazas(bbox: BBox, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<PlazaRow[]> {
-  const els = await overpassTiled(bbox, b => `[out:json][timeout:60];(
+  const els = await overpassTiled(bbox, b => `[out:json][timeout:25];(
   way["landuse"~"^(retail|commercial|industrial)$"](${b});
   way["building"~"^(retail|commercial|industrial|warehouse|supermarket|mall)$"](${b});
   way["shop"="mall"](${b});
@@ -233,7 +255,7 @@ export async function fetchPlazas(bbox: BBox, signal?: AbortSignal, onTile?: (do
   });
 }
 export async function fetchOsmBusinesses(bbox: BBox, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<BusinessRow[]> {
-  const els = await overpassTiled(bbox, b => `[out:json][timeout:60];(
+  const els = await overpassTiled(bbox, b => `[out:json][timeout:25];(
   nwr["shop"]["name"](${b}); nwr["craft"]["name"](${b}); nwr["office"]["name"](${b}); nwr["healthcare"]["name"](${b});
   nwr["amenity"]["name"](${b}); nwr["leisure"]["name"](${b}); nwr["industrial"]["name"](${b});
 ); out center tags;`, signal, onTile);
