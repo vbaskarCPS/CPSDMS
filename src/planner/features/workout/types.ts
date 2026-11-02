@@ -3,7 +3,10 @@ export type Muscle = 'chest' | 'back' | 'shoulders' | 'biceps' | 'triceps' | 'qu
 export type Equipment = 'barbell' | 'dumbbell' | 'machine' | 'cable' | 'bodyweight' | 'kettlebell' | 'band' | 'cardio';
 export type Units = 'lb' | 'kg';
 
-export interface Exercise { id: string; name: string; muscles: Muscle[]; equipment: Equipment; type: 'strength' | 'cardio'; defaultStep?: number; custom?: boolean; timed?: boolean; unilateral?: boolean }
+export interface Exercise { id: string; name: string; muscles: Muscle[]; equipment: Equipment; type: 'strength' | 'cardio'; defaultStep?: number; custom?: boolean; timed?: boolean; unilateral?: boolean; assisted?: boolean }
+/** Assisted pull-ups, dips and the like: the "weight" is the machine's counterweight (or the band), so LESS is harder
+ *  and progress means taking assistance away. From the flag, else the name. */
+export const isAssisted = (e?: { name?: string; assisted?: boolean } | null): boolean => !!e && (e.assisted ?? /assist|band[- ]?(ed|assisted)|counter[- ]?weight/i.test(e.name || ''));
 /** One side at a time? From the flag, else the name. */
 export const isUnilateral = (e?: { name?: string; unilateral?: boolean } | null): boolean => !!e && (e.unilateral ?? /one[- ]arm|single[- ](arm|leg)|bulgarian|split squat|lunge|step[- ]up|pistol|one[- ]leg|unilateral|per side/i.test(e.name || ''));
 

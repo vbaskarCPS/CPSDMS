@@ -25,6 +25,8 @@ export const LIBRARY: Exercise[] = [
   ex('pendlay-row', 'Pendlay Row', ['back', 'biceps'], 'barbell', 5),
   ex('db-row', 'One-arm Dumbbell Row', ['back', 'biceps'], 'dumbbell', 5),
   ex('pull-up', 'Pull-up', ['back', 'biceps'], 'bodyweight', 5),
+  { ...ex('assisted-pull-up', 'Assisted Pull-up', ['back', 'biceps'], 'machine', 10), assisted: true },   // the weight is the counterweight: less is harder
+  { ...ex('assisted-dip', 'Assisted Dip', ['chest', 'triceps'], 'machine', 10), assisted: true },
   ex('chin-up', 'Chin-up', ['back', 'biceps'], 'bodyweight', 5),
   ex('lat-pulldown', 'Lat Pulldown', ['back', 'biceps'], 'cable', 10),
   ex('seated-row', 'Seated Cable Row', ['back', 'biceps'], 'cable', 10),

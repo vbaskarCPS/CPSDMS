@@ -43,7 +43,7 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
   const sessions = ws.map((w, i) => i < fullSessions
     ? { date: w.date, name: w.name, minutes: w.endedAt ? Math.round((new Date(w.endedAt).getTime() - new Date(w.startedAt).getTime()) / 60000) : undefined, notes: w.notes || undefined, prs: w.prs?.length ? w.prs : undefined,
         coach_review: w.review || undefined, next_prescription: w.next || undefined,
-        exercises: (w.exercises || []).map((e: AnyDoc) => ({ name: e.name, target: e.targetReps, rest: e.restSec, sets: (e.sets || []).filter((s: AnyDoc) => s.done).map(fmtSet), my_note: e.comment || undefined, plan_cue: e.note || undefined })) }
+        exercises: (w.exercises || []).map((e: AnyDoc) => ({ name: e.name, ...(/assist|counter[- ]?weight/i.test(e.name || '') ? { weight_means: 'assistance (counterweight): less is harder, progress = less assist' } : {}), target: e.targetReps, rest: e.restSec, sets: (e.sets || []).filter((s: AnyDoc) => s.done).map(fmtSet), my_note: e.comment || undefined, plan_cue: e.note || undefined })) }
     : { date: w.date, name: w.name, exercises: (w.exercises || []).map((e: AnyDoc) => `${e.name}: ${(e.sets || []).filter((s: AnyDoc) => s.done).map(fmtSet).join(', ')}${e.comment ? ` ("${e.comment}")` : ''}`) });
   const inProgress = workouts.map(d => d.data).find(w => w && !w.endedAt && !w.discarded);
 

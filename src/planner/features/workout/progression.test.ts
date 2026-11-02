@@ -81,3 +81,15 @@ describe('nextSetTip', () => {
     expect(t).toMatch(/Same 40 lb/);
   });
 });
+
+describe('assisted moves (the weight is the counterweight)', () => {
+  it('progress takes assist away; a deload adds it back; the least assist is the working weight', async () => {
+    const { suggest } = await import('./progression');
+    const hist = [{ sets: [{ weight: 60, reps: 8, done: true }, { weight: 60, reps: 8, done: true }, { weight: 60, reps: 8, done: true }] }];
+    const up = suggest({ history: hist as never, targetReps: '6-8', targetSets: 3, units: 'lb', lower: false, defaultStep: 10, assisted: true });
+    expect(up.weight).toBe(50); expect(up.reason).toMatch(/take 10 off/);
+    const missed = [{ sets: [{ weight: 60, reps: 3, done: true }, { weight: 60, reps: 2, done: true }] }, { sets: [{ weight: 60, reps: 3, done: true }, { weight: 60, reps: 3, done: true }] }];
+    const down = suggest({ history: missed as never, targetReps: '6-8', targetSets: 2, units: 'lb', lower: false, defaultStep: 10, assisted: true });
+    expect(down.weight).toBe(70); expect(down.reason).toMatch(/add 10 assist/);
+  });
+});
