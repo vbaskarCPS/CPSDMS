@@ -702,3 +702,9 @@
   .v2-split-list .r .t { flex-basis: calc(100% - 30px); }
   .v2-split-list .v2-sel { max-width: none; flex: 1 0 100%; margin-left: 24px; }
 }
+
+/* Cities › part of a city: neighbourhoods and wards to pick */
+.v2-area-hits { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; padding: 6px; margin-bottom: 8px; }
+.v2-area-hits label { display: flex; gap: 8px; align-items: flex-start; padding: 6px; border-radius: 8px; cursor: pointer; }
+.v2-area-hits label:hover { background: var(--hover, #f9fafb); }
+.v2-area-hits input { margin-top: 3px; }

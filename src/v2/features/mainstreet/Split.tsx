@@ -95,11 +95,11 @@ export const Split: React.FC = () => {
         </div>
         <div className="v2-split-side">
           <Card>
-            <label className="v2-label" htmlFor="sp-city">City</label>
+            <label className="v2-label" htmlFor="sp-city">City or area</label>
             <select id="sp-city" className="v2-sel" value={city} onChange={e => { setCity(e.target.value); setWalked(null); setConfirm(false); }}>
               {ready.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
-            <div className="v2-small v2-mut" style={{ margin: '4px 0 10px' }}>Uses the city’s own boundary and its main roads (free map data). Add a city under Cities; the paid Google step can be skipped.</div>
+            <div className="v2-small v2-mut" style={{ margin: '4px 0 10px' }}>Uses the city’s (or area’s) own boundary and its main roads, from free map data. Add one under Cities.</div>
             {activeCamps.length > 1 && <>
               <label className="v2-label" htmlFor="sp-camp">Campaign</label>
               <select id="sp-camp" className="v2-sel" value={campaign} onChange={e => setCampaign(e.target.value)} style={{ marginBottom: 10 }}>
