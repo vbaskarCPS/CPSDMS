@@ -175,6 +175,24 @@ export async function fetchBoundary(city: string, province = 'Ontario'): Promise
   return { osm_id: hit.osm_id, name: hit.display_name, geometry: hit.geojson as GeoJSON.Polygon | GeoJSON.MultiPolygon, bbox: { s, n, w, e } };
 }
 
+/** Neighbourhoods, wards and other named areas with a boundary, for an area that's part of a city (Kanata, Barrhaven). */
+export interface AreaHit { osm_id: number; name: string; label: string; kind: string; geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon }
+export async function searchAreas(q: string, province = 'Ontario'): Promise<AreaHit[]> {
+  if (!q.trim()) return [];
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(`${q.trim()}, ${province}, Canada`)}&format=jsonv2&polygon_geojson=1&polygon_threshold=0.0002&limit=12`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Couldn’t search OpenStreetMap (${res.status})`);
+  const rows = await res.json() as { osm_id: number; name?: string; display_name: string; type: string; addresstype?: string; geojson: GeoJSON.Geometry }[];
+  const seen = new Set<number>();
+  return rows.filter(r => (r.geojson.type === 'Polygon' || r.geojson.type === 'MultiPolygon') && !seen.has(r.osm_id) && seen.add(r.osm_id))
+    .map(r => ({ osm_id: r.osm_id, name: r.name || r.display_name.split(',')[0], label: r.display_name.replace(/, Canada$/, ''),
+      kind: r.addresstype || r.type, geometry: r.geojson as GeoJSON.Polygon | GeoJSON.MultiPolygon }));
+}
+/** Several areas as one boundary. */
+export function joinAreas(parts: (GeoJSON.Polygon | GeoJSON.MultiPolygon)[]): GeoJSON.MultiPolygon {
+  return { type: 'MultiPolygon', coordinates: parts.flatMap(g => (g.type === 'Polygon' ? [g.coordinates] : g.coordinates)) };
+}
+
 export function lineKind(tags: Record<string, string>): LineKind | null {
   const h = tags.highway;
   if (h && /^(motorway|trunk|motorway_link|trunk_link)$/.test(h)) return 'highway';

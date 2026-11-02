@@ -4,7 +4,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Map as MbMap, MapMouseEvent } from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { Archive, ArchiveRestore, Check, Pencil, Plus, Search, Sparkles, Trash2, Undo2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Pencil, Plus, Search, Trash2, Undo2, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useLoad } from '../../lib/data';
 import {
@@ -183,7 +183,8 @@ export const Zones: React.FC = () => {
         <span className="v2-spacer" />
         <span className="v2-mut v2-small">{all.filter(z => z.status === 'active').length} active · {all.filter(z => z.status === 'active' && z.campaigns.every(c => !c.rep_id)).length} without a rep</span>
         {!draft && !review && <Btn kind="o" icon={Plus} onClick={() => startDraw(null)}>Draw a zone</Btn>}
-        {!draft && !review && <Btn icon={Sparkles} onClick={() => setGenOpen(true)}>Generate zones</Btn>}
+        {/* "Generate zones" (balanced by preloaded businesses) is parked: zones come from Split now. GenerateModal stays below. */}
+        {!draft && !review && <Link to="/app/mainstreet/split" className="v2-btn">Split a city</Link>}
       </div>
       <div className="v2-row" style={{ marginBottom: 12 }}>
         <button className={`v2-chip${filter === 'all' ? ' on' : ''}`} onClick={() => setFilter('all')}>All</button>
