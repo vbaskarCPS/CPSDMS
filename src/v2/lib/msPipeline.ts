@@ -2,10 +2,11 @@
 // how hot it is (with the reasons), and its whole history. Database: 20261246300000_mainstreet_pipeline.sql.
 import { db, must } from './client';
 
-export type Stage = 'new' | 'talked' | 'pitched' | 'booked' | 'won' | 'lost';
+/** Four stages, New → Pitched → Booked → Won; Lost is the off-ramp (Not interested, Not a fit). */
+export type Stage = 'new' | 'pitched' | 'booked' | 'won' | 'lost';
 export type Heat = 'hot' | 'warm' | 'cold';
 export const STAGES: { key: Stage; label: string }[] = [
-  { key: 'new', label: 'New' }, { key: 'talked', label: 'Talked to' }, { key: 'pitched', label: 'Pitched' },
+  { key: 'new', label: 'New' }, { key: 'pitched', label: 'Pitched' },
   { key: 'booked', label: 'Onboarding booked' }, { key: 'won', label: 'Won' }, { key: 'lost', label: 'Lost' },
 ];
 export const stageLabel = (s: string | undefined) => STAGES.find(x => x.key === s)?.label || s || '';
@@ -37,7 +38,7 @@ export async function timeline(business: string, campaign: string): Promise<Time
 
 /** Rows by stage, in the board's order. */
 export function byStage(rows: PipeRow[]): Record<Stage, PipeRow[]> {
-  const out = { new: [], talked: [], pitched: [], booked: [], won: [], lost: [] } as Record<Stage, PipeRow[]>;
+  const out = { new: [], pitched: [], booked: [], won: [], lost: [] } as Record<Stage, PipeRow[]>;
   for (const r of rows) (out[r.stage] || out.new).push(r);
   return out;
 }

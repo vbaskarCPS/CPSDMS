@@ -257,8 +257,8 @@ function bizState(bid: string) {
   const s = stateOf(bid);
   const stage = S.lost.has(bid) || m?.status === 'not_fit' ? 'lost' : s.state === 'closed' || m?.status === 'closed' ? 'won' : m && m.status === 'booked' ? 'booked'
     : s.state === 'not_interested' || s.state === 'cant_sell' ? 'lost' : s.state === 'interested' || s.state === 'follow_up' || s.state === 'pending' ? 'pitched'
-    : vs.length ? 'talked' : 'new';
-  const heat = stage === 'booked' || stage === 'pitched' ? (s.state === 'interested' ? 'hot' : 'warm') : stage === 'talked' ? 'cold' : undefined;
+    : 'new';
+  const heat = stage === 'booked' || stage === 'pitched' ? (s.state === 'interested' ? 'hot' : 'warm') : stage === 'new' && vs.length ? 'cold' : undefined;
   const a = S.answers.get(bid);
   return { stage, heat, points: vs.length * 10 + (a ? 30 : 0), why: heat ? [a ? 'Answered the deck questions' : 'Asked for information', `${vs.length} visit${vs.length === 1 ? '' : 's'}`] : [],
     meeting: m ? { id: m.id, starts_at: m.starts_at, status: m.status, host: m.host.name } : undefined, yearly: a?.proposal?.yearly,
