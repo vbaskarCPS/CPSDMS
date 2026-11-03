@@ -277,6 +277,22 @@ export async function geocode(q: string, near?: { lat: number; lng: number } | n
   const j = await res.json() as { features?: { center: [number, number]; place_name: string }[] };
   return (j.features || []).map(f => ({ lng: f.center[0], lat: f.center[1], label: f.place_name.replace(/, Canada$/, '') }));
 }
+/** An address, compared loosely: case, punctuation, spacing and the trailing city/province/postal code don't matter
+ *  ("1501 34 Ave SW" is the same as "1501 34 AVE S.W., Calgary, AB T2T 2B1"). */
+export function addrKey(a: string | null | undefined): string {
+  return (a || '').split(',')[0].toLowerCase().replace(/[.#]/g, '').replace(/\s+/g, ' ').trim();
+}
+/** Is the pin still for the address in the box? (The rep typed or changed the address after the pin was set.) */
+export function pinMatchesAddress(typed: string, pinFor: string | null): boolean {
+  return !typed.trim() || addrKey(typed) === addrKey(pinFor);
+}
+/** Which looked-up address to use when the rep adds without picking one: the only result, or the first when it's
+ *  plainly the address they typed. null = let them pick. */
+export function hitForTyped<T extends { label: string }>(typed: string, hits: T[]): T | null {
+  if (hits.length === 1) return hits[0];
+  const k = addrKey(typed);
+  return hits.length && k && addrKey(hits[0].label) === k ? hits[0] : null;
+}
 /** A point → its street address (for a dropped pin). */
 export async function reverseGeocode(p: { lat: number; lng: number }): Promise<string | null> {
   const token = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_MAPBOX_TOKEN;

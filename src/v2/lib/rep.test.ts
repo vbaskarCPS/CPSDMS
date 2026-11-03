@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { houseNo, isOpen, OUTCOMES, pinOf, streetOf, visitProblem, walkOrder, whenLabel, type RepBusiness } from './rep';
+import { addrKey, hitForTyped, houseNo, isOpen, pinMatchesAddress, OUTCOMES, pinOf, streetOf, visitProblem, walkOrder, whenLabel, type RepBusiness } from './rep';
 
 const biz = (id: string, address: string | null, plaza: string | null = null): RepBusiness => ({
   id, name: id, address, lat: 0, lng: 0, kind: 'trades', plaza, plaza_id: plaza ? `p-${plaza}` : null, state: 'new', last_at: null, follow_up_at: null, visits: 0,
@@ -56,5 +56,26 @@ describe('rep · pins', () => {
     expect(whenLabel('2026-10-29T09:00:00', now)).toMatch(/^Tomorrow/);
     expect(whenLabel('2026-10-27T09:00:00', now)).toMatch(/^Yesterday/);
     expect(whenLabel('2026-11-03T09:00:00', now)).toMatch(/Nov/);
+  });
+});
+
+describe('adding a business: the pin and the address', () => {
+  it('compares addresses loosely', () => {
+    expect(addrKey('1501 34 Ave SW')).toBe(addrKey('1501 34 AVE SW, Calgary, AB T2T 2B1'));
+    expect(addrKey(' 1501  34 Ave SW, Calgary ')).toBe('1501 34 ave sw');
+  });
+  it('knows when the rep typed an address the pin isn’t at', () => {
+    expect(pinMatchesAddress('', '12 Main St, Calgary')).toBe(true);                       // nothing typed
+    expect(pinMatchesAddress('12 Main St, Calgary, AB', '12 Main St, Calgary')).toBe(true); // the pin's own address
+    expect(pinMatchesAddress('1501 34 Ave SW', '980 Main St SE, Calgary')).toBe(false);     // typed over the phone
+    expect(pinMatchesAddress('1501 34 Ave SW', null)).toBe(false);                          // no address for the pin
+  });
+  it('uses the only match, or the first when it is plainly the typed address; otherwise asks', () => {
+    const a = { lat: 1, lng: 1, label: '1501 34 Ave SW, Calgary, Alberta T2T 2B1' };
+    const b = { lat: 2, lng: 2, label: '1501 34 Ave NW, Calgary, Alberta' };
+    expect(hitForTyped('1501 34 ave sw', [b])).toBe(b);
+    expect(hitForTyped('1501 34 Ave SW', [a, b])).toBe(a);
+    expect(hitForTyped('1501 34 Ave', [a, b])).toBeNull();
+    expect(hitForTyped('1501 34 Ave SW', [])).toBeNull();
   });
 });
