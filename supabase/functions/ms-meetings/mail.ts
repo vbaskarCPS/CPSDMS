@@ -22,6 +22,13 @@ export function whenLabel(iso: string, tz: string): string {
   return `${day} at ${time}`;
 }
 
+/** What the owner is asked to have ready, so the call goes quickly. */
+export const OWNER_PREP = {
+  title: 'To prepare for the call',
+  intro: 'To streamline the process, please have one of these ready:',
+  items: ['Financials from the previous year', 'OR one month of bank statements and/or credit card statements'],
+};
+
 const first = (s: string) => (s || '').trim().split(/\s+/)[0] || s;
 
 export function meetingEmail(m: MeetingNotice, who: 'owner' | 'host', kind: Kind): { fromName: string; subject: string; html: string; text: string } {
@@ -39,15 +46,34 @@ export function meetingEmail(m: MeetingNotice, who: 'owner' | 'host', kind: Kind
        ['Owner', [m.owner_name, m.owner_phone, m.owner_email].filter(Boolean).join(' · ')],
        ...(m.rep ? [['Booked by', `${m.rep.name}${m.rep.phone ? ` · ${m.rep.phone}` : ''}`] as [string, string]] : []),
        ...(m.notes ? [['Rep’s notes', m.notes] as [string, string]] : []),
-       ...((m.answers?.summary || []).map(([q, a]) => [q, a] as [string, string])),
-       ...(m.answers?.proposal ? [['Proposal shown', `about $${Math.round(m.answers.proposal.yearly).toLocaleString('en-CA')} a year${m.answers.proposal.quoted ? ' plus Core (quoted)' : ''}: `
-         + m.answers.proposal.lines.map(([k, v]) => `${k} ${v}`).join(', ')] as [string, string]] : []),
        ['Your Zoom', zoom || 'No Zoom link saved yet: add it under My hours']];
+  // the host's prep: what the owner answered on the deck, the proposal they saw, and what they were asked to bring
+  const prep: [string, string][] = who === 'host' && kind !== 'cancelled' ? [
+    ...((m.answers?.summary || []).map(([q, a]) => [q, a] as [string, string])),
+    ...(m.answers?.proposal ? [['Proposal shown', `about $${Math.round(m.answers.proposal.yearly).toLocaleString('en-CA')} a year${m.answers.proposal.quoted ? ' plus Core (quoted)' : ''}: `
+      + m.answers.proposal.lines.map(([k, v]) => `${k} ${v}`).join(', ')] as [string, string]] : []),
+    ['Owner was asked to have ready', OWNER_PREP.items.join(' ')],
+  ] : [];
+  const hasDeck = !!(m.answers?.summary?.length || m.answers?.proposal);
   const intro = who === 'owner'
     ? (kind === 'cancelled' ? `Hi ${esc(first(m.owner_name))}, your onboarding call with ${esc(company)} has been cancelled. We’ll be in touch to find a new time.`
       : kind === 'changed' ? `Hi ${esc(first(m.owner_name))}, your onboarding call with ${esc(company)} has a new time.`
       : `Hi ${esc(first(m.owner_name))}, thanks for choosing ${esc(company)}. Here’s your onboarding call, where we get you set up.`)
     : (kind === 'cancelled' ? `This onboarding call was cancelled.` : kind === 'changed' ? `This onboarding call was moved.` : `You have a new onboarding call.`);
+  const row = ([k, v]: [string, string]) => `<tr><td style="padding:6px 12px 6px 0;color:#6b7280;font-size:13px;vertical-align:top;">${esc(k)}</td>`
+    + `<td style="padding:6px 0;font-size:14px;color:#111827;">${esc(v)}</td></tr>`;
+  const ownerPrep = who === 'owner' && kind !== 'cancelled'
+    ? `<div style="margin:18px 0 0;padding:12px 14px;border:1.5px solid #99d5cb;background:#f0fdfa;border-radius:10px;">
+    <div style="font-size:14px;font-weight:700;color:#0f766e;margin-bottom:4px;">${esc(OWNER_PREP.title)}</div>
+    <div style="font-size:14px;color:#374151;line-height:1.5;">${esc(OWNER_PREP.intro)}</div>
+    <ul style="margin:6px 0 0;padding-left:20px;font-size:14px;color:#111827;line-height:1.6;">${OWNER_PREP.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul>
+  </div>` : '';
+  const hostPrep = prep.length
+    ? `<div style="margin:18px 0 0;padding:12px 14px;border:1.5px solid #99d5cb;background:#f0fdfa;border-radius:10px;">
+    <div style="font-size:14px;font-weight:700;color:#0f766e;margin-bottom:4px;">Prep for the call</div>
+    ${hasDeck ? '' : `<div style="font-size:13px;color:#6b7280;margin-bottom:4px;">No answers from the deck for this one.</div>`}
+    <table style="border-collapse:collapse;">${prep.map(row).join('')}</table>
+  </div>` : '';
   const rows = lines.map(([k, v]) => `<tr><td style="padding:6px 12px 6px 0;color:#6b7280;font-size:13px;vertical-align:top;white-space:nowrap;">${esc(k)}</td>`
     + `<td style="padding:6px 0;font-size:14px;color:#111827;">${/^https:\/\//.test(v) ? `<a href="${esc(v)}" style="color:#0f766e;font-weight:700;">${esc(v)}</a>` : esc(v)}</td></tr>`).join('');
   const button = zoom && kind !== 'cancelled'
@@ -56,10 +82,12 @@ export function meetingEmail(m: MeetingNotice, who: 'owner' | 'host', kind: Kind
   <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#0f766e;">${esc(head)}</div>
   <h1 style="font-size:20px;margin:6px 0 10px;color:#111827;">${esc(company)} onboarding call</h1>
   <p style="font-size:14px;color:#374151;line-height:1.5;margin:0 0 12px;">${intro}</p>
-  <table style="border-collapse:collapse;">${rows}</table>${button}
+  <table style="border-collapse:collapse;">${rows}</table>${button}${ownerPrep}${hostPrep}
   <p style="font-size:12px;color:#9ca3af;margin-top:20px;">${who === 'owner' ? `The calendar invite is attached. To change the time, reply to this email.` : `MainstreetAI › Meetings. Mark how it went in the app afterwards.`}</p>
 </div>`;
-  const text = [`${head}: ${company} onboarding call`, '', ...lines.map(([k, v]) => `${k}: ${v}`)].join('\n');
+  const text = [`${head}: ${company} onboarding call`, '', ...lines.map(([k, v]) => `${k}: ${v}`),
+    ...(who === 'owner' && kind !== 'cancelled' ? ['', `${OWNER_PREP.title}: ${OWNER_PREP.intro}`, ...OWNER_PREP.items.map(i => `- ${i}`)] : []),
+    ...(prep.length ? ['', 'Prep for the call', ...(hasDeck ? [] : ['No answers from the deck for this one.']), ...prep.map(([k, v]) => `${k}: ${v}`)] : [])].join('\n');
   return { fromName: who === 'owner' ? `${company} onboarding` : 'MainstreetAI Meetings', subject, html, text };
 }
 
@@ -68,7 +96,8 @@ const icsText = (s: string) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').re
 
 /** A calendar invite for the call (UTC times, so every calendar shows it in its own time zone). */
 export function icsFor(m: MeetingNotice, kind: Kind, now = new Date()): string {
-  const desc = [`${m.campaign.name} onboarding with ${m.host.name}`, m.host.zoom_url ? `Join: ${m.host.zoom_url}` : '', `Business: ${m.business.name}`]
+  const desc = [`${m.campaign.name} onboarding with ${m.host.name}`, m.host.zoom_url ? `Join: ${m.host.zoom_url}` : '', `Business: ${m.business.name}`,
+    `${OWNER_PREP.intro} ${OWNER_PREP.items.join(' ')}`]
     .filter(Boolean).join('\n');
   return [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//MainstreetAI//Meetings//EN', `METHOD:${kind === 'cancelled' ? 'CANCEL' : 'REQUEST'}`,

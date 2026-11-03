@@ -51,6 +51,20 @@ describe('the emails', () => {
     expect(h).toContain('Proposal shown: about $7,783 a year: Core bookkeeping $549/mo');
     expect(meetingEmail(withA, 'owner', 'booked').text).not.toContain('25K');
   });
+  it('asks the owner to have their financials or statements ready (not on a cancellation)', () => {
+    const e = meetingEmail(m, 'owner', 'booked');
+    expect(e.text).toContain('Financials from the previous year');
+    expect(e.text).toContain('OR one month of bank statements and/or credit card statements');
+    expect(e.html).toContain('To prepare for the call');
+    expect(meetingEmail(m, 'owner', 'cancelled').text).not.toContain('Financials');
+  });
+  it('gives the host a Prep section, with what the owner was asked to bring', () => {
+    const h = meetingEmail(m, 'host', 'booked');
+    expect(h.html).toContain('Prep for the call');
+    expect(h.html).toContain('No answers from the deck for this one.');
+    expect(h.text).toContain('Owner was asked to have ready: Financials from the previous year OR one month of bank statements');
+    expect(meetingEmail(m, 'host', 'cancelled').text).not.toContain('Prep for the call');
+  });
   it('makes a calendar invite, and a cancellation', () => {
     const ics = icsFor(m, 'booked', new Date('2026-11-02T15:00:00Z'));
     expect(ics).toContain('DTSTART:20261103T193000Z');
