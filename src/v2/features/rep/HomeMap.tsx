@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import { Crosshair, LocateFixed, Plus, X } from 'lucide-react';
 import {
-  addLead, geocode, hereNow, isOpen, repMap, reverseGeocode, stagePin,
+  addLead, geocode, hereNow, hitForTyped, isOpen, pinMatchesAddress, repMap, reverseGeocode, stagePin,
   type MapBiz, type RepMap,
 } from '../../lib/rep';
 import { BUSINESS_KINDS, kindLabel } from '../../lib/msCity';
@@ -147,6 +147,9 @@ const SendQueue: React.FC = () => {
 // ───────────── add a business: where the rep is standing ─────────────
 // Opens on the rep's GPS: the street address, businesses already added within 60 m (open one instead of adding it
 // twice), and business names from map data at that spot to tap. Or type the name.
+// The pin and the address box are kept honest with each other: the form says where the pin is, and if the rep types
+// an address (say, adding a business over the phone) and adds it without picking a Find result, the address is looked
+// up and the business goes there, never quietly where the rep is standing.
 const AddLead: React.FC<{
   campaigns: { id: string; name: string; color: string }[]; at: { lat: number; lng: number } | null;
   onPick: () => void; onClose: () => void; onAdded: (b: MapBiz, campaign: string) => void; onOpen: (id: string) => boolean;
@@ -157,6 +160,9 @@ const AddLead: React.FC<{
   const [phone, setPhone] = useState('');
   const [campaign, setCampaign] = useState(campaigns[0]?.id || '');
   const [point, setPoint] = useState<{ lat: number; lng: number } | null>(at);
+  // where the pin came from, and the address it's for (so we can tell when the address box no longer matches it)
+  const [pinFrom, setPinFrom] = useState<'gps' | 'map' | 'address' | 'place'>(at ? 'map' : 'gps');
+  const [pinFor, setPinFor] = useState<string | null>(null);
   const [hits, setHits] = useState<{ lat: number; lng: number; label: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [locating, setLocating] = useState(!at);
@@ -173,8 +179,9 @@ const AddLead: React.FC<{
   // added, the businesses we already know there, and names from map data
   const lookAround = useCallback(async (p: { lat: number; lng: number }, keepAddress = false) => {
     setPoint(p); setHits([]);
+    if (!keepAddress) setPinFor(null);
     const [a, ad, kn, pl] = await Promise.all([keepAddress ? Promise.resolve(null) : reverseGeocode(p), nearbyAdded(p).catch(() => []), knownNear(p).catch(() => []), mapPlaces(p)]);
-    if (a) setAddress(a);
+    if (a) { setAddress(a); setPinFor(a); }
     setAdded(ad.filter(x => x.m <= 60));
     // a name already added here isn't offered again
     const have = new Set(ad.map(x => x.name.toLowerCase()));
@@ -189,7 +196,7 @@ const AddLead: React.FC<{
     hereNow(8000).then(p => {
       if (!live) return;
       setLocating(false); near.current = p;
-      if (p) lookAround(p); else setError(new Error('Your location isn’t available. Type the address or tap the map.'));
+      if (p) { setPinFrom('gps'); lookAround(p); } else setError(new Error('Your location isn’t available. Type the address or tap the map.'));
     });
     return () => { live = false; };
   }, [at, lookAround]);
@@ -199,8 +206,12 @@ const AddLead: React.FC<{
     const p = await hereNow();
     setBusy(false);
     if (!p) { setError(new Error('Your location isn’t available. Type the address or tap the map.')); return; }
-    near.current = p; lookAround(p);
+    near.current = p; setPinFrom('gps'); lookAround(p);
   };
+  const chooseHit = (h: { lat: number; lng: number; label: string }) => {
+    setAddress(h.label); setPinFor(h.label); setPinFrom('address'); setPicked(null); lookAround(h, true);
+  };
+  const addressMoved = !pinMatchesAddress(address, pinFor);
   const look = async () => {
     setError(null);
     try { const h = await geocode(address, near.current || point); setHits(h); if (!h.length) setError(new Error('No match. Try the street number and name, or tap the map.')); }
@@ -212,25 +223,43 @@ const AddLead: React.FC<{
     if (x.address) setAddress(x.address);
     if (x.phone) setPhone(x.phone);
     setPoint({ lat: x.lat, lng: x.lng });   // its own spot, so adding it makes this one theirs instead of a copy
+    setPinFrom('place'); setPinFor(x.address || address);
   };
   const pickPlace = (x: MapPlace) => {
     setPicked(x.name); setName(x.name);
     if (x.kind) setKind(x.kind);
-    if (x.address) setAddress(a => (a && /^\d/.test(a) ? a : x.address || a));
-    setPoint({ lat: x.lat, lng: x.lng });
+    // keep a street address that came with the pin; one the rep typed himself still gets looked up when he adds it
+    if (!addressMoved) {
+      const next = address && /^\d/.test(address) ? address : x.address || address;
+      setAddress(next); setPinFor(next);
+    }
+    setPoint({ lat: x.lat, lng: x.lng }); setPinFrom('place');
   };
   const openAdded = (x: NearbyBiz) => {
     if (onOpen(x.id)) return;
     setNote(`${x.name} is already on the map, but not in your zones. Ask an admin if it should be yours.`);
   };
   const save = async () => {
-    if (!point) { setError(new Error('Where is it? Use your location, look up the address, or tap the map.')); return; }
     setBusy(true); setError(null);
     try {
-      const r = await addLead({ name: name.trim(), kind, address, lat: point.lat, lng: point.lng, phone, campaign });
-      onAdded({ id: r.id, n: name.trim(), a: address || undefined, lat: point.lat, lng: point.lng, k: kind, z: r.zone_id || undefined, c: r.campaign_id, lead: true, s: 'new' }, r.campaign_id);
+      let p = point, addr = address;
+      if (addressMoved) {   // the rep typed an address that isn't where the pin is: put it at that address
+        const h = await geocode(address, near.current || point);
+        const pick = hitForTyped(address, h);
+        if (!pick) {
+          setHits(h);
+          setError(new Error(h.length ? 'Which one is it? Pick the address below, then tap Add it.' : 'Couldn’t find that address. Check it, or tap the map where the business is.'));
+          return;
+        }
+        p = { lat: pick.lat, lng: pick.lng }; addr = pick.label;
+        setPoint(p); setAddress(addr); setPinFor(addr); setPinFrom('address');
+      }
+      if (!p) { setError(new Error('Where is it? Use your location, look up the address, or tap the map.')); return; }
+      const r = await addLead({ name: name.trim(), kind, address: addr, lat: p.lat, lng: p.lng, phone, campaign });
+      onAdded({ id: r.id, n: name.trim(), a: addr || undefined, lat: p.lat, lng: p.lng, k: kind, z: r.zone_id || undefined, c: r.campaign_id, lead: true, s: 'new' }, r.campaign_id);
     } catch (e) { setError(e); } finally { setBusy(false); }
   };
+  const pinLabel = pinFrom === 'gps' ? 'where you are' : pinFrom === 'map' ? 'where you tapped' : pinFrom === 'place' ? (name || 'the business you picked') : 'the address';
   return (
     <div className="v2-rep-sheet-bg" onClick={onClose}>
       <div className="v2-rep-sheet" role="dialog" aria-label="Add a business" onClick={e => e.stopPropagation()}>
@@ -238,8 +267,14 @@ const AddLead: React.FC<{
           <button type="button" aria-label="Close" onClick={onClose} className="v2-rep-x"><X size={20} /></button></div>
         <div className="v2-small" style={{ margin: '4px 0 10px', display: 'flex', gap: 6, alignItems: 'center' }}>
           <LocateFixed size={15} style={{ color: '#2563eb', flexShrink: 0 }} />
-          {locating ? <span className="v2-mut">Finding where you are…</span> : point ? <span>You’re at <b>{address || 'this spot'}</b></span> : <span className="v2-mut">No location yet</span>}
+          {locating ? <span className="v2-mut">Finding where you are…</span>
+            : !point ? <span className="v2-mut">No pin yet: type the address, use where you are, or tap the map</span>
+            : <span>Pin: <b>{pinFor || (pinFrom === 'gps' ? 'where you are' : 'this spot')}</b>{pinFrom === 'gps' && pinFor ? ' (where you are)' : pinFrom === 'map' && pinFor ? ' (where you tapped)' : ''}</span>}
         </div>
+        {point && addressMoved && (
+          <div className="v2-add-dup">
+            <span style={{ flex: 1 }}><b>The pin is {pinLabel}, not the address you typed.</b> Adding it puts the business at the address. Tap Find to check it first.</span>
+          </div>)}
         {added.map(x => (
           <div key={x.id} className="v2-add-dup">
             <span style={{ flex: 1 }}><b>{x.dnk ? 'Do not knock' : 'Already added'} {x.m} m away:</b> {x.name}{x.by ? `, by ${x.by}` : ''}</span>
@@ -283,7 +318,7 @@ const AddLead: React.FC<{
         </Field>
         {hits.length > 0 && (
           <div className="v2-rep-hits">{hits.map(h => (
-            <button key={h.label} type="button" onClick={() => { setAddress(h.label); lookAround(h, true); }}>{h.label}</button>))}</div>)}
+            <button key={h.label} type="button" onClick={() => chooseHit(h)}>{h.label}</button>))}</div>)}
         <div className="v2-rep-acts" style={{ margin: '0 0 6px' }}>
           <button type="button" onClick={here} disabled={busy}><LocateFixed size={15} />Use where I am</button>
           <button type="button" onClick={onPick}><Crosshair size={15} />Tap the map</button>
@@ -294,7 +329,7 @@ const AddLead: React.FC<{
             <div className="v2-rep-kinds">{campaigns.map(c => <button key={c.id} type="button" className={`v2-rep-pill${campaign === c.id ? ' on' : ''}`} onClick={() => setCampaign(c.id)}><i style={{ background: c.color }} />{c.name}</button>)}</div>
           </Field>)}
         <ErrorBox error={error} />
-        <Btn onClick={save} disabled={busy || !name.trim() || !kind} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e' }}>
+        <Btn onClick={save} disabled={busy || !name.trim() || !kind || (!point && !address.trim())} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e' }}>
           {busy ? 'Adding…' : 'Add it'}</Btn>
         <div className="v2-small v2-mut" style={{ marginTop: 8 }}>It opens next, ready for their cards, the deck or the visit.</div>
       </div>
