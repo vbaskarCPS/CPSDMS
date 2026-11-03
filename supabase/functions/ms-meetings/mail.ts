@@ -94,18 +94,48 @@ export function meetingEmail(m: MeetingNotice, who: 'owner' | 'host', kind: Kind
 const icsDate = (iso: string) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 const icsText = (s: string) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, m => `\\${m}`);
 
-/** A calendar invite for the call (UTC times, so every calendar shows it in its own time zone). */
-export function icsFor(m: MeetingNotice, kind: Kind, now = new Date()): string {
+// a name for CN="…" (no quotes or line breaks allowed inside)
+const icsName = (s: string) => (s || '').replace(/["\r\n]/g, '').replace(/[\\]/g, '').trim();
+const isEmail = (s: string | null | undefined): s is string => !!s && /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(s.trim());
+
+/** Calendar lines are at most 75 bytes; longer ones continue on the next line after a space (RFC 5545 §3.1). */
+function fold(line: string): string {
+  const enc = new TextEncoder();
+  if (enc.encode(line).length <= 75) return line;
+  const parts: string[] = [];
+  let cur = '', bytes = 0, limit = 75;
+  for (const ch of line) {
+    const n = enc.encode(ch).length;
+    if (bytes + n > limit) { parts.push(cur); cur = ''; bytes = 0; limit = 74; }   // the leading space counts
+    cur += ch; bytes += n;
+  }
+  parts.push(cur);
+  return parts.join('\r\n ');
+}
+
+/** A calendar invite for the call (UTC times, so every calendar shows it in its own time zone). The host is the
+ *  organizer and the owner is an invited guest, so it lands in both calendars as a meeting with both on it, and
+ *  the owner's Accept/Decline goes to the host. */
+export function icsFor(m: MeetingNotice, kind: Kind, now = new Date(), fallbackOrganizer = 'mainstreetai@propertystars.app'): string {
   const desc = [`${m.campaign.name} onboarding with ${m.host.name}`, m.host.zoom_url ? `Join: ${m.host.zoom_url}` : '', `Business: ${m.business.name}`,
     `${OWNER_PREP.intro} ${OWNER_PREP.items.join(' ')}`]
     .filter(Boolean).join('\n');
+  const hostEmail = isEmail(m.host.email) ? m.host.email.trim() : null;
+  const ownerEmail = isEmail(m.owner_email) ? m.owner_email.trim() : null;
+  const organizer = `ORGANIZER;CN="${icsName(m.host.name || m.campaign.name)}":mailto:${hostEmail || fallbackOrganizer}`;
+  const guests = [
+    ...(hostEmail ? [`ATTENDEE;CN="${icsName(m.host.name)}";ROLE=CHAIR;PARTSTAT=ACCEPTED;CUTYPE=INDIVIDUAL:mailto:${hostEmail}`] : []),
+    ...(ownerEmail && ownerEmail.toLowerCase() !== hostEmail?.toLowerCase()
+      ? [`ATTENDEE;CN="${icsName(m.owner_name)}";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CUTYPE=INDIVIDUAL:mailto:${ownerEmail}`] : []),
+  ];
   return [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//MainstreetAI//Meetings//EN', `METHOD:${kind === 'cancelled' ? 'CANCEL' : 'REQUEST'}`,
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//MainstreetAI//Meetings//EN', 'CALSCALE:GREGORIAN', `METHOD:${kind === 'cancelled' ? 'CANCEL' : 'REQUEST'}`,
     'BEGIN:VEVENT', `UID:ms-meeting-${m.id}@propertystars.app`, `DTSTAMP:${icsDate(now.toISOString())}`,
     `DTSTART:${icsDate(m.starts_at)}`, `DTEND:${icsDate(m.ends_at)}`,
     `SUMMARY:${icsText(`${m.campaign.name} onboarding call · ${m.business.name}`)}`,
     `DESCRIPTION:${icsText(desc)}`, ...(m.host.zoom_url ? [`LOCATION:${icsText(m.host.zoom_url)}`, `URL:${m.host.zoom_url}`] : []),
+    organizer, ...guests,
     `STATUS:${kind === 'cancelled' ? 'CANCELLED' : 'CONFIRMED'}`, `SEQUENCE:${kind === 'booked' ? 0 : Math.floor(now.getTime() / 1000)}`,
     'END:VEVENT', 'END:VCALENDAR', '',
-  ].join('\r\n');
+  ].map(fold).join('\r\n');
 }

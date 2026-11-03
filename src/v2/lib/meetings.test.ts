@@ -72,4 +72,21 @@ describe('the emails', () => {
     expect(ics).toContain('LOCATION:https://zoom.us/j/123');
     expect(icsFor(m, 'cancelled')).toContain('METHOD:CANCEL');
   });
+  const unfold = (s: string) => s.replace(/\r\n /g, '');
+  it('makes the host the organizer and invites the owner as a guest', () => {
+    const ics = unfold(icsFor(m, 'booked', new Date('2026-11-02T15:00:00Z')));
+    expect(ics).toContain('ORGANIZER;CN="Sam Host":mailto:sam@taxifi.ai');
+    expect(ics).toContain('ATTENDEE;CN="Sam Host";ROLE=CHAIR;PARTSTAT=ACCEPTED;CUTYPE=INDIVIDUAL:mailto:sam@taxifi.ai');
+    expect(ics).toContain('ATTENDEE;CN="Ann Lee";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CUTYPE=INDIVIDUAL:mailto:ann@shop.ca');
+    expect(unfold(icsFor(m, 'cancelled'))).toContain('mailto:ann@shop.ca');   // so the cancellation takes it off their calendar
+  });
+  it('still makes an invite when the owner or host has no email', () => {
+    const ics = unfold(icsFor({ ...m, owner_email: null, host: { ...m.host, email: null } }, 'booked', new Date(), 'mainstreetai@propertystars.app'));
+    expect(ics).toContain('ORGANIZER;CN="Sam Host":mailto:mainstreetai@propertystars.app');
+    expect(ics).not.toContain('ATTENDEE');
+  });
+  it('keeps every calendar line within 75 bytes', () => {
+    const ics = icsFor({ ...m, business: { ...m.business, name: 'A very long business name · '.repeat(6) } }, 'booked');
+    for (const line of ics.split('\r\n')) expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(75);
+  });
 });
