@@ -202,6 +202,7 @@ function today() {
     visits: vs.length, deals: vs.filter(v => v.outcome === 'closed').length, followups: vs.filter(v => v.outcome === 'follow_up').length,
     goal_visits: myGoal ?? 40, goal_deals: 2, goal_own: myGoal != null, team_goal_visits: 40 };
 }
+let demoNotify = { email: 'rep@example.com', followup_set: false, followup_morning: false, timezone: 'America/Toronto' };
 let myGoal: number | null = null;   // the demo rep's own daily visits goal (session only)
 const demoCal = { connected: false, ok: null as boolean | null, fetched_at: null as string | null, error: null as string | null, busy_count: 0 };   // the demo host's calendar link
 function followups() {
@@ -345,6 +346,11 @@ export function rpc(name: string, a: Args): unknown {
       ];
       const from = period === 'today' ? todayKey() : period === 'week' ? torontoDay(Date.now() - torontoDay(Date.now()).dow * D).key : `${todayKey().slice(0, 8)}01`;
       return { period, from, streak: 3, goal_visits: myGoal ?? 40, reps };
+    }
+    case 'ms_rep_notify_get': return { ...demoNotify };
+    case 'ms_rep_notify_set': {
+      demoNotify = { ...demoNotify, followup_set: !!a.p_set, followup_morning: !!a.p_morning, timezone: String(a.p_tz || demoNotify.timezone) };
+      return { ...demoNotify };
     }
     case 'ms_rep_set_visit_goal': {
       const v = a.p_visits == null ? null : Number(a.p_visits);
