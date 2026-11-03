@@ -62,6 +62,14 @@ export const HomeMap: React.FC = () => {
     return campaign ? { id: bid, b, campaign } : null;
   }, [openId, m]);
 
+  // no zones and nothing added yet: there's nothing to fit the map to, so start it where the rep is
+  const located = useRef(false);
+  useEffect(() => {
+    if (!m || located.current || m.data.pairs.length || m.data.businesses.length) return;
+    located.current = true;
+    hereNow().then(p => { if (p) mapRef.current?.flyTo(p, 15); }).catch(() => {});
+  }, [m]);
+
   const onSaved = useCallback((v: SavedVisit) => {
     const cid = open?.campaign;
     // the pin changes as soon as the visit is saved: Not interested is Lost, a booking is Booked, the rest keep their stage
@@ -91,9 +99,8 @@ export const HomeMap: React.FC = () => {
       {m?.cached && <div className="v2-rep-note" style={{ margin: 0, borderRadius: 0 }}>No signal: showing your map from {new Date(m.at).toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' })}.</div>}
       <ErrorBox error={!m ? error : null} />
       {!m && !error ? <Loading label="Loading your zones…" /> : m && (
-        m.data.pairs.length === 0 && m.data.businesses.length === 0
-          ? <div className="v2-rep-body"><div className="v2-rep-zone"><b>No zones yet.</b><div className="v2-mut v2-small">Your admin assigns your zones. They’ll show here.</div></div></div>
-          : (
+        <>
+          {m.data.pairs.length === 0 && <div className="v2-rep-note" style={{ margin: 0, borderRadius: 0 }}><b>No zones yet.</b> Your admin assigns your zones; until then you can still add businesses you find.</div>}
             <RepMapView ref={mapRef} zones={zones} pins={pins} fitKey={zones.map(z => z.id).join(',')} showCounts={!adding?.pick}
               onPick={id => setOpen(id)}
               onMapTap={adding?.pick ? p => setAdding({ at: p }) : null}>
@@ -103,7 +110,8 @@ export const HomeMap: React.FC = () => {
                   <div className="v2-rep-fabs">
                     <button type="button" className="v2-rep-fab dark" onClick={() => setAdding({})} aria-label="Add a business"><Plus size={20} />Add</button>
                   </div>)}
-            </RepMapView>))}
+            </RepMapView>
+        </>)}
       {open && (
         <BusinessSheet key={openId} id={open.id} campaign={open.campaign}
           fallback={open.b ? { id: open.b.id, name: open.b.n, address: open.b.a, kind: open.b.k, lat: open.b.lat, lng: open.b.lng, hours: open.b.h, lead: open.b.lead } : null}
