@@ -1,6 +1,6 @@
 // Pieces the host app and MainstreetAI › Meetings share: a call's card (with how it went) and the weekly-hours editor.
 import React, { useState } from 'react';
-import { Plus, Video, X } from 'lucide-react';
+import { ChevronDown, ClipboardList, Plus, Video, X } from 'lucide-react';
 import {
   hasAnswers, DAYS, STATUS_LABEL, STATUS_TONE, TIMEZONES, setMeetingFollowUp, setOutcome, timeLabel, dayLabel, toHHMM, toMin, type DeckAnswers, type Hours, type Meeting, type MeetingStatus,
 } from '../../lib/meetings';
@@ -10,20 +10,28 @@ const OUTCOMES: { key: Exclude<MeetingStatus, 'cancelled' | 'booked'>; label: st
   { key: 'closed', label: 'Closed', kind: 'g' }, { key: 'no_show', label: 'No-show', kind: 'o' }, { key: 'not_fit', label: 'Not a fit', kind: 'o' },
 ];
 
-/** What the owner answered on the deck, and the proposal it made. */
-export const AnswersPanel: React.FC<{ a: DeckAnswers | null | undefined; open?: boolean }> = ({ a, open }) => {
-  if (!hasAnswers(a)) return null;
+/** What the owner answered on the deck, and the proposal it made: a clear button to open before the call, for prep. */
+export const AnswersPanel: React.FC<{ a: DeckAnswers | null | undefined; open?: boolean; label?: string; quiet?: boolean }> = ({ a, open, label = 'Prep: their answers', quiet }) => {
+  if (!hasAnswers(a)) return quiet ? null : <div className="v2-answers-none">No answers from the deck for this one.</div>;
   const p = a.proposal;
   const money = (n: number) => `$${Math.round(n).toLocaleString('en-CA')}`;
+  const n = (a.summary || []).length;
   return (
     <details className="v2-answers" open={open}>
-      <summary>Their answers{p ? ` · proposal about ${money(p.yearly)} a year${p.quoted ? ' plus Core (quoted)' : ''}` : ''}</summary>
-      <dl>{(a.summary || []).map(([q, v]) => <React.Fragment key={q}><dt>{q}</dt><dd>{v}</dd></React.Fragment>)}</dl>
-      {p && <div className="prop">
-        {p.lines.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
-        <div className="tot"><span>About a year</span><b>{money(p.yearly)}</b></div>
-        {p.today_yearly != null && <div className="v2-small v2-mut">Pays about {money(p.today_yearly)} a year now{p.savings != null && p.savings > 0 ? `: saves about ${money(p.savings)}` : ''}</div>}
-      </div>}
+      <summary>
+        <ClipboardList size={17} aria-hidden />
+        <span className="t"><b>{label}</b>
+          <small>{n} answer{n === 1 ? '' : 's'}{p ? ` · proposal about ${money(p.yearly)} a year${p.quoted ? ' plus Core (quoted)' : ''}` : ''}</small></span>
+        <ChevronDown size={18} className="chev" aria-hidden />
+      </summary>
+      <div className="body">
+        <dl>{(a.summary || []).map(([q, v]) => <React.Fragment key={q}><dt>{q}</dt><dd>{v}</dd></React.Fragment>)}</dl>
+        {p && <div className="prop">
+          {p.lines.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
+          <div className="tot"><span>About a year</span><b>{money(p.yearly)}</b></div>
+          {p.today_yearly != null && <div className="v2-small v2-mut">Pays about {money(p.today_yearly)} a year now{p.savings != null && p.savings > 0 ? `: saves about ${money(p.savings)}` : ''}</div>}
+        </div>}
+      </div>
     </details>
   );
 };
