@@ -349,6 +349,17 @@ export const byVisits = (a: BoardRep, b: BoardRep) => b.visits - a.visits || (b.
 export async function setVisitGoal(visits: number | null): Promise<{ goal_visits: number; own: boolean; team_goal_visits: number }> {
   return must(await db.rpc('ms_rep_set_visit_goal', { p_visits: visits })) as { goal_visits: number; own: boolean; team_goal_visits: number };
 }
+// ───────────── settings: follow-up emails ─────────────
+export interface RepNotify { email: string | null; followup_set: boolean; followup_morning: boolean; timezone: string }
+export async function repNotify(): Promise<RepNotify> {
+  return must(await db.rpc('ms_rep_notify_get')) as RepNotify;
+}
+/** Save the switches, with this phone's time zone (so the 8 AM email is 8 AM where the rep is). */
+export async function setRepNotify(followupSet: boolean, followupMorning: boolean): Promise<RepNotify> {
+  let tz: string | null = null;
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { /* keep the saved one */ }
+  return must(await db.rpc('ms_rep_notify_set', { p_set: followupSet, p_morning: followupMorning, p_tz: tz })) as RepNotify;
+}
 export const money = (n: number) => n.toLocaleString('en-CA', { style: 'currency', currency: 'CAD', maximumFractionDigits: n % 1 ? 2 : 0 });
 
 // ───────────── photos ─────────────

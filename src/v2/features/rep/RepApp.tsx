@@ -1,10 +1,10 @@
 // src/v2/features/rep/RepApp.tsx — the MainstreetAI rep app (/app/rep). A rep only ever lands here:
-// a map of all their zones (the home screen), the zone list, follow-ups, and "Visits & Onboardings" (the
-// leaderboards, today against their own visits goal, their numbers). MainstreetAI only, no Property Stars. Managing reps is in the
+// a map of all their zones (the home screen), the zone list, follow-ups, "Visits & Onboardings" (the
+// leaderboards, today against their own visits goal, their numbers), and Settings (the gear: follow-up emails). MainstreetAI only, no Property Stars. Managing reps is in the
 // management portal.
 import React, { useMemo, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, Mail, Map as MapIcon, Pencil, Trophy } from 'lucide-react';
+import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, Mail, Map as MapIcon, Pencil, Settings as Gear, Trophy } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
@@ -23,6 +23,7 @@ import { BusinessSheet } from './BusinessSheet';
 import { FollowupEmails } from './FollowupEmails';
 import { HomeMap } from './HomeMap';
 import { RepMapView } from './RepMapView';
+import { RepSettings } from './RepSettings';
 import { download, RepProvider, useRep } from './repContext';
 import './rep.css';
 
@@ -41,6 +42,7 @@ export const RepApp: React.FC = () => {
         <Route path="inbox" element={<Frame mail><MailApp quick={REP_QUICK} /></Frame>} />
         <Route path="followups" element={<Frame><Followups /></Frame>} />
         <Route path="me" element={<Frame><Me /></Frame>} />
+        <Route path="settings" element={<Frame><RepSettings /></Frame>} />
         <Route path="numbers" element={<Navigate to="/app/rep/me" replace />} />
         <Route path="*" element={<Navigate to="/app/rep" replace />} />
       </Routes>
@@ -63,6 +65,7 @@ const Frame: React.FC<{ full?: boolean; mail?: boolean; children: React.ReactNod
       <div className="v2-rep-top">
         <span className="brand"><MsLogo size={18} /><MsTab /></span>
         <span className="who">{profile?.full_name}</span>
+        <button type="button" aria-label="Settings" title="Settings" onClick={() => nav('/app/rep/settings')}><Gear size={16} /></button>
         <button type="button" aria-label="Sign out" onClick={async () => { await signOut(); nav('/app/login?as=mainstreet', { replace: true }); }}><LogOut size={16} /></button>
       </div>
       <div className={`v2-rep-body${full ? ' full' : ''}${mail ? ' mail' : ''}`}>{children}</div>
