@@ -1,7 +1,7 @@
 // Meetings: grouping open times, hours summaries, and the onboarding-call email and calendar invite.
 import { describe, expect, it } from 'vitest';
 import { hoursSummary, minLabel, slotsByDay, toHHMM, toMin } from './meetings';
-import { icsFor, meetingEmail, whenLabel, type MeetingNotice } from '../../../supabase/functions/ms-meetings/mail';
+import { calendarLinks, icsFor, meetingEmail, whenLabel, type MeetingNotice } from '../../../supabase/functions/ms-meetings/mail';
 
 const m: MeetingNotice = {
   id: 'm1', status: 'booked', starts_at: '2026-11-03T19:30:00Z', ends_at: '2026-11-03T20:00:00Z', length_min: 30, timezone: 'America/Toronto',
@@ -71,5 +71,38 @@ describe('the emails', () => {
     expect(ics).toContain('UID:ms-meeting-m1@propertystars.app');
     expect(ics).toContain('LOCATION:https://zoom.us/j/123');
     expect(icsFor(m, 'cancelled')).toContain('METHOD:CANCEL');
+  });
+  const unfold = (s: string) => s.replace(/\r\n /g, '');
+  it('makes the host the organizer and invites the owner as a guest', () => {
+    const ics = unfold(icsFor(m, 'booked', new Date('2026-11-02T15:00:00Z')));
+    expect(ics).toContain('ORGANIZER;CN="Sam Host":mailto:sam@taxifi.ai');
+    expect(ics).toContain('ATTENDEE;CN="Sam Host";ROLE=CHAIR;PARTSTAT=ACCEPTED;CUTYPE=INDIVIDUAL:mailto:sam@taxifi.ai');
+    expect(ics).toContain('ATTENDEE;CN="Ann Lee";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CUTYPE=INDIVIDUAL:mailto:ann@shop.ca');
+    expect(unfold(icsFor(m, 'cancelled'))).toContain('mailto:ann@shop.ca');   // so the cancellation takes it off their calendar
+  });
+  it('still makes an invite when the owner or host has no email', () => {
+    const ics = unfold(icsFor({ ...m, owner_email: null, host: { ...m.host, email: null } }, 'booked', new Date(), 'mainstreetai@propertystars.app'));
+    expect(ics).toContain('ORGANIZER;CN="Sam Host":mailto:mainstreetai@propertystars.app');
+    expect(ics).not.toContain('ATTENDEE');
+  });
+  it('gives the owner Add to calendar links with the right time, but not the host or a cancellation', () => {
+    const l = calendarLinks(m);
+    const g = new URL(l.google).searchParams;
+    expect(g.get('dates')).toBe('20261103T193000Z/20261103T200000Z');
+    expect(g.get('text')).toBe('taxifi onboarding call with Sam Host');
+    expect(g.get('location')).toBe('https://zoom.us/j/123');
+    const o = new URL(l.outlook).searchParams;
+    expect(o.get('startdt')).toBe('2026-11-03T19:30:00Z');
+    expect(o.get('enddt')).toBe('2026-11-03T20:00:00Z');
+    expect(l.outlookCom).toContain('https://outlook.live.com/calendar/');
+    const e = meetingEmail(m, 'owner', 'booked');
+    expect(e.html).toContain('Add it to your calendar');
+    expect(e.text).toContain('Google Calendar: https://calendar.google.com/');
+    expect(meetingEmail(m, 'host', 'booked').html).not.toContain('Add it to your calendar');
+    expect(meetingEmail(m, 'owner', 'cancelled').html).not.toContain('Add it to your calendar');
+  });
+  it('keeps every calendar line within 75 bytes', () => {
+    const ics = icsFor({ ...m, business: { ...m.business, name: 'A very long business name · '.repeat(6) } }, 'booked');
+    for (const line of ics.split('\r\n')) expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(75);
   });
 });

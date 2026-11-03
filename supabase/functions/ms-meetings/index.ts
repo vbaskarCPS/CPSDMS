@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
           to: [t.email],
           reply_to: t.who === 'owner' ? (m.host.email || undefined) : (m.owner_email || undefined),
           subject: mail.subject, html: mail.html, text: mail.text,
-          attachments: [{ filename: 'onboarding-call.ics', content: b64(icsFor(m, kind)), content_type: 'text/calendar; charset=utf-8; method=' + (kind === 'cancelled' ? 'CANCEL' : 'REQUEST') }],
+          attachments: [{ filename: 'onboarding-call.ics', content: b64(icsFor(m, kind, new Date(), FROM_ADDRESS)), content_type: 'text/calendar; charset=utf-8; method=' + (kind === 'cancelled' ? 'CANCEL' : 'REQUEST') }],
         }),
       });
       if (res.ok) sent.push(t.who);
