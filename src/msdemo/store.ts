@@ -203,6 +203,7 @@ function today() {
     goal_visits: myGoal ?? 40, goal_deals: 2, goal_own: myGoal != null, team_goal_visits: 40 };
 }
 let myGoal: number | null = null;   // the demo rep's own daily visits goal (session only)
+const demoCal = { connected: false, ok: null as boolean | null, fetched_at: null as string | null, error: null as string | null, busy_count: 0 };   // the demo host's calendar link
 function followups() {
   const out = [];
   for (const b of allBiz()) {
@@ -451,6 +452,12 @@ export function rpc(name: string, a: Args): unknown {
     }
     case 'ms_thread_file': return null;
     case 'mail_directory': return [];
+    case 'ms_host_calendar_status': return { ...demoCal };
+    case 'ms_host_set_calendar': {   // the demo host's calendar: pretend it's read, with a few busy times
+      const on = !!str(a.p_url).trim();
+      Object.assign(demoCal, { connected: on, ok: on ? null : null, fetched_at: null, error: null, busy_count: on ? 6 : 0 });
+      return { ...demoCal };
+    }
     default: return undefined;
   }
 }
@@ -458,6 +465,7 @@ export function rpc(name: string, a: Args): unknown {
 /** Edge functions the rep and host screens call. Nothing is sent. */
 export function fn(name: string, body: Args): unknown {
   if (name === 'ms-meetings') return { sent: ['owner', 'host'], skipped: [] };
+  if (name === 'ms-calendar') { if (demoCal.connected) { demoCal.ok = true; demoCal.fetched_at = iso(Date.now()); } return { hosts: [] }; }
   if (name === 'ms-mail') {
     const to = (body.to as string[]) || [];
     let t = S.threads.find(x => x.id === str(body.thread_id));

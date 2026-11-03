@@ -12,6 +12,7 @@ import {
 } from '../../lib/meetings';
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tabs, Tag, Toggle } from '../../ui';
 import { DaysOff, HoursEditor, MeetingCard, TimezoneSelect } from '../meetings/shared';
+import { CalendarLink } from '../meetings/CalendarLink';
 import '../meetings/meetings.css';
 
 type View = 'calendar' | 'hosts' | 'rules';
@@ -251,6 +252,7 @@ const EditHost: React.FC<{ h: HostRow; onClose: () => void; onDone: () => void }
         {(campaigns.data || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
       <Field label="Zoom link"><input className="v2-input" value={zoom} onChange={e => setZoom(e.target.value)} placeholder="https://zoom.us/j/…" autoCapitalize="none" /></Field>
       <Field label="Time zone"><TimezoneSelect value={tz} onChange={setTz} /></Field>
+      <CalendarLink host={h.id} />
       <div className="v2-label" style={{ marginTop: 6 }}>Weekly hours</div>
       <HoursEditor hours={hours} onChange={setHours} />
       <div className="v2-label" style={{ marginTop: 10 }}>Days off</div>
