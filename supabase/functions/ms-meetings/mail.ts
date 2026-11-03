@@ -31,6 +31,24 @@ export const OWNER_PREP = {
 
 const first = (s: string) => (s || '').trim().split(/\s+/)[0] || s;
 
+/** "Add to calendar" links for the owner. Each makes its own copy of the event in that calendar (it won't follow a
+ *  move or cancellation; the attached invite does). */
+export function calendarLinks(m: MeetingNotice): { google: string; outlook: string; outlookCom: string } {
+  const title = `${m.campaign.name} onboarding call with ${m.host.name}`;
+  const details = [m.host.zoom_url ? `Join the Zoom call: ${m.host.zoom_url}` : '', `${OWNER_PREP.intro} ${OWNER_PREP.items.join(' ')}`]
+    .filter(Boolean).join('\n\n');
+  const where = m.host.zoom_url || '';
+  const g = new URLSearchParams({ action: 'TEMPLATE', text: title, dates: `${icsDate(m.starts_at)}/${icsDate(m.ends_at)}`, details, location: where });
+  const iso = (s: string) => new Date(s).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const o = (base: string) => `${base}?${new URLSearchParams({ path: '/calendar/action/compose', rru: 'addevent', subject: title,
+    startdt: iso(m.starts_at), enddt: iso(m.ends_at), body: details, location: where })}`;
+  return {
+    google: `https://calendar.google.com/calendar/render?${g}`,
+    outlook: o('https://outlook.office.com/calendar/0/deeplink/compose'),       // work / school (Microsoft 365)
+    outlookCom: o('https://outlook.live.com/calendar/0/deeplink/compose'),      // Outlook.com, Hotmail
+  };
+}
+
 export function meetingEmail(m: MeetingNotice, who: 'owner' | 'host', kind: Kind): { fromName: string; subject: string; html: string; text: string } {
   const tz = who === 'host' ? (m.host.timezone || m.timezone) : m.timezone;
   const when = whenLabel(m.starts_at, tz);
@@ -62,6 +80,14 @@ export function meetingEmail(m: MeetingNotice, who: 'owner' | 'host', kind: Kind
     : (kind === 'cancelled' ? `This onboarding call was cancelled.` : kind === 'changed' ? `This onboarding call was moved.` : `You have a new onboarding call.`);
   const row = ([k, v]: [string, string]) => `<tr><td style="padding:6px 12px 6px 0;color:#6b7280;font-size:13px;vertical-align:top;">${esc(k)}</td>`
     + `<td style="padding:6px 0;font-size:14px;color:#111827;">${esc(v)}</td></tr>`;
+  const links = who === 'owner' && kind !== 'cancelled' ? calendarLinks(m) : null;
+  const pill = (href: string, label: string) => `<a href="${esc(href)}" style="display:inline-block;margin:0 6px 6px 0;padding:8px 12px;border:1.5px solid #0f766e;border-radius:8px;color:#0f766e;text-decoration:none;font-size:13px;font-weight:700;">${esc(label)}</a>`;
+  const addCal = links
+    ? `<div style="margin:14px 0 0;">
+    <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">Add it to your calendar</div>
+    ${pill(links.google, 'Google Calendar')}${pill(links.outlook, 'Outlook')}${pill(links.outlookCom, 'Outlook.com')}
+    <div style="font-size:12px;color:#9ca3af;">Apple Calendar or another app: open the attached onboarding-call.ics.</div>
+  </div>` : '';
   const ownerPrep = who === 'owner' && kind !== 'cancelled'
     ? `<div style="margin:18px 0 0;padding:12px 14px;border:1.5px solid #99d5cb;background:#f0fdfa;border-radius:10px;">
     <div style="font-size:14px;font-weight:700;color:#0f766e;margin-bottom:4px;">${esc(OWNER_PREP.title)}</div>
@@ -82,10 +108,12 @@ export function meetingEmail(m: MeetingNotice, who: 'owner' | 'host', kind: Kind
   <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#0f766e;">${esc(head)}</div>
   <h1 style="font-size:20px;margin:6px 0 10px;color:#111827;">${esc(company)} onboarding call</h1>
   <p style="font-size:14px;color:#374151;line-height:1.5;margin:0 0 12px;">${intro}</p>
-  <table style="border-collapse:collapse;">${rows}</table>${button}${ownerPrep}${hostPrep}
+  <table style="border-collapse:collapse;">${rows}</table>${button}${addCal}${ownerPrep}${hostPrep}
   <p style="font-size:12px;color:#9ca3af;margin-top:20px;">${who === 'owner' ? `The calendar invite is attached. To change the time, reply to this email.` : `MainstreetAI › Meetings. Mark how it went in the app afterwards.`}</p>
 </div>`;
   const text = [`${head}: ${company} onboarding call`, '', ...lines.map(([k, v]) => `${k}: ${v}`),
+    ...(links ? ['', 'Add it to your calendar:', `Google Calendar: ${links.google}`, `Outlook: ${links.outlook}`, `Outlook.com: ${links.outlookCom}`,
+      'Apple Calendar or another app: open the attached onboarding-call.ics.'] : []),
     ...(who === 'owner' && kind !== 'cancelled' ? ['', `${OWNER_PREP.title}: ${OWNER_PREP.intro}`, ...OWNER_PREP.items.map(i => `- ${i}`)] : []),
     ...(prep.length ? ['', 'Prep for the call', ...(hasDeck ? [] : ['No answers from the deck for this one.']), ...prep.map(([k, v]) => `${k}: ${v}`)] : [])].join('\n');
   return { fromName: who === 'owner' ? `${company} onboarding` : 'MainstreetAI Meetings', subject, html, text };
