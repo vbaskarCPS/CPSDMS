@@ -82,10 +82,27 @@ describe('the emails', () => {
   });
   it('still makes an invite when the owner or host has no email', () => {
     const ics = unfold(icsFor({ ...m, owner_email: null, host: { ...m.host, email: null } }, 'booked', new Date(), 'mainstreetai@propertystars.app'));
-    expect(ics).toContain('ORGANIZER;CN="Sam Host":mailto:mainstreetai@propertystars.app');
+    expect(ics).toContain('ORGANIZER;CN="taxifi onboarding":mailto:mainstreetai@propertystars.app');
     expect(ics).not.toContain('ATTENDEE');
   });
-  it('gives the owner Add to calendar links with the right time, but not the host or a cancellation', () => {
+  it('gives the host a copy they can add: MainstreetAI organizes, the host is a guest', () => {
+    const ics = unfold(icsFor(m, 'booked', new Date('2026-11-02T15:00:00Z'), 'mainstreetai@propertystars.app', 'host'));
+    expect(ics).toContain('ORGANIZER;CN="taxifi onboarding":mailto:mainstreetai@propertystars.app');
+    expect(ics).not.toContain('ORGANIZER;CN="Sam Host"');
+    expect(ics).toContain('ATTENDEE;CN="Sam Host";ROLE=CHAIR;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CUTYPE=INDIVIDUAL:mailto:sam@taxifi.ai');
+    expect(ics).toContain('mailto:ann@shop.ca');
+    expect(ics).toContain('UID:ms-meeting-m1@propertystars.app');   // same call, so a cancellation finds it
+    expect(unfold(icsFor(m, 'cancelled', new Date(), 'mainstreetai@propertystars.app', 'host'))).toContain('ORGANIZER;CN="taxifi onboarding":mailto:mainstreetai@propertystars.app');
+  });
+  it('gives the host Add to calendar links about the business', () => {
+    const g = new URL(calendarLinks(m, 'host').google).searchParams;
+    expect(g.get('text')).toBe('Onboarding call: Lee’s Bakery');
+    expect(g.get('details')).toContain('Ann Lee · 613 555 0100 · ann@shop.ca');
+    expect(g.get('details')).not.toContain('Financials');
+    expect(meetingEmail(m, 'host', 'booked').html).toContain('Add it to your calendar');
+    expect(meetingEmail(m, 'host', 'cancelled').html).not.toContain('Add it to your calendar');
+  });
+  it('gives the owner Add to calendar links with the right time, but not on a cancellation', () => {
     const l = calendarLinks(m);
     const g = new URL(l.google).searchParams;
     expect(g.get('dates')).toBe('20261103T193000Z/20261103T200000Z');
@@ -98,7 +115,6 @@ describe('the emails', () => {
     const e = meetingEmail(m, 'owner', 'booked');
     expect(e.html).toContain('Add it to your calendar');
     expect(e.text).toContain('Google Calendar: https://calendar.google.com/');
-    expect(meetingEmail(m, 'host', 'booked').html).not.toContain('Add it to your calendar');
     expect(meetingEmail(m, 'owner', 'cancelled').html).not.toContain('Add it to your calendar');
   });
   it('keeps every calendar line within 75 bytes', () => {
