@@ -31,11 +31,14 @@ export const OWNER_PREP = {
 
 const first = (s: string) => (s || '').trim().split(/\s+/)[0] || s;
 
-/** "Add to calendar" links for the owner. Each makes its own copy of the event in that calendar (it won't follow a
- *  move or cancellation; the attached invite does). */
-export function calendarLinks(m: MeetingNotice): { google: string; outlook: string; outlookCom: string } {
-  const title = `${m.campaign.name} onboarding call with ${m.host.name}`;
-  const details = [m.host.zoom_url ? `Join the Zoom call: ${m.host.zoom_url}` : '', `${OWNER_PREP.intro} ${OWNER_PREP.items.join(' ')}`]
+/** "Add to calendar" links for the owner or the host. Each makes its own copy of the event in that calendar (it
+ *  won't follow a move or cancellation; the attached invite does). */
+export function calendarLinks(m: MeetingNotice, who: 'owner' | 'host' = 'owner'): { google: string; outlook: string; outlookCom: string } {
+  const title = who === 'owner' ? `${m.campaign.name} onboarding call with ${m.host.name}` : `Onboarding call: ${m.business.name}`;
+  const details = (who === 'owner'
+    ? [m.host.zoom_url ? `Join the Zoom call: ${m.host.zoom_url}` : '', `${OWNER_PREP.intro} ${OWNER_PREP.items.join(' ')}`]
+    : [m.host.zoom_url ? `Your Zoom: ${m.host.zoom_url}` : '', `Business: ${m.business.name}${m.business.address ? `, ${m.business.address}` : ''}`,
+       `Owner: ${[m.owner_name, m.owner_phone, m.owner_email].filter(Boolean).join(' · ')}`])
     .filter(Boolean).join('\n\n');
   const where = m.host.zoom_url || '';
   const g = new URLSearchParams({ action: 'TEMPLATE', text: title, dates: `${icsDate(m.starts_at)}/${icsDate(m.ends_at)}`, details, location: where });
@@ -80,7 +83,7 @@ export function meetingEmail(m: MeetingNotice, who: 'owner' | 'host', kind: Kind
     : (kind === 'cancelled' ? `This onboarding call was cancelled.` : kind === 'changed' ? `This onboarding call was moved.` : `You have a new onboarding call.`);
   const row = ([k, v]: [string, string]) => `<tr><td style="padding:6px 12px 6px 0;color:#6b7280;font-size:13px;vertical-align:top;">${esc(k)}</td>`
     + `<td style="padding:6px 0;font-size:14px;color:#111827;">${esc(v)}</td></tr>`;
-  const links = who === 'owner' && kind !== 'cancelled' ? calendarLinks(m) : null;
+  const links = kind !== 'cancelled' ? calendarLinks(m, who) : null;
   const pill = (href: string, label: string) => `<a href="${esc(href)}" style="display:inline-block;margin:0 6px 6px 0;padding:8px 12px;border:1.5px solid #0f766e;border-radius:8px;color:#0f766e;text-decoration:none;font-size:13px;font-weight:700;">${esc(label)}</a>`;
   const addCal = links
     ? `<div style="margin:14px 0 0;">
@@ -141,18 +144,24 @@ function fold(line: string): string {
   return parts.join('\r\n ');
 }
 
-/** A calendar invite for the call (UTC times, so every calendar shows it in its own time zone). The host is the
- *  organizer and the owner is an invited guest, so it lands in both calendars as a meeting with both on it, and
- *  the owner's Accept/Decline goes to the host. */
-export function icsFor(m: MeetingNotice, kind: Kind, now = new Date(), fallbackOrganizer = 'mainstreetai@propertystars.app'): string {
+/** A calendar invite for the call (UTC times, so every calendar shows it in its own time zone).
+ *  The owner's copy (`who` 'owner'): the host is the organizer and the owner a guest, so the owner's Accept/Decline
+ *  goes to the host. The host's copy: MainstreetAI (the sending address) is the organizer and the host a guest, since
+ *  Gmail and Outlook won't let you add an invite in which you are the organizer. */
+export function icsFor(m: MeetingNotice, kind: Kind, now = new Date(), fallbackOrganizer = 'mainstreetai@propertystars.app', who: 'owner' | 'host' = 'owner'): string {
   const desc = [`${m.campaign.name} onboarding with ${m.host.name}`, m.host.zoom_url ? `Join: ${m.host.zoom_url}` : '', `Business: ${m.business.name}`,
     `${OWNER_PREP.intro} ${OWNER_PREP.items.join(' ')}`]
     .filter(Boolean).join('\n');
   const hostEmail = isEmail(m.host.email) ? m.host.email.trim() : null;
   const ownerEmail = isEmail(m.owner_email) ? m.owner_email.trim() : null;
-  const organizer = `ORGANIZER;CN="${icsName(m.host.name || m.campaign.name)}":mailto:${hostEmail || fallbackOrganizer}`;
+  const hostOrganizes = who === 'owner' && !!hostEmail;
+  const organizer = hostOrganizes
+    ? `ORGANIZER;CN="${icsName(m.host.name || m.campaign.name)}":mailto:${hostEmail}`
+    : `ORGANIZER;CN="${icsName(`${m.campaign.name} onboarding`)}":mailto:${fallbackOrganizer}`;
   const guests = [
-    ...(hostEmail ? [`ATTENDEE;CN="${icsName(m.host.name)}";ROLE=CHAIR;PARTSTAT=ACCEPTED;CUTYPE=INDIVIDUAL:mailto:${hostEmail}`] : []),
+    ...(hostEmail ? [hostOrganizes
+      ? `ATTENDEE;CN="${icsName(m.host.name)}";ROLE=CHAIR;PARTSTAT=ACCEPTED;CUTYPE=INDIVIDUAL:mailto:${hostEmail}`
+      : `ATTENDEE;CN="${icsName(m.host.name)}";ROLE=CHAIR;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CUTYPE=INDIVIDUAL:mailto:${hostEmail}`] : []),
     ...(ownerEmail && ownerEmail.toLowerCase() !== hostEmail?.toLowerCase()
       ? [`ATTENDEE;CN="${icsName(m.owner_name)}";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CUTYPE=INDIVIDUAL:mailto:${ownerEmail}`] : []),
   ];
