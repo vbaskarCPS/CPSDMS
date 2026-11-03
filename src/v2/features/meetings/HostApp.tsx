@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLoad } from '../../lib/data';
 import { dayKey, hostMe, hoursSummary, longDay, meetingsList, saveMyHours, type Hours, type HostMe, type Meeting } from '../../lib/meetings';
+import { CalendarLink } from './CalendarLink';
 import { Btn, Card, ErrorBox, Field, Loading, Tabs } from '../../ui';
 import { DaysOff, HoursEditor, MeetingCard, TimezoneSelect } from './shared';
 import './meetings.css';
@@ -71,6 +72,7 @@ const MyHours: React.FC<{ me: HostMe; onSaved: () => void }> = ({ me, onSaved })
         <Field label="Your Zoom meeting link" hint="Owners get this in their booking email."><input className="v2-input" value={zoom} onChange={e => setZoom(e.target.value)} placeholder="https://zoom.us/j/…" inputMode="url" autoCapitalize="none" /></Field>
         <Field label="Your time zone"><TimezoneSelect value={tz} onChange={setTz} /></Field>
       </Card>
+      <CalendarLink />
       <Card title="Weekly hours" right={<span className="v2-small v2-mut">{me.rules.length_min}-minute calls</span>}>
         <HoursEditor hours={hours} onChange={setHours} />
       </Card>

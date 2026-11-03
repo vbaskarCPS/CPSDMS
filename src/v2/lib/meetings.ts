@@ -54,12 +54,32 @@ export interface HostRow {
 }
 
 // ── booking (the rep, from the deck) ──
+// ── hosts' own calendars (ms-calendar): busy times there are left out of the open times ──
+export interface CalendarStatus { connected: boolean; fetched_at: string | null; ok: boolean | null; error: string | null; busy_count: number }
+/** Read the hosts' calendars again (if older than a minute; force: now). Never throws: a calendar that can't be
+ *  read keeps its last busy times, and booking still works. */
+export async function refreshCalendars(p: { campaign?: string; host?: string; force?: boolean }): Promise<void> {
+  try { await db.functions.invoke('ms-calendar', { body: { action: 'refresh', campaign: p.campaign, host: p.host, force: !!p.force } }); } catch { /* keep going */ }
+}
+export async function calendarStatus(host?: string | null): Promise<CalendarStatus | null> {
+  return (must(await db.rpc('ms_host_calendar_status', { p_host: host || null })) as CalendarStatus | null) || null;
+}
+/** Save (or, with '', remove) a host's private calendar link, then read it once to check it works. */
+export async function setCalendar(url: string, host?: string | null): Promise<CalendarStatus | null> {
+  must(await db.rpc('ms_host_set_calendar', { p_url: url, p_host: host || null }));
+  const me = host || (await db.auth.getUser()).data.user?.id;
+  if (url.trim() && me) await refreshCalendars({ host: me, force: true });
+  return calendarStatus(host);
+}
+
 export async function meetingSlots(campaign: string, from: string | null, days = 7): Promise<Slots> {
+  await refreshCalendars({ campaign });   // the hosts' own calendars, a minute old at most
   const r = must(await db.rpc('ms_meeting_slots', { p_campaign: campaign, p_from: from, p_days: days })) as Slots;
   return { ...r, slots: r.slots || [] };
 }
 export interface BookInput { campaign: string; business: string; start: string; name: string; phone: string; email: string; notes?: string; lat?: number | null; lng?: number | null; accuracy?: number | null }
 export async function bookMeeting(b: BookInput): Promise<Meeting> {
+  await refreshCalendars({ campaign: b.campaign, force: true });   // one last look at the hosts' calendars
   const m = must(await db.rpc('ms_book_meeting', {
     p_campaign: b.campaign, p_business: b.business, p_start: b.start, p_name: b.name, p_phone: b.phone || null, p_email: b.email || null,
     p_notes: b.notes || null, p_lat: b.lat ?? null, p_lng: b.lng ?? null, p_accuracy: b.accuracy ?? null,

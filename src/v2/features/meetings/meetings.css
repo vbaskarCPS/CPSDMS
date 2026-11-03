@@ -40,3 +40,11 @@
 .v2-answers .prop { border-top: 1px solid var(--line, #e5e7eb); padding-top: 6px; display: grid; gap: 2px; }
 .v2-answers .prop > div:not(.v2-small) { display: flex; justify-content: space-between; gap: 10px; }
 .v2-answers .prop .tot { font-weight: 800; border-top: 1px solid var(--line, #e5e7eb); padding-top: 3px; }
+/* the host's calendar link */
+.v2-cal-status { display: flex; gap: 8px; align-items: flex-start; padding: 9px 11px; border-radius: 10px; font-size: 13px; margin-bottom: 4px; }
+.v2-cal-status.good { background: #f0fdf4; border: 1px solid #bbf7d0; color: #14532d; }
+.v2-cal-status.bad { background: #fef2f2; border: 1px solid #fecaca; color: #7f1d1d; }
+.v2-cal-how { font-size: 12.5px; margin: 4px 0 2px; }
+.v2-cal-how summary { cursor: pointer; color: #0f766e; font-weight: 600; list-style: none; display: inline-flex; align-items: center; gap: 4px; }
+.v2-cal-how summary::-webkit-details-marker { display: none; }
+.v2-cal-how p { margin: 6px 0; line-height: 1.45; }
