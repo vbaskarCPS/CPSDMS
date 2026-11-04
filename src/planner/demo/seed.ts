@@ -129,7 +129,13 @@ export function demoSeed(): SeedDoc[] {
   const validTo = dealAt.toISOString();
   const shop = (id: string, text: string, by: string, section: string, deals: unknown[], extra: Record<string, unknown> = {}) => put('shop', id, { id, text, done: false, by, addedAt: iso(today, '09:10'), section, deals, dealsAt: iso(today, '09:10'), ...extra });
   shop('s1', 'Milk', 'rosh', 'Dairy & Eggs', [{ merchant: 'No Frills', name: 'Neilson 4L Milk', price: 5.49, saleStory: 'SAVE $1.50', validTo, kind: 'flyer' }, { merchant: 'Walmart', name: 'Great Value 4L Milk', price: 5.97, kind: 'regular' }], { qty: '2' });
-  shop('s2', 'Chicken thighs', 'vijay', 'Meat & Seafood', [{ merchant: 'No Frills', name: 'Chicken Thighs, Family Pack', price: 2.99, saleStory: '$2.99/lb', validTo, kind: 'flyer' }, { merchant: 'Food Basics', name: 'Chicken Thighs', price: 3.49, validTo, kind: 'flyer' }]);
+  shop('s2', 'Chicken thighs', 'vijay', 'Meat & Seafood', [
+    { merchant: 'No Frills', name: 'Chicken Thighs, Bone-in, Family Pack', price: 2.99, saleStory: '$2.99/lb', validTo, kind: 'flyer', variant: 'Bone-in', size: 'Family pack', per: 'lb' },
+    { merchant: 'Food Basics', name: 'Boneless Skinless Chicken Thighs, Value Pack', price: 4.99, saleStory: '$4.99/lb', validTo, kind: 'flyer', variant: 'Boneless skinless', size: 'Value pack', per: 'lb' },
+    { merchant: 'Fortinos', name: 'PC Boneless Skinless Chicken Thighs 6 pc', price: 9.99, validTo, kind: 'flyer', saleStory: 'SAVE $3', variant: 'Boneless skinless', size: '6 pieces (~750 g)', amount: 750, unit: 'g', per: 'each' },
+    { merchant: 'Walmart', name: 'Your Fresh Market Boneless Skinless Chicken Thighs 12 pc', price: 17.97, kind: 'regular', variant: 'Boneless skinless', size: '12 pieces (~1.5 kg)', amount: 1500, unit: 'g', per: 'each' },
+    { merchant: 'Walmart', name: 'Your Fresh Market Chicken Thighs Bone-in 6 pc', price: 9.47, kind: 'regular', variant: 'Bone-in', size: '6 pieces (~1.1 kg)', amount: 1100, unit: 'g', per: 'each' },
+  ]);
   shop('s3', 'AA batteries', 'vijay', 'Hardware & Auto', [{ merchant: 'Canadian Tire', name: 'Duracell AA 16-pack', price: 14.99, saleStory: 'SAVE 40%', validTo, kind: 'flyer' }]);
   shop('s4', 'Basmati rice 10 lb', 'rosh', 'Pantry', [], { suggestedStore: 'Indian grocer', reason: 'bulk basmati, best price' });
   shop('s5', 'Plantain', 'rosh', 'Produce', [], { suggestedStore: 'Caribbean grocer', reason: 'always in stock, ripe' });

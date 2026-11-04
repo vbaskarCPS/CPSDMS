@@ -133,7 +133,12 @@ export async function exerciseInfo(name: string, kind: 'exercise' | 'stretch' | 
   return { videos: vids(r.videos), description: r.description || '', setup: list(r.setup), tip: r.tip || '', mistakes: list(r.mistakes), parts: (Array.isArray(r.parts) ? r.parts : []).filter(p => p && p.name).map(p => ({ name: p.name, dose: p.dose || '', cue: p.cue || '', videos: vids(p.videos) })), fetchedAt: new Date().toISOString() };
 }
 
-export interface Deal { merchant: string; name: string; price: number | null; saleStory?: string; validTo?: string; validFrom?: string; image?: string; kind?: 'flyer' | 'regular'; wasPrice?: number }
+export interface Deal {
+  merchant: string; name: string; price: number | null; saleStory?: string; validTo?: string; validFrom?: string; image?: string; kind?: 'flyer' | 'regular'; wasPrice?: number;
+  /** from Coach Claude: the kind ("Boneless skinless"), the size as said ("12 pack", "~1.5 kg"), the size as a number
+   *  (g, ml or each) and what the price is for (the package, or by weight for meat and produce) */
+  variant?: string; size?: string; amount?: number; unit?: 'g' | 'ml' | 'each'; per?: 'each' | 'lb' | 'kg' | '100g';
+}
 export interface DealsResult { items: { id: string; section: string; deals: Deal[]; suggestedStore?: string; reason?: string }[]; stores_seen?: string[] }
 /** This week's flyer deals near the household for the shopping list (Flipp data, matched by Coach Claude), each item's
  *  store section, and — for the stores with no flyers — which one is likely best for it. */

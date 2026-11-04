@@ -25,3 +25,14 @@
 .shop__stores { display: flex; flex-wrap: wrap; gap: 6px; }
 .shop__stores button { border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; font-size: 13px; }
 .shop__stores button.is-on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+/* Build it */
+.shop__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.shop__chips button { border: 1px solid var(--line); background: var(--bg-2); color: inherit; border-radius: 999px; padding: 7px 12px; font-size: 13px; }
+.shop__chips button.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--bg-2)); font-weight: 600; }
+.shop__chips small { color: var(--ink-2); font-weight: 400; margin-left: 4px; }
+.shop__price { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
+.shop__price small { font-size: 11px; color: var(--ink-2); }
+.shop__best { font-style: normal; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); margin-left: 6px; }
+.shop__count { display: flex; align-items: center; gap: 8px; }
+.shop__count b { min-width: 22px; text-align: center; font-size: 16px; }
+.shop__built { font-weight: 400; color: var(--ink-2); }
