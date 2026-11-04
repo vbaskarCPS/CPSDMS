@@ -724,6 +724,44 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   document.getElementById('q-next').addEventListener('click', function () { go(slides.indexOf(document.getElementById('p-body').closest('.slide'))); });
   render();
 
+  // in the rep app: the answers saved on this business come back in ({ type: 'ms-deck-fill', data }), so the rep can
+  // pick up where they left off. Only from the app that embeds the deck.
+  function fill(d) {
+    if (!d || typeof d !== 'object' || !d.answers || typeof d.answers !== 'object') return;
+    var a = d.answers;
+    answers = {};
+    Array.prototype.forEach.call(document.querySelectorAll('.q:not([data-num])'), function (g) {
+      var key = g.getAttribute('data-q'), v = a[key], vals = Array.isArray(v) ? v.map(String) : v == null ? [] : [String(v)];
+      if (EXACT[key]) closeExact(key);
+      Array.prototype.forEach.call(g.querySelectorAll('.opts button'), function (b) {
+        b.setAttribute('aria-pressed', vals.indexOf(b.getAttribute('data-v')) >= 0 ? 'true' : 'false');
+      });
+      if (EXACT[key] && typeof a[key + '_n'] === 'number' && isFinite(a[key + '_n'])) {
+        var x = EXACT[key], n = Math.max(0, Math.min(a[key + '_n'], x.max)), box = g.querySelector('.num.exact');
+        Array.prototype.forEach.call(g.querySelectorAll('.opts button'), function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-v') === 'exact' ? 'true' : 'false'); });
+        if (box) { box.hidden = false; box.querySelector('input').value = String(n); }
+        answers[key + '_n'] = n; answers[key] = x.band(n);
+      } else if (vals.length) {
+        var known = vals.filter(function (s) { return !!g.querySelector('.opts button[data-v="' + s.replace(/"/g, '') + '"]'); });
+        if (known.length) answers[key] = g.hasAttribute('data-multi') ? known : known[0];
+      }
+    });
+    var oy = document.querySelector('.q[data-q="owned_years"]'); if (oy) oy.hidden = answers.owned_whole !== 'no';
+    if (oy && oy.hidden) delete answers.owned_years;
+    var staff = parseInt(a.staff, 10);
+    document.getElementById('w-staff').value = isFinite(staff) && staff >= 0 ? String(Math.min(staff, 999)) : '';
+    if (isFinite(staff) && staff >= 0) answers.staff = Math.min(staff, 999);
+    var c = d.contact || {};
+    document.getElementById('w-name').value = c.name || '';
+    document.getElementById('w-phone').value = c.phone || '';
+    document.getElementById('w-email').value = c.email || '';
+    render();
+  }
+  if (embedded) window.addEventListener('message', function (e) {
+    if (e.source !== window.parent || !e.data || e.data.type !== 'ms-deck-fill') return;
+    fill(e.data.data);
+  });
+
   // rep code (kept for the rep's own reference) and the booking button: inside the rep app it asks the app to open booking
   var refInput = document.getElementById('ref');
   var fromHash = (/(?:^|[#&])ref=([A-Za-z0-9]{2,12})/.exec(location.hash) || [])[1];

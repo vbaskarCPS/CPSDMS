@@ -371,6 +371,7 @@ export function rpc(name: string, a: Args): unknown {
     }
     case 'ms_rep_nearby': return [];
     case 'ms_zone_walked': return { total_m: 18500, walked_m: Math.min(18500, 4200 + S.visits.length * 30), roads: [] };
+    case 'ms_rep_deck_answers': { const x = S.answers.get(str(a.p_business)); return x ? { data: x, updated_at: new Date().toISOString(), updated_by: 'Alex Morgan' } : null; }
     case 'ms_save_deck_answers': S.answers.set(str(a.p_business), a.p_data as DeckAnswers); return null;
     case 'ms_business_state': return bizState(str(a.p_business));
     case 'ms_business_timeline': return timeline(str(a.p_business));

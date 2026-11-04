@@ -1,9 +1,11 @@
 // src/v2/features/rep/BusinessSheet.tsx — one business, as a full page: directions, call, hours; the
 // Present (the deck: pitch, questions, proposal, booking); log a visit (with photos, and a business
 // card read into the contact); the email conversations with it; and the rep's own history there.
+// The questionnaire and proposal saved from the deck can be seen again, reopened in the deck filled in, and emailed
+// to the owner (on its own, or with a follow-up: the copy opens in the email composer to check before sending).
 // Works with no signal: the visit waits on the phone.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Camera, ChevronRight, ExternalLink, Globe, MapPin, Navigation, Phone, Presentation, ScanLine, X } from 'lucide-react';
+import { ArrowLeft, Camera, ChevronRight, ClipboardList, ExternalLink, Globe, Mail, MapPin, Navigation, Phone, Presentation, ScanLine, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { inbox, mailWhen } from '../../lib/mail';
 import { useAuth } from '../../lib/auth';
@@ -19,7 +21,10 @@ import { LOST_REASONS, markPitched, setLost } from '../../lib/msPipeline';
 import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BookOnboarding } from './BookOnboarding';
-import { hasAnswers, saveDeckAnswers, type DeckAnswers } from '../../lib/meetings';
+import { hasAnswers, repDeckAnswers, saveDeckAnswers, type DeckAnswers } from '../../lib/meetings';
+import { deckEmail } from '../../lib/deckEmail';
+import { AnswersPanel } from '../meetings/shared';
+import { Composer, type ComposeInit } from '../mail/Composer';
 import { DoNotKnock, People } from './People';
 import { StageCard, TimelineToggle } from './Stage';
 import { dnkLabel } from '../../lib/msField';
@@ -80,6 +85,18 @@ export const BusinessSheet: React.FC<{
     if (c) { if (c.name) setCName(c.name); if (c.phone) setCPhone(c.phone); if (c.email) setCEmail(c.email); }
   }, []);
   useEffect(() => () => photos.forEach(p => URL.revokeObjectURL(p.url)), []);   // eslint-disable-line react-hooks/exhaustive-deps
+  // the questionnaire and proposal saved on the business (from this visit or an earlier one)
+  const saved = useLoad(() => repDeckAnswers(id, campaign).catch(() => null), [id, campaign, peopleTick]);
+  useEffect(() => {
+    const s = saved.data?.data; if (!hasAnswers(s)) return;
+    if (!answers.current) { answers.current = s; savedAnswers.current = JSON.stringify(s); }
+    const c = s.contact;   // the contact they gave in the deck fills an empty visit form
+    if (c) { setCName(n => n || c.name || ''); setCPhone(p => p || c.phone || ''); setCEmail(e => e || c.email || ''); }
+  }, [saved.data]);
+  const [showAnswers, setShowAnswers] = useState(false);
+  const [emailCopy, setEmailCopy] = useState(false);
+  const [compose, setCompose] = useState<ComposeInit | null>(null);
+  const afterCompose = React.useRef<null | (() => void)>(null);
 
   const d: (RepBusinessView | (SheetFallback & { phone?: null; website?: null; plaza?: null; visits: []; sends: [] })) | null =
     b.data || (fallback ? { ...fallback, phone: null, website: null, plaza: null, visits: [], sends: [] } : null);
@@ -111,8 +128,17 @@ export const BusinessSheet: React.FC<{
     finally { setScanning(false); }
   };
 
+  // a copy of the questionnaire and proposal, as an email to the owner, opened in the composer to check
+  const copyInit = useCallback((to: string, followUpAt: string | null): ComposeInit | null => {
+    const a = answers.current; if (!d || !hasAnswers(a)) return null;
+    const e = deckEmail({ business: d.name, campaign: kit.data?.name || 'taxifi', answers: a, contactName: cName, followUpAt });
+    return { key: `deckcopy:${id}:${campaign}:${Date.now()}`, title: 'Questionnaire & proposal', business_id: id, campaign_id: campaign,
+      to: to ? [to] : [], subject: e.subject, html: e.html, context: `${d.name} · ${kit.data?.name || ''}`.replace(/ · $/, '') };
+  }, [d, id, campaign, kit.data, cName]);
+
   const save = useCallback(async () => {
     if (!outcome || !d) return;
+    if (outcome === 'follow_up' && emailCopy && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cEmail.trim())) { setError(new Error('Add their email to send them the copy.')); return; }
     if (outcome === 'not_interested' && !lostWhy) { setError(new Error('Pick why they’re not interested.')); return; }
     const input = { outcome, notes, contact_name: cName, contact_phone: cPhone, contact_email: cEmail,
       follow_up_at: when ? new Date(when).toISOString() : null };
@@ -145,9 +171,20 @@ export const BusinessSheet: React.FC<{
           notes: [cName && `Ask for ${cName}`, cPhone, notes].filter(Boolean).join('\n') });
         toast({ msg, actions: [{ label: 'Add to calendar', onClick: () => download(`follow-up-${d.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.ics`, ics) }] });
       } else toast(msg);
-      onSaved({ business: id, outcome, state: stateAfter(outcome), here: here ? { lat: here.lat, lng: here.lng } : null, queued: !r.sent });
+      const done = () => onSaved({ business: id, outcome, state: stateAfter(outcome), here: here ? { lat: here.lat, lng: here.lng } : null, queued: !r.sent });
+      // the copy of their questionnaire and proposal: checked in the composer first, then the visit closes
+      const copy = outcome === 'follow_up' && emailCopy ? copyInit(cEmail.trim(), input.follow_up_at) : null;
+      if (copy && r.sent) { afterCompose.current = done; setCompose(copy); return; }
+      if (copy) toast('No signal: email them the copy later from “Questionnaire & proposal” on this business.');
+      done();
     } catch (e) { setError(e); } finally { setBusy(false); }
-  }, [outcome, lostWhy, notes, cName, cPhone, cEmail, when, photos, id, campaign, d, session, toast, onSaved]);
+  }, [outcome, lostWhy, notes, cName, cPhone, cEmail, when, photos, id, campaign, d, session, toast, onSaved, emailCopy, copyInit]);
+  const closeCompose = (sent: boolean) => {
+    setCompose(null);
+    if (sent) toast('Copy sent.');
+    const f = afterCompose.current; afterCompose.current = null; f?.();
+  };
+  const view = hasAnswers(answers.current) ? answers.current : saved.data?.data;
 
 
 
@@ -178,10 +215,28 @@ export const BusinessSheet: React.FC<{
           // showing the deck is the pitch: the stage (and the pin) move to Pitched now
           markPitched(id, campaign).then(st => { setPeopleTick(t => t + 1); onStage?.(st.stage); }).catch(() => undefined);
         }}>
-          <Presentation size={26} /><span><b>Present</b><em>{kit.data && !kit.data.present_url ? 'No presentation for this campaign yet' : 'Show the owner and book a call'}</em></span><ChevronRight size={20} />
+          <Presentation size={26} /><span><b>Present</b><em>{kit.data && !kit.data.present_url ? 'No presentation for this campaign yet' : hasAnswers(view) ? 'Opens with their answers filled in' : 'Show the owner and book a call'}</em></span><ChevronRight size={20} />
         </button>
+        {hasAnswers(view) && (
+          <button type="button" className="v2-rep-card" onClick={() => setShowAnswers(true)}>
+            <ClipboardList size={26} /><span><b>Questionnaire &amp; proposal</b><em>{view.proposal ? `About $${Math.round(view.proposal.yearly).toLocaleString('en-CA')} a year · ` : ''}See it or email it to them</em></span><ChevronRight size={20} />
+          </button>)}
       </div>
-      {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref}
+      {showAnswers && hasAnswers(view) && (
+        <div className="v2-rep-sheet-bg" onClick={() => setShowAnswers(false)}>
+          <div className="v2-rep-sheet" role="dialog" aria-label="Questionnaire and proposal" onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center' }}><h2 style={{ flex: 1 }}>Questionnaire &amp; proposal</h2>
+              <button type="button" aria-label="Close" onClick={() => setShowAnswers(false)} className="v2-rep-x"><X size={20} /></button></div>
+            {saved.data && <div className="v2-small v2-mut" style={{ margin: '2px 0 8px' }}>Saved {whenLabel(saved.data.updated_at)}{saved.data.updated_by ? ` by ${saved.data.updated_by}` : ''}</div>}
+            <AnswersPanel a={view} open />
+            <div className="v2-rep-acts" style={{ marginTop: 10 }}>
+              {kit.data?.present_url && <button type="button" onClick={() => { setShowAnswers(false); setPresenting(true); }}><Presentation size={15} />Open in the deck</button>}
+              <button type="button" onClick={() => { const c = copyInit(cEmail || view.contact?.email || lastEmail(d), null); if (c) { setShowAnswers(false); setCompose(c); } }}><Mail size={15} />Email it to them</button>
+            </div>
+          </div>
+        </div>)}
+      {compose && <Composer init={compose} onClose={() => closeCompose(false)} onSent={() => closeCompose(true)} />}
+      {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref} fill={hasAnswers(answers.current) ? answers.current : null}
         onClose={() => { keepAnswers(); setPresenting(false); }} onBook={() => setBooking(true)} onAnswers={onDeckAnswers} />}
       {booking && <BookOnboarding campaign={campaign} business={id} businessName={d.name} answers={answers.current}
         owner={{ name: cName, phone: cPhone || d.phone || '', email: cEmail || lastEmail(d) }}
@@ -219,6 +274,12 @@ export const BusinessSheet: React.FC<{
         </>)}
       {outcome === 'follow_up' && (
         <Field label="Follow up on"><input className="v2-input" type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} /></Field>)}
+      {outcome === 'follow_up' && hasAnswers(view) && (
+        <label className="v2-rep-check">
+          <input type="checkbox" checked={emailCopy} onChange={e => { setEmailCopy(e.target.checked); setError(null); }} />
+          <span><b>Email them a copy of their questionnaire &amp; proposal</b>
+            <span className="v2-small v2-mut">Opens in your email after you save, with the follow-up time, to check before you send it.</span></span>
+        </label>)}
       {(outcome === 'follow_up' || outcome === 'interested' || outcome === 'closed') && (
         <>
           <div className="v2-rep-row">
@@ -279,7 +340,10 @@ const Sheet: React.FC<{ onClose: () => void; label: string; children: React.Reac
 };
 
 // ───────────── present: the campaign's deck, full screen ─────────────
-const Presenter: React.FC<{ url: string; code: string; onClose: () => void; onBook: () => void; onAnswers: (a: DeckAnswers) => void }> = ({ url, code, onClose, onBook, onAnswers }) => {
+const Presenter: React.FC<{ url: string; code: string; fill?: DeckAnswers | null; onClose: () => void; onBook: () => void; onAnswers: (a: DeckAnswers) => void }> = ({ url, code, fill, onClose, onBook, onAnswers }) => {
+  // the answers saved on the business go back into the deck once it has loaded (only the first answers it opened with)
+  const fillAt = React.useRef(fill);
+  const onLoad = () => { const f = fillAt.current; if (f) frame.current?.contentWindow?.postMessage({ type: 'ms-deck-fill', data: f }, new URL(url, location.href).origin); };
   const src = `${url}#embed=1&ref=${encodeURIComponent(code)}`;
   const frame = React.useRef<HTMLIFrameElement>(null);
   useEffect(() => {
@@ -296,7 +360,7 @@ const Presenter: React.FC<{ url: string; code: string; onClose: () => void; onBo
   }, [onClose, onBook, onAnswers]);
   return (
     <div className="v2-rep-present" role="dialog" aria-label="Presentation">
-      <iframe ref={frame} src={src} title="Presentation" />
+      <iframe ref={frame} src={src} title="Presentation" onLoad={onLoad} />
       <button type="button" className="close" onClick={onClose} aria-label="Close the presentation"><X size={20} /></button>
     </div>
   );
