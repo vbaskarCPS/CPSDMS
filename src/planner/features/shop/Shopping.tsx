@@ -1,11 +1,13 @@
 // src/planner/features/shop/Shopping.tsx — /shop: the household's shopping list, grouped by the store with the best
-// flyer deal this week (or by section, in store-walk order). Add, tick, remove; tap a deal to pick a different store.
+// flyer deal this week (or by section, in store-walk order). Add, tick, remove. Adding opens Build it (type, size,
+// price per kg / each, how many); tapping an item reopens it.
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Check, X, RefreshCw, Store, Map, Tag, Settings2 } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
 import { Page, Header, Card, Button, Sheet, Field, Input, useToast, uid } from '../../ui/primitives';
+import { BuildSheet } from './BuildSheet';
 import { loadList, loadPrefs, refreshDeals, removeItem, saveItem, savePrefs } from './store';
-import { ANYWHERE, bestDeal, DEFAULT_PREFS, isFlyer, liveDeals, sectionRank, storeOf, type ShopItem, type ShopPrefs } from './types';
+import { ANYWHERE, bestDeal, DEFAULT_PREFS, isFlyer, liveDeals, perLabel, saleNote, sectionRank, storeOf, type ShopItem, type ShopPrefs } from './types';
 
 const money = (n: number | null | undefined) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
 const until = (iso?: string) => (iso ? `until ${new Date(iso).toLocaleDateString([], { weekday: 'short' })}` : '');
@@ -17,7 +19,7 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
   const [checking, setChecking] = useState(false);
   const [view, setView] = useState<'store' | 'aisle'>('store');
   const [text, setText] = useState('');
-  const [pick, setPick] = useState<ShopItem | null>(null);
+  const [pickId, setPickId] = useState<string | null>(null);   // the item whose Build it sheet is open
   const [showPrefs, setShowPrefs] = useState(false);
   const [toast, say] = useToast();
 
@@ -39,7 +41,7 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
     const t = text.trim(); if (!t) return;
     const m = t.match(/^(\d+(?:\.\d+)?\s*(?:x|×|kg|g|lb|l|ml|pk|pack)?)\s+(.+)$/i);
     const item: ShopItem = { id: uid(), text: m ? m[2].trim() : t, qty: m ? m[1].trim() : undefined, done: false, by: pass.user.username, addedAt: new Date().toISOString() };
-    setText(''); setItems(l => [...l, item]);
+    setText(''); setItems(l => [...l, item]); setPickId(item.id);   // straight into Build it
     try {
       await saveItem(item);
       setChecking(true);
@@ -51,7 +53,8 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
   const toggle = async (i: ShopItem) => { const n = { ...i, done: !i.done, doneAt: !i.done ? new Date().toISOString() : undefined }; setItems(l => l.map(x => (x.id === i.id ? n : x))); try { await saveItem(n); } catch { /* retry on next change */ } };
   const remove = async (i: ShopItem) => { setItems(l => l.filter(x => x.id !== i.id)); try { await removeItem(i); } catch { /* ignore */ } };
   const clearDone = async () => { const done = items.filter(i => i.done); setItems(l => l.filter(i => !i.done)); for (const i of done) await removeItem(i).catch(() => undefined); };
-  const choose = async (i: ShopItem, store?: string) => { const n = { ...i, store }; setItems(l => l.map(x => (x.id === i.id ? n : x))); setPick(null); try { await saveItem(n); } catch { /* ignore */ } };
+  const choose = async (n: ShopItem) => { setItems(l => l.map(x => (x.id === n.id ? n : x))); setPickId(null); try { await saveItem(n); } catch { /* ignore */ } };
+  const pick = items.find(i => i.id === pickId) || null;
   const recheck = async () => { setChecking(true); try { setItems(await refreshDeals(items, prefs, true)); say('Flyers checked', 'good'); } catch (e) { say(e instanceof Error ? e.message : "Couldn't check the flyers", 'bad'); } finally { setChecking(false); } };
 
   const open = items.filter(i => !i.done), done = items.filter(i => i.done);
@@ -96,10 +99,10 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
                   <div key={i.id} className="shop__item">
                     <button type="button" className="pl-check" aria-label="Got it" onClick={() => void toggle(i)}><Check /></button>
                     <div className="shop__main">
-                      <b>{i.qty ? `${i.qty} ` : ''}{i.text}</b>
+                      <b>{i.count && i.count > 1 ? `${i.count} × ` : i.qty ? `${i.qty} ` : ''}{i.text}{i.pick && (i.pick.variant || i.pick.size) ? <small className="shop__built"> · {[i.pick.variant, i.pick.size].filter(Boolean).join(', ')}</small> : null}</b>
                       {d
-                        ? <button type="button" className={`shop__deal ${isFlyer(d) ? '' : 'is-regular'}`} onClick={() => setPick(i)}>{money(d.price)} {d.name}{isFlyer(d) ? `${d.saleStory ? ` · ${d.saleStory}` : ''}${d.validTo ? ` · ${until(d.validTo)}` : ''}` : ' · regular price'}{liveDeals(i).length > 1 ? ` · +${liveDeals(i).length - 1} more` : ''}</button>
-                        : <button type="button" className="shop__deal is-regular" onClick={() => setPick(i)}>{i.suggestedStore && storeOf(i) === i.suggestedStore ? `likely best here · ${i.reason || 'no flyer'}` : checking && !i.dealsAt ? 'checking flyers…' : `${view === 'store' ? (i.section || 'no deal found') : 'no deal found'} · tap to pick a store`}{i.by !== pass.user.username ? ` · added by ${i.by}` : ''}</button>}
+                        ? <button type="button" className={`shop__deal ${isFlyer(d) ? '' : 'is-regular'}`} onClick={() => setPickId(i.id)}>{money(d.price)}{perLabel(d)} {d.name}{isFlyer(d) ? `${saleNote(d) ? ` · ${saleNote(d)}` : ''}${d.validTo ? ` · ${until(d.validTo)}` : ''}` : ' · regular price'}{liveDeals(i).length > 1 ? ` · +${liveDeals(i).length - 1} more` : ''}</button>
+                        : <button type="button" className="shop__deal is-regular" onClick={() => setPickId(i.id)}>{i.suggestedStore && storeOf(i) === i.suggestedStore ? `likely best here · ${i.reason || 'no flyer'}` : checking && !i.dealsAt ? 'checking flyers…' : `${view === 'store' ? (i.section || 'no deal found') : 'no deal found'} · tap to build it`}{i.by !== pass.user.username ? ` · added by ${i.by}` : ''}</button>}
                     </div>
                     <button type="button" className="shop__x" aria-label="Remove" onClick={() => void remove(i)}><X size={14} /></button>
                   </div>
@@ -118,26 +121,7 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
       )}
       <p className="pl-muted" style={{ fontSize: 12, textAlign: 'center' }}>One list for the house. Deals are this week's flyers near {prefs.postal}, with everyday prices where stores list them; sections are the usual store layout, not exact aisle numbers.</p>
 
-      <Sheet open={!!pick} onClose={() => setPick(null)} title={pick ? `${pick.text} — this week` : ''}>
-        {pick && (
-          <div className="pl-stack">
-            {liveDeals(pick).map((d, k) => (
-              <button type="button" key={k} className={`shop__offer ${storeOf(pick) === d.merchant ? 'is-on' : ''}`} onClick={() => void choose(pick, d.merchant)}>
-                {d.image && <img src={d.image} alt="" loading="lazy" />}
-                <div className="pl-grow"><b>{d.merchant}{isFlyer(d) ? '' : ' · regular price'}</b><span>{d.name}</span><small>{isFlyer(d) ? `${d.saleStory ? `${d.saleStory} · ` : ''}flyer ${until(d.validTo)}` : d.wasPrice ? `was ${money(d.wasPrice)}` : 'everyday price'}</small></div>
-                <strong>{money(d.price)}</strong>
-              </button>
-            ))}
-            {liveDeals(pick).length === 0 && <p className="pl-muted">No flyer deal or listed price for this one.</p>}
-            <p className="pl-label" style={{ marginTop: 4 }}>Or get it at</p>
-            <div className="shop__stores">
-              {[...prefs.specialty.map(s => s.name), ...prefs.stores].filter(s => !liveDeals(pick).some(d => d.merchant === s)).map(s => <button type="button" key={s} className={storeOf(pick) === s ? 'is-on' : ''} onClick={() => void choose(pick, s)}>{s}{pick.suggestedStore === s ? ' ★' : ''}</button>)}
-            </div>
-            {pick.suggestedStore && pick.reason && <small className="pl-muted">★ Coach Claude: {pick.reason}</small>}
-            <Button ghost onClick={() => void choose(pick, undefined)}>Just get it anywhere</Button>
-          </div>
-        )}
-      </Sheet>
+      <BuildSheet item={pick} prefs={prefs} checking={checking} onClose={() => setPickId(null)} onSave={n => void choose(n)} />
 
       <Sheet open={showPrefs} onClose={() => setShowPrefs(false)} title="Your stores">
         <div className="pl-stack">
