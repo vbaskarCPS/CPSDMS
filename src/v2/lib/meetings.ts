@@ -87,6 +87,11 @@ export async function bookMeeting(b: BookInput): Promise<Meeting> {
   return m;
 }
 /** Saves the deck answers on the business (queued on the phone when there's no signal). */
+/** A business's saved questionnaire and proposal (for the rep who works it). null: none yet. */
+export interface SavedDeckAnswers { data: DeckAnswers; updated_at: string; updated_by: string | null }
+export async function repDeckAnswers(business: string, campaign: string): Promise<SavedDeckAnswers | null> {
+  return (must(await db.rpc('ms_rep_deck_answers', { p_business: business, p_campaign: campaign })) as SavedDeckAnswers | null) || null;
+}
 export async function saveDeckAnswers(business: string, campaign: string, data: DeckAnswers): Promise<void> {
   const { sendOrQueue } = await import('./repQueue');
   await sendOrQueue({ id: crypto.randomUUID(), rpc: 'ms_save_deck_answers', args: { p_business: business, p_campaign: campaign, p_data: data },

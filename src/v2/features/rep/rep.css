@@ -253,3 +253,8 @@
 .v2-rep-switch input:checked + i::after { left: 21px; }
 .v2-rep-switch input:focus-visible + i { outline: 2px solid #2563eb; outline-offset: 2px; }
 .v2-rep-switch input:disabled + i { opacity: .6; }
+
+/* a checkbox option under a form field (Email them a copy…) */
+.v2-rep-check { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0 4px; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 12px; background: #f0fdfa; cursor: pointer; }
+.v2-rep-check input { width: 18px; height: 18px; margin-top: 2px; accent-color: #0f766e; flex-shrink: 0; }
+.v2-rep-check > span { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
