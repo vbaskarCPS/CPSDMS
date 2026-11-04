@@ -10,7 +10,7 @@ import { useDoc } from '../lib/useDoc';
 import { blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, routineNow, type BlockId, type Routine } from '../lib/routine';
 import { InstallHint } from '../ui/InstallHint';
 import { Stat } from '../ui/primitives';
-import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, todosDone, wakeStreak, TodoList, type Day } from '../features/plan';
+import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, todosDone, wakeStreak, TodoList, MissedBedtime, isMorningHours, type Day } from '../features/plan';
 import { HabitsTodayCard, SlotHabits, SlotHabitsProvider, autoMark } from '../features/habits';
 import { WorkoutTodayCard } from '../features/workout';
 import { FoodTodayCard } from '../features/food';
@@ -60,6 +60,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
   const [streaks, setStreaks] = useState<{ up: number; lights: number; fast: number | null; morning: number } | null>(null);
   const isMorning = routine.profile === 'morning';
+  const [askBed, setAskBed] = useState(false);   // lights out tapped in the morning: ask for last night's time
 
   useEffect(() => { void loadRoutine().then(setRoutine); }, []);
   useEffect(() => { const id = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(id); }, []);
@@ -97,6 +98,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const tick = (id: TickId) => {
     const k = tickKey(id);
     const on = !day.ticks[k];
+    if (id === 'lightsOut' && on && isMorningHours()) { setAskBed(true); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     set(d => ({ ...d, ticks: { ...d.ticks, [k]: on ? nowHM() : undefined } }));
     // habits tied to this tick
     if (id === 'wake') void autoMark('wake', on);
@@ -126,6 +128,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
         <Link to="/settings" className="pl-btn pl-btn--ghost" aria-label="Settings" style={{ minHeight: 40, padding: '0 8px', border: 0 }}><Cog /></Link>
       </header>
 
+      <MissedBedtime routine={routine} open={askBed} onClose={() => setAskBed(false)} />
       {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
       <div className="pl-stats today-streaks">
         <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Up on time</span>} value={streaks ? streaks.up : '–'} sub={`by ${clock(routine.wake)}`} tone={streaks && streaks.up > 0 ? 'good' : undefined} />

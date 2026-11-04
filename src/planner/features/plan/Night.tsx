@@ -9,6 +9,7 @@ import { clock, loadRoutine, routineMin, routineMinutes, routineNow, type Routin
 import { Page, Header, Card, Button, Prompt, Score, Input, useToast } from '../../ui/primitives';
 import { addDays, nowHM, sleepEstimate } from './dates';
 import { beep } from './sound';
+import { MissedBedtime, isMorningHours } from './MissedBedtime';
 import { autoMark } from '../habits/auto';
 import { dayAverage, emptyDay, normalizeDay, SCORE_KEYS, type Day } from './types';
 
@@ -77,7 +78,9 @@ export function Night() {
     } catch { /* tomorrow's page can be set by hand */ }
   };
 
+  const [askBed, setAskBed] = useState(false);
   const lightsOut = async () => {
+    if (isMorningHours()) { setAskBed(true); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }   // that was last night
     set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: nowHM() } }));
     void autoMark('lightsOut', true);
     await flush();
@@ -89,6 +92,7 @@ export function Night() {
     <Page>
       <Header eyebrow={morningP ? 'Evening wind-down' : 'Miracle Night'} title={done ? 'Good night.' : 'Wind down'} back="/" save={save} />
 
+      {askBed && <MissedBedtime routine={routine} open onClose={() => setAskBed(false)} />}
       <Card accent className="night-top">
         <Moon aria-hidden />
         <div>
