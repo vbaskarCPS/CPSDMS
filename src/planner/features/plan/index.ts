@@ -14,6 +14,7 @@ export { emptyDay, normalizeDay, briefDone, reviewDone, toggleTodo, toggleMust, 
 export { useFrequentTodos } from './useFrequentTodos';
 export type { Todo } from './types';
 export { TodoList } from './TodoList';
+export { MissedBedtime, isMorningHours } from './MissedBedtime';
 export type { Day } from './types';
 
 export const planRoutes: { path: string; element: JSX.Element }[] = [

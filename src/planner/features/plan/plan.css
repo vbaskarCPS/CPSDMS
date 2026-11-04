@@ -144,3 +144,11 @@
 .todo__must.is-on svg { fill: currentColor; }
 .todo__must:disabled:not(.is-on) { visibility: hidden; }
 .todo__chips button.is-must { border-style: solid; border-color: color-mix(in srgb, var(--amber) 60%, transparent); }
+
+/* "Did you forget to record bedtime?" on Today */
+.bed-missed { display: flex; gap: 12px; align-items: flex-start; }
+.bed-missed > svg { flex-shrink: 0; margin-top: 2px; }
+.bed-missed b { display: block; }
+.bed-missed small { display: block; margin-top: 2px; }
+.bed-missed__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.bed-missed__row .pl-input { width: auto; min-width: 0; flex: 0 1 140px; }
