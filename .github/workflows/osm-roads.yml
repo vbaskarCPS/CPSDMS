@@ -13,8 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # west,south,east,north — whole 0.02° squares (Surrey and White Rock)
-      BOXES: "-122.94,49.00,-122.66,49.24"
+      # west,south,east,north — whole 0.02° squares: the Lower Mainland, from West Vancouver and the North Shore
+      # to Hope (Metro Vancouver, the Fraser Valley, Chilliwack, Agassiz, Harrison)
+      BOXES: "-123.30,49.00,-121.40,49.42"
     steps:
       - uses: actions/checkout@v4
       - name: Tools
