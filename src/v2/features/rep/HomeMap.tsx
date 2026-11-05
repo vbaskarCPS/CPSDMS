@@ -4,6 +4,7 @@
 // preloaded city businesses and the day's location tracking.)
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { cardLeads, markCardLead } from '../../lib/repCard';
 import { Crosshair, LocateFixed, Plus, X } from 'lucide-react';
 import {
   addLead, geocode, hereNow, withUnit, hitForTyped, isOpen, pinMatchesAddress, repMap, reverseGeocode, stagePin,
@@ -36,7 +37,19 @@ export const HomeMap: React.FC = () => {
   // businesses changed here stay on the map in their new colour (a Lost one doesn't just vanish from To visit)
   const [touched, setTouched] = useState<Set<string>>(() => new Set());
   const [camp, setCamp] = useState<string | null>(null);
-  const [adding, setAdding] = useState<null | { pick?: boolean; at?: { lat: number; lng: number } }>(null);
+  const [adding, setAdding] = useState<null | { pick?: boolean; at?: { lat: number; lng: number }; prefill?: AddPrefill }>(null);
+  // "Add to map" on an owner who sent their details from the rep's card: the Add form, filled in
+  const cardLead = sp.get('cardlead');
+  useEffect(() => {
+    if (!cardLead) return;
+    let live = true;
+    cardLeads().then(ls => {
+      const l = ls.find(x => x.id === cardLead); if (!live) return;
+      const n = new URLSearchParams(sp); n.delete('cardlead'); setSp(n, { replace: true });
+      if (l) setAdding({ prefill: { lead: l.id, name: l.business || l.name, address: l.address || '', phone: l.phone || '', campaign: l.campaign_id } });
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [cardLead]);   // eslint-disable-line react-hooks/exhaustive-deps
   const mapRef = useRef<RepMapHandle>(null);
 
   const campaigns = useMemo(() => {
@@ -118,10 +131,12 @@ export const HomeMap: React.FC = () => {
           onClose={() => setOpen(null)} onSaved={onSaved} onStage={onStage}
           onGone={() => { const cid = open.campaign; setM(cur => cur && { ...cur, data: { ...cur.data, businesses: cur.data.businesses.filter(b => !(b.id === open.id && b.c === cid)) } }); setOpen(null); }} />)}
       {adding && !adding.pick && m && (
-        <AddLead campaigns={campaigns} at={adding.at || null}
+        <AddLead campaigns={campaigns} at={adding.at || null} prefill={adding.prefill}
           onOpen={id => { const b = m.data.businesses.find(x => x.id === id); if (!b) return false; setAdding(null); setOpen(`${b.id}|${b.c}`); return true; }}
           onPick={() => setAdding({ pick: true })} onClose={() => setAdding(null)}
           onAdded={(biz, campaign) => {
+            const lead = adding.prefill?.lead;
+            if (lead) markCardLead(lead, 'added', biz.id).catch(() => undefined);
             setAdding(null);
             setM(cur => cur && { ...cur, data: { ...cur.data, businesses: [...cur.data.businesses, biz] } });
             mapRef.current?.flyTo(biz);
@@ -150,16 +165,19 @@ const SendQueue: React.FC = () => {
 // The pin and the address box are kept honest with each other: the form says where the pin is, and if the rep types
 // an address (say, adding a business over the phone) and adds it without picking a Find result, the address is looked
 // up and the business goes there, never quietly where the rep is standing.
+/** What the Add form starts with (an owner who sent their details from the rep's card). */
+interface AddPrefill { lead: string; name: string; address: string; phone: string; campaign: string }
+
 const AddLead: React.FC<{
-  campaigns: { id: string; name: string; color: string }[]; at: { lat: number; lng: number } | null;
+  campaigns: { id: string; name: string; color: string }[]; at: { lat: number; lng: number } | null; prefill?: AddPrefill;
   onPick: () => void; onClose: () => void; onAdded: (b: MapBiz, campaign: string) => void; onOpen: (id: string) => boolean;
-}> = ({ campaigns, at, onPick, onClose, onAdded, onOpen }) => {
-  const [name, setName] = useState('');
+}> = ({ campaigns, at, prefill, onPick, onClose, onAdded, onOpen }) => {
+  const [name, setName] = useState(prefill?.name || '');
   const [kind, setKind] = useState('');
-  const [address, setAddress] = useState('');
+  const [address, setAddress] = useState(prefill?.address || '');
   const [unit, setUnit] = useState('');   // unit / suite: kept out of the map lookup, saved in front of the address
-  const [phone, setPhone] = useState('');
-  const [campaign, setCampaign] = useState(campaigns[0]?.id || '');
+  const [phone, setPhone] = useState(prefill?.phone || '');
+  const [campaign, setCampaign] = useState(prefill?.campaign || campaigns[0]?.id || '');
   const [point, setPoint] = useState<{ lat: number; lng: number } | null>(at);
   // where the pin came from, and the address it's for (so we can tell when the address box no longer matches it)
   const [pinFrom, setPinFrom] = useState<'gps' | 'map' | 'address' | 'place'>(at ? 'map' : 'gps');
@@ -197,7 +215,8 @@ const AddLead: React.FC<{
     hereNow(8000).then(p => {
       if (!live) return;
       setLocating(false); near.current = p;
-      if (p) { setPinFrom('gps'); lookAround(p); } else setError(new Error('Your location isn’t available. Type the address or tap the map.'));
+      // an address that came with the business (a card lead) stays: adding looks it up instead of using where you are
+      if (p) { setPinFrom('gps'); lookAround(p, !!prefill?.address); } else setError(new Error('Your location isn’t available. Type the address or tap the map.'));
     });
     return () => { live = false; };
   }, [at, lookAround]);

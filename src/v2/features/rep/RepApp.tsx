@@ -4,7 +4,7 @@
 // management portal.
 import React, { useMemo, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, Mail, Map as MapIcon, Pencil, Settings as Gear, Trophy } from 'lucide-react';
+import { ArrowLeft, Bell, CalendarPlus, Clock, Flame, LayoutList, List, LogOut, Mail, Map as MapIcon, Pencil, QrCode, Settings as Gear, Trophy } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
@@ -24,6 +24,7 @@ import { FollowupEmails } from './FollowupEmails';
 import { HomeMap } from './HomeMap';
 import { RepMapView } from './RepMapView';
 import { RepSettings } from './RepSettings';
+import { CardLeads, RepCardScreen } from './RepCard';
 import { download, RepProvider, useRep } from './repContext';
 import './rep.css';
 
@@ -43,6 +44,7 @@ export const RepApp: React.FC = () => {
         <Route path="followups" element={<Frame><Followups /></Frame>} />
         <Route path="me" element={<Frame><Me /></Frame>} />
         <Route path="settings" element={<Frame><RepSettings /></Frame>} />
+        <Route path="card" element={<Frame><RepCardScreen /></Frame>} />
         <Route path="numbers" element={<Navigate to="/app/rep/me" replace />} />
         <Route path="*" element={<Navigate to="/app/rep" replace />} />
       </Routes>
@@ -65,6 +67,7 @@ const Frame: React.FC<{ full?: boolean; mail?: boolean; children: React.ReactNod
       <div className="v2-rep-top">
         <span className="brand"><MsLogo size={18} /><MsTab /></span>
         <span className="who">{profile?.full_name}</span>
+        <button type="button" aria-label="My business card" title="My business card" onClick={() => nav('/app/rep/card')}><QrCode size={16} /></button>
         <button type="button" aria-label="Settings" title="Settings" onClick={() => nav('/app/rep/settings')}><Gear size={16} /></button>
         <button type="button" aria-label="Sign out" onClick={async () => { await signOut(); nav('/app/login?as=mainstreet', { replace: true }); }}><LogOut size={16} /></button>
       </div>
@@ -218,6 +221,7 @@ const Followups: React.FC = () => {
         <button type="button" className="v2-rep-zone v2-rep-ask" onClick={async () => { try { setPerm(await Notification.requestPermission()); } catch { /* no */ } }}>
           <Bell size={18} /><div><b>Remind me on this phone</b><div className="v2-small v2-mut">A reminder 10 minutes before each follow-up, while MainstreetAI is open.</div></div>
         </button>)}
+      <CardLeads />
       <FollowupEmails />
       <ErrorBox error={f.error} />
       {f.loading && !f.data ? <Loading /> : !f.data?.length ? <div className="v2-rep-zone v2-mut">No follow-ups. When a business asks you to come back, log a Follow-up and it shows here.</div> : null}

@@ -13,6 +13,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import WorkerLocationTracker from './components/WorkerLocationTracker';
 import { DemoCoach } from './pages/Demo/DemoCoach';
 const DemoPage = React.lazy(() => import('./pages/Demo/DemoPage'));
+const CardPage = React.lazy(() => import('./pages/CardPage'));
 // The /minigame hub (players, saved progress, the games): stand-alone, loads only when opened.
 const MinigameHub = React.lazy(() => import('./pages/Minigame/MinigameHub'));
 
@@ -91,6 +92,8 @@ function App() {
         <Route path="/app/*" element={<V2App />} />
         {/* the MainstreetAI reps' sign-in link */}
         <Route path="/mainstreet" element={<Navigate to="/app/login?as=mainstreet" replace />} />
+        {/* a MainstreetAI rep's digital business card (public) */}
+        <Route path="/card/:slug" element={<CardPage />} />
 
         {/* Public catch-all: handles both job fair forms AND shuttle pages */}
         <Route path="/:slug" element={<SlugRouter />} />

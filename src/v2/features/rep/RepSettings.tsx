@@ -3,6 +3,7 @@
 // email listing that day's follow-ups. Both go to the rep's login email; saving also saves the phone's time zone.
 import React, { useEffect, useState } from 'react';
 import { repNotify, setRepNotify, type RepNotify } from '../../lib/rep';
+import { Link } from 'react-router-dom';
 import { ErrorBox, Loading } from '../../ui';
 
 const Switch: React.FC<{ on: boolean; busy: boolean; label: string; hint: string; onChange: (v: boolean) => void }> = ({ on, busy, label, hint, onChange }) => (
@@ -31,6 +32,10 @@ export const RepSettings: React.FC = () => {
   return (
     <>
       <h1>Settings</h1>
+      <Link to="/app/rep/card" className="v2-rep-zone" style={{ display: 'block', color: 'inherit', textDecoration: 'none' }}>
+        <div style={{ fontWeight: 800 }}>My business card</div>
+        <div className="v2-small v2-mut">Your digital card for each campaign: share it by QR code or link, and edit your photo, details, links and style.</div>
+      </Link>
       <ErrorBox error={error} />
       {s && (
         <div className="v2-rep-zone">
