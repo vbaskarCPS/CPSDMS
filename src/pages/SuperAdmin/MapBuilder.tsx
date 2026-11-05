@@ -323,14 +323,16 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
   const [activeRouteNum, setActiveRouteNum] = useState(1);
   const [allWays, setAllWays] = useState<OsmWay[]>([]);
   const [loadingRoads, setLoadingRoads] = useState(false);
+  // Load More Roads runs in the background: the map stays usable with the roads already loaded
+  const [moreRoads, setMoreRoads] = useState(false);
   const [roadsSeconds, setRoadsSeconds] = useState(0);
   const [roadsCapped, setRoadsCapped] = useState(false);
   useEffect(() => {
-    if (!loadingRoads) { setRoadsSeconds(0); return; }
+    if (!loadingRoads && !moreRoads) { setRoadsSeconds(0); return; }
     const t0 = Date.now();
     const t = setInterval(() => setRoadsSeconds(Math.floor((Date.now() - t0) / 1000)), 1000);
     return () => clearInterval(t);
-  }, [loadingRoads]);
+  }, [loadingRoads, moreRoads]);
   // the area whose road load has finished (even if it failed) and the area whose saved routes are on
   // the map: the saved routes are drawn from their own saved shapes when the roads don't come
   const [roadsTriedFor, setRoadsTriedFor] = useState<string | null>(null);
@@ -1126,18 +1128,22 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
 
   const loadRoadsFromViewport = useCallback(async () => {
     const map = mapRef.current;
-    if (!map || loadingRoads) return;
-    setLoadingRoads(true); setError(null);
+    if (!map || loadingRoads || moreRoads) return;
+    setMoreRoads(true); setError(null);
     try {
       const b = map.getBounds();
       if (!b) throw new Error('Map not available');
       const { bbox, capped } = roadBox({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
       setRoadsCapped(capped);
       const newWays = await fetchRoads(bbox);
-      setAllWays(prev => { const existingIds = new Set(prev.map(w => w.id)); return [...prev, ...newWays.filter(w => !existingIds.has(w.id))]; });
+      // only roads that aren't on the map yet: a road you split while this loaded keeps its pieces
+      setAllWays(prev => {
+        const have = new Set<number>(); for (const w of prev) { have.add(w.id); if (w.rootId != null) have.add(w.rootId); }
+        return [...prev, ...newWays.filter(w => !have.has(w.id))];
+      });
     } catch { setError('All Overpass mirrors are unavailable — please try again in a moment.'); }
-    finally { setLoadingRoads(false); }
-  }, [loadingRoads]);
+    finally { setMoreRoads(false); }
+  }, [loadingRoads, moreRoads]);
 
   const handleAddStreet = () => {
     const name = addStreetInput.trim();
@@ -1583,6 +1589,12 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
                 </div>
               </div>
             )}
+            {moreRoads && (
+              <div className="absolute top-3 right-14 bg-gray-800/95 border border-gray-700 rounded-lg px-3 py-1.5 text-xs flex items-center gap-2 z-10 pointer-events-none">
+                <Loader size={13} className="animate-spin text-blue-400" />
+                <span>Loading more roads{roadsSeconds >= 3 ? ` · ${roadsSeconds}s` : ''} — keep building, they'll appear when they arrive</span>
+              </div>
+            )}
             {roadsCapped && !loadingRoads && currentArea && (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-amber-900/90 border border-amber-700 text-amber-100 rounded px-3 py-1.5 text-xs z-10 flex items-center gap-3">
                 <span>Roads loaded for the middle of the view only (the view is too wide for one request). Zoom in and click Load More Roads for the rest.</span>
@@ -1612,8 +1624,8 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
                   <span className="text-sm font-medium font-mono">{formatRouteCode(currentArea.prefix, activeRouteNum)}</span>
                 </div>
               )}
-              <button onClick={loadRoadsFromViewport} disabled={loadingRoads} className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300 border border-gray-600 px-3 py-1.5 rounded text-sm flex items-center gap-2">
-                {loadingRoads ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}Load More Roads
+              <button onClick={loadRoadsFromViewport} disabled={loadingRoads || moreRoads} className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300 border border-gray-600 px-3 py-1.5 rounded text-sm flex items-center gap-2">
+                {loadingRoads || moreRoads ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}Load More Roads
               </button>
               <button onClick={() => setShowGhostRoutes(v => !v)} className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm border transition-colors ${showGhostRoutes ? 'bg-indigo-900/40 border-indigo-500 text-indigo-300' : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'}`}>
                 {showGhostRoutes ? <Eye size={14} /> : <EyeOff size={14} />}
