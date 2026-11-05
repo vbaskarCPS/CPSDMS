@@ -44,3 +44,23 @@ export function deckEmail(p: {
   else parts.push('<p>If you have any questions, just reply to this email.</p>');
   return { subject: `Your ${p.campaign} questionnaire and proposal: ${p.business}`, html: parts.join('') };
 }
+
+/** A follow-up email with no figures: for an owner who didn't get as far as a proposal. Thanks them, says where to
+ *  read more (the campaign's info link) and when the rep will be back. */
+export function followupNoFigures(p: {
+  business: string; campaign: string; contactName?: string | null; followUpAt?: string | null; infoUrl?: string | null; tz?: string;
+}): { subject: string; html: string } {
+  const name = first(p.contactName);
+  const parts = [
+    `<p>Hi${name ? ` ${esc(name)}` : ''},</p>`,
+    `<p>Thanks for taking a few minutes with me today at ${esc(p.business)}.</p>`,
+    p.infoUrl && /^https?:\/\//i.test(p.infoUrl)
+      ? `<p>As promised, here’s where you can read more about ${esc(p.campaign)}: <a href="${esc(p.infoUrl)}">${esc(p.infoUrl)}</a></p>`
+      : `<p>I’d be glad to show you what ${esc(p.campaign)} could do for your business.</p>`,
+    p.followUpAt
+      ? `<p>I’ll follow up with you on ${esc(followWhen(p.followUpAt, p.tz))} to answer any questions and, if it’s a fit, walk you through a quick quote.</p>`
+      : '<p>I’ll follow up with you soon to answer any questions and, if it’s a fit, walk you through a quick quote.</p>',
+    '<p>If anything comes up before then, just reply to this email.</p>',
+  ];
+  return { subject: `Following up: ${p.campaign} for ${p.business}`, html: parts.join('') };
+}

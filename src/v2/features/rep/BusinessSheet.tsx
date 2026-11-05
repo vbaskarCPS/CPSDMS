@@ -22,12 +22,12 @@ import { cacheGet, cacheSet, sendOrQueue, type QPhoto } from '../../lib/repQueue
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BookOnboarding } from './BookOnboarding';
 import { hasAnswers, repDeckAnswers, saveDeckAnswers, type DeckAnswers } from '../../lib/meetings';
-import { deckEmail } from '../../lib/deckEmail';
+import { deckEmail, followupNoFigures } from '../../lib/deckEmail';
 import { AnswersPanel } from '../meetings/shared';
 import { Composer, type ComposeInit } from '../mail/Composer';
 import { DoNotKnock, People } from './People';
 import { StageCard, TimelineToggle } from './Stage';
-import { dnkLabel } from '../../lib/msField';
+import { dnkLabel, loadOcr } from '../../lib/msField';
 import { download, useRep } from './repContext';
 
 /** What's known from the map, for when the business can't be loaded (no signal). */
@@ -114,7 +114,7 @@ export const BusinessSheet: React.FC<{
     setScanning(true); setError(null);
     try {
       setPhotos(p => (p.length < 6 ? [...p, { file, url: URL.createObjectURL(file) }] : p));
-      const { createWorker } = await import('tesseract.js');
+      const createWorker = await loadOcr();
       const w = await createWorker('eng');
       const { data } = await w.recognize(await shrinkPhoto(file, 2000));
       await w.terminate();
@@ -129,10 +129,15 @@ export const BusinessSheet: React.FC<{
   };
 
   // a copy of the questionnaire and proposal, as an email to the owner, opened in the composer to check
+  // with a proposal: a copy of their answers and proposal. Without one: a short follow-up with no figures.
   const copyInit = useCallback((to: string, followUpAt: string | null): ComposeInit | null => {
-    const a = answers.current; if (!d || !hasAnswers(a)) return null;
-    const e = deckEmail({ business: d.name, campaign: kit.data?.name || 'taxifi', answers: a, contactName: cName, followUpAt });
-    return { key: `deckcopy:${id}:${campaign}:${Date.now()}`, title: 'Questionnaire & proposal', business_id: id, campaign_id: campaign,
+    if (!d) return null;
+    const a = answers.current;
+    const e = hasAnswers(a) && a.proposal
+      ? deckEmail({ business: d.name, campaign: kit.data?.name || 'taxifi', answers: a, contactName: cName, followUpAt })
+      : followupNoFigures({ business: d.name, campaign: kit.data?.name || 'taxifi', contactName: cName || a?.contact?.name, followUpAt, infoUrl: kit.data?.info_url });
+    return { key: `deckcopy:${id}:${campaign}:${Date.now()}`, business_id: id, campaign_id: campaign,
+      title: hasAnswers(a) && a.proposal ? 'Questionnaire & proposal' : 'Follow-up email',
       to: to ? [to] : [], subject: e.subject, html: e.html, context: `${d.name} · ${kit.data?.name || ''}`.replace(/ · $/, '') };
   }, [d, id, campaign, kit.data, cName]);
 
@@ -175,7 +180,7 @@ export const BusinessSheet: React.FC<{
       // the copy of their questionnaire and proposal: checked in the composer first, then the visit closes
       const copy = outcome === 'follow_up' && emailCopy ? copyInit(cEmail.trim(), input.follow_up_at) : null;
       if (copy && r.sent) { afterCompose.current = done; setCompose(copy); return; }
-      if (copy) toast('No signal: email them the copy later from “Questionnaire & proposal” on this business.');
+      if (copy) toast('No signal: the visit is saved. Send the email later from this business once you have signal.');
       done();
     } catch (e) { setError(e); } finally { setBusy(false); }
   }, [outcome, lostWhy, notes, cName, cPhone, cEmail, when, photos, id, campaign, d, session, toast, onSaved, emailCopy, copyInit]);
@@ -237,7 +242,8 @@ export const BusinessSheet: React.FC<{
         </div>)}
       {compose && <Composer init={compose} onClose={() => closeCompose(false)} onSent={() => closeCompose(true)} />}
       {presenting && kit.data?.present_url && <Presenter url={kit.data.present_url} code={kit.data.ref} fill={hasAnswers(answers.current) ? answers.current : null}
-        onClose={() => { keepAnswers(); setPresenting(false); }} onBook={() => setBooking(true)} onAnswers={onDeckAnswers} />}
+        onClose={() => { keepAnswers(); setPresenting(false); }} onBook={() => setBooking(true)} onAnswers={onDeckAnswers}
+        onEmail={() => { keepAnswers(); const c = copyInit(cEmail || answers.current?.contact?.email || lastEmail(d), null); if (c) { setPresenting(false); setCompose(c); } }} />}
       {booking && <BookOnboarding campaign={campaign} business={id} businessName={d.name} answers={answers.current}
         owner={{ name: cName, phone: cPhone || d.phone || '', email: cEmail || lastEmail(d) }}
         onBooked={() => { booked.current = true; }}
@@ -274,11 +280,14 @@ export const BusinessSheet: React.FC<{
         </>)}
       {outcome === 'follow_up' && (
         <Field label="Follow up on"><input className="v2-input" type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} /></Field>)}
-      {outcome === 'follow_up' && hasAnswers(view) && (
+      {outcome === 'follow_up' && (
         <label className="v2-rep-check">
           <input type="checkbox" checked={emailCopy} onChange={e => { setEmailCopy(e.target.checked); setError(null); }} />
-          <span><b>Email them a copy of their questionnaire &amp; proposal</b>
-            <span className="v2-small v2-mut">Opens in your email after you save, with the follow-up time, to check before you send it.</span></span>
+          {hasAnswers(view) && view.proposal
+            ? <span><b>Email them a copy of their questionnaire &amp; proposal</b>
+                <span className="v2-small v2-mut">Opens in your email after you save, with the follow-up time, to check before you send it.</span></span>
+            : <span><b>Email them a follow-up</b>
+                <span className="v2-small v2-mut">A short thank-you with no figures and when you’ll be back. Opens in your email after you save, to check before you send it.</span></span>}
         </label>)}
       {(outcome === 'follow_up' || outcome === 'interested' || outcome === 'closed') && (
         <>
@@ -340,7 +349,7 @@ const Sheet: React.FC<{ onClose: () => void; label: string; children: React.Reac
 };
 
 // ───────────── present: the campaign's deck, full screen ─────────────
-const Presenter: React.FC<{ url: string; code: string; fill?: DeckAnswers | null; onClose: () => void; onBook: () => void; onAnswers: (a: DeckAnswers) => void }> = ({ url, code, fill, onClose, onBook, onAnswers }) => {
+const Presenter: React.FC<{ url: string; code: string; fill?: DeckAnswers | null; onClose: () => void; onBook: () => void; onAnswers: (a: DeckAnswers) => void; onEmail: () => void }> = ({ url, code, fill, onClose, onBook, onAnswers, onEmail }) => {
   // the answers saved on the business go back into the deck once it has loaded (only the first answers it opened with)
   const fillAt = React.useRef(fill);
   const onLoad = () => { const f = fillAt.current; if (f) frame.current?.contentWindow?.postMessage({ type: 'ms-deck-fill', data: f }, new URL(url, location.href).origin); };
@@ -354,10 +363,11 @@ const Presenter: React.FC<{ url: string; code: string; fill?: DeckAnswers | null
       const m = e.data as { type?: string; data?: DeckAnswers } | null;
       if (m?.type === 'ms-deck-answers' && m.data && typeof m.data === 'object') onAnswers(m.data);
       if (m?.type === 'ms-book-onboarding') onBook();
+      if (m?.type === 'ms-email-proposal') onEmail();
     };
     window.addEventListener('keydown', esc); window.addEventListener('message', msg);
     return () => { window.removeEventListener('keydown', esc); window.removeEventListener('message', msg); };
-  }, [onClose, onBook, onAnswers]);
+  }, [onClose, onBook, onAnswers, onEmail]);
   return (
     <div className="v2-rep-present" role="dialog" aria-label="Presentation">
       <iframe ref={frame} src={src} title="Presentation" onLoad={onLoad} />

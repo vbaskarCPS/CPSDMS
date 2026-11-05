@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import { Crosshair, LocateFixed, Plus, X } from 'lucide-react';
 import {
-  addLead, geocode, hereNow, hitForTyped, isOpen, pinMatchesAddress, repMap, reverseGeocode, stagePin,
+  addLead, geocode, hereNow, withUnit, hitForTyped, isOpen, pinMatchesAddress, repMap, reverseGeocode, stagePin,
   type MapBiz, type RepMap,
 } from '../../lib/rep';
 import { BUSINESS_KINDS, kindLabel } from '../../lib/msCity';
@@ -157,6 +157,7 @@ const AddLead: React.FC<{
   const [name, setName] = useState('');
   const [kind, setKind] = useState('');
   const [address, setAddress] = useState('');
+  const [unit, setUnit] = useState('');   // unit / suite: kept out of the map lookup, saved in front of the address
   const [phone, setPhone] = useState('');
   const [campaign, setCampaign] = useState(campaigns[0]?.id || '');
   const [point, setPoint] = useState<{ lat: number; lng: number } | null>(at);
@@ -255,8 +256,9 @@ const AddLead: React.FC<{
         setPoint(p); setAddress(addr); setPinFor(addr); setPinFrom('address');
       }
       if (!p) { setError(new Error('Where is it? Use your location, look up the address, or tap the map.')); return; }
-      const r = await addLead({ name: name.trim(), kind, address: addr, lat: p.lat, lng: p.lng, phone, campaign });
-      onAdded({ id: r.id, n: name.trim(), a: addr || undefined, lat: p.lat, lng: p.lng, k: kind, z: r.zone_id || undefined, c: r.campaign_id, lead: true, s: 'new' }, r.campaign_id);
+      const full = withUnit(unit, addr);
+      const r = await addLead({ name: name.trim(), kind, address: full, lat: p.lat, lng: p.lng, phone, campaign });
+      onAdded({ id: r.id, n: name.trim(), a: full || undefined, lat: p.lat, lng: p.lng, k: kind, z: r.zone_id || undefined, c: r.campaign_id, lead: true, s: 'new' }, r.campaign_id);
     } catch (e) { setError(e); } finally { setBusy(false); }
   };
   const pinLabel = pinFrom === 'gps' ? 'where you are' : pinFrom === 'map' ? 'where you tapped' : pinFrom === 'place' ? (name || 'the business you picked') : 'the address';
@@ -315,6 +317,8 @@ const AddLead: React.FC<{
               onKeyDown={e => { if (e.key === 'Enter') look(); }} autoComplete="off" />
             <Btn kind="o" onClick={look} disabled={!address.trim()}>Find</Btn>
           </div>
+          <input className="v2-input" placeholder="Unit / suite (optional)" aria-label="Unit or suite" value={unit} onChange={e => setUnit(e.target.value)}
+            autoComplete="off" style={{ marginTop: 6, maxWidth: 220 }} />
         </Field>
         {hits.length > 0 && (
           <div className="v2-rep-hits">{hits.map(h => (

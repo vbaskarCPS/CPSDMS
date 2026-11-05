@@ -418,6 +418,7 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
         <div class="kicker">Next step</div>
         <h2>Let's book your onboarding call.</h2>
         <button type="button" class="cta primary" id="cta-book">Book onboarding<small>Pick a day and time together, takes a minute</small></button>
+        <button type="button" class="cta" id="cta-email" hidden>Email this proposal<small>Not ready to book? Send a copy to their email</small></button>
         
         <div class="call">
           <b>On the call</b>
@@ -769,6 +770,10 @@ h2 { font-size: clamp(30px, 8.5vw, 44px); }
   refInput.addEventListener('input', function () {
     try { localStorage.setItem('taxifi-door-ref', refInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); } catch (e) {}
   });
+  // inside the rep app: email the owner a copy of their answers and proposal instead of booking now
+  var ctaEmail = document.getElementById('cta-email');
+  if (embedded) ctaEmail.hidden = false;
+  ctaEmail.addEventListener('click', function () { if (embedded) { share(); window.parent.postMessage({ type: 'ms-email-proposal' }, '*'); } });
   document.getElementById('cta-book').addEventListener('click', function () {
     if (embedded) { share(); window.parent.postMessage({ type: 'ms-book-onboarding' }, '*'); return; }
     openPreview();

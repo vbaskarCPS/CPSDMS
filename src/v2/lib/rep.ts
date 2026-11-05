@@ -183,7 +183,7 @@ export function hereNow(timeoutMs = 8000): Promise<{ lat: number; lng: number; a
 
 // ───────────── follow-ups and numbers ─────────────
 export interface FollowUp {
-  business_id: string; name: string; address: string | null; zone_id: string; zone_name: string; campaign_id: string; campaign_name: string;
+  business_id: string; name: string; address: string | null; zone_id: string | null; zone_name: string | null; campaign_id: string; campaign_name: string;
   follow_up_at: string; when: 'overdue' | 'today' | 'later'; contact_name: string | null; contact_phone: string | null; notes: string | null;
 }
 export async function repFollowups(): Promise<FollowUp[]> { return (must(await db.rpc('ms_rep_followups')) as FollowUp[]) || []; }
@@ -281,6 +281,14 @@ export async function geocode(q: string, near?: { lat: number; lng: number } | n
  *  ("1501 34 Ave SW" is the same as "1501 34 AVE S.W., Calgary, AB T2T 2B1"). */
 export function addrKey(a: string | null | undefined): string {
   return (a || '').split(',')[0].toLowerCase().replace(/[.#]/g, '').replace(/\s+/g, ' ').trim();
+}
+/** "Unit 5, 123 Main St, Calgary" from a unit and an address (a bare number or letters gets "Unit"; "Suite 200" or
+ *  "#4" are kept as typed). No unit: the address as it is. */
+export function withUnit(unit: string, address: string): string {
+  const u = unit.trim().replace(/,+$/, ''), a = address.trim();
+  if (!u) return a;
+  const label = /^(unit|suite|ste|apt|#|bay|office|floor|fl)\b|^#/i.test(u) ? u : `Unit ${u}`;
+  return a ? `${label}, ${a}` : label;
 }
 /** Is the pin still for the address in the box? (The rep typed or changed the address after the pin was set.) */
 export function pinMatchesAddress(typed: string, pinFor: string | null): boolean {
