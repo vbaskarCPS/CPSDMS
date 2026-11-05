@@ -1,6 +1,6 @@
 // The copy of the questionnaire and proposal a rep can email to the owner.
 import { describe, expect, it } from 'vitest';
-import { deckEmail, SAVINGS_DISCLAIMER } from './deckEmail';
+import { deckEmail, followupNoFigures, SAVINGS_DISCLAIMER } from './deckEmail';
 import type { DeckAnswers } from './meetings';
 
 const a: DeckAnswers = {
@@ -37,5 +37,22 @@ describe('the questionnaire & proposal email', () => {
     const e = deckEmail({ business: 'A&B <Shop>', campaign: 'Taxifi', answers: { ...a, contact: { ...a.contact!, name: '<b>x</b>' } } });
     expect(e.html).toContain('A&amp;B &lt;Shop&gt;');
     expect(e.html).not.toContain('<b>x</b>');
+  });
+});
+
+describe('the follow-up email with no figures', () => {
+  it('thanks them, links the campaign info, says when, and has no dollar figures', () => {
+    const e = followupNoFigures({ business: 'Vega Dental', campaign: 'Taxifi', contactName: 'Maria Vega', followUpAt: '2026-11-10T15:00:00Z', infoUrl: 'https://taxifi.ai/talk', tz: 'America/Toronto' });
+    expect(e.subject).toBe('Following up: Taxifi for Vega Dental');
+    expect(e.html).toContain('<p>Hi Maria,</p>');
+    expect(e.html).toContain('href="https://taxifi.ai/talk"');
+    expect(e.html).toContain('Tuesday, November 10 at 10:00 AM');
+    expect(e.html).not.toMatch(/\$\d/);
+  });
+  it('works with no name, link or date', () => {
+    const e = followupNoFigures({ business: 'X', campaign: 'Taxifi' });
+    expect(e.html).toContain('<p>Hi,</p>');
+    expect(e.html).toContain('I’ll follow up with you soon');
+    expect(e.html).not.toContain('href=');
   });
 });
