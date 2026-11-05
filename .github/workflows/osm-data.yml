@@ -1,0 +1,62 @@
+# Map data from OpenStreetMap (free, ODbL) for BC, Ontario and Alberta, so the Map Builder and MainstreetAI never wait
+# on the overloaded Overpass road servers. Downloads each province from Geofabrik, then publishes on the osm-data branch:
+#   ms/{i}_{j}.json       MainstreetAI: main roads, rail, rivers and commercial land, whole provinces, 0.25° tiles
+#   streets/{i}_{j}.json  Map Builder: every street the builder uses, populated areas, 0.1° tiles
+#   index.json            which tiles exist, and when they were made
+# Runs when this file or scripts/osm_data.py changes on the osm-data-job branch, and on the 1st of every third month.
+name: OSM map data
+on:
+  push:
+    branches: [osm-data-job]
+    paths: ['.github/workflows/osm-data.yml', 'scripts/osm_data.py']
+  schedule:
+    - cron: '17 6 1 */3 *'
+permissions:
+  contents: write
+jobs:
+  data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q osmium-tool
+      - name: Build
+        run: |
+          set -e
+          mkdir -p out/ms out/streets
+          for p in british-columbia ontario alberta; do
+            curl -sSfL -o "$p.osm.pbf" "https://download.geofabrik.de/north-america/canada/$p-latest.osm.pbf"
+            ls -la "$p.osm.pbf"
+            # MainstreetAI: main roads, rail, rivers, commercial land
+            osmium tags-filter "$p.osm.pbf" \
+              w/highway=motorway,trunk,primary,secondary,tertiary,motorway_link,trunk_link,primary_link,secondary_link \
+              w/railway=rail w/waterway=river,canal \
+              wa/landuse=retail,commercial,industrial wa/building=retail,commercial,industrial,warehouse,supermarket,mall wa/shop=mall \
+              -o ms.pbf --overwrite
+            osmium export ms.pbf -f geojsonseq -a type,id -o ms.geojsonseq --overwrite
+            python3 scripts/osm_data.py ms ms.geojsonseq out/ms
+            # Map Builder: streets in the populated areas of this province
+            python3 scripts/osm_data.py boxes "$p" | while read b; do
+              osmium extract -b "$b" -s complete_ways "$p.osm.pbf" -o area.pbf --overwrite
+              osmium tags-filter area.pbf w/highway -o roads.pbf --overwrite
+              echo '{"linear_tags": true, "area_tags": false}' > lin.json
+              osmium export roads.pbf -c lin.json -f geojsonseq -a id -o roads.geojsonseq --overwrite
+              python3 scripts/osm_data.py streets roads.geojsonseq out/streets "$b"
+            done
+            rm -f "$p.osm.pbf" ms.pbf area.pbf roads.pbf ms.geojsonseq roads.geojsonseq
+          done
+          python3 scripts/osm_data.py index out
+          du -sh out/ms out/streets; ls out/ms | wc -l; ls out/streets | wc -l
+      - name: Publish
+        run: |
+          git config user.name "osm-data bot"
+          git config user.email "osm-data@users.noreply.github.com"
+          git checkout --orphan data
+          git rm -rq --cached . || true
+          find . -mindepth 1 -maxdepth 1 ! -name out ! -name .git -exec rm -rf {} +
+          mv out/* . && rmdir out
+          printf 'Map data © OpenStreetMap contributors, ODbL (openstreetmap.org/copyright), from Geofabrik extracts.\nms/: main roads, rail, rivers, commercial land (0.25° tiles). streets/: Map Builder streets (0.1° tiles). index.json lists them.\n' > README.txt
+          git add -A
+          git commit -qm "OSM map data $(date -u +%F)"
+          git push -f origin HEAD:osm-data
