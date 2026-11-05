@@ -216,6 +216,47 @@ type SizeConfig = {
   minWidthPayout: string;
 };
 
+/** Phones held upright: the sections stack top to bottom, so every row gets the full width. */
+const PHONE_SIZE: SizeConfig = {
+  headerPadding: 'p-3',
+  headerTrophy: 'text-3xl',
+  headerTitle: 'text-xl',
+  headerDate: 'text-sm',
+  columnGap: 'gap-5',
+  sectionIcon: 16,
+  sectionTitle: 'text-base',
+  sectionMargin: 'mb-2',
+  rowPadding: 'p-2.5',
+  rowGap: 'gap-2.5',
+  rowMargin: 'space-y-2',
+  medalSize: 'text-2xl',
+  placingText: 'text-[10px]',
+  firstNameText: 'text-base',
+  lastNameText: 'text-sm',
+  achievementSize: 'w-10 h-10',
+  achievementContainer: 'w-12 h-12',
+  eqOverlayText: 'text-xs',
+  upsellText: 'text-sm',
+  bonusText: 'text-sm',
+  payoutText: 'text-lg',
+  minWidthMedal: 'min-w-[38px]',
+  minWidthBonus: 'min-w-[44px]',
+  minWidthPayout: 'min-w-[78px]',
+};
+
+/** True on a phone-width screen (follows rotating the phone). */
+function useIsPhone(): boolean {
+  const q = '(max-width: 640px)';
+  const [on, setOn] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia(q);
+    const f = () => setOn(m.matches);
+    m.addEventListener('change', f);
+    return () => m.removeEventListener('change', f);
+  }, []);
+  return on;
+}
+
 function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
   if (columnCount === 4) {
     if (totalBonuses <= 8) {
@@ -1039,9 +1080,10 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     ].filter(Boolean).length;
   }, [activeBonusWinners]);
 
+  const isPhone = useIsPhone();
   const sizeConfig = useMemo(
-    () => getSizeConfig(totalBonusCount, activeColumns),
-    [totalBonusCount, activeColumns]
+    () => (isPhone ? PHONE_SIZE : getSizeConfig(totalBonusCount, activeColumns)),
+    [totalBonusCount, activeColumns, isPhone]
   );
 
   const hasBonuses = totalBonusCount > 0;
@@ -2263,7 +2305,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       {/* On the page body, not inside the new app's restyled panel, so the screenshot keeps its own look. */}
       {showScreenshotModal && createPortal(
         <div
-          className="fixed inset-0 bg-gray-900 z-50 flex flex-col h-screen overflow-hidden"
+          className={`fixed inset-0 bg-gray-900 z-50 flex flex-col h-screen ${isPhone ? 'overflow-y-auto' : 'overflow-hidden'}`}
           style={{ fontFamily: "'Quicksand', 'Nunito', sans-serif" }}
         >
           {/* Clickable Dark Red Header */}
@@ -2287,12 +2329,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           </div>
 
           {/* Content — Horizontal Columns */}
-          <div className="flex-1 overflow-hidden p-4">
-            <div className={`h-full flex ${sizeConfig.columnGap}`}>
+          <div className={isPhone ? 'p-3' : 'flex-1 overflow-hidden p-4'}>
+            <div className={`${isPhone ? 'flex flex-col' : 'h-full flex'} ${sizeConfig.columnGap}`}>
 
               {/* Performance EQ Column */}
               {activeBonusWinners.performanceEQ.length > 0 && (
-                <div className="flex-1 min-w-0 flex flex-col">
+                <div className={isPhone ? 'min-w-0 flex flex-col' : 'flex-1 min-w-0 flex flex-col'}>
                   <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
                     <div className="p-1.5 rounded-full bg-blue-500/20 border-2 border-blue-400">
                       <TrendingUp size={sizeConfig.sectionIcon} className="text-blue-400" />
@@ -2301,7 +2343,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                       Performance EQ
                     </h2>
                   </div>
-                  <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
+                  <div className={`${sizeConfig.rowMargin} ${isPhone ? '' : 'flex-1 overflow-hidden'}`}>
                     {isTeamSeason
                       ? (activeBonusWinners.performanceEQ as TeamBonusWinner[]).map(
                           (winner, idx) => renderTeamWinnerRow(winner, idx)
@@ -2353,7 +2395,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
               {/* Total Upsell Column */}
               {activeBonusWinners.totalUpsell.length > 0 && (
-                <div className="flex-1 min-w-0 flex flex-col">
+                <div className={isPhone ? 'min-w-0 flex flex-col' : 'flex-1 min-w-0 flex flex-col'}>
                   <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
                     <div className="p-1.5 rounded-full bg-purple-500/20 border-2 border-purple-400">
                       <DollarSign size={sizeConfig.sectionIcon} className="text-purple-400" />
@@ -2362,7 +2404,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                       Total Upsell
                     </h2>
                   </div>
-                  <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
+                  <div className={`${sizeConfig.rowMargin} ${isPhone ? '' : 'flex-1 overflow-hidden'}`}>
                     {isTeamSeason
                       ? (activeBonusWinners.totalUpsell as TeamBonusWinner[]).map(
                           (winner, idx) => renderTeamWinnerRow(winner, idx)
@@ -2413,7 +2455,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
               {/* Rookie Column */}
               {activeBonusWinners.rookie.length > 0 && (
-                <div className="flex-1 min-w-0 flex flex-col">
+                <div className={isPhone ? 'min-w-0 flex flex-col' : 'flex-1 min-w-0 flex flex-col'}>
                   <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
                     <div className="p-1.5 rounded-full bg-yellow-500/20 border-2 border-yellow-400">
                       <Star size={sizeConfig.sectionIcon} className="text-yellow-400" />
@@ -2422,7 +2464,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                       Rookie
                     </h2>
                   </div>
-                  <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
+                  <div className={`${sizeConfig.rowMargin} ${isPhone ? '' : 'flex-1 overflow-hidden'}`}>
                     {isTeamSeason
                       ? (activeBonusWinners.rookie as TeamBonusWinner[]).map(
                           (winner, idx) => renderTeamWinnerRow(winner, idx)
@@ -2474,7 +2516,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
               {/* Other Bonuses Column — DRAG-TO-REORDER ENABLED */}
               {activeBonusWinners.other.length > 0 && (
-                <div className="flex-1 min-w-0 flex flex-col">
+                <div className={isPhone ? 'min-w-0 flex flex-col' : 'flex-1 min-w-0 flex flex-col'}>
                   <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
                     <div className="p-1.5 rounded-full bg-gray-500/20 border-2 border-gray-400">
                       <Sparkles size={sizeConfig.sectionIcon} className="text-gray-400" />
@@ -2482,11 +2524,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     <h2 className={`${sizeConfig.sectionTitle} font-black text-gray-400 uppercase tracking-wide`}>
                       Other
                     </h2>
-                    <span className="text-[10px] text-gray-500 italic ml-auto flex items-center gap-1">
+                    <span className={`text-[10px] text-gray-500 italic ml-auto items-center gap-1 ${isPhone ? 'hidden' : 'flex'}`}>
                       <GripVertical size={10} /> drag to reorder
                     </span>
                   </div>
-                  <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
+                  <div className={`${sizeConfig.rowMargin} ${isPhone ? '' : 'flex-1 overflow-hidden'}`}>
                     <DndContext
                       sensors={dndSensors}
                       collisionDetection={closestCenter}
@@ -2543,7 +2585,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
               )}
 
               {!hasBonuses && (
-                <div className="flex-1 flex items-center justify-center text-gray-500">
+                <div className={`flex-1 flex items-center justify-center text-gray-500 ${isPhone ? 'py-24' : ''}`}>
                   <div className="text-center">
                     <Trophy size={80} className="mx-auto mb-4 opacity-30" />
                     <p className="text-2xl">No bonuses have been assigned yet.</p>
