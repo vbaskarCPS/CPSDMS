@@ -227,7 +227,54 @@ export function lineKind(tags: Record<string, string>): LineKind | null {
   if (tags.waterway && /^(river|canal)$/.test(tags.waterway)) return 'water';
   return null;
 }
+// ───────────── published OpenStreetMap tiles ─────────────
+// A GitHub job (.github/workflows/osm-data.yml) cuts the main roads, rail, rivers and commercial land for all of BC,
+// Ontario and Alberta out of OpenStreetMap's provincial downloads, as 0.25° tiles on the osm-data branch. Building a
+// city reads those (seconds, no road server); the Overpass servers are only asked when the tiles can't be reached.
+const OSM_DATA = 'https://raw.githubusercontent.com/vbaskarCPS/CPSDMS/osm-data';
+const MS_TILE = 0.25;
+interface MsTile { lines: { id: number; kind: LineKind; name: string | null; c: [number, number][] }[]; plazas: { id: number; t?: 'w' | 'r'; name: string | null; kind: PlazaRow['kind']; c: [number, number][] }[] }
+let msIndex: Promise<Set<string> | null> | null = null;
+/** Which tiles exist (null: the published data can't be reached). */
+function tileIndex(): Promise<Set<string> | null> {
+  if (!msIndex) msIndex = fetch(`${OSM_DATA}/index.json`).then(r => (r.ok ? r.json() : null))
+    .then((j: { ms?: string[] } | null) => (j?.ms ? new Set(j.ms) : null)).catch(() => null);
+  return msIndex.then(x => { if (!x) msIndex = null; return x; });
+}
+const msTileCache = new Map<string, Promise<MsTile>>();
+const touches = (c: [number, number][], b: BBox) => {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const [x, y] of c) { if (x < w) w = x; if (x > e) e = x; if (y < s) s = y; if (y > n) n = y; }
+  return !(e < b.w || w > b.e || n < b.s || s > b.n);
+};
+/** Main roads and commercial land in a box from the published tiles; null when they can't be reached. */
+export async function msFromTiles(bbox: BBox, onTile?: (done: number, of: number) => void): Promise<{ lines: LineRow[]; plazas: PlazaRow[] } | null> {
+  const idx = await tileIndex();
+  if (!idx) return null;
+  const keys: string[] = [];
+  for (let i = Math.floor(bbox.s / MS_TILE + 1e-9); i <= Math.floor(bbox.n / MS_TILE + 1e-9); i++)
+    for (let j = Math.floor(bbox.w / MS_TILE + 1e-9); j <= Math.floor(bbox.e / MS_TILE + 1e-9); j++)
+      if (idx.has(`${i}_${j}`)) keys.push(`${i}_${j}`);
+  const lines = new Map<number, LineRow>(), plazas = new Map<number, PlazaRow>();
+  let done = 0;
+  try {
+    await Promise.all(keys.map(async k => {
+      if (!msTileCache.has(k)) msTileCache.set(k, fetch(`${OSM_DATA}/ms/${k}.json`).then(r => { if (!r.ok) throw new Error(`tile ${k}: ${r.status}`); return r.json() as Promise<MsTile>; }));
+      const t = await msTileCache.get(k)!;
+      for (const l of t.lines || []) if (!lines.has(l.id) && touches(l.c, bbox)) lines.set(l.id, { osm_id: l.id, kind: l.kind, name: l.name, coordinates: l.c });
+      for (const p of t.plazas || []) {
+        const id = p.t === 'r' ? -p.id : p.id;
+        if (!plazas.has(id) && touches(p.c, bbox)) plazas.set(id, { osm_id: id, name: p.name, kind: p.kind, coordinates: p.c });
+      }
+      onTile?.(++done, keys.length);
+    }));
+  } catch (e) { keys.forEach(k => msTileCache.delete(k)); throw e; }
+  return { lines: [...lines.values()], plazas: [...plazas.values()] };
+}
+
 export async function fetchLines(bbox: BBox, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<LineRow[]> {
+  const t = await msFromTiles(bbox, onTile).catch(() => null);
+  if (t) return t.lines;
   const els = await overpassTiled(bbox, b => `[out:json][timeout:25];(
   way["highway"~"^(motorway|trunk|primary|secondary|tertiary|motorway_link|trunk_link|primary_link|secondary_link)$"](${b});
   way["railway"="rail"](${b});
@@ -240,6 +287,8 @@ export async function fetchLines(bbox: BBox, signal?: AbortSignal, onTile?: (don
   });
 }
 export async function fetchPlazas(bbox: BBox, signal?: AbortSignal, onTile?: (done: number, of: number) => void): Promise<PlazaRow[]> {
+  const t = await msFromTiles(bbox, onTile).catch(() => null);
+  if (t) return t.plazas;
   const els = await overpassTiled(bbox, b => `[out:json][timeout:25];(
   way["landuse"~"^(retail|commercial|industrial)$"](${b});
   way["building"~"^(retail|commercial|industrial|warehouse|supermarket|mall)$"](${b});

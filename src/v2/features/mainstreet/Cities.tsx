@@ -181,11 +181,11 @@ const Builder: React.FC<{ city: City; onClose: () => void }> = ({ city, onClose 
       if (have > 0) set('lines', 'done', `${have.toLocaleString('en-CA')} road pieces, already saved`);
       else {
         set('lines', 'running');
-        const lines = await fetchLines(bboxOf(geometry), ctrl.signal, (d, of) => set('lines', 'running', `OpenStreetMap · part ${d} of ${of}`));
+        const lines = await fetchLines(bboxOf(geometry), ctrl.signal, (d, of) => set('lines', 'running', `OpenStreetMap · tile ${d} of ${of}`));
         set('lines', 'done', `${await replaceLines(city.id, lines)} road pieces`);
       }
       set('land', 'running');
-      const land = await fetchPlazas(bboxOf(geometry), ctrl.signal, (d, of) => set('land', 'running', `OpenStreetMap · part ${d} of ${of}`));
+      const land = await fetchPlazas(bboxOf(geometry), ctrl.signal, (d, of) => set('land', 'running', `OpenStreetMap · tile ${d} of ${of}`));
       set('land', 'done', `${await replacePlazas(city.id, land)} areas`);
       set('blocks', 'running', 'Queued: it starts within a minute');
       setJob(await queueCityBuild(city.id));

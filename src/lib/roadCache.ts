@@ -4,6 +4,7 @@
 // several presses of "Load" per area. The ground is cut into cells 0.02° on a side. Cells somebody
 // already loaded come straight from our database; only the rest go to Overpass, and what comes back
 // is saved for next time. If the cache can't be reached, the builder simply asks Overpass as before.
+// Before Overpass, the published OpenStreetMap tiles (road_cache_fill) fill what they cover.
 
 export const CELL = 0.02;
 /** Past this many cells (a huge box), skip the cache and ask Overpass directly. */
@@ -50,6 +51,8 @@ export interface RoadCacheDeps {
   get: (cells: string[], b: Box) => Promise<{ have: string[]; ways: { id: number; name: string; unnamed?: boolean; g: [number, number][] }[] }>;
   /** road_cache_put */
   put: (cells: string[] | null, ways: { id: number; name: string; unnamed: boolean; g: [number, number][] }[]) => Promise<unknown>;
+  /** road_cache_fill: load the published OpenStreetMap tiles for these cells; returns the cells now saved */
+  fill?: (cells: string[]) => Promise<string[]>;
   onSaveError?: (e: unknown) => void;
 }
 
@@ -81,8 +84,22 @@ export async function fetchRoadsCached(bbox: string, deps: RoadCacheDeps): Promi
   } catch {
     return deps.overpass(bbox);   // cache unreachable: as before
   }
-  const missing = cells.filter(c => !have.has(c));
+  let missing = cells.filter(c => !have.has(c));
   if (!missing.length) return cached;
+
+  // the published OpenStreetMap tiles (BC, Ontario and Alberta's populated areas) before the road servers
+  if (deps.fill) {
+    try {
+      const now = await deps.fill(missing);
+      if (now.length) {
+        const r = await deps.get(now, box);
+        cached = mergeWays(cached, r.ways.map(w => ({ id: w.id, name: w.name || '', unnamed: !!w.unnamed, geometry: w.g })));
+        for (const c of r.have) have.add(c);
+        missing = cells.filter(c => !have.has(c));
+        if (!missing.length) return cached;
+      }
+    } catch { /* no tiles here, or they can't be reached: the road servers as before */ }
+  }
 
   // fetch whole cells, so a cell is complete once saved
   const fresh = await deps.overpass(boxString(cellsBox(missing)));
