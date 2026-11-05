@@ -268,6 +268,11 @@ function fetchRoads(bbox: string): Promise<OsmWay[]> {
       const { error } = await db.rpc('road_cache_put', { p_cells: cells, p_ways: ways });
       if (error) throw error;
     },
+    fill: async cells => {
+      const { data, error } = await db.rpc('road_cache_fill', { p_cells: cells });
+      if (error) throw error;
+      return (data as string[] | null) || [];
+    },
     onSaveError: e => console.warn('[Map Builder] saving roads failed:', e),
   });
 }

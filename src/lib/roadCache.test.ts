@@ -57,4 +57,22 @@ describe('road cache · loading', () => {
     await saveWays(d, ['1:1'], many);
     expect(d.put.mock.calls.map(c => [c[0], (c[1] as unknown[]).length])).toEqual([[null, 1500], [null, 1500], [['1:1'], 200]]);
   });
+  it('fills missing cells from the published tiles before asking Overpass', async () => {
+    const d = deps(['2172:-3991'], [way(1)], [way(9)]);
+    const tiled = { have: ['2172:-3990'], ways: [{ id: 4, name: 'Oak St', g: way(4).geometry }] };
+    d.get.mockImplementationOnce(async () => ({ have: ['2172:-3991'], ways: [{ id: 1, name: way(1).name, g: way(1).geometry }] }))
+         .mockImplementationOnce(async () => tiled);
+    const fill = vi.fn(async (c: string[]) => c);
+    const got = await fetchRoadsCached(bbox, { ...d, fill });
+    expect(fill).toHaveBeenCalledWith(['2172:-3990']);
+    expect(got.map(w => w.id).sort()).toEqual([1, 4]);
+    expect(d.overpass).not.toHaveBeenCalled();
+  });
+  it('asks Overpass for what the tiles do not cover', async () => {
+    const d = deps(['2172:-3991'], [way(1)], [way(2)]);
+    const fill = vi.fn(async () => [] as string[]);
+    const got = await fetchRoadsCached(bbox, { ...d, fill });
+    expect(got.map(w => w.id).sort()).toEqual([1, 2]);
+    expect(d.overpass).toHaveBeenCalledWith('43.44,-79.8,43.46,-79.78');
+  });
 });
