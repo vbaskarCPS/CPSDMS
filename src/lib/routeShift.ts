@@ -57,3 +57,36 @@ export function describeShift(a: ShiftAnswer, code: string): { blocked: string |
   }
   return { blocked, moves, carried };
 }
+
+// ───────────── moving a route to another number ─────────────
+// The route keeps its streets and everything filed under it; the routes in between move one number
+// up (or down), across every map with the prefix (app_route_move). The number has to be within the
+// route's own map's numbers, or one past its last.
+export interface MoveAnswer {
+  ok: boolean; preview?: boolean; reason?: 'bad_input' | 'same_number' | 'not_drawn' | 'outside_map' | 'live_today';
+  code?: string; to?: string; area?: string; first?: string; last?: string; live?: string[];
+  moves?: ShiftMap[]; data?: ShiftData;
+}
+export async function previewMove(prefix: string, from: number, to: number): Promise<MoveAnswer> {
+  const { data, error } = await db.rpc('app_route_move_preview', { p_prefix: prefix, p_from: from, p_to: to });
+  if (error) throw new Error(error.message);
+  return data as MoveAnswer;
+}
+export async function moveRoute(prefix: string, from: number, to: number): Promise<MoveAnswer> {
+  const { data, error } = await db.rpc('app_route_move', { p_prefix: prefix, p_from: from, p_to: to });
+  if (error) throw new Error(error.message);
+  return data as MoveAnswer;
+}
+/** Plain words for the move: what shifts, what goes with it, or why it can't be done. */
+export function describeMove(a: MoveAnswer, code: string): { blocked: string | null; moves: string[]; carried: string | null } {
+  const base = describeShift({ ok: true, maps: a.moves, data: a.data }, code);
+  let blocked: string | null = null;
+  if (!a.ok) {
+    if (a.reason === 'outside_map') blocked = `${code} stays on ${a.area}, so pick a number from ${a.first} to ${a.last}.`;
+    else if (a.reason === 'live_today') blocked = `${(a.live || []).join(', ')} ${(a.live || []).length === 1 ? 'is' : 'are'} on today's live day. Move after the day is closed.`;
+    else if (a.reason === 'not_drawn') blocked = `${code} isn't saved yet. Save the map first, then move it.`;
+    else if (a.reason === 'same_number') blocked = `${code} already has that number.`;
+    else blocked = `${code} can't be moved (${a.reason || 'unknown reason'}).`;
+  }
+  return { blocked, moves: base.moves, carried: base.carried };
+}
