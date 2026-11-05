@@ -6,7 +6,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   ArrowLeft, Loader, Check, X, AlertCircle,
   Plus, Map as MapIcon, Scissors, RefreshCw, Pencil, Eye, EyeOff, Edit2,
-  BookOpen, Users, Trash2,
+  BookOpen, Users, Trash2, ArrowUpDown,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { db } from '../../v2/lib/client';
@@ -14,6 +14,7 @@ import { googleAuthService } from '../../lib/googleAuthService';
 import { loadAndCacheMapPCL, getMapPCLCounts, recalibrateMapPCL } from '../../lib/pclCacheService';
 import { firstFree, ownedNumbers, runsLabel, takenNumbers, type Drawn } from '../../lib/areaNumbers';
 import { RouteDeleteModal } from './RouteDeleteModal';
+import { RouteMoveModal } from './RouteMoveModal';
 import { readBuilderView, saveBuilderView } from '../../lib/builderView';
 import { placeSearches, roadBox } from '../../lib/roadBox';
 import { fetchRoadsCached } from '../../lib/roadCache';
@@ -340,6 +341,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
   const [saving, setSaving] = useState(false);
   // a route number being deleted (the later routes of the prefix move down one)
   const [deletingNum, setDeletingNum] = useState<number | null>(null);
+  const [movingNum, setMovingNum] = useState<number | null>(null);   // Move to number… open for this route
   const [error, setError] = useState<string | null>(null);
   const [addStreetInput, setAddStreetInput] = useState('');
   const [hoveredWayName, setHoveredWayName] = useState<string | null>(null);
@@ -1378,6 +1380,14 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
           onDone={() => { setDeletingNum(null); window.location.reload(); }} />
       )}
 
+      {movingNum != null && currentArea && (
+        <RouteMoveModal prefix={currentArea.prefix} number={movingNum} code={formatRouteCode(currentArea.prefix, movingNum)}
+          format={n => formatRouteCode(currentArea.prefix, n)}
+          first={currentArea.route_start ?? 1} last={(currentArea.route_start ?? 1) + Math.max(1, currentArea.route_count || 0) - 1}
+          mapState={mapSaveState} onClose={() => setMovingNum(null)}
+          onDone={() => { setMovingNum(null); window.location.reload(); }} />
+      )}
+
       {pclModalOpen && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => !pclRunning && setPclModalOpen(false)}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
@@ -1523,6 +1533,12 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
                     </span>
                     {r.status !== 'pending' && r.num === activeRouteNum && (
                       <button onClick={e => { e.stopPropagation(); setRoutes(prev => prev.map(rt => rt.num === r.num ? { ...rt, status: 'pending' } : rt)); }} title="Unlock for editing" className="text-gray-500 hover:text-yellow-400 transition-colors flex-shrink-0 ml-1"><Pencil size={9} /></button>
+                    )}
+                    {r.num === activeRouteNum && r.status === 'approved' && (
+                      <span role="button" tabIndex={0} onClick={e => { e.stopPropagation(); setMovingNum(r.num); }}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); setMovingNum(r.num); } }}
+                        title={`Move ${formatRouteCode(currentArea.prefix, r.num)} to another number (the routes in between shift to make room)`} aria-label={`Move ${formatRouteCode(currentArea.prefix, r.num)} to another number`}
+                        className="text-gray-500 hover:text-blue-400 transition-colors flex-shrink-0 ml-1 cursor-pointer"><ArrowUpDown size={10} /></span>
                     )}
                     {r.num === activeRouteNum && (
                       <span role="button" tabIndex={0} onClick={e => { e.stopPropagation(); setDeletingNum(r.num); }}
