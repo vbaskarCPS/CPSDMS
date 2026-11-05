@@ -33,8 +33,8 @@ begin
 end $$;
 revoke all on function public.road_tile_load(int, int) from public, anon, authenticated;
 
--- the builder: load the tiles for squares the cache doesn't have (as many as fit in about 6 seconds);
--- returns the squares that are in the cache now
+-- the builder: load one tile for squares the cache doesn't have (a dense city tile takes ~4 s, and a call gets 8 s);
+-- returns the squares that are in the cache now. The builder calls it again while it keeps filling squares.
 create or replace function public.road_cache_fill(p_cells text[])
 returns text[] language plpgsql security definer set search_path = public as $$
 declare t0 timestamptz := clock_timestamp(); t record; v_out text[];
@@ -44,7 +44,7 @@ begin
   for t in select distinct floor(split_part(c, ':', 1)::int / 5.0)::int i, floor(split_part(c, ':', 2)::int / 5.0)::int j
              from unnest(p_cells) c
             where c ~ '^-?\d+:-?\d+$' and not exists (select 1 from road_cache_cells k where k.cell = c) loop
-    exit when clock_timestamp() - t0 > interval '6 seconds';
+    exit when clock_timestamp() - t0 > interval '1 second';   -- one tile per call (a missing tile is instant)
     perform road_tile_load(t.i, t.j);
   end loop;
   select array_agg(c) into v_out from unnest(p_cells) c where exists (select 1 from road_cache_cells k where k.cell = c);

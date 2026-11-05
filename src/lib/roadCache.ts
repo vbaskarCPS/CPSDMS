@@ -88,16 +88,18 @@ export async function fetchRoadsCached(bbox: string, deps: RoadCacheDeps): Promi
   if (!missing.length) return cached;
 
   // the published OpenStreetMap tiles (BC, Ontario and Alberta's populated areas) before the road servers
+  // (a call loads about one tile, so it's asked again while it keeps filling squares)
   if (deps.fill) {
     try {
-      const now = await deps.fill(missing);
-      if (now.length) {
+      for (let round = 0; round < 12 && missing.length; round++) {
+        const now = (await deps.fill(missing)).filter(c => !have.has(c));
+        if (!now.length) break;
         const r = await deps.get(now, box);
         cached = mergeWays(cached, r.ways.map(w => ({ id: w.id, name: w.name || '', unnamed: !!w.unnamed, geometry: w.g })));
-        for (const c of r.have) have.add(c);
+        for (const c of [...now, ...r.have]) have.add(c);
         missing = cells.filter(c => !have.has(c));
-        if (!missing.length) return cached;
       }
+      if (!missing.length) return cached;
     } catch { /* no tiles here, or they can't be reached: the road servers as before */ }
   }
 
