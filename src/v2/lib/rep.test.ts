@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addrKey, hitForTyped, houseNo, isOpen, pinMatchesAddress, OUTCOMES, pinOf, streetOf, visitProblem, walkOrder, whenLabel, type RepBusiness } from './rep';
+import { addrKey, hitForTyped, houseNo, isOpen, pinMatchesAddress, withUnit, OUTCOMES, pinOf, streetOf, visitProblem, walkOrder, whenLabel, type RepBusiness } from './rep';
 
 const biz = (id: string, address: string | null, plaza: string | null = null): RepBusiness => ({
   id, name: id, address, lat: 0, lng: 0, kind: 'trades', plaza, plaza_id: plaza ? `p-${plaza}` : null, state: 'new', last_at: null, follow_up_at: null, visits: 0,
@@ -77,5 +77,15 @@ describe('adding a business: the pin and the address', () => {
     expect(hitForTyped('1501 34 Ave SW', [a, b])).toBe(a);
     expect(hitForTyped('1501 34 Ave', [a, b])).toBeNull();
     expect(hitForTyped('1501 34 Ave SW', [])).toBeNull();
+  });
+});
+
+describe('unit / suite on an added business', () => {
+  it('puts the unit in front of the address', () => {
+    expect(withUnit('5', '123 Main St, Calgary')).toBe('Unit 5, 123 Main St, Calgary');
+    expect(withUnit('Suite 200', '123 Main St')).toBe('Suite 200, 123 Main St');
+    expect(withUnit('#4', '123 Main St')).toBe('#4, 123 Main St');
+    expect(withUnit('  ', '123 Main St')).toBe('123 Main St');
+    expect(withUnit('B', '')).toBe('Unit B');
   });
 });

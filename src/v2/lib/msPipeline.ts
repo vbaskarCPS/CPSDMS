@@ -11,7 +11,7 @@ export const STAGES: { key: Stage; label: string }[] = [
 ];
 export const stageLabel = (s: string | undefined) => STAGES.find(x => x.key === s)?.label || s || '';
 export const HEAT: Record<Heat, { label: string; tone: 'r' | 'a' | 'b' }> = { hot: { label: 'Hot', tone: 'r' }, warm: { label: 'Warm', tone: 'a' }, cold: { label: 'Cold', tone: 'b' } };
-export const LOST_REASONS = ['Happy with their accountant', 'Not incorporated', 'Too small', 'Price', 'Not the right time', 'Other'];
+export const LOST_REASONS = ['Happy with their accountant', 'Not incorporated', 'Too small', 'Price', 'Not the right time', 'Under contract', 'Other'];
 
 export interface BizState {
   stage: Stage; heat?: Heat; points: number; why?: string[]; lost_reason?: string;

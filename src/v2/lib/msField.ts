@@ -39,9 +39,18 @@ export function roleFromTitle(title: string | null | undefined): string {
   return t ? 'Other' : '';
 }
 
+/** The card reader. tesseract.js is CommonJS: in the built app createWorker sits on the module's default export,
+ *  so reading { createWorker } straight off the import gave undefined and every scan failed. */
+export async function loadOcr(): Promise<typeof import('tesseract.js').createWorker> {
+  const m = await import('tesseract.js') as unknown as { createWorker?: typeof import('tesseract.js').createWorker; default?: { createWorker: typeof import('tesseract.js').createWorker } };
+  const f = m.createWorker || m.default?.createWorker;
+  if (!f) throw new Error('The card reader didn’t load');
+  return f;
+}
+
 /** Read one card photo on the phone (the reader loads the first time it's used, so it needs signal once). */
 export async function readCards(files: File[], shrink: (f: File, max?: number) => Promise<Blob>): Promise<(CardFields & { file: File })[]> {
-  const { createWorker } = await import('tesseract.js');
+  const createWorker = await loadOcr();
   const w = await createWorker('eng');
   try {
     const out: (CardFields & { file: File })[] = [];
