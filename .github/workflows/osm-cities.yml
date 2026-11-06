@@ -1,0 +1,42 @@
+# Municipal boundaries only (fast): every municipality's boundary for BC, Ontario, Alberta and Saskatchewan, published on
+# the osm-cities branch as cities/{PR}.json + cities/b/{osm id}.json, so MainstreetAI can build cities while the full
+# map-data job (osm-data.yml) is still running. Runs when this file changes on the osm-cities-job branch.
+name: OSM city boundaries
+on:
+  push:
+    branches: [osm-cities-job]
+    paths: ['.github/workflows/osm-cities.yml']
+permissions:
+  contents: write
+jobs:
+  cities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q osmium-tool
+      - name: Build
+        run: |
+          set -e
+          mkdir -p out/cities
+          for p in ontario british-columbia alberta saskatchewan; do
+            curl -sSfL -o "$p.osm.pbf" "https://download.geofabrik.de/north-america/canada/$p-latest.osm.pbf"
+            osmium tags-filter "$p.osm.pbf" r/boundary=administrative -o adm.pbf --overwrite
+            osmium export adm.pbf -f geojsonseq -a type,id -o adm.geojsonseq --overwrite
+            python3 scripts/osm_data.py cities adm.geojsonseq out/cities "$p"
+            rm -f "$p.osm.pbf" adm.pbf adm.geojsonseq
+          done
+          du -sh out/cities; ls out/cities
+      - name: Publish
+        run: |
+          git config user.name "osm-data bot"
+          git config user.email "osm-data@users.noreply.github.com"
+          git checkout --orphan cities-data
+          git rm -rq --cached . || true
+          find . -mindepth 1 -maxdepth 1 ! -name out ! -name .git -exec rm -rf {} +
+          mv out/* . && rmdir out
+          printf 'Municipal boundaries © OpenStreetMap contributors, ODbL (openstreetmap.org/copyright), from Geofabrik extracts.\n' > README.txt
+          git add -A
+          git commit -qm "OSM city boundaries $(date -u +%F)"
+          git push -f origin HEAD:osm-cities
