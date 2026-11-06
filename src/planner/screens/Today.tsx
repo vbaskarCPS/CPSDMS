@@ -15,7 +15,8 @@ import { Stat } from '../ui/primitives';
 import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, todosDone, wakeStreak, TodoList, MissedBedtime, isMorningHours, type Day } from '../features/plan';
 import { HabitsTodayCard, SlotHabits, SlotHabitsProvider, autoMark } from '../features/habits';
 import { WorkoutTodayCard } from '../features/workout';
-import { FoodTodayCard, mealKey, saveMeal, slotMeal } from '../features/food';
+import { FoodTodayCard, alreadyLoggedFor, fromRoad, mealKey, saveMeal, slotMeal } from '../features/food';
+import type { Meal } from '../features/food/model';
 import type { ProteinSlot } from '../features/plan';
 import { MoneyTodayCard } from '../features/money';
 import { CycleTodayCard } from '../features/cycle';
@@ -100,12 +101,28 @@ export function Today({ pass }: { pass: PlannerPass }) {
     ...list.map((b, i) => ({ b, i, t: routineMin(b.at), o: 0 })),
     ...(isMorning ? [] : (day.protein?.slots || []).map(s => ({ s, t: routineMin(s.time || '12:00'), o: 1 }))),
   ].sort((a, b) => a.t - b.t || a.o - b.o);
-  const ateIt = async (s: ProteinSlot) => {
-    const setSlot = (eaten: string | undefined) => set(d => ({ ...d, protein: d.protein ? { ...d.protein, slots: d.protein.slots.map(x => (x.id === s.id ? { ...x, eaten } : x)) } : d.protein }));
-    if (s.eaten) { setSlot(undefined); await putDoc('meal', s.eaten, null).catch(() => undefined); return; }
+  // "Ate it" on a protein-road slot. If that food is probably already in the log (logged from Food first), ask
+  // whether to count that one instead of logging it twice.
+  const [already, setAlready] = useState<{ slotId: string; meals: Meal[] } | null>(null);
+  const setSlot = (id: string, eaten: string | undefined) => set(d => ({ ...d, protein: d.protein ? { ...d.protein, slots: d.protein.slots.map(x => (x.id === id ? { ...x, eaten } : x)) } : d.protein }));
+  const logSlot = async (s: ProteinSlot) => {
+    setAlready(null);
     const m = slotMeal(s, today, nowHM());
-    setSlot(mealKey(m));
-    try { await saveMeal(m); } catch { setSlot(undefined); }
+    setSlot(s.id, mealKey(m));
+    try { await saveMeal(m); } catch { setSlot(s.id, undefined); }
+  };
+  const ateIt = async (s: ProteinSlot) => {
+    if (s.eaten) {
+      setSlot(s.id, undefined);
+      // only remove the meal the slot logged itself; one logged from Food stays in the log
+      const m = (await getDocs<Meal>('meal', s.eaten, s.eaten).catch(() => []))[0]?.data;
+      if (m && fromRoad(m)) await putDoc('meal', s.eaten, null).catch(() => undefined);
+      return;
+    }
+    const meals = (await getDocs<Meal>('meal', `${today}~`, `${today}~~`).catch(() => [])).map(d => d.data).filter(Boolean);
+    const hits = alreadyLoggedFor(s, meals, day.protein?.slots || [], nowHM());
+    if (hits.length) { setAlready({ slotId: s.id, meals: hits.slice(0, 2) }); return; }
+    await logSlot(s);
   };
   const cur = currentBlock(routine, now);
   const curIdx = list.findIndex(b => b.id === cur);
@@ -171,8 +188,20 @@ export function Today({ pass }: { pass: PlannerPass }) {
                     {s.what
                       ? <button type="button" className={`pl-btn pl-btn--small ${s.eaten ? 'pl-btn--ghost' : due ? 'pl-btn--primary' : ''}`} onClick={() => void ateIt(s)}>{s.eaten ? 'Undo' : 'Ate it'}</button>
                       : <Link to="/plan/sauna" className="pl-btn pl-btn--small pl-btn--ghost">Plan it <ChevronRight /></Link>}
-                    {!s.eaten && <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">Ate something else</Link>}
+                    {!s.eaten && already?.slotId !== s.id && <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">Ate something else</Link>}
                   </div>
+                  {already?.slotId === s.id && (
+                    <div className="today-already" role="group" aria-label="Already logged">
+                      <small>Already in your log. Is it one of these?</small>
+                      {already.meals.map(m => (
+                        <button key={m.id} type="button" className="pl-btn pl-btn--small pl-btn--primary" onClick={() => { setSlot(s.id, mealKey(m)); setAlready(null); }}>
+                          Count {m.name.length > 28 ? `${m.name.slice(0, 26)}…` : m.name} · {clock(m.time)}
+                        </button>
+                      ))}
+                      <button type="button" className="pl-btn pl-btn--small" onClick={() => void logSlot(s)}>No, log {s.label} too</button>
+                      <button type="button" className="pl-btn pl-btn--small pl-btn--ghost" onClick={() => setAlready(null)}>Cancel</button>
+                    </div>
+                  )}
                 </div>
               </div>
             );

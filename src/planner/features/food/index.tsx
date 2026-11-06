@@ -12,6 +12,7 @@ import { RecipePage } from './RecipePage';
 export { FoodTodayCard };
 export { ProteinRoad } from './ProteinRoad';
 export { slotMeal, afterKitchen } from './protein';
+export { alreadyLoggedFor, fromRoad } from './dupes';
 export { removeMeal, saveMeal, mealKey } from './model';
 
 export const foodRoutes = [

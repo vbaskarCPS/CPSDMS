@@ -1,5 +1,5 @@
 // src/planner/features/food/FoodToday.tsx — the day: ring, macros, meals; plus the Today-screen card.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BookOpen, Camera, ChevronLeft, ChevronRight, Plus, Utensils, X, History, Target, Star } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
@@ -11,6 +11,7 @@ import { ensureShakeFavourite, fastStreak, fmtDuration } from './fasting';
 import { SwayMeter } from './sway/SwayMeter';
 import { loadSwayPrefs, swayOnNow } from './sway/prefs';
 import { afterKitchen, planned } from './protein';
+import { likelySame } from './dupes';
 import type { ProteinPlan } from '../plan/types';
 
 const TIPS_KEY = 'vijay-planner-food-tips';
@@ -110,11 +111,16 @@ export function FoodToday() {
   const { r, now } = useRoutineClock();
   const [toast, say] = useToast();
   const [shakeBusy, setShakeBusy] = useState(false);
+  const shakeAsked = useRef(0);
   const logShake = async () => {
     setShakeBusy(true);
     try {
       const fav = await ensureShakeFavourite();
       const m: Meal = { id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), date: dayKey(), time: nowTime(), name: fav.name, items: fav.items, totals: fav.totals, source: 'favourite' };
+      // a shake already logged in the last while (here or on the protein road): the second tap within 15 s confirms
+      const hit = likelySame(m, meals);
+      if (hit && Date.now() - shakeAsked.current > 15_000) { shakeAsked.current = Date.now(); say(`Already logged at ${clock(hit.time)}. Tap again to log another.`, 'bad'); return; }
+      shakeAsked.current = 0;
       await saveMeal(m);
       say('Shake logged', 'good');
       await reload();
