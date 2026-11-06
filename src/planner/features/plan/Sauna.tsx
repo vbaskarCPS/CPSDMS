@@ -1,5 +1,6 @@
 // src/planner/features/plan/Sauna.tsx — the 5 am club's sauna (night profile): a timer, then yesterday looked back
-// (3 lines and the scorecard, saved on yesterday's page), then today's Brief → the to-do list. Nothing happens at
+// (3 lines and the scorecard, saved on yesterday's page), the protein road (2 meals + shakes to the goal, before the
+// kitchen closes), then today's Brief → the to-do list. Nothing happens at
 // night any more; this is where the reflecting and planning live.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -12,6 +13,7 @@ import { Page, Header, Card, Button, Prompt, Score, useToast } from '../../ui/pr
 import { addDays, nowHM } from './dates';
 import { beep } from './sound';
 import { autoMark } from '../habits/auto';
+import { ProteinRoad } from '../food/ProteinRoad';
 import { dayAverage, emptyDay, normalizeDay, SCORE_KEYS, type Day } from './types';
 
 const fmtSec = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -69,7 +71,7 @@ export function Sauna() {
         <Card className={`night-stage night-stage--col ${day.ticks.sauna ? 'is-done' : ''}`}>
           <div className="pl-row">
             <button type="button" className={`pl-check ${day.ticks.sauna ? 'is-on' : ''}`} aria-label="Sauna done" onClick={() => saunaDone(!day.ticks.sauna)}><Check /></button>
-            <div className="pl-grow"><b><Flame aria-hidden /> Sauna</b><small>{day.ticks.sauna ? `${clock(day.ticks.sauna)} · done` : `${routine.saunaMin} min · look back at ${yName}, then plan today`}</small></div>
+            <div className="pl-grow"><b><Flame aria-hidden /> Sauna</b><small>{day.ticks.sauna ? `${clock(day.ticks.sauna)} · done` : `${routine.saunaMin} min · look back at ${yName}, plan the protein, then today's Brief`}</small></div>
             {!day.night.saunaStart && !day.ticks.sauna && <Button small primary onClick={() => setDay(d => ({ ...d, night: { ...d.night, saunaStart: new Date().toISOString() } }))}><Play /> Start</Button>}
           </div>
           {day.night.saunaStart && !day.ticks.sauna && (
@@ -97,6 +99,8 @@ export function Sauna() {
           <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : yday.reflection ? 'Another note from Coach Claude' : `Coach Claude on ${yName}`}</Button>
         </Card>
       )}
+
+      {!t.loading && <ProteinRoad plan={day.protein} yesterday={yday.protein} routine={routine} onChange={p => setDay(d => ({ ...d, protein: p }))} />}
 
       <Card className={`pl-stack ${briefDone ? 'night-done' : ''}`}>
         <h2><Sunrise aria-hidden style={{ width: 20, height: 20, color: 'var(--amber-2)', verticalAlign: '-3px' }} /> Today's Brief</h2>

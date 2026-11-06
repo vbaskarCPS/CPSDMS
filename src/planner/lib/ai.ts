@@ -11,11 +11,11 @@ export interface FoodItem { name: string; portion: string; grams?: number; kcal:
 export interface FoodEstimate { items: FoodItem[]; tips?: string }
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 
-async function invoke<T>(body: Record<string, unknown>): Promise<T> {
+async function invoke<T>(body: Record<string, unknown>, fn = 'planner-ai'): Promise<T> {
   const p = getPass();
   if (!p) throw new SignedOut();
   if (isDemo()) return (await demoInvoke(body)) as T;
-  const { data, error } = await supabase.functions.invoke('planner-ai', { body: { ...body, token: p.token } });
+  const { data, error } = await supabase.functions.invoke(fn, { body: { ...body, token: p.token } });
   if (error) {
     // supabase-js hides the body on non-2xx; try to read it for the real message
     const ctx = (error as { context?: Response }).context;
@@ -145,4 +145,16 @@ export interface DealsResult { items: { id: string; section: string; deals: Deal
 export async function shoppingDeals(items: { id: string; text: string }[], postal: string, stores: string[], specialty: { name: string; note?: string }[] = []): Promise<DealsResult> {
   const r = await invoke<DealsResult>({ action: 'deals', items, postal, stores, specialty });
   return { items: Array.isArray(r.items) ? r.items : [], stores_seen: r.stores_seen };
+}
+
+// ───────── recipes (supabase/functions/planner-recipes) ─────────
+export interface RecipeDraftIngredient { qty?: number; unit?: string; item: string; note?: string; section?: string; pantry?: boolean }
+export interface RecipeDraft { name: string; servings: number; minutes?: number; ingredients: RecipeDraftIngredient[]; steps: string[]; perServing: { kcal: number; protein: number; carbs: number; fat: number }; source?: string }
+/** A recipe from a link (read server-side), pasted text, or a photo of a cookbook page — with the numbers per serving. */
+export async function importRecipe(from: { url?: string; text?: string; image?: { media_type: string; data: string } }): Promise<RecipeDraft> {
+  return invoke<RecipeDraft>({ action: 'recipe', ...from }, 'planner-recipes');
+}
+/** A high-protein recipe idea from Coach Claude, about `protein` g a serving. */
+export async function recipeIdea(protein: number, note?: string, avoid: string[] = []): Promise<RecipeDraft> {
+  return invoke<RecipeDraft>({ action: 'recipe_idea', protein, note, avoid }, 'planner-recipes');
 }

@@ -30,7 +30,12 @@ export function demoSeed(): SeedDoc[] {
   });
   put('day', y3, day(y3, {}));
   put('day', y2, day(y2, { scores: { clarity: 3, energy: 3, necessity: 4, productivity: 3, influence: 4, courage: 3 } }));
-  put('day', y1, day(y1, { ticks: { up: '08:40', dinner: '18:05', gym: '21:10', sauna: '22:25', shake: '23:00', lightsOut: '01:05' }, reflection: "You kept the fast, trained, and still got the proposal out — that's the day working. The 1:05 lights-out is the one thing to pull back: it's where tomorrow's energy comes from. Tonight, phone in the kitchen at 12:45." }));
+  put('day', y1, day(y1, { protein: { slots: [
+    { id: 'ps1', kind: 'shake', label: 'Shake 1', time: '06:50', what: 'Protein shake × 2', protein: 50, kcal: 260, eaten: 'x' },
+    { id: 'ps2', kind: 'meal', label: 'Meal 1', time: '09:00', what: 'Greek yogurt egg bowl', protein: 42, kcal: 520, recipeId: 'r2', servings: 1, eaten: 'x' },
+    { id: 'ps3', kind: 'shake', label: 'Shake 2', time: '11:30', what: 'Protein shake × 2', protein: 50, kcal: 260, eaten: 'x' },
+    { id: 'ps4', kind: 'meal', label: 'Meal 2', time: '13:15', what: 'Tandoori chicken thighs & rice', protein: 48, kcal: 640, recipeId: 'r1', servings: 1 },
+  ] }, ticks: { up: '08:40', dinner: '18:05', gym: '21:10', sauna: '22:25', shake: '23:00', lightsOut: '01:05' }, reflection: "You kept the fast, trained, and still got the proposal out — that's the day working. The 1:05 lights-out is the one thing to pull back: it's where tomorrow's energy comes from. Tonight, phone in the kitchen at 12:45." }));
   put('day', today, {
     // started a few minutes ago, so the Brief page shows a live timer rather than hours of overtime
     brief: { word: 'Steady', aGame: 'Rosh — plan the weekend together', stress: 'Three calls back to back', stressResponse: 'Five minutes between them, standing up', excited: 'Mobility night — hips need it', startedAt: new Date(Date.now() - 3 * 60_000).toISOString(), finishedAt: new Date().toISOString(), seconds: 480 },
@@ -114,7 +119,13 @@ export function demoSeed(): SeedDoc[] {
   put('bodyweight', today, { weight: 189 });
 
   // ── food: today's dinner, yesterday's two meals, targets
-  put('foodprefs', 'targets', { kcal: 2200, protein: 160 });
+  put('foodprefs', 'targets', { kcal: 2200, protein: 180 });
+  put('recipe', 'r1', { id: 'r1', name: 'Tandoori chicken thighs & rice', servings: 4, minutes: 35, perServing: { kcal: 640, protein: 48, carbs: 62, fat: 20 }, createdAt: iso(today, '07:00'),
+    ingredients: [{ qty: 2, unit: 'lb', item: 'boneless skinless chicken thighs', section: 'Meat & Seafood' }, { qty: 1, unit: 'cup', item: 'plain Greek yogurt', section: 'Dairy & Eggs' }, { qty: 2, unit: 'tbsp', item: 'tandoori masala', section: 'Pantry', pantry: true }, { qty: 1, item: 'lemon', note: 'juiced', section: 'Produce' }, { qty: 4, unit: 'clove', item: 'garlic', note: 'grated', section: 'Produce' }, { qty: 2, unit: 'cup', item: 'basmati rice', note: 'rinsed', section: 'Pantry' }, { qty: 1, unit: 'tbsp', item: 'cooking oil', section: 'Pantry', pantry: true }, { item: 'salt', section: 'Pantry', pantry: true }],
+    steps: ['Mix the yogurt, masala, lemon, garlic and salt; coat the chicken and leave 15 minutes (or overnight).', 'Cook the rice.', 'Sear the chicken in the oil, 6 minutes a side, until 165°F inside.', 'Rest 5 minutes, slice, serve over the rice.'] });
+  put('recipe', 'r2', { id: 'r2', name: 'Greek yogurt egg bowl', servings: 1, minutes: 10, perServing: { kcal: 520, protein: 42, carbs: 30, fat: 24 }, createdAt: iso(today, '07:00'),
+    ingredients: [{ qty: 3, unit: 'large', item: 'eggs', section: 'Dairy & Eggs' }, { qty: 0.75, unit: 'cup', item: 'plain Greek yogurt', section: 'Dairy & Eggs' }, { qty: 1, item: 'pita', section: 'Bakery' }, { qty: 0.5, item: 'cucumber', note: 'diced', section: 'Produce' }, { item: 'chili flakes', section: 'Pantry', pantry: true }],
+    steps: ['Fry or poach the eggs.', 'Spread the yogurt in a bowl, top with the eggs, cucumber and chili flakes.', 'Warm the pita and eat.'] });
   const meal = (key: string, time: string, id: string, name: string, kcal: number, protein: number, carbs: number, fat: number) => put('meal', `${key}~${time}~${id}`, { id, date: key, time, name, items: [{ name, portion: '1 plate', kcal, protein, carbs, fat, confidence: 'medium' }], totals: { kcal, protein, carbs, fat }, source: 'photo' });
   meal(y1, '18:10', 'm1', 'Chicken thighs, rice, salad', 720, 52, 68, 24);
   meal(y1, '23:02', 'm2', 'Protein shake', 240, 40, 12, 4);

@@ -24,17 +24,17 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 // Same defaults as src/planner/lib/routine.ts (night: Vijay, morning: Rosh); the app comes from settings.app
 type Profile = 'night' | 'morning';
 type AppId = 'vijayplanner' | 'roshplanner';
-interface Routine { profile: Profile; wake: string; wakeGrace: number; briefMinutes: number; daycare: string; eatOpen: string; eatClose: string; gym: string; shake: string; saunaMin: number; review: string; windDown: string; unwindCap: number; lightsOut: string; stretchMin: number; meditateMin: number; workoutMin: number; kiaanUp: string; fast: boolean }
+interface Routine { profile: Profile; wake: string; wakeGrace: number; briefMinutes: number; daycare: string; eatOpen: string; eatClose: string; gym: string; shake: string; saunaMin: number; review: string; windDown: string; unwindCap: number; lightsOut: string; stretchMin: number; meditateMin: number; workoutMin: number; kiaanUp: string; fast: boolean; kitchenClose: string }
 // night profile = Vijay's 5 am club: up at 5, gym, the sauna (yesterday's review + today's Brief), lights out 9:30
 const NIGHT_ROUTINE: Routine = {
   profile: 'night', stretchMin: 0, meditateMin: 0, workoutMin: 0, kiaanUp: '07:30', fast: true,
   wake: '05:00', wakeGrace: 15, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '20:30', gym: '05:15', shake: '20:30', saunaMin: 25, review: '06:45', windDown: '21:30', unwindCap: 0, lightsOut: '21:30',
+  eatOpen: '18:00', eatClose: '20:30', gym: '05:15', shake: '20:30', saunaMin: 25, review: '06:45', windDown: '21:30', unwindCap: 0, lightsOut: '21:30', kitchenClose: '14:00',
 };
 const MORNING_ROUTINE: Routine = {
   profile: 'morning', stretchMin: 10, meditateMin: 10, workoutMin: 20, kiaanUp: '08:00', fast: false,
   wake: '05:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', saunaMin: 0, review: '20:30', windDown: '20:45', unwindCap: 30, lightsOut: '21:00',
+  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', saunaMin: 0, review: '20:30', windDown: '20:45', unwindCap: 30, lightsOut: '21:00', kitchenClose: '',
 };
 interface UserSettings { app?: string; profile?: string }
 const appOf = (s: UserSettings | null | undefined): AppId => (s?.app === 'roshplanner' ? 'roshplanner' : 'vijayplanner');
@@ -116,7 +116,9 @@ function reminders(r: Routine, app: AppId): Reminder[] {
   const planAt = minutesOf(r.review) - (r.saunaMin || 0);
   return [
     { id: 'wake', at: routineMin(minutesOf(r.wake)), body: `5 am. Up — straight to the gym, no snooze.`, url: u('/'), done: d => !!d.ticks?.up || !!d.ticks?.gym },
-    { id: 'sauna', at: routineMin(planAt), body: `Sauna: look back at yesterday, then today's Brief → the list.`, url: u('/plan/sauna'), done: d => !!d.brief?.finishedAt },
+    { id: 'sauna', at: routineMin(planAt), body: `Sauna: look back at yesterday, plan the protein road, then today's Brief → the list.`, url: u('/plan/sauna'), done: d => !!d.brief?.finishedAt },
+    // the body gets the grams still to go when it's sent (see 'tick')
+    ...(r.kitchenClose ? [{ id: 'kitchen', at: routineMin(minutesOf(r.kitchenClose) - 30), body: `Kitchen closes at ${clock(r.kitchenClose)} — 30 minutes.`, url: u('/food'), done: () => false }] : []),
     ...(r.fast ? [{ id: 'window', at: routineMin(minutesOf(r.eatOpen) - 15), body: `Eating window opens at ${clock(r.eatOpen)}. Protein first.`, url: u('/food'), done: (d: DayDoc) => !!d.ticks?.dinner }] : []),
     { id: 'lightsOut', at: routineMin(minutesOf(r.lightsOut) - 15), body: `Lights out at ${clock(r.lightsOut)} — up at ${clock(r.wake)}.`, url: u('/'), done: d => !!d.ticks?.lightsOut },
   ];
@@ -132,6 +134,18 @@ export function dueReminders(r: Routine, now: Date, log: Record<string, string>,
 async function doc<T>(svc: Svc, userId: string, kind: string, key: string): Promise<T | null> {
   const { data } = await svc.from('planner_docs').select('data').eq('user_id', userId).eq('kind', kind).eq('key', key).maybeSingle();
   return data && data.data && typeof data.data === 'object' ? data.data as T : null;
+}
+
+/** "Kitchen closes at 2:00 pm — 45 g protein still to go." from today's logged meals and the protein goal. */
+async function kitchenBody(svc: Svc, userId: string, dayKey: string, r: Routine): Promise<string> {
+  const head = `Kitchen closes at ${clock(r.kitchenClose)}`;
+  try {
+    const goal = Number((await doc<{ protein?: number }>(svc, userId, 'foodprefs', 'targets'))?.protein) || 180;
+    const { data } = await svc.from('planner_docs').select('data').eq('user_id', userId).eq('kind', 'meal').gte('key', `${dayKey}~`).lt('key', `${dayKey}~~`);
+    const eaten = Math.round(((data || []) as { data: { totals?: { protein?: number } } | null }[]).reduce((t, m) => t + (Number(m.data?.totals?.protein) || 0), 0));
+    const left = goal - eaten;
+    return left > 0 ? `${head} — ${left} g protein still to go (${eaten} of ${goal}).` : `${head} — ${eaten} g protein, goal hit. 💪`;
+  } catch { return `${head} — 30 minutes.`; }
 }
 
 Deno.serve(async req => {
@@ -174,6 +188,7 @@ Deno.serve(async req => {
         const due = dueReminders(routine, now, log, day, app);
         if (!due.length) { skipped++; continue; }
         for (const rem of due) {
+          if (rem.id === 'kitchen') rem.body = await kitchenBody(svc, u.id, dayKey, routine);
           const r = await sendAll(svc, u.id, { title: APP_NAME[app], body: rem.body, url: rem.url, tag: rem.id, icon: `/${app}/icon-192.png` });
           sent += r.sent;
           log[rem.id] = now.toISOString();

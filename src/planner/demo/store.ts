@@ -82,6 +82,10 @@ export async function demoInvoke(body: Record<string, unknown>): Promise<unknown
     ], videos: [{ id: 'dQw4w9WgXcQ', title: 'Mobility flow for tight hips — 3 min', seconds: 185 }] };
     case 'deals': return { items: [], specialty: [] };
     case 'plan': return { name: 'Coach plan', exercises: [] };
+    case 'recipe': case 'recipe_idea': return { name: body.action === 'recipe' ? 'Chicken shawarma bowls' : 'Lemon garlic salmon & lentils', servings: 2, minutes: 30, source: typeof body.url === 'string' ? body.url : undefined,
+      perServing: { kcal: 610, protein: Number(body.protein) || 52, carbs: 48, fat: 22 },
+      ingredients: [{ qty: 1.5, unit: 'lb', item: 'boneless skinless chicken thighs', section: 'Meat & Seafood', pantry: false }, { qty: 1, unit: 'cup', item: 'plain Greek yogurt', section: 'Dairy & Eggs', pantry: false }, { qty: 2, item: 'pitas', section: 'Bakery', pantry: false }, { qty: 1, item: 'cucumber', section: 'Produce', pantry: false }, { qty: 1, unit: 'tbsp', item: 'shawarma spice', section: 'Pantry', pantry: true }, { qty: 1, unit: 'tbsp', item: 'olive oil', section: 'Pantry', pantry: true }],
+      steps: ['Toss the chicken with the spice and oil.', 'Roast at 425°F for 20 minutes.', 'Slice and serve with the yogurt, cucumber and warm pitas.'] };
     default: return {};
   }
 }

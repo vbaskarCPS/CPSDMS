@@ -59,7 +59,7 @@ export function Settings({ pass }: { pass: PlannerPass }) {
         <h3>My routine</h3>
         <p className="pl-muted" style={{ fontSize: 13 }}>{morningP
           ? 'The times the Today screen, reminders and the evening wind-down run on.'
-          : 'The 5 am club: the times the Today screen, reminders and the fast run on. Yesterday\'s review and today\'s Brief happen in the sauna; nothing at night but lights out.'}</p>
+          : 'The 5 am club: the times the Today screen and reminders run on. Yesterday\'s review, the protein road and today\'s Brief happen in the sauna; food stops when the kitchen closes; nothing at night but lights out.'}</p>
         <div className="pl-grid-2">
           <label className="pl-field"><span className="pl-label">Up</span><input className="pl-input" type="time" value={routine.wake} onChange={e => r('wake', e.target.value)} required /></label>
           <label className="pl-field"><span className="pl-label">Grace (min)</span><input className="pl-input" type="number" min={0} max={120} value={routine.wakeGrace} onChange={e => r('wakeGrace', Number(e.target.value) || 0)} /></label>
@@ -71,7 +71,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
           <label className="pl-field"><span className="pl-label">{morningP ? 'Morning Brief (min)' : 'Brief (min)'}</span><input className="pl-input" type="number" min={1} max={60} value={routine.briefMinutes} onChange={e => r('briefMinutes', Math.max(1, Number(e.target.value) || 10))} /></label>
           {morningP && <label className="pl-field"><span className="pl-label">Kiaan up</span><input className="pl-input" type="time" value={routine.kiaanUp} onChange={e => r('kiaanUp', e.target.value)} required /></label>}
           <label className="pl-field"><span className="pl-label">Kiaan → daycare</span><input className="pl-input" type="time" value={routine.daycare} onChange={e => r('daycare', e.target.value)} required /></label>
-          <label className="pl-field"><span className="pl-label">{routine.fast ? 'Dinner · fast ends' : 'Dinner'}</span><input className="pl-input" type="time" value={routine.eatOpen} onChange={e => r('eatOpen', e.target.value)} required /></label>
+          {!morningP && <label className="pl-field"><span className="pl-label">Kitchen closes (blank = no cut-off)</span><input className="pl-input" type="time" value={routine.kitchenClose} onChange={e => r('kitchenClose', e.target.value)} /></label>}
+          {(morningP || !routine.kitchenClose || routine.fast) && <label className="pl-field"><span className="pl-label">{routine.fast ? 'Dinner · fast ends' : 'Dinner'}</span><input className="pl-input" type="time" value={routine.eatOpen} onChange={e => r('eatOpen', e.target.value)} required /></label>}
           {!morningP && <label className="pl-field"><span className="pl-label">Gym</span><input className="pl-input" type="time" value={routine.gym} onChange={e => r('gym', e.target.value)} required /></label>}
           {routine.fast && <label className="pl-field"><span className="pl-label">Window closes</span><input className="pl-input" type="time" value={routine.eatClose} onChange={e => r('eatClose', e.target.value)} required /></label>}
           {!morningP && <label className="pl-field"><span className="pl-label">Sauna (min, 0 = none)</span><input className="pl-input" type="number" min={0} max={60} value={routine.saunaMin} onChange={e => r('saunaMin', Math.max(0, Number(e.target.value) || 0))} /></label>}

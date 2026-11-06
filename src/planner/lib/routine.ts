@@ -1,7 +1,7 @@
 // src/planner/lib/routine.ts — the shape of Vijay's day. Every feature reads its times from here.
 // Vijay (the 'night' profile, now the 5 am club): up at 5, straight to the gym, then the sauna, where he does
-// yesterday's review and today's Brief → the to-do list; the list through the day, dinner (the fast ends), lights
-// out at 9:30. Nothing to do at night but go to bed. Rosh ('morning'): Miracle Morning, bed at 9.
+// yesterday's review and today's Brief → the to-do list, and the protein road (2 meals + shakes, eaten by 2 pm when the
+// kitchen closes); the list through the day, lights out at 9:30. Nothing to do at night but go to bed. Rosh ('morning'): Miracle Morning, bed at 9.
 // Kept in doc kind 'prefs', key 'routine'; editable in Settings.
 //
 // The planner's "day" rolls over at 4 am, not midnight: lights out at 1 am still belongs to the day
@@ -28,17 +28,18 @@ export interface Routine {
   unwindCap: number;   // morning profile: minutes of games/unwind before the review (0 = no cap)
   windDown: string;    // night profile: hard stop for the unwind — teeth, face, phone on charge, bed
   lightsOut: string;   // in bed, lights off
+  kitchenClose: string;// night profile: last food of the day ('' = no cut-off); the protein road's slots all land before it
 }
 
 export const NIGHT_ROUTINE: Routine = {
   profile: 'night', stretchMin: 0, meditateMin: 0, workoutMin: 0, kiaanUp: '07:30', fast: true,
   wake: '05:00', wakeGrace: 15, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '20:30', gym: '05:15', shake: '20:30', saunaMin: 25, review: '06:45', unwindCap: 0, windDown: '21:30', lightsOut: '21:30',
+  eatOpen: '18:00', eatClose: '20:30', gym: '05:15', shake: '20:30', saunaMin: 25, review: '06:45', unwindCap: 0, windDown: '21:30', lightsOut: '21:30', kitchenClose: '14:00',
 };
 export const MORNING_ROUTINE: Routine = {
   profile: 'morning', stretchMin: 10, meditateMin: 10, workoutMin: 20, kiaanUp: '08:00', fast: false,
   wake: '05:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', saunaMin: 0, review: '20:30', unwindCap: 30, windDown: '20:45', lightsOut: '21:00',
+  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', saunaMin: 0, review: '20:30', unwindCap: 30, windDown: '20:45', lightsOut: '21:00', kitchenClose: '',
 };
 export const DEFAULT_ROUTINE: Routine = NIGHT_ROUTINE;
 export const defaultsFor = (p: Profile): Routine => (p === 'morning' ? MORNING_ROUTINE : NIGHT_ROUTINE);
@@ -88,7 +89,7 @@ export function fastState(r: Routine, d = new Date()): { eating: boolean; openIn
   return { eating, openIn, closeIn, fastedFor };
 }
 
-export type BlockId = 'wake' | 'brief' | 'daycare' | 'work' | 'dinner' | 'gym' | 'sauna' | 'night' | 'shake' | 'unwind' | 'windDown' | 'lightsOut'
+export type BlockId = 'wake' | 'brief' | 'daycare' | 'work' | 'dinner' | 'kitchen' | 'gym' | 'sauna' | 'night' | 'shake' | 'unwind' | 'windDown' | 'lightsOut'
   | 'morning' | 'kiaanUp' | 'evening';
 /** Night profile (5 am club): gym → sauna (yesterday's review, today's Brief) → out at r.review, the list starts. */
 export const reviewAt = (r: Routine) => r.review;
@@ -106,8 +107,10 @@ export function blocks(r: Routine): Block[] {
     ...(r.saunaMin ? [{ id: 'sauna' as BlockId, label: 'Sauna', at: saunaAt(r), until: r.review, blurb: `${r.saunaMin} min · yesterday's review, then today's Brief` }] : []),
     { id: 'night', label: 'Yesterday, looked back', at: planAt(r), blurb: '3 lines · scorecard · from the sauna' },
     { id: 'brief', label: "Today's Brief", at: planAt(r), until: r.review, blurb: 'one word · 3 must-dos · → today\'s list' },
-    { id: 'work', label: 'Tackle the list', at: r.review, until: r.eatOpen, blurb: r.fast ? 'today\'s list · fasting: water, black coffee, tea' : 'today\'s list' },
-    { id: 'dinner', label: 'Dinner — first meal', at: r.eatOpen, blurb: r.fast ? `fast ends · protein first · window closes ${clock(r.eatClose)}` : 'log it' },
+    { id: 'work', label: 'Tackle the list', at: r.review, blurb: r.fast ? 'today\'s list · fasting: water, black coffee, tea' : 'today\'s list' },
+    r.kitchenClose
+      ? { id: 'kitchen', label: 'Kitchen closed', at: r.kitchenClose, blurb: 'done eating for the day · water, coffee, tea' }
+      : { id: 'dinner', label: r.fast ? 'Dinner — first meal' : 'Dinner', at: r.eatOpen, blurb: r.fast ? `fast ends · protein first · window closes ${clock(r.eatClose)}` : 'log it' },
     { id: 'lightsOut', label: 'Lights out', at: r.lightsOut, blurb: `phone down — up at ${clock(r.wake)}` },
   ];
 }

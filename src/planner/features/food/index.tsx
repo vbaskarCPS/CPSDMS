@@ -6,8 +6,13 @@ import { History } from './History';
 import { TargetsScreen } from './Targets';
 import { Favourites } from './Favourites';
 import { SwayGuide } from './sway/SwayGuide';
+import { Recipes } from './Recipes';
+import { RecipePage } from './RecipePage';
 
 export { FoodTodayCard };
+export { ProteinRoad } from './ProteinRoad';
+export { slotMeal, afterKitchen } from './protein';
+export { removeMeal, saveMeal, mealKey } from './model';
 
 export const foodRoutes = [
   { path: '/food', element: <FoodToday /> },
@@ -17,4 +22,6 @@ export const foodRoutes = [
   { path: '/food/targets', element: <TargetsScreen /> },
   { path: '/food/favourites', element: <Favourites /> },
   { path: '/food/sway', element: <SwayGuide /> },
+  { path: '/food/recipes', element: <Recipes /> },
+  { path: '/food/recipes/:id', element: <RecipePage /> },
 ];

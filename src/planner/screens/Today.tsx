@@ -1,20 +1,22 @@
 // src/planner/screens/Today.tsx — the home screen: the day as a timeline of the routine (night profile, the 5 am
-// club: up → gym → sauna (yesterday looked back, today's Brief) → the list → dinner → lights out; morning profile:
+// club: up → gym → sauna (yesterday looked back, the protein road, today's Brief) → the list, with the protein road's
+// shakes and meals at their times ("Ate it" logs them) → kitchen closed → lights out; morning profile:
 // Miracle Morning → Brief → … → bed at 9),
 // the current block highlighted, each one tickable. Streaks on top; the feature cards below.
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Settings as Cog, Check, Sunrise, Moon, Flame, ChevronRight } from 'lucide-react';
 import type { PlannerPass } from '../lib/auth';
-import { dayKey, getDocs } from '../lib/docs';
+import { dayKey, getDocs, putDoc } from '../lib/docs';
 import { useDoc } from '../lib/useDoc';
-import { blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, routineNow, type BlockId, type Routine } from '../lib/routine';
+import { blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, routineMin, routineMinutes, routineNow, type Block, type BlockId, type Routine } from '../lib/routine';
 import { InstallHint } from '../ui/InstallHint';
 import { Stat } from '../ui/primitives';
 import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, todosDone, wakeStreak, TodoList, MissedBedtime, isMorningHours, type Day } from '../features/plan';
 import { HabitsTodayCard, SlotHabits, SlotHabitsProvider, autoMark } from '../features/habits';
 import { WorkoutTodayCard } from '../features/workout';
-import { FoodTodayCard } from '../features/food';
+import { FoodTodayCard, mealKey, saveMeal, slotMeal } from '../features/food';
+import type { ProteinSlot } from '../features/plan';
 import { MoneyTodayCard } from '../features/money';
 import { CycleTodayCard } from '../features/cycle';
 import { CalendarTodayCard } from '../features/calendar';
@@ -28,7 +30,7 @@ function greeting(h: number): string {
   return 'Good night';
 }
 
-type TickId = Exclude<BlockId, 'brief' | 'work' | 'night' | 'morning' | 'evening' | 'unwind' | 'windDown'>;
+type TickId = Exclude<BlockId, 'brief' | 'work' | 'night' | 'morning' | 'evening' | 'unwind' | 'windDown' | 'kitchen'>;
 const TICKS: Record<'night' | 'morning', TickId[]> = {
   night: ['wake', 'gym', 'sauna', 'dinner', 'lightsOut'],
   morning: ['wake', 'kiaanUp', 'dinner', 'lightsOut'],
@@ -92,6 +94,19 @@ export function Today({ pass }: { pass: PlannerPass }) {
   }, [loading, today, routine, day.ticks.up, day.ticks.lightsOut, day.morningRoutine.finishedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const list = blocks(routine);
+  // the protein road's shakes and meals, in among the blocks at their times (blocks first on a tie)
+  type Row = { b: Block; i: number; s?: undefined } | { s: ProteinSlot; b?: undefined };
+  const rows: Row[] = [
+    ...list.map((b, i) => ({ b, i, t: routineMin(b.at), o: 0 })),
+    ...(isMorning ? [] : (day.protein?.slots || []).map(s => ({ s, t: routineMin(s.time || '12:00'), o: 1 }))),
+  ].sort((a, b) => a.t - b.t || a.o - b.o);
+  const ateIt = async (s: ProteinSlot) => {
+    const setSlot = (eaten: string | undefined) => set(d => ({ ...d, protein: d.protein ? { ...d.protein, slots: d.protein.slots.map(x => (x.id === s.id ? { ...x, eaten } : x)) } : d.protein }));
+    if (s.eaten) { setSlot(undefined); await putDoc('meal', s.eaten, null).catch(() => undefined); return; }
+    const m = slotMeal(s, today, nowHM());
+    setSlot(mealKey(m));
+    try { await saveMeal(m); } catch { setSlot(undefined); }
+  };
   const cur = currentBlock(routine, now);
   const curIdx = list.findIndex(b => b.id === cur);
   const fast = fastState(routine, now);
@@ -116,6 +131,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
     if (id === 'work') { if (day.todos.length) return todosDone(day) ? 'done' : undefined; const n = day.priorities.filter(p => p.text.trim()).length, d = day.priorities.filter(p => p.done).length; return n && d === n ? 'done' : undefined; }
     if (id === 'night') return (isMorning ? reviewDone(day) : yReviewed) ? 'done' : undefined;
     if (id === 'evening') return t.lightsOut ? 'done' : undefined;
+    if (id === 'kitchen') return undefined;
     if (id === 'unwind' || id === 'windDown') return t.lightsOut ? 'done' : undefined;
     if (id === 'morning') return day.morningRoutine.finishedAt ? 'done' : undefined;
     return t[tickKey(id)];
@@ -142,7 +158,26 @@ export function Today({ pass }: { pass: PlannerPass }) {
       </div>
 
       <section className="today-timeline pl-card" aria-label="Today's routine">
-        {list.map((b, i) => {
+        {rows.map(row => {
+          if (row.s) {
+            const s = row.s, due = routineMin(s.time) <= routineMinutes(now);
+            return (
+              <div key={s.id} className={`today-block today-block--slot ${s.eaten ? 'is-done' : ''} ${due && !s.eaten ? 'is-due' : ''}`}>
+                <div className="today-block__rail"><span className="today-block__dot">{s.eaten && <Check aria-hidden />}</span></div>
+                <div className="today-block__body">
+                  <div className="today-block__head"><span className="today-block__time">{clock(s.time)}</span>{s.protein ? <span className="rc-tag">{s.protein} g</span> : null}</div>
+                  <b className="today-block__label">{s.label}{s.what ? <span className="pl-muted" style={{ fontWeight: 500 }}> · {s.what}</span> : null}</b>
+                  <div className="today-block__actions">
+                    {s.what
+                      ? <button type="button" className={`pl-btn pl-btn--small ${s.eaten ? 'pl-btn--ghost' : due ? 'pl-btn--primary' : ''}`} onClick={() => void ateIt(s)}>{s.eaten ? 'Undo' : 'Ate it'}</button>
+                      : <Link to="/plan/sauna" className="pl-btn pl-btn--small pl-btn--ghost">Plan it <ChevronRight /></Link>}
+                    {!s.eaten && <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">Ate something else</Link>}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          const { b, i } = row;
           const done = ticked(b.id);
           const isCur = b.id === cur;
           const past = i < curIdx;
@@ -185,6 +220,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
                   {b.id === 'morning' && <Link to="/plan/morning" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : 'pl-btn--primary'}`}>{done ? 'Done' : 'Start'} <ChevronRight /></Link>}
                   {b.id === 'work' && <Link to="/plan" className="pl-btn pl-btn--small pl-btn--ghost">Day page</Link>}
                   {(b.id === 'dinner' || b.id === 'shake') && <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">+ Log</Link>}
+                  {b.id === 'kitchen' && <Link to="/food" className="pl-btn pl-btn--small pl-btn--ghost">Food</Link>}
                   {b.id === 'sauna' && !done && <Link to="/plan/sauna" className={`pl-btn pl-btn--small ${isCur ? 'pl-btn--primary' : 'pl-btn--ghost'}`}>Timer <ChevronRight /></Link>}
                   {b.id === 'gym' && <Link to="/workout" className="pl-btn pl-btn--small pl-btn--ghost">Start session</Link>}
                 </div>

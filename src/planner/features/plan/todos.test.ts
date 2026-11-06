@@ -22,3 +22,12 @@ describe('todos', () => {
     expect(frequentTodos(days, ['dishes']).map(x => x.text)).toEqual(['Take Kiaan to daycare']);
   });
 });
+
+import { addDays } from './dates';
+describe('addDays', () => {
+  it('moves whole days (the 4 am day start never pulls it back one)', () => {
+    expect(addDays('2026-11-06', -1)).toBe('2026-11-05');
+    expect(addDays('2026-11-06', 1)).toBe('2026-11-07');
+    expect(addDays('2026-03-01', -1)).toBe('2026-02-28');
+  });
+});

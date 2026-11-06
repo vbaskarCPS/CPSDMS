@@ -4,7 +4,8 @@ import { routineMin, routineNow, type Routine } from '../../lib/routine';
 import type { Day } from './types';
 
 export const parseDay = (key: string): Date => { const [y, m, d] = key.split('-').map(Number); return new Date(y, m - 1, d); };
-export const addDays = (key: string, n: number): string => { const d = parseDay(key); d.setDate(d.getDate() + n); return dayKey(d); };
+// noon, so the 4 am day shift in dayKey never lands it on the day before
+export const addDays = (key: string, n: number): string => { const d = parseDay(key); d.setHours(12); d.setDate(d.getDate() + n); return dayKey(d); };
 export const isValidDay = (k: string | undefined): k is string => !!k && /^\d{4}-\d{2}-\d{2}$/.test(k) && !isNaN(parseDay(k).getTime());
 
 export function weekKey(d = new Date()): string {
