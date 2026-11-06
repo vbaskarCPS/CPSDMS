@@ -83,3 +83,6 @@ create or replace function public.osm_data_url(p_path text)
 returns text language sql immutable set search_path = public as $$
   select 'https://raw.githubusercontent.com/vbaskarCPS/CPSDMS/' || case when p_path like 'cities/%' then 'osm-cities/' else 'osm-data/' end || p_path
 $$;
+
+-- four at once was too much for the database alongside the app: two loaders and two builders
+select cron.unschedule('ms-city-autoload-3'), cron.unschedule('ms-city-autoload-4'), cron.unschedule('ms-city-jobs-3'), cron.unschedule('ms-city-jobs-4');
