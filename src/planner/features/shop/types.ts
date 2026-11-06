@@ -12,6 +12,7 @@ export interface ShopItem {
   reason?: string;
   pick?: Deal;                 // the exact product you built it out to (type, size, store, price)
   count?: number;              // how many of it
+  for?: string[];              // the recipes it was added for
 }
 /** stores: the ones with flyers; specialty: the ones without (Lococo's, the Indian / Caribbean / Middle Eastern grocers) with a note on what they're for. */
 export interface ShopPrefs { postal: string; stores: string[]; specialty: { name: string; note?: string }[] }

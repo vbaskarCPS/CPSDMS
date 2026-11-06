@@ -99,7 +99,7 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
                   <div key={i.id} className="shop__item">
                     <button type="button" className="pl-check" aria-label="Got it" onClick={() => void toggle(i)}><Check /></button>
                     <div className="shop__main">
-                      <b>{i.count && i.count > 1 ? `${i.count} × ` : i.qty ? `${i.qty} ` : ''}{i.text}{i.pick && (i.pick.variant || i.pick.size) ? <small className="shop__built"> · {[i.pick.variant, i.pick.size].filter(Boolean).join(', ')}</small> : null}</b>
+                      <b>{i.count && i.count > 1 ? `${i.count} × ` : i.qty ? `${i.qty} ` : ''}{i.text}{i.pick && (i.pick.variant || i.pick.size) ? <small className="shop__built"> · {[i.pick.variant, i.pick.size].filter(Boolean).join(', ')}</small> : null}{i.for?.length ? <small className="shop__built"> · for {i.for.join(', ')}</small> : null}</b>
                       {d
                         ? <button type="button" className={`shop__deal ${isFlyer(d) ? '' : 'is-regular'}`} onClick={() => setPickId(i.id)}>{money(d.price)}{perLabel(d)} {d.name}{isFlyer(d) ? `${saleNote(d) ? ` · ${saleNote(d)}` : ''}${d.validTo ? ` · ${until(d.validTo)}` : ''}` : ' · regular price'}{liveDeals(i).length > 1 ? ` · +${liveDeals(i).length - 1} more` : ''}</button>
                         : <button type="button" className="shop__deal is-regular" onClick={() => setPickId(i.id)}>{i.suggestedStore && storeOf(i) === i.suggestedStore ? `likely best here · ${i.reason || 'no flyer'}` : checking && !i.dealsAt ? 'checking flyers…' : `${view === 'store' ? (i.section || 'no deal found') : 'no deal found'} · tap to build it`}{i.by !== pass.user.username ? ` · added by ${i.by}` : ''}</button>}

@@ -27,7 +27,8 @@ export function PushCard() {
     { at: hhmm(minutesOf(r.lightsOut) - 10), what: 'Lights out' },
   ] : [
     { at: r.wake, what: 'Up — straight to the gym' },
-    { at: planAt(r), what: "Sauna: yesterday's review, then today's Brief" },
+    { at: planAt(r), what: "Sauna: yesterday's review, the protein road, today's Brief" },
+    ...(r.kitchenClose ? [{ at: hhmm(minutesOf(r.kitchenClose) - 30), what: `Kitchen closes at ${clock(r.kitchenClose)} — protein still to go` }] : []),
     ...(r.fast ? [{ at: hhmm(minutesOf(r.eatOpen) - 15), what: `Eating window opens at ${clock(r.eatOpen)}` }] : []),
     { at: hhmm(minutesOf(r.lightsOut) - 15), what: `Lights out at ${clock(r.lightsOut)} — up at ${clock(r.wake)}` },
   ];

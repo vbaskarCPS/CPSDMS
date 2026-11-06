@@ -2,6 +2,8 @@
 import { getDoc, getDocs, putDoc, putDocs } from '../../lib/docs';
 import { shoppingDeals } from '../../lib/ai';
 import { DEFAULT_PREFS, type ShopItem, type ShopPrefs } from './types';
+import { uid } from '../../ui/primitives';
+import { addQty } from '../food/recipes';
 
 export async function loadList(): Promise<ShopItem[]> {
   const docs = await getDocs<ShopItem>('shop');
@@ -27,4 +29,25 @@ export async function refreshDeals(items: ShopItem[], prefs: ShopPrefs, force = 
   });
   await putDocs(next.filter(i => stale.some(s => s.id === i.id)).map(i => ({ kind: 'shop', key: i.id, data: i })));
   return next;
+}
+
+/** Put lines on the list (from a recipe): an item already on the list (not ticked off) gets the amount added and the
+ *  recipe noted instead of a second line. The flyers are looked up the next time the list opens. Returns how many were new. */
+export async function addLines(lines: { text: string; qty?: string; section?: string; recipe?: string }[], by: string): Promise<number> {
+  const list = await loadList();
+  const norm = (t: string) => t.trim().toLowerCase().replace(/s$/, '');
+  const changed: ShopItem[] = []; let fresh = 0;
+  for (const l of lines) {
+    const fors = (l.recipe || '').split(', ').filter(Boolean);
+    const hit = [...list, ...changed].find(i => !i.done && norm(i.text) === norm(l.text));
+    if (hit) {
+      const n: ShopItem = { ...hit, qty: addQty(hit.qty, l.qty), for: [...new Set([...(hit.for || []), ...fors])] };
+      const k = changed.findIndex(c => c.id === n.id); if (k >= 0) changed[k] = n; else changed.push(n);
+      continue;
+    }
+    changed.push({ id: uid(), text: l.text.trim(), qty: l.qty || undefined, section: l.section, for: fors.length ? fors : undefined, done: false, by, addedAt: new Date().toISOString() });
+    fresh++;
+  }
+  if (changed.length) await putDocs(changed.map(i => ({ kind: 'shop', key: i.id, data: i })));
+  return fresh;
 }

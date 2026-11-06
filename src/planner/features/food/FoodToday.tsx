@@ -1,15 +1,17 @@
 // src/planner/features/food/FoodToday.tsx — the day: ring, macros, meals; plus the Today-screen card.
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Camera, ChevronLeft, ChevronRight, Plus, Utensils, X, History, Target, Star } from 'lucide-react';
+import { BookOpen, Camera, ChevronLeft, ChevronRight, Plus, Utensils, X, History, Target, Star } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
-import { dayKey } from '../../lib/docs';
+import { dayKey, getDoc } from '../../lib/docs';
 import { clock, fastState, loadRoutine, routineNow, type Routine } from '../../lib/routine';
 import { Button, Card, Header, Page, Progress, Ring, useToast } from '../../ui/primitives';
 import { addDays, addTotals, DEFAULT_TARGETS, loadTargets, mealKey, mealsBetween, mealsForDay, nowTime, prettyDay, round, saveMeal, ZERO, type Meal, type Targets, type Totals } from './model';
 import { ensureShakeFavourite, fastStreak, fmtDuration } from './fasting';
 import { SwayMeter } from './sway/SwayMeter';
 import { loadSwayPrefs, swayOnNow } from './sway/prefs';
+import { afterKitchen, planned } from './protein';
+import type { ProteinPlan } from '../plan/types';
 
 const TIPS_KEY = 'vijay-planner-food-tips';
 
@@ -125,12 +127,16 @@ export function FoodToday() {
   const dismissTips = () => { setTips(false); try { localStorage.setItem(TIPS_KEY, '1'); } catch { /* fine */ } };
   const go = (k: string) => setParams(k === dayKey() ? {} : { day: k });
   const remaining = t.kcal - totals.kcal;
+  // the protein road planned in the sauna (5 am club)
+  const [road, setRoad] = useState<ProteinPlan | null>(null);
+  useEffect(() => { getDoc<{ protein?: ProteinPlan }>('day', day).then(d => setRoad(d?.protein?.slots?.length ? d.protein : null)).catch(() => setRoad(null)); }, [day]);
 
   return (
     <Page>
       <Header title="Food" eyebrow="Photo → confirm → logged" right={
         <div className="pl-row" style={{ gap: 4 }}>
           <Link to="/food/history" className="pl-btn pl-btn--ghost pl-btn--small" aria-label="History" style={{ border: 0, padding: '0 6px' }}><History /></Link>
+          <Link to="/food/recipes" className="pl-btn pl-btn--ghost pl-btn--small" aria-label="Recipes" style={{ border: 0, padding: '0 6px' }}><BookOpen /></Link>
           <Link to="/food/favourites" className="pl-btn pl-btn--ghost pl-btn--small" aria-label="Favourites" style={{ border: 0, padding: '0 6px' }}><Star /></Link>
           <Link to="/food/targets" className="pl-btn pl-btn--ghost pl-btn--small" aria-label="Targets" style={{ border: 0, padding: '0 6px' }}><Target /></Link>
         </div>
@@ -168,6 +174,7 @@ export function FoodToday() {
         <hr className="pl-divider" style={{ margin: '14px 0' }} />
         <div className="pl-stack" style={{ gap: 8 }}>
           <Macro label="Protein" value={totals.protein} max={t.protein} />
+          {road && <p className="pl-muted" style={{ fontSize: 13, margin: 0 }}>Protein road: eaten {totals.protein} g of {planned(road)} g planned{r.kitchenClose ? ` · kitchen closes ${clock(r.kitchenClose)}` : ''} · <Link to="/plan/sauna">plan</Link></p>}
           <Macro label="Carbs" value={totals.carbs} max={t.carbs} />
           <Macro label="Fat" value={totals.fat} max={t.fat} />
         </div>
@@ -197,7 +204,7 @@ export function FoodToday() {
             {meals.map(m => (
               <Link key={m.id} to={`/food/meal/${encodeURIComponent(mealKey(m))}`} className="pl-item">
                 <Thumb m={m} />
-                <div className="pl-grow"><b>{m.name || 'Meal'}</b><small>{m.time} · {m.items.map(i => i.name).slice(0, 3).join(', ')}{m.items.length > 3 ? '…' : ''}</small></div>
+                <div className="pl-grow"><b>{m.name || 'Meal'}</b><small>{m.time}{afterKitchen(m.time, r) ? <span style={{ color: 'var(--amber-2)', fontWeight: 600 }}> · after the kitchen closed</span> : null} · {m.items.map(i => i.name).slice(0, 3).join(', ')}{m.items.length > 3 ? '…' : ''}</small></div>
                 <span className="fd-kcal">{m.totals.kcal}</span>
               </Link>
             ))}
@@ -226,6 +233,7 @@ export function FoodTodayCard({ pass }: { pass: PlannerPass }) {
           <div className="pl-row"><Link to="/food" className="pl-grow" style={{ textDecoration: 'none', fontWeight: 700 }}>Food</Link><Link to="/food/add" className="pl-btn pl-btn--primary pl-btn--small"><Plus style={{ width: 16, height: 16 }} /> Add</Link></div>
           <Macro label="Protein" value={totals.protein} max={t.protein} />
           {r.fast && <FastLine r={r} now={now} />}
+          {!r.fast && r.kitchenClose && <span className="pl-muted" style={{ fontSize: 13 }}>{afterKitchen(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`, r) ? 'Kitchen closed' : `Kitchen closes ${clock(r.kitchenClose)}`} · {Math.max(0, t.protein - totals.protein)} g protein to go</span>}
           <small className="pl-muted">{last ? `Last: ${last.name || 'Meal'} at ${last.time}` : 'Nothing logged yet today'}</small>
         </div>
       </div>

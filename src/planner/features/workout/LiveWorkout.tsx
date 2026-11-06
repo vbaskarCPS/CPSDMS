@@ -332,7 +332,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
             )}
             {summary.next && Object.keys(summary.next).length > 0 && <p className="pl-muted" style={{ fontSize: 13 }}>Next session is set up from this: {Object.keys(summary.next).length} exercise{Object.keys(summary.next).length > 1 ? 's' : ''} prefilled with the coach's numbers.</p>}
             {night
-              ? <><Button block primary onClick={() => nav('/plan/night', { replace: true })}><Flame size={18} /> Sauna → Day review</Button><Button block ghost onClick={() => nav('/workout', { replace: true })}>Done</Button></>
+              ? <><Button block primary onClick={() => nav('/plan/sauna', { replace: true })}><Flame size={18} /> Sauna → plan the day</Button><Button block ghost onClick={() => nav('/workout', { replace: true })}>Done</Button></>
               : <Button block primary onClick={() => nav('/workout', { replace: true })}>Done</Button>}
           </>
         )}

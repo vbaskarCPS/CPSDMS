@@ -22,6 +22,13 @@ export interface Ticks { up?: string; kiaanUp?: string; daycare?: string; dinner
 export interface MorningRoutine { stretch?: boolean; meditate?: boolean; workout?: boolean; startedAt?: string; finishedAt?: string }
 /** Miracle Night: unwind, the quick review, tomorrow's #1. */
 export interface Night { saunaStart?: string; unwindStart?: string; unwindEnd?: string; tomorrowTop?: string; review: { win: string; drag: string; tomorrow: string } }
+/** The protein road (5 am club): planned in the sauna — 2 meals and a couple of shakes before the kitchen closes.
+ *  Each slot holds what it'll be (a recipe × servings, a favourite, typed and estimated, or just grams). `eaten` is the
+ *  logged meal's key once "Ate it" is tapped. The goal lives in the food targets (protein). */
+export interface ProteinItem { name: string; portion: string; grams?: number; kcal: number; protein: number; carbs: number; fat: number }
+export interface ProteinSlot { id: string; kind: 'meal' | 'shake'; label: string; time: string; what: string; protein: number; kcal?: number;
+  items?: ProteinItem[]; recipeId?: string; servings?: number; eaten?: string }
+export interface ProteinPlan { slots: ProteinSlot[]; plannedAt?: string }
 export const reviewDone = (d: Day) => Object.values(d.night.review).every(v => v.trim());
 
 export interface Day {
@@ -39,6 +46,7 @@ export interface Day {
   evening: Evening;
   scores: Scores;
   reflection?: string;
+  protein?: ProteinPlan;
 }
 
 export const briefDone = (d: Day): boolean => !!d.brief.finishedAt;
@@ -91,6 +99,7 @@ export function normalizeDay(d: Partial<Day> | null | undefined): Day {
     evening: { ...e.evening, ...(d.evening || {}) },
     scores: d.scores || {},
     reflection: d.reflection,
+    protein: d.protein && Array.isArray(d.protein.slots) ? { ...d.protein, slots: d.protein.slots.filter(x => x && typeof x.id === 'string') } : undefined,
   };
 }
 
