@@ -1,5 +1,6 @@
-// src/planner/screens/Today.tsx — the home screen: the day as a timeline of the routine (night profile:
-// up with Kiaan → Bed Brief → … → Miracle Night → lights out; morning profile: Miracle Morning → Brief → … → bed at 9),
+// src/planner/screens/Today.tsx — the home screen: the day as a timeline of the routine (night profile, the 5 am
+// club: up → gym → sauna (yesterday looked back, today's Brief) → the list → dinner → lights out; morning profile:
+// Miracle Morning → Brief → … → bed at 9),
 // the current block highlighted, each one tickable. Streaks on top; the feature cards below.
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -29,7 +30,7 @@ function greeting(h: number): string {
 
 type TickId = Exclude<BlockId, 'brief' | 'work' | 'night' | 'morning' | 'evening' | 'unwind' | 'windDown'>;
 const TICKS: Record<'night' | 'morning', TickId[]> = {
-  night: ['wake', 'dinner', 'gym', 'sauna', 'shake', 'lightsOut'],
+  night: ['wake', 'gym', 'sauna', 'dinner', 'lightsOut'],
   morning: ['wake', 'kiaanUp', 'dinner', 'lightsOut'],
 };
 const tickKey = (id: TickId): keyof Day['ticks'] => (id === 'wake' ? 'up' : id);
@@ -61,6 +62,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const [streaks, setStreaks] = useState<{ up: number; lights: number; fast: number | null; morning: number } | null>(null);
   const isMorning = routine.profile === 'morning';
   const [askBed, setAskBed] = useState(false);   // lights out tapped in the morning: ask for last night's time
+  const [yReviewed, setYReviewed] = useState(false);   // 5 am club: yesterday looked back, in the sauna
 
   useEffect(() => { void loadRoutine().then(setRoutine); }, []);
   useEffect(() => { const id = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(id); }, []);
@@ -74,6 +76,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
       const map: Record<string, Day> = {};
       docs.forEach(d => { map[d.key] = normalizeDay(d.data); });
       map[today] = day;
+      if (on) setYReviewed(!!map[addDays(today, -1)] && reviewDone(map[addDays(today, -1)]));
       // fast kept: consecutive logged days with no meal before the window, ending today or yesterday
       let fast: number | null = null;
       if (routine.fast) {
@@ -111,7 +114,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const ticked = (id: BlockId): string | undefined => {
     if (id === 'brief') return day.brief.finishedAt ? 'done' : undefined;
     if (id === 'work') { if (day.todos.length) return todosDone(day) ? 'done' : undefined; const n = day.priorities.filter(p => p.text.trim()).length, d = day.priorities.filter(p => p.done).length; return n && d === n ? 'done' : undefined; }
-    if (id === 'night') return reviewDone(day) ? 'done' : undefined;
+    if (id === 'night') return (isMorning ? reviewDone(day) : yReviewed) ? 'done' : undefined;
     if (id === 'evening') return t.lightsOut ? 'done' : undefined;
     if (id === 'unwind' || id === 'windDown') return t.lightsOut ? 'done' : undefined;
     if (id === 'morning') return day.morningRoutine.finishedAt ? 'done' : undefined;
@@ -177,11 +180,12 @@ export function Today({ pass }: { pass: PlannerPass }) {
                 <div className="today-block__actions">
                   {canTick && <button type="button" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : isCur ? 'pl-btn--primary' : ''}`} onClick={() => tick(b.id as TickId)}>{done ? 'Undo' : b.id === 'wake' ? "I'm up" : b.id === 'lightsOut' ? (isMorning ? 'In bed' : 'Lights out') : b.id === 'kiaanUp' ? "He's up" : 'Done'}</button>}
                   {b.id === 'brief' && <Link to="/plan/brief" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : 'pl-btn--primary'}`}>{done ? 'Edit' : 'Start'} <ChevronRight /></Link>}
-                  {(b.id === 'night' || b.id === 'evening' || b.id === 'windDown') && <Link to="/plan/night" className={`pl-btn pl-btn--small ${isCur && !done ? 'pl-btn--primary' : 'pl-btn--ghost'}`}>Open <ChevronRight /></Link>}
+                  {(b.id === 'evening' || b.id === 'windDown' || (b.id === 'night' && isMorning)) && <Link to="/plan/night" className={`pl-btn pl-btn--small ${isCur && !done ? 'pl-btn--primary' : 'pl-btn--ghost'}`}>Open <ChevronRight /></Link>}
+                  {b.id === 'night' && !isMorning && <Link to="/plan/sauna" className={`pl-btn pl-btn--small ${!done && (isCur || cur === 'sauna' || cur === 'brief') ? 'pl-btn--primary' : 'pl-btn--ghost'}`}>{done ? 'Edit' : 'Start'} <ChevronRight /></Link>}
                   {b.id === 'morning' && <Link to="/plan/morning" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : 'pl-btn--primary'}`}>{done ? 'Done' : 'Start'} <ChevronRight /></Link>}
                   {b.id === 'work' && <Link to="/plan" className="pl-btn pl-btn--small pl-btn--ghost">Day page</Link>}
                   {(b.id === 'dinner' || b.id === 'shake') && <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">+ Log</Link>}
-                  {b.id === 'sauna' && !done && <Link to="/plan/night" className={`pl-btn pl-btn--small ${isCur ? 'pl-btn--primary' : 'pl-btn--ghost'}`}>Timer <ChevronRight /></Link>}
+                  {b.id === 'sauna' && !done && <Link to="/plan/sauna" className={`pl-btn pl-btn--small ${isCur ? 'pl-btn--primary' : 'pl-btn--ghost'}`}>Timer <ChevronRight /></Link>}
                   {b.id === 'gym' && <Link to="/workout" className="pl-btn pl-btn--small pl-btn--ghost">Start session</Link>}
                 </div>
               </div>

@@ -68,7 +68,7 @@ export function DayPage() {
       {loading ? <p className="pl-muted">Loading…</p> : (
         <>
           {/* ── Bed Brief ── */}
-          <Section title={<span className="pl-row" style={{ gap: 8 }}><Sunrise aria-hidden style={{ width: 20, height: 20, color: 'var(--amber-2)' }} /> {morningP ? 'Morning Brief' : 'Bed Brief'}</span>}
+          <Section title={<span className="pl-row" style={{ gap: 8 }}><Sunrise aria-hidden style={{ width: 20, height: 20, color: 'var(--amber-2)' }} /> {morningP ? 'Morning Brief' : "The day's Brief"}</span>}
             meta={day.brief.finishedAt ? `done${day.brief.seconds ? ` in ${Math.round(day.brief.seconds / 60)} min` : ''}` : `${briefN}/5`} done={!!day.brief.finishedAt}>
             {t.up && <p className="pl-muted" style={{ fontSize: 13 }}>Up at {clock(t.up)}{t.daycare ? ` · daycare ${clock(t.daycare)}` : ''}</p>}
             <div className="plan-brief-grid">
@@ -84,7 +84,7 @@ export function DayPage() {
                 <button type="button" className={`pl-check ${t.done ? 'is-on' : ''}`} aria-label={t.done ? 'Mark not done' : 'Mark done'} onClick={() => set(d => toggleTodo(d, t.id))}><Check /></button>
               </div>
             ))}
-            {isToday && <Link to="/plan/brief" className="pl-btn pl-btn--small">{day.brief.finishedAt ? 'Edit brief' : morningP ? 'Do the Morning Brief' : 'Do the Bed Brief'}</Link>}
+            {isToday && <Link to="/plan/brief" className="pl-btn pl-btn--small">{day.brief.finishedAt ? 'Edit brief' : morningP ? 'Do the Morning Brief' : 'Do the Brief'}</Link>}
           </Section>
 
           {/* ── Today's list ── */}
@@ -95,10 +95,10 @@ export function DayPage() {
 
 
           {/* ── Miracle Night ── */}
-          <Section title={<span className="pl-row" style={{ gap: 8 }}><Moon aria-hidden style={{ width: 20, height: 20, color: 'var(--accent)' }} /> {morningP ? 'Evening' : 'Miracle Night'}</span>}
-            meta={t.lightsOut ? `${morningP ? 'in bed' : 'lights out'} ${clock(t.lightsOut)}` : avg !== null ? `avg ${avg}` : `${reviewN}/3`} done={!!t.lightsOut} open={!isToday || new Date().getHours() >= (morningP ? 19 : 21) || new Date().getHours() < 4}>
+          <Section title={<span className="pl-row" style={{ gap: 8 }}><Moon aria-hidden style={{ width: 20, height: 20, color: 'var(--accent)' }} /> {morningP ? 'Evening' : 'Looked back'}</span>}
+            meta={t.lightsOut ? `${morningP ? 'in bed' : 'lights out'} ${clock(t.lightsOut)}` : avg !== null ? `avg ${avg}` : `${reviewN}/3`} done={!!t.lightsOut} open={!isToday || (morningP && (new Date().getHours() >= 19 || new Date().getHours() < 4))}>
             <p className="pl-muted" style={{ fontSize: 13 }}>
-              {[t.dinner && `dinner ${clock(t.dinner)}`, t.gym && `gym ${clock(t.gym)}`, t.shake && `shake ${clock(t.shake)}`].filter(Boolean).join(' · ') || 'Dinner, gym and shake get ticked on the Today screen.'}
+              {[t.dinner && `dinner ${clock(t.dinner)}`, t.gym && `gym ${clock(t.gym)}`, t.sauna && `sauna ${clock(t.sauna)}`, t.shake && `shake ${clock(t.shake)}`].filter(Boolean).join(' · ') || 'Gym, sauna and dinner get ticked on the Today screen.'}
             </p>
             <Prompt q="Win of the day" value={day.night.review.win} onChange={v => set(d => ({ ...d, night: { ...d.night, review: { ...d.night.review, win: v } } }))} rows={1} />
             <Prompt q="What dragged" value={day.night.review.drag} onChange={v => set(d => ({ ...d, night: { ...d.night, review: { ...d.night.review, drag: v } } }))} rows={1} />
@@ -113,7 +113,7 @@ export function DayPage() {
             {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
             <div className="pl-row" style={{ flexWrap: 'wrap' }}>
               <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Coach Claude" : "Coach Claude on this day"}</Button>
-              {isToday && <Link to="/plan/night" className="pl-btn pl-btn--primary">{morningP ? 'Open the evening wind-down' : 'Open Miracle Night'}</Link>}
+              {isToday && morningP && <Link to="/plan/night" className="pl-btn pl-btn--primary">Open the evening wind-down</Link>}
             </div>
           </Section>
         </>

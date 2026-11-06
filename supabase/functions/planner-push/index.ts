@@ -24,16 +24,17 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 // Same defaults as src/planner/lib/routine.ts (night: Vijay, morning: Rosh); the app comes from settings.app
 type Profile = 'night' | 'morning';
 type AppId = 'vijayplanner' | 'roshplanner';
-interface Routine { profile: Profile; wake: string; wakeGrace: number; briefMinutes: number; daycare: string; eatOpen: string; eatClose: string; gym: string; shake: string; review: string; windDown: string; unwindCap: number; lightsOut: string; stretchMin: number; meditateMin: number; workoutMin: number; kiaanUp: string; fast: boolean }
+interface Routine { profile: Profile; wake: string; wakeGrace: number; briefMinutes: number; daycare: string; eatOpen: string; eatClose: string; gym: string; shake: string; saunaMin: number; review: string; windDown: string; unwindCap: number; lightsOut: string; stretchMin: number; meditateMin: number; workoutMin: number; kiaanUp: string; fast: boolean }
+// night profile = Vijay's 5 am club: up at 5, gym, the sauna (yesterday's review + today's Brief), lights out 9:30
 const NIGHT_ROUTINE: Routine = {
-  profile: 'night', stretchMin: 0, meditateMin: 0, workoutMin: 0, kiaanUp: '08:30', fast: true,
-  wake: '08:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '23:00', gym: '21:00', shake: '23:00', review: '22:30', windDown: '00:45', unwindCap: 60, lightsOut: '01:00',
+  profile: 'night', stretchMin: 0, meditateMin: 0, workoutMin: 0, kiaanUp: '07:30', fast: true,
+  wake: '05:00', wakeGrace: 15, briefMinutes: 10, daycare: '09:30',
+  eatOpen: '18:00', eatClose: '20:30', gym: '05:15', shake: '20:30', saunaMin: 25, review: '06:45', windDown: '21:30', unwindCap: 0, lightsOut: '21:30',
 };
 const MORNING_ROUTINE: Routine = {
   profile: 'morning', stretchMin: 10, meditateMin: 10, workoutMin: 20, kiaanUp: '08:00', fast: false,
   wake: '05:30', wakeGrace: 30, briefMinutes: 10, daycare: '09:30',
-  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', review: '20:30', windDown: '20:45', unwindCap: 30, lightsOut: '21:00',
+  eatOpen: '18:00', eatClose: '20:00', gym: '06:00', shake: '20:00', saunaMin: 0, review: '20:30', windDown: '20:45', unwindCap: 30, lightsOut: '21:00',
 };
 interface UserSettings { app?: string; profile?: string }
 const appOf = (s: UserSettings | null | undefined): AppId => (s?.app === 'roshplanner' ? 'roshplanner' : 'vijayplanner');
@@ -103,7 +104,6 @@ function clock(hhmm: string): string {
 
 interface Reminder { id: string; at: number; body: string; url: string; done: (day: DayDoc) => boolean }
 interface DayDoc { brief?: { finishedAt?: string }; ticks?: Record<string, string | undefined>; night?: { review?: Record<string, string> } }
-const reviewDone = (d: DayDoc) => ['win', 'drag', 'tomorrow'].every(k => (d.night?.review?.[k] || '').trim());
 
 function reminders(r: Routine, app: AppId): Reminder[] {
   const u = (path: string) => `/${app}${path}`;
@@ -112,14 +112,13 @@ function reminders(r: Routine, app: AppId): Reminder[] {
     { id: 'evening', at: routineMin(minutesOf(r.lightsOut) - 30), body: 'Evening review, then bed with Kiaan.', url: u('/plan/night'), done: d => !!d.ticks?.lightsOut },
     { id: 'bed', at: routineMin(minutesOf(r.lightsOut) - 10), body: 'Lights out.', url: u('/plan/night'), done: d => !!d.ticks?.lightsOut },
   ];
+  // the 5 am club: nothing at night but lights out
+  const planAt = minutesOf(r.review) - (r.saunaMin || 0);
   return [
-    { id: 'wake', at: routineMin(minutesOf(r.wake)), body: `Morning. Bed Brief — ${r.briefMinutes} minutes, from bed.`, url: u('/plan/brief'), done: d => !!d.brief?.finishedAt },
-    { id: 'window', at: routineMin(minutesOf(r.eatOpen) - 15), body: `Eating window opens at ${clock(r.eatOpen)}. Protein first.`, url: u('/food'), done: d => !!d.ticks?.dinner },
-    { id: 'gym', at: routineMin(minutesOf(r.gym) - 20), body: `Gym at ${clock(r.gym)} with the boys.`, url: u('/workout'), done: d => !!d.ticks?.gym },
-    { id: 'review', at: routineMin(minutesOf(r.review)), body: 'Out of the sauna? Day review — 3 lines, scorecard, tomorrow\'s #1.', url: u('/plan/night'), done: d => reviewDone(d) },
-    { id: 'shake', at: routineMin(minutesOf(r.shake)), body: 'Shake. Good day — go have fun. I\'ll buzz you at ' + clock(r.windDown) + ' to get ready for bed.', url: u('/plan/night'), done: d => !!d.ticks?.shake },
-    { id: 'windDown', at: routineMin(minutesOf(r.windDown)), body: `Hard stop. Teeth, face, phone on charge — lights out ${clock(r.lightsOut)}.`, url: u('/plan/night'), done: d => !!d.ticks?.lightsOut },
-    { id: 'lightsOut', at: routineMin(minutesOf(r.lightsOut)), body: 'Lights out.', url: u('/plan/night'), done: d => !!d.ticks?.lightsOut },
+    { id: 'wake', at: routineMin(minutesOf(r.wake)), body: `5 am. Up — straight to the gym, no snooze.`, url: u('/'), done: d => !!d.ticks?.up || !!d.ticks?.gym },
+    { id: 'sauna', at: routineMin(planAt), body: `Sauna: look back at yesterday, then today's Brief → the list.`, url: u('/plan/sauna'), done: d => !!d.brief?.finishedAt },
+    ...(r.fast ? [{ id: 'window', at: routineMin(minutesOf(r.eatOpen) - 15), body: `Eating window opens at ${clock(r.eatOpen)}. Protein first.`, url: u('/food'), done: (d: DayDoc) => !!d.ticks?.dinner }] : []),
+    { id: 'lightsOut', at: routineMin(minutesOf(r.lightsOut) - 15), body: `Lights out at ${clock(r.lightsOut)} — up at ${clock(r.wake)}.`, url: u('/'), done: d => !!d.ticks?.lightsOut },
   ];
 }
 
