@@ -209,6 +209,8 @@ a { color: inherit; }
 .today-block.is-now .today-block__body { border-top: 0; }
 .today-block.is-now .today-block__label { font-family: var(--serif); font-size: 19px; }
 .today-block__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.today-already { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; padding: 10px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+.today-already small { flex-basis: 100%; font-weight: 600; }
 .today-block__actions:empty { display: none; }
 .today-block:not(.is-now) .today-block__actions .pl-btn { min-height: 32px; font-size: 13px; }
 .today-prios { margin-top: 4px; }

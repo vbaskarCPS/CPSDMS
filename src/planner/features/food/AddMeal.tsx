@@ -3,10 +3,12 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Camera, Image, Loader2, Star, Utensils } from 'lucide-react';
 import { estimateFoodPhoto, estimateFoodText, shrinkImage, type FoodEstimate } from '../../lib/ai';
-import { dayKey, getDocs } from '../../lib/docs';
+import { dayKey, getDoc, getDocs, putDoc } from '../../lib/docs';
 import { Button, Card, Empty, Field, Header, Page, Segmented, TextArea, useToast, uid } from '../../ui/primitives';
 import { MealEditor, type Draft } from './MealEditor';
 import { mealKey, nowTime, removeMeal, round, saveFavourite, saveMeal, sum, type FavMeal, type Meal } from './model';
+import { fromRoad, likelySame } from './dupes';
+import type { Day } from '../plan/types';
 
 type Mode = 'photo' | 'text' | 'fav';
 
@@ -33,6 +35,7 @@ export function AddMeal() {
   const [lastFile, setLastFile] = useState<File | null>(null);
   const [favs, setFavs] = useState<FavMeal[]>([]);
   const [saving, setSaving] = useState(false);
+  const [same, setSame] = useState<Meal | null>(null);   // probably already logged: ask before adding it twice
   const [toast, show] = useToast();
   const camRef = useRef<HTMLInputElement>(null);
   const libRef = useRef<HTMLInputElement>(null);
@@ -76,12 +79,28 @@ export function AddMeal() {
     setTips(undefined); setSource('favourite');
   };
 
-  const save = async () => {
+  /** mode: undefined = check for a double first; 'replace' = this replaces `same`; 'both' = keep both. */
+  const save = async (mode?: 'replace' | 'both') => {
     if (!draft || saving) return;
     setSaving(true);
     try {
       const meal: Meal = { id: uid(), date: day, time: draft.time || nowTime(), name: draft.name.trim() || 'Meal', items: draft.items, totals: round(sum(draft.items)), thumb: draft.thumb, note: draft.note, source };
+      if (!mode) {
+        const logged = (await getDocs<Meal>('meal', `${day}~`, `${day}~~`).catch(() => [])).map(d => d.data).filter(Boolean);
+        const hit = likelySame(meal, logged);
+        if (hit) { setSame(hit); setSaving(false); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+      }
       await saveMeal(meal);
+      if (mode === 'replace' && same) {
+        await removeMeal(same);
+        // a protein-road slot counted the old one: it now counts this one
+        if (fromRoad(same)) {
+          const d = await getDoc<Day>('day', day).catch(() => null);
+          const old = mealKey(same);
+          if (d?.protein?.slots.some(x => x.eaten === old)) await putDoc('day', day, { ...d, protein: { ...d.protein, slots: d.protein.slots.map(x => (x.eaten === old ? { ...x, eaten: mealKey(meal) } : x)) } });
+        }
+      }
+      setSame(null);
       if (draft.saveFav) await saveFavourite(meal.name, meal.items, meal.thumb);
       else if (fav) await saveFavourite(fav.name, fav.items, fav.thumb, fav);   // count the use
       show(`Logged ${meal.totals.kcal} kcal`, 'good');
@@ -94,7 +113,20 @@ export function AddMeal() {
       <Page>
         <Header title="Check the plate" eyebrow="Nothing is saved until you tap Save" back="/food/add" />
         {error && <p className="pl-error">{error}</p>}
-        <MealEditor draft={draft} setDraft={setDraft} tips={tips} onSave={save} saving={saving} />
+        {same && (
+          <Card accent>
+            <b>Already logged?</b>
+            <p className="pl-muted" style={{ margin: '4px 0 10px', fontSize: 14 }}>
+              “{same.name}” is in your log at {same.time}{fromRoad(same) ? ` (ticked on the ${same.note!.replace('Protein road · ', 'protein road as ')})` : ''}: {same.totals.kcal} kcal, {same.totals.protein} g protein. Is this the same food?
+            </p>
+            <div className="pl-row" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <Button small primary onClick={() => void save('replace')} disabled={saving}>Same food: use this one</Button>
+              <Button small onClick={() => void save('both')} disabled={saving}>Different: add both</Button>
+              <Button small ghost onClick={() => { setSame(null); nav('/food', { replace: true }); }}>Don’t add</Button>
+            </div>
+          </Card>
+        )}
+        <MealEditor draft={draft} setDraft={setDraft} tips={tips} onSave={() => void save()} saving={saving} />
         <Button block ghost onClick={() => { setDraft(null); setPreview(null); }}>Start over</Button>
         {toast}
       </Page>
