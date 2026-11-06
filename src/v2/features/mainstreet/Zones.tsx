@@ -1,4 +1,5 @@
-// src/v2/features/mainstreet/Zones.tsx — MainstreetAI › Zones: the list of knock zones beside the map.
+// src/v2/features/mainstreet/Zones.tsx — MainstreetAI › Zones: a full-screen map with a sidebar (30%) of the zones,
+// grouped by rep in each rep's colour (unassigned last, grey); on phones the list sits under the map.
 // Draw a zone (click corners, double-click or Finish to close), name it, and the map fills in its
 // City/Area. Pick a zone to put campaigns on it and give each campaign a rep.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -9,7 +10,7 @@ import { Link } from 'react-router-dom';
 import { useLoad } from '../../lib/data';
 import {
   acceptRun, assignRep, closeRing, runToReady, stepLabel, type StepState, deleteZone, discardRun, filterZones, generateZones, listCampaigns, listReps, listRuns, listZones, mergeProposed, placeAt, placeLabel,
-  polygonProblem, proposalFeatures, saveZone, setZoneCampaigns, setZoneStatus, zoneColor, zoneFeatures, type Zone, type ZoneFilter, type ZoneRun,
+  polygonProblem, proposalFeatures, repColor, saveZone, setZoneCampaigns, setZoneStatus, UNASSIGNED_COLOR, zoneColor, zoneFeatures, type Zone, type ZoneFilter, type ZoneRun,
 } from '../../lib/mainstreet';
 import { listCities, type City } from '../../lib/msCity';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
@@ -19,6 +20,13 @@ type Draft = { id: string | null; name: string; corners: [number, number][]; cit
 
 export const Zones: React.FC = () => {
   const zones = useLoad(listZones, []);
+  // the page fills the window under the app's top bar
+  const page = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const fitPage = () => { const el = page.current; if (el) el.style.setProperty('--v2-ms-top', `${Math.max(0, el.getBoundingClientRect().top + window.scrollY)}px`); };
+    fitPage(); window.addEventListener('resize', fitPage);
+    return () => window.removeEventListener('resize', fitPage);
+  }, []);
   const campaigns = useLoad(listCampaigns, []);
   const reps = useLoad(listReps, []);
   const [filter, setFilter] = useState<ZoneFilter>('all');
@@ -37,6 +45,17 @@ export const Zones: React.FC = () => {
 
   const all = zones.data || [];
   const shown = useMemo(() => filterZones(all, filter, showRetired, q), [all, filter, showRetired, q]);
+  // the sidebar list: one group per rep, in their colour (A–Z), then the unassigned zones in grey
+  const groups = useMemo(() => {
+    const by = new Map<string, { key: string; name: string; color: string; zones: Zone[] }>();
+    for (const z of shown) {
+      const c = z.status === 'active' ? z.campaigns.find(x => x.rep_id) : undefined;
+      const key = c?.rep_id || '';
+      if (!by.has(key)) by.set(key, { key: key || 'none', name: c?.rep_name || 'Unassigned', color: key ? repColor(key) : UNASSIGNED_COLOR, zones: [] });
+      by.get(key)!.zones.push(z);
+    }
+    return [...by.values()].sort((a, b) => (a.key === 'none' ? 1 : 0) - (b.key === 'none' ? 1 : 0) || a.name.localeCompare(b.name));
+  }, [shown]);
   const selected = all.find(z => z.id === picked) || null;
   const activeCampaigns = (campaigns.data || []).filter(c => c.is_active);
   const activeReps = (reps.data || []).filter(r => r.is_active);
@@ -177,15 +196,16 @@ export const Zones: React.FC = () => {
   };
 
   return (
-    <div className="v2-main v2-ms">
+    <div className="v2-ms v2-ms-zones" ref={page}>
+      <aside className="v2-ms-side">
       <div className="v2-head">
         <span className="v2-h1">Zones</span>
         <span className="v2-spacer" />
-        <span className="v2-mut v2-small">{all.filter(z => z.status === 'active').length} active · {all.filter(z => z.status === 'active' && z.campaigns.every(c => !c.rep_id)).length} without a rep</span>
-        {!draft && !review && <Btn kind="o" icon={Plus} onClick={() => startDraw(null)}>Draw a zone</Btn>}
-        {!draft && !review && <Btn icon={Sparkles} onClick={() => setGenOpen(true)}>Generate zones</Btn>}
+        {!draft && !review && <Btn kind="o" size="sm" icon={Plus} onClick={() => startDraw(null)}>Draw</Btn>}
+        {!draft && !review && <Btn size="sm" icon={Sparkles} onClick={() => setGenOpen(true)}>Generate</Btn>}
       </div>
-      <div className="v2-row" style={{ marginBottom: 12 }}>
+      <div className="v2-mut v2-small" style={{ marginBottom: 8 }}>{all.filter(z => z.status === 'active').length} active · {all.filter(z => z.status === 'active' && z.campaigns.every(c => !c.rep_id)).length} without a rep</div>
+      <div className="v2-row" style={{ marginBottom: 10, gap: 6 }}>
         <button className={`v2-chip${filter === 'all' ? ' on' : ''}`} onClick={() => setFilter('all')}>All</button>
         <button className={`v2-chip${filter === 'unassigned' ? ' on' : ''}`} onClick={() => setFilter('unassigned')}>Unassigned</button>
         <select className="v2-select-pill" value={filter === 'all' || filter === 'unassigned' ? '' : filter} onChange={e => setFilter(e.target.value || 'all')} aria-label="Campaign">
@@ -193,31 +213,13 @@ export const Zones: React.FC = () => {
           {(campaigns.data || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <label className="v2-chip" style={{ cursor: 'pointer' }}><input type="checkbox" checked={showRetired} onChange={e => setShowRetired(e.target.checked)} /> Show retired</label>
-        <span className="v2-spacer" />
-        <div style={{ position: 'relative' }}>
-          <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: '#6b7280' }} />
-          <input className="v2-input" style={{ paddingLeft: 30, width: 220 }} placeholder="Zone, place, campaign or rep" value={q} onChange={e => setQ(e.target.value)} aria-label="Search zones" />
-        </div>
+      </div>
+      <div style={{ position: 'relative', marginBottom: 10 }}>
+        <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: '#6b7280' }} />
+        <input className="v2-input" style={{ paddingLeft: 30, width: '100%' }} placeholder="Zone, place, campaign or rep" value={q} onChange={e => setQ(e.target.value)} aria-label="Search zones" />
       </div>
       <ErrorBox error={error || zones.error || campaigns.error} />
-
-      <div className="v2-split map">
-        <div className="v2-card v2-ms-mapcard">
-          {draft && (
-            <div className="v2-ms-drawbar">
-              <b>{draft.id ? `Redrawing ${draft.name}` : 'Drawing a zone'}</b>
-              <span className="v2-mut v2-small">Click the map to add corners · {draft.corners.length} so far · double-click or Finish when the shape is closed</span>
-              <span className="v2-spacer" />
-              <Btn kind="o" size="sm" icon={Undo2} disabled={!draft.corners.length} onClick={undo}>Undo</Btn>
-              <Btn kind="o" size="sm" icon={X} onClick={cancel}>Cancel</Btn>
-              <Btn size="sm" icon={Check} disabled={draft.corners.length < 3} onClick={finish}>Finish</Btn>
-            </div>
-          )}
-          <div ref={box} className="v2-ms-map" />
-          {failed && <div className="v2-err" style={{ margin: 10 }}>{failed}</div>}
-        </div>
-
-        <div>
+      <div className="v2-ms-side-body">
           {review ? (
             <ReviewPanel review={review} busy={busy} progress={busy && progress ? stepLabel(progress) : null} onMerge={doMerge} onAccept={doAccept} onDiscard={doDiscard} onRegenerate={regenerate}
               onPick={k => pickPropRef.current(k)} />
@@ -274,30 +276,39 @@ export const Zones: React.FC = () => {
             <div className="v2-card" style={{ padding: 0, overflow: 'hidden' }}>
               {zones.loading ? <Loading /> : !shown.length ? (
                 <div className="v2-note" style={{ padding: 16 }}>{all.length ? 'No zones match.' : 'No zones yet. Draw the first one on the map.'}</div>
-              ) : (
-                <div className="v2-table-wrap"><table className="v2-table">
-                  <thead><tr><th>Zone</th><th>City / Area</th><th>Density</th><th>Campaigns · rep</th><th>Created</th></tr></thead>
-                  <tbody>
-                    {shown.map(z => (
-                      <tr key={z.id} className="click" onClick={() => setPicked(z.id)}>
-                        <td><span className="v2-row" style={{ gap: 7, flexWrap: 'nowrap' }}>
-                          <span style={{ width: 10, height: 10, borderRadius: 3, background: zoneColor(z), flexShrink: 0 }} />
-                          <b>{z.name}</b>{z.status === 'retired' && <Tag tone="a">Retired</Tag>}</span></td>
-                        <td>{placeLabel(z)}</td>
-                        <td>{z.business_count ?? <span className="v2-mut">—</span>}</td>
-                        <td>{z.campaigns.length ? z.campaigns.map(c => (
-                          <div key={c.campaign_id} className="v2-small"><span style={{ color: c.color, fontWeight: 700 }}>{c.name}</span> · {c.rep_name || <span className="v2-mut">no rep</span>}</div>
-                        )) : <span className="v2-mut">—</span>}</td>
-                        <td className="v2-mut v2-small">{new Date(z.created_at).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table></div>
-              )}
+              ) : groups.map(g => (
+                <div key={g.key} className="v2-ms-group">
+                  <div className="v2-ms-group-head">
+                    <span className="v2-ms-swatch" style={{ background: g.color }} />
+                    <b>{g.name}</b><span className="v2-mut v2-small">{g.zones.length} zone{g.zones.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {g.zones.map(z => (
+                    <button type="button" key={z.id} className="v2-ms-zrow" onClick={() => setPicked(z.id)}>
+                      <span className="v2-ms-swatch sm" style={{ background: zoneColor(z) }} />
+                      <span className="v2-ms-zname"><b>{z.name}</b>{z.status === 'retired' && <> <Tag tone="a">Retired</Tag></>}<small>{placeLabel(z)}{z.business_count != null ? ` · density ${z.business_count}` : ''}</small></span>
+                    </button>
+                  ))}
+                </div>
+              ))}
             </div>
           )}
-        </div>
       </div>
+      </aside>
+
+        <div className="v2-ms-mapcard">
+          {draft && (
+            <div className="v2-ms-drawbar">
+              <b>{draft.id ? `Redrawing ${draft.name}` : 'Drawing a zone'}</b>
+              <span className="v2-mut v2-small">Click the map to add corners · {draft.corners.length} so far · double-click or Finish when the shape is closed</span>
+              <span className="v2-spacer" />
+              <Btn kind="o" size="sm" icon={Undo2} disabled={!draft.corners.length} onClick={undo}>Undo</Btn>
+              <Btn kind="o" size="sm" icon={X} onClick={cancel}>Cancel</Btn>
+              <Btn size="sm" icon={Check} disabled={draft.corners.length < 3} onClick={finish}>Finish</Btn>
+            </div>
+          )}
+          <div ref={box} className="v2-ms-map" />
+          {failed && <div className="v2-err" style={{ margin: 10 }}>{failed}</div>}
+        </div>
 
       {naming && draft && (
         <NameZone initial={draft.name} busy={busy} error={error} onClose={() => setNaming(false)} onSave={save} />
