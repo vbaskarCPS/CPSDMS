@@ -155,9 +155,20 @@ export function filterZones(zones: Zone[], f: ZoneFilter, showRetired: boolean, 
 }
 
 /** The colour a zone is drawn in: grey until a rep works it, then its (first assigned) campaign's colour. */
+/** 24 distinct, map-readable colours (no greys: grey means unassigned). */
+export const REP_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#d97706', '#9333ea', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5',
+  '#0d9488', '#c026d3', '#ca8a04', '#dc2626', '#0284c7', '#059669', '#7c3aed', '#be123c', '#15803d', '#b45309', '#1d4ed8', '#a21caf', '#0f766e', '#f59e0b'];
+/** A rep's colour: the same on every zone and every screen (from their id). */
+export function repColor(repId: string): string {
+  let h = 0;
+  for (let i = 0; i < repId.length; i++) h = (h * 31 + repId.charCodeAt(i)) >>> 0;
+  return REP_COLORS[h % REP_COLORS.length];
+}
+/** Retired: slate. Assigned: the rep's colour. Unassigned: grey. */
 export function zoneColor(z: Pick<Zone, 'campaigns' | 'status'>): string {
   if (z.status === 'retired') return '#64748b';
-  return z.campaigns.find(c => c.rep_id)?.color || UNASSIGNED_COLOR;
+  const rep = z.campaigns.find(c => c.rep_id)?.rep_id;
+  return rep ? repColor(rep) : UNASSIGNED_COLOR;
 }
 
 /** Mapbox features for the zone shapes and their labels. */
@@ -166,8 +177,13 @@ export function zoneFeatures(zones: Zone[], selectedId: string | null): { shapes
     shapes: { type: 'FeatureCollection', features: zones.map(z => ({
       type: 'Feature', geometry: z.polygon, properties: { id: z.id, color: zoneColor(z), sel: z.id === selectedId ? 1 : 0, retired: z.status === 'retired' ? 1 : 0 } })) },
     labels: { type: 'FeatureCollection', features: zones.filter(z => z.center_lat != null && z.center_lng != null).map(z => ({
-      type: 'Feature', geometry: { type: 'Point', coordinates: [z.center_lng!, z.center_lat!] }, properties: { id: z.id, label: z.name } })) },
+      type: 'Feature', geometry: { type: 'Point', coordinates: [z.center_lng!, z.center_lat!] }, properties: { id: z.id, label: zoneLabel(z), name: z.name, rep: zoneLabel(z).split('\n')[1] || '' } })) },
   };
+}
+/** The map label: the zone's name, and the assigned rep's name on the line under it. */
+export function zoneLabel(z: Pick<Zone, 'name' | 'campaigns' | 'status'>): string {
+  const rep = z.status === 'retired' ? null : z.campaigns.find(c => c.rep_id)?.rep_name;
+  return rep ? `${z.name}\n${rep}` : z.name;
 }
 
 /** City (place) and area (neighbourhood / locality) at a point, from Mapbox. Null when there's no token. */
