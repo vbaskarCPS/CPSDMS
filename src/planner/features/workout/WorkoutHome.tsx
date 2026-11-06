@@ -112,13 +112,13 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
   );
 }
 
-/** "Gym · 9:00 pm with the boys", or "Late start — still counts" once it's 30 min past and nothing's logged. */
+/** "Gym · 5:15 am", or "Late start — still counts" once it's 30 min past and nothing's logged. */
 function useGymLine(doneToday: boolean, unfinished: boolean): string {
   const [r, setR] = useState<Routine>(() => routineNow());
   const [, tick] = useState(0);
   useEffect(() => { void loadRoutine().then(setR); const id = window.setInterval(() => tick(n => n + 1), 60_000); return () => window.clearInterval(id); }, []);
-  if (doneToday || unfinished) return `Gym · ${clock(r.gym)} with the boys`;
-  return routineMinutes() > routineMin(r.gym) + 30 ? 'Late start — still counts' : `Gym · ${clock(r.gym)} with the boys`;
+  if (doneToday || unfinished) return `Gym · ${clock(r.gym)}`;
+  return routineMinutes() > routineMin(r.gym) + 30 ? 'Late start — still counts' : `Gym · ${clock(r.gym)}`;
 }
 
 /** The card on the Today screen. */

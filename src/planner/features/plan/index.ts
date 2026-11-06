@@ -1,10 +1,11 @@
-// src/planner/features/plan — the day around Vijay's routine: the Bed Brief (from bed, ≤10 min), the
-// daily page, Miracle Night (wind-down, review, lights out), weekly and monthly reviews.
+// src/planner/features/plan — the day around the routine: the Brief (≤10 min) → today's list, the daily page,
+// the sauna (5 am club: yesterday's review + today's Brief), the evening wind-down (Rosh), weekly and monthly reviews.
 import './plan.css';
 import { createElement } from 'react';
 import { DayPage } from './DayPage';
 import { Brief } from './Brief';
 import { Night } from './Night';
+import { Sauna } from './Sauna';
 import { Morning } from './Morning';
 import { MonthReview, WeekReview } from './Reviews';
 
@@ -21,6 +22,7 @@ export const planRoutes: { path: string; element: JSX.Element }[] = [
   { path: '/plan', element: createElement(DayPage) },
   { path: '/plan/brief', element: createElement(Brief) },
   { path: '/plan/night', element: createElement(Night) },
+  { path: '/plan/sauna', element: createElement(Sauna) },
   { path: '/plan/morning', element: createElement(Morning) },
   { path: '/plan/week', element: createElement(WeekReview) },
   { path: '/plan/month', element: createElement(MonthReview) },

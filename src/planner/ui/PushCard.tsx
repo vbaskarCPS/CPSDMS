@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Bell, BellOff, Smartphone } from 'lucide-react';
 import { Card, Button } from './primitives';
 import { disablePush, enablePush, pushState, sendTest, type PushState } from '../lib/push';
-import { clock, hhmm, minutesOf, routineNow } from '../lib/routine';
+import { clock, hhmm, minutesOf, routineNow, planAt } from '../lib/routine';
 
 export function PushCard() {
   const [state, setState] = useState<PushState | 'loading'>('loading');
@@ -21,12 +21,15 @@ export function PushCard() {
     finally { setBusy(false); refresh(); }
   };
 
-  const reminders = [
-    { at: r.wake, what: 'Bed Brief' },
-    { at: hhmm(minutesOf(r.eatOpen) - 15), what: `Eating window opens at ${clock(r.eatOpen)}` },
-    { at: hhmm(minutesOf(r.gym) - 20), what: `Gym at ${clock(r.gym)}` },
-    { at: r.shake, what: 'Shake, then Miracle Night' },
-    { at: hhmm(minutesOf(r.lightsOut) - 15), what: 'Lights out in 15' },
+  const reminders = r.profile === 'morning' ? [
+    { at: r.wake, what: 'Miracle Morning, then the Brief' },
+    { at: hhmm(minutesOf(r.lightsOut) - 30), what: 'Evening review, then bed' },
+    { at: hhmm(minutesOf(r.lightsOut) - 10), what: 'Lights out' },
+  ] : [
+    { at: r.wake, what: 'Up — straight to the gym' },
+    { at: planAt(r), what: "Sauna: yesterday's review, then today's Brief" },
+    ...(r.fast ? [{ at: hhmm(minutesOf(r.eatOpen) - 15), what: `Eating window opens at ${clock(r.eatOpen)}` }] : []),
+    { at: hhmm(minutesOf(r.lightsOut) - 15), what: `Lights out at ${clock(r.lightsOut)} — up at ${clock(r.wake)}` },
   ];
 
   return (

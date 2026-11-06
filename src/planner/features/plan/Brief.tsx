@@ -142,7 +142,7 @@ export function Brief() {
       </header>
 
       <section className="brief__body pl-fade" key={step}>
-        <p className="pl-eyebrow">{routine.profile === 'morning' ? 'Morning Brief' : 'Bed Brief'} · {step + 1} of {STEPS.length}</p>
+        <p className="pl-eyebrow">{routine.profile === 'morning' ? 'Morning Brief' : "Today's Brief"} · {step + 1} of {STEPS.length}</p>
         <h1 className="brief__q">{STEPS[step].title}</h1>
         {STEPS[step].hint && <p className="pl-muted">{STEPS[step].hint}</p>}
         {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
