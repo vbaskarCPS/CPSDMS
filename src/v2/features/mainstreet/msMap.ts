@@ -24,7 +24,9 @@ export function createZonesMap(box: HTMLDivElement, onReady: (m: mapboxgl.Map) =
         'line-color': ['get', 'color'], 'line-width': ['case', ['==', ['get', 'sel'], 1], 3.5, 1.8],
         'line-dasharray': ['case', ['==', ['get', 'retired'], 1], ['literal', [2, 2]], ['literal', [1, 0]]] } });
       m.addLayer({ id: 'ms-zone-label', type: 'symbol', source: 'ms-labels', layout: {
-        'text-field': ['get', 'label'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 12.5, 'text-allow-overlap': false },
+        // the zone's name, and the assigned rep's name smaller on the line under it
+        'text-field': ['format', ['get', 'name'], {}, ['case', ['!=', ['get', 'rep'], ''], ['concat', '\n', ['get', 'rep']], ''], { 'font-scale': 0.85 }],
+        'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 12.5, 'text-allow-overlap': false },
         paint: { 'text-color': '#111827', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
       // a proposal under review: candidates, lit up when picked for a merge
       m.addLayer({ id: 'ms-prop-fill', type: 'fill', source: 'ms-prop', paint: {

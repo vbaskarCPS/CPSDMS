@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closeRing, filterZones, placeLabel, polygonProblem, zoneColor, zoneFeatures, type Zone } from './mainstreet';
+import { closeRing, filterZones, placeLabel, polygonProblem, REP_COLORS, repColor, zoneColor, zoneFeatures, zoneLabel, type Zone } from './mainstreet';
 
 const zone = (p: Partial<Zone> & { id: string; name: string }): Zone => ({
   polygon: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] }, center_lat: 0.5, center_lng: 0.5, city: null, area: null,
@@ -39,12 +39,21 @@ describe('mainstreet · list', () => {
     expect(filterZones([a, b, c], 'all', false, 'burl').map(z => z.id)).toEqual(['b']);
   });
   it('colours by assignment', () => {
-    expect(zoneColor(a)).toBe('#0ea5e9');
+    const rep = a.campaigns.find(c => c.rep_id)!.rep_id!;
+    expect(zoneColor(a)).toBe(repColor(rep));
+    expect(REP_COLORS).toContain(zoneColor(a));
+    expect(repColor('rep-x')).toBe(repColor('rep-x'));
+    const repName = a.campaigns.find(c => c.rep_id)!.rep_name;
+    expect(zoneLabel(a)).toBe(`${a.name}\n${repName}`);
+    expect(zoneLabel(b)).toBe(b.name);
+    expect(new Set(['r1', 'r2', 'r3', 'r4', 'r5', 'r6'].map(repColor)).size).toBeGreaterThan(3);
     expect(zoneColor(b)).toBe('#94a3b8');
     expect(zoneColor(c)).toBe('#64748b');
     const f = zoneFeatures([a, b], 'b');
     expect(f.shapes.features.map(x => x.properties?.sel)).toEqual([0, 1]);
-    expect(f.labels.features[0].properties?.label).toBe('Plaza North');
+    expect(f.labels.features[0].properties?.label).toBe('Plaza North\nRep One');
+    expect(f.labels.features[0].properties?.name).toBe('Plaza North');
+    expect(f.labels.features[0].properties?.rep).toBe('Rep One');
   });
 });
 
