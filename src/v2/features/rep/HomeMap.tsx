@@ -14,6 +14,7 @@ import { knownNear, mapPlaces, nearbyAdded, type KnownBiz, type MapPlace, type N
 import { cacheGet, cacheSet } from '../../lib/repQueue';
 import { Btn, ErrorBox, Field, Loading } from '../../ui';
 import { BusinessSheet, type SavedVisit } from './BusinessSheet';
+import { LocationBanner } from './LocationBanner';
 import { RepMapView, type MapPin, type MapZone, type RepMapHandle } from './RepMapView';
 import { useRep } from './repContext';
 
@@ -87,6 +88,7 @@ export const HomeMap: React.FC = () => {
   return (
     <>
       <SendQueue />
+      <LocationBanner />
       <div className="v2-rep-bar2 v2-rep-filters">
         <div className="v2-rep-seg">
           <button type="button" className={show === 'open' ? 'on' : ''} onClick={() => setShow('open')}>To visit{m ? ` ${left}` : ''}</button>

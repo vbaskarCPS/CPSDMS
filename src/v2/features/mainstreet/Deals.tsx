@@ -45,7 +45,7 @@ export const Deals: React.FC = () => {
 
 const inline: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' };
 const Where: React.FC<{ far: boolean; distance_m?: number }> = ({ far, distance_m }) => far
-  ? <Tag tone="a"><span style={inline}><MapPin size={11} />{distance_m != null ? `Logged ${distance_m} m away` : 'No location'}</span></Tag>
+  ? <Tag tone="a"><span style={inline}><MapPin size={11} />{distance_m != null ? `Logged ${distance_m} m away` : 'No GPS · placed at the address'}</span></Tag>
   : <Tag tone="g"><span style={inline}><MapPin size={11} />At the business</span></Tag>;
 
 const DealList: React.FC<{ list: PipelineDeal[]; view: View; onDone: () => void }> = ({ list, view, onDone }) => {

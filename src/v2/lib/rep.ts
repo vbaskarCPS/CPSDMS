@@ -419,3 +419,20 @@ export interface RepNow {
 }
 export async function repsToday(): Promise<RepNow[]> { return (must(await db.rpc('ms_reps_today')) as RepNow[]) || []; }
 export async function dealPhotos(deal: string): Promise<string[]> { return (must(await db.rpc('ms_deal_photos', { p_deal: deal })) as string[] | null) || []; }
+
+// ───────────── location help ─────────────
+/** How to turn location on for this phone's browser (iPhone / Android / other), step by step. */
+export function locationSteps(ua: string): { phone: string; steps: string[] } {
+  if (/iPhone|iPad|iPod/i.test(ua)) return { phone: 'iPhone', steps: [
+    'Settings → Privacy & Security → Location Services: turn it on.',
+    'In the same list, Safari Websites → While Using the App, and turn on Precise Location.',
+    'Back here, tap aA in the address bar → Website Settings → Location → Allow.',
+    'Close this app completely and open it again.',
+  ] };
+  if (/Android/i.test(ua)) return { phone: 'Android', steps: [
+    'Pull down from the top of the screen and turn Location on.',
+    'In Chrome, tap the icon left of the address → Permissions → Location → Allow.',
+    'Close this app completely and open it again.',
+  ] };
+  return { phone: 'this device', steps: ['Turn on location for this browser in its site settings, then reload the page.'] };
+}
