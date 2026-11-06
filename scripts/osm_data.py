@@ -3,6 +3,7 @@
   osm_data.py boxes PROVINCE              the populated boxes (west,south,east,north) for a province, one per line
   osm_data.py ms FILE OUTDIR              main roads / rail / rivers / commercial land → OUTDIR/{i}_{j}.json (0.25°)
   osm_data.py streets FILE OUTDIR BOX     builder streets → OUTDIR/{i}_{j}.json (0.1°), merged with what's there
+  osm_data.py cities FILE OUTDIR PROVINCE municipal boundaries → OUTDIR/{province}.json (the list) + OUTDIR/b/{osm id}.json
   osm_data.py index OUTDIR                OUTDIR/index.json
 """
 import json, math, os, sys, datetime
@@ -40,7 +41,20 @@ BOXES = {
         '-110.75,49.95,-110.60,50.10',   # Medicine Hat
         '-115.40,51.00,-115.30,51.10',   # Canmore
     ],
+    'saskatchewan': [
+        '-106.90,51.95,-106.40,52.40',   # Saskatoon, Martensville, Warman
+        '-104.85,50.30,-104.40,50.60',   # Regina, White City
+        '-105.85,53.10,-105.60,53.30',   # Prince Albert
+        '-105.70,50.30,-105.40,50.50',   # Moose Jaw
+        '-107.90,50.20,-107.70,50.40',   # Swift Current
+        '-102.60,51.10,-102.40,51.30',   # Yorkton
+        '-108.40,52.70,-108.20,52.90',   # North Battleford, Battleford
+        '-103.10,49.10,-102.90,49.20',   # Estevan
+        '-103.90,49.60,-103.80,49.70',   # Weyburn
+        '-110.10,53.20,-109.90,53.40',   # Lloydminster
+    ],
 }
+PROV = {'british-columbia': 'BC', 'ontario': 'ON', 'alberta': 'AB', 'saskatchewan': 'SK'}
 UNNAMED_OK = {'residential', 'service', 'unclassified', 'living_street'}
 HIGHWAY = {'motorway', 'trunk', 'motorway_link', 'trunk_link'}
 ARTERIAL = {'primary', 'secondary', 'tertiary', 'primary_link', 'secondary_link'}
@@ -146,11 +160,45 @@ def cmd_streets(src, out, box):
     print(f'streets {box}: {len(tiles)} tiles')
 
 
+def cmd_cities(src, out, province):
+    """Municipal boundaries (admin_level 8, and 6 for Ontario's single- and upper-tier places) for MainstreetAI's Cities."""
+    os.makedirs(f'{out}/b', exist_ok=True)
+    found = []
+    for ft in rows(src):
+        g, p = ft.get('geometry') or {}, ft.get('properties') or {}
+        if p.get('@type') != 'relation' or g.get('type') not in ('Polygon', 'MultiPolygon'): continue
+        lvl = str(p.get('admin_level') or '')
+        if lvl not in ('6', '8') or not p.get('name'): continue
+        oid = str(p.get('@id', ''))
+        if not oid.isdigit(): continue
+        polys = [g['coordinates']] if g['type'] == 'Polygon' else g['coordinates']
+        out_polys, xs, ys = [], [], []
+        for poly in polys:
+            rings = []
+            for ring in poly:
+                r = []
+                for x, y in ring:
+                    c = [round(x, 5), round(y, 5)]
+                    if not r or r[-1] != c: r.append(c)
+                if len(r) >= 4: rings.append(r); xs += [c[0] for c in r]; ys += [c[1] for c in r]
+            if rings: out_polys.append(rings)
+        if not out_polys: continue
+        with open(f'{out}/b/{oid}.json', 'w') as f: json.dump({'type': 'MultiPolygon', 'coordinates': out_polys}, f, separators=(',', ':'))
+        pop = str(p.get('population') or '').replace(',', '').strip()
+        found.append({'id': int(oid), 'name': p['name'], 'level': int(lvl), 'province': PROV.get(province, province),
+                      'type': p.get('border_type') or p.get('place') or None, 'pop': int(pop) if pop.isdigit() else None,
+                      'bbox': [min(xs), min(ys), max(xs), max(ys)]})
+    found.sort(key=lambda c: (-(c['pop'] or 0), c['name']))
+    with open(f'{out}/{PROV.get(province, province)}.json', 'w') as f: json.dump(found, f, separators=(',', ':'))
+    print(f'cities {province}: {len(found)}')
+
+
 def cmd_index(out):
     idx = {'made': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d'),
            'ms_tile': MS_TILE, 'streets_tile': ST_TILE,
            'ms': sorted(f[:-5] for f in os.listdir(f'{out}/ms')),
-           'streets': sorted(f[:-5] for f in os.listdir(f'{out}/streets'))}
+           'streets': sorted(f[:-5] for f in os.listdir(f'{out}/streets')),
+           'cities': sorted(f[:-5] for f in os.listdir(f'{out}/cities') if f.endswith('.json'))}
     with open(f'{out}/index.json', 'w') as f: json.dump(idx, f, separators=(',', ':'))
     print(f"index: {len(idx['ms'])} ms tiles, {len(idx['streets'])} street tiles")
 
@@ -160,4 +208,5 @@ if __name__ == '__main__':
     if cmd == 'boxes': print('\n'.join(BOXES[sys.argv[2]]))
     elif cmd == 'ms': cmd_ms(sys.argv[2], sys.argv[3])
     elif cmd == 'streets': cmd_streets(sys.argv[2], sys.argv[3], sys.argv[4])
+    elif cmd == 'cities': cmd_cities(sys.argv[2], sys.argv[3], sys.argv[4])
     elif cmd == 'index': cmd_index(sys.argv[2])
