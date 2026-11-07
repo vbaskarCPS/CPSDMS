@@ -10,7 +10,7 @@ import { Btn, Field, Loading } from '../../ui';
 import { MsLogo, MsTab } from '../../ui/MsLogo';
 
 export const Login: React.FC = () => {
-  const { session, profile, loading, signIn, can } = useAuth();
+  const { session, profile, signIn, can } = useAuth();
   const nav = useNavigate();
   const loc = useLocation() as { state?: { from?: string }; search: string };
   // propertystars.app/mainstreet opens straight on the reps' sign-in, MainstreetAI only
@@ -112,7 +112,7 @@ export const Login: React.FC = () => {
         {error && <div className="v2-err" style={{ marginBottom: 12 }}>{error}</div>}
         {sent && <div className="v2-card" style={{ marginBottom: 12, background: '#ecfdf5', borderColor: '#a7f3d0' }}>
           <b>Check your email.</b><div className="v2-small">If that email belongs to a MainstreetAI rep, a link to choose a new password is on its way. It works for 2 hours.</div></div>}
-        <Btn type="submit" disabled={busy || loading} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e' }}>
+        <Btn type="submit" disabled={busy} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e' }}>
           {busy ? (forgot ? 'Sending…' : 'Signing in…') : forgot ? 'Email me a link' : 'Sign in'}</Btn>
         <div className="v2-note" style={{ textAlign: 'center' }}>
           <button type="button" className="v2-link" style={{ background: 'none', border: 0 }} onClick={() => { setForgot(f => !f); setError(null); setSent(false); }}>
@@ -129,7 +129,7 @@ export const Login: React.FC = () => {
         {error && <div className="v2-err" style={{ marginBottom: 12 }}>{error}</div>}
         {finalized && <div className="v2-card" style={{ marginBottom: 12, background: '#ecfdf5', borderColor: '#a7f3d0' }}>
           <b>Your day is complete.</b><div className="v2-small">Your payout has been processed and your logsheet is closed for today. Great work!</div></div>}
-        <Btn type="submit" disabled={busy || loading} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Signing in…' : 'Sign in'}</Btn>
+        <Btn type="submit" disabled={busy} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Signing in…' : 'Sign in'}</Btn>
         <div className="v2-note" style={{ textAlign: 'center' }}>
           {tab === 'worker' ? <>New? Try training mode: <b>Training</b> / <b>training</b></> : 'You stay signed in on this device until you sign out.'}
         </div>

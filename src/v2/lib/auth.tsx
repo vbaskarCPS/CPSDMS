@@ -84,10 +84,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     db.auth.getSession().then(({ data }) => load(data.session));
     const { data: sub } = db.auth.onAuthStateChange((event, s) => {
-      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'USER_UPDATED') load(s);
+      // Never call Supabase inside this callback: it runs while the auth lock is held, and a query that needs
+      // the session waits for that lock forever (the sign-in screen stayed "loading", its button greyed out).
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'USER_UPDATED') setTimeout(() => { void load(s); }, 0);
       else setSession(s);
     });
-    return () => sub.subscription.unsubscribe();
+    // and never let a stuck check keep the sign-in button off
+    const giveUp = setTimeout(() => setLoading(false), 8000);
+    return () => { clearTimeout(giveUp); sub.subscription.unsubscribe(); };
   }, [load]);
 
   const setCenterId = useCallback((id: string) => {
