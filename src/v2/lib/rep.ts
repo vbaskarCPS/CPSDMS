@@ -39,13 +39,14 @@ export const PIN: Record<PinState, { label: string; color: string }> = {
 };
 export const pinOf = (s: string | null | undefined) => PIN[(s as PinState) in PIN ? (s as PinState) : 'new'];
 
-/** Pins by stage (New → Pitched → Booked → Won, or Lost). A follow-up can be open at any stage (before the
+/** Pins by stage (New → Pitched → Questionnaire → Booked → Won, or Lost). A follow-up can be open at any stage (before the
  *  pitch, after it, or the host's after the call): the pin keeps its stage colour and gets an amber ring. */
-export type StagePin = 'new' | 'pitched' | 'booked' | 'won' | 'lost' | 'off';
+export type StagePin = 'new' | 'pitched' | 'questionnaire' | 'booked' | 'won' | 'lost' | 'off';
 export const FOLLOW_UP_RING = '#f59e0b';
 export const STAGE_PIN: Record<StagePin, { label: string; color: string }> = {
   new: { label: 'New', color: '#ffffff' },
   pitched: { label: 'Pitched', color: '#2563eb' },
+  questionnaire: { label: 'Questionnaire', color: '#7c3aed' },
   booked: { label: 'Onboarding booked', color: '#86efac' },
   won: { label: 'Won', color: '#16a34a' },
   lost: { label: 'Lost', color: '#dc2626' },

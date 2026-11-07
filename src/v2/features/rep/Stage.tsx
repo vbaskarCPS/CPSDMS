@@ -1,4 +1,4 @@
-// Where a business stands: its stage (New → Talked to → Pitched → Onboarding booked → Won, or Lost with a
+// Where a business stands: its stage (New → Pitched → Questionnaire → Onboarding booked → Won, or Lost with a
 // reason), how hot it is and why, and everything that's happened there from every rep. Used in the rep app and in
 // MainstreetAI › Pipeline.
 import React, { useState } from 'react';

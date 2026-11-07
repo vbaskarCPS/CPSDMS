@@ -1,7 +1,8 @@
 // src/v2/features/mainstreet/Pipeline.tsx — MainstreetAI › Pipeline: every business a rep has worked, by stage
 // (New → Talked to → Pitched → Onboarding booked → Won / Lost), with how hot it is. Filter by campaign, rep and
 // heat; open one for its stage, the reasons for its score, and everything that's happened there.
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useLoad } from '../../lib/data';
 import { listCampaigns, listReps } from '../../lib/mainstreet';
 import { HEAT, STAGES, byStage, pipeline, type Heat, type PipeRow, type Stage } from '../../lib/msPipeline';
@@ -21,6 +22,14 @@ export const Pipeline: React.FC = () => {
   const cols = useMemo(() => byStage(shown), [shown]);
   const [phoneStage, setPhoneStage] = useState<Stage>('pitched');
   const [open, setOpen] = useState<PipeRow | null>(null);
+  // opened from a pin on the Zones map: ?open={business}&c={campaign}
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const id = params.get('open'); if (!id || !rows.data) return;
+    const r = rows.data.find(x => x.id === id && (!params.get('c') || x.campaign_id === params.get('c')));
+    if (r) setOpen(r);
+    setParams({}, { replace: true });
+  }, [rows.data]);   // eslint-disable-line react-hooks/exhaustive-deps
   const month = useMemo(() => {
     const since = new Date(); since.setDate(1); since.setHours(0, 0, 0, 0);
     const recent = (rows.data || []).filter(r => r.last_at && new Date(r.last_at) >= since);

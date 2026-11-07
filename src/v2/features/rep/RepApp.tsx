@@ -24,6 +24,7 @@ import { FollowupEmails } from './FollowupEmails';
 import { HomeMap } from './HomeMap';
 import { RepMapView } from './RepMapView';
 import { RepSettings } from './RepSettings';
+import { WhatsNew } from './WhatsNew';
 import { download, RepProvider, useRep } from './repContext';
 import './rep.css';
 
@@ -46,6 +47,7 @@ export const RepApp: React.FC = () => {
         <Route path="numbers" element={<Navigate to="/app/rep/me" replace />} />
         <Route path="*" element={<Navigate to="/app/rep" replace />} />
       </Routes>
+      <WhatsNew />
     </RepProvider>
   );
 };

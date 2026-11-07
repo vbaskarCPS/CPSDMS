@@ -17,7 +17,7 @@ export function createZonesMap(box: HTMLDivElement, onReady: (m: mapboxgl.Map) =
     let loaded = false;
     m.on('load', () => {
       loaded = true; tidyRmBaseMap(m);
-      for (const id of ['ms-zones', 'ms-labels', 'ms-draw', 'ms-draw-pts', 'ms-prop', 'ms-prop-labels']) m.addSource(id, { type: 'geojson', data: EMPTY });
+      for (const id of ['ms-zones', 'ms-labels', 'ms-draw', 'ms-draw-pts', 'ms-prop', 'ms-prop-labels', 'ms-biz']) m.addSource(id, { type: 'geojson', data: EMPTY });
       m.addLayer({ id: 'ms-zone-fill', type: 'fill', source: 'ms-zones', paint: {
         'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'sel'], 1], 0.38, ['==', ['get', 'retired'], 1], 0.06, 0.16] } });
       m.addLayer({ id: 'ms-zone-line', type: 'line', source: 'ms-zones', paint: {
@@ -35,6 +35,10 @@ export function createZonesMap(box: HTMLDivElement, onReady: (m: mapboxgl.Map) =
       m.addLayer({ id: 'ms-prop-label', type: 'symbol', source: 'ms-prop-labels', layout: {
         'text-field': ['get', 'label'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 13, 'text-allow-overlap': true },
         paint: { 'text-color': '#111827', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
+      // the pipeline: a pin for each business a rep has worked, in its stage's colour (New is white with a dark ring)
+      m.addLayer({ id: 'ms-biz-pts', type: 'circle', source: 'ms-biz', paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 4, 14, 7.5], 'circle-color': ['get', 'color'],
+        'circle-stroke-color': ['case', ['==', ['get', 'stage'], 'new'], '#374151', '#ffffff'], 'circle-stroke-width': 1.8 } });
       // drawing: the shape so far, and a dot on each corner
       m.addLayer({ id: 'ms-draw-fill', type: 'fill', source: 'ms-draw', paint: { 'fill-color': '#0d9488', 'fill-opacity': 0.22 } });
       m.addLayer({ id: 'ms-draw-line', type: 'line', source: 'ms-draw', paint: { 'line-color': '#0f766e', 'line-width': 2.5, 'line-dasharray': [2, 1.5] } });
