@@ -5,6 +5,7 @@
 import React, { useMemo, useState } from 'react';
 import { DoorOpen, Search, Sparkles } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
+import { STAGE_PIN } from '../../lib/rep';
 
 interface Update {
   id: string;                 // unique and never reused, e.g. '2026-11-07-add-remotely'
@@ -16,6 +17,22 @@ interface Update {
 
 // newest first
 const UPDATES: Update[] = [
+  {
+    id: '2026-11-07-questionnaire-stage',
+    title: 'New stage: Questionnaire',
+    intro: 'Businesses now go New → Pitched → Questionnaire → Onboarding booked → Won.',
+    steps: [
+      'When you save the questionnaire from the deck, the business moves to Questionnaire and its pin turns purple.',
+      'Pitched (blue) now means you presented, but the questionnaire isn’t filled in yet.',
+      'Book the onboarding call from a Questionnaire business to move it on to Onboarding booked.',
+    ],
+    picture: (
+      <div className="v2-whatsnew-stages" aria-hidden="true">
+        {(['new', 'pitched', 'questionnaire', 'booked', 'won'] as const).map(k => (
+          <span key={k} className={k === 'questionnaire' ? 'on' : ''}><i style={{ background: STAGE_PIN[k].color }} />{STAGE_PIN[k].label}</span>))}
+      </div>
+    ),
+  },
   {
     id: '2026-11-07-add-remotely',
     title: 'Add a business remotely',

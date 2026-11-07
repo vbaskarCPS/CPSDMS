@@ -288,3 +288,7 @@
 .v2-whatsnew-steps li { margin-bottom: 6px; }
 .v2 .v2-btn.v2-whatsnew-go { width: 100%; justify-content: center; padding: 12px; font-size: 15px; }
 .v2-whatsnew h2 { color: #111827; font-size: 21px; }
+.v2-whatsnew-stages { display: flex; flex-wrap: wrap; gap: 6px; }
+.v2-whatsnew-stages span { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 1.5px solid #e5e7eb; border-radius: 999px; padding: 5px 10px; font-size: 13px; color: #111827; }
+.v2-whatsnew-stages span.on { border-color: #7c3aed; font-weight: 700; }
+.v2-whatsnew-stages i { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #374151; }
