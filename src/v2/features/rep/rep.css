@@ -277,3 +277,14 @@
 .v2-add-mode button.on { border-color: #0f766e; background: #f0fdfa; }
 .v2-add-mode button.on svg { color: #0f766e; }
 .v2-stage .labels span { overflow-wrap: anywhere; }
+
+/* What's new (after an update) */
+.v2-whatsnew-bg { z-index: 45; }
+.v2-whatsnew-tag { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; font-weight: 600; color: #0f766e; background: #f0fdfa; border-radius: 999px; padding: 3px 9px; margin-bottom: 8px; }
+.v2-whatsnew-intro { margin: 6px 0 10px; color: #374151; font-size: 14.5px; }
+.v2-whatsnew-pic { background: #f3f4f6; border-radius: 14px; padding: 10px; margin-bottom: 10px; }
+.v2-whatsnew-pic .v2-add-mode { margin: 0; }
+.v2-whatsnew-steps { margin: 0 0 14px; padding-left: 20px; font-size: 14.5px; line-height: 1.45; color: #111827; }
+.v2-whatsnew-steps li { margin-bottom: 6px; }
+.v2 .v2-btn.v2-whatsnew-go { width: 100%; justify-content: center; padding: 12px; font-size: 15px; }
+.v2-whatsnew h2 { color: #111827; font-size: 21px; }
