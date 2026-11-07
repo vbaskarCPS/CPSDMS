@@ -4,7 +4,7 @@
 // preloaded city businesses and the day's location tracking.)
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Crosshair, LocateFixed, Plus, X } from 'lucide-react';
+import { Crosshair, DoorOpen, LocateFixed, Plus, Search, X } from 'lucide-react';
 import {
   addLead, geocode, hereNow, withUnit, hitForTyped, isOpen, pinMatchesAddress, repMap, reverseGeocode, stagePin,
   type MapBiz, type RepMap,
@@ -146,7 +146,9 @@ const SendQueue: React.FC = () => {
   );
 };
 
-// ───────────── add a business: where the rep is standing ─────────────
+// ───────────── add a business: at the door, or remotely ─────────────
+// Two clear ways in: "I'm at the door" (the pin starts on the rep's GPS) or "Add remotely" (no GPS: the rep types
+// the business and its address and picks the right match, say for a lead from a call or a referral).
 // Opens on the rep's GPS: the street address, businesses already added within 60 m (open one instead of adding it
 // twice), and business names from map data at that spot to tap. Or type the name.
 // The pin and the address box are kept honest with each other: the form says where the pin is, and if the rep types
@@ -177,6 +179,8 @@ const AddLead: React.FC<{
   const [note, setNote] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const near = useRef<{ lat: number; lng: number } | null>(null);
+  const [mode, setMode] = useState<'door' | 'remote'>('door');
+  const modeRef = useRef(mode); modeRef.current = mode;
 
   // what's at a spot (where the rep is, a tap on the map, or a looked-up address): its address, what's already been
   // added, the businesses we already know there, and names from map data
@@ -199,11 +203,19 @@ const AddLead: React.FC<{
     hereNow(8000).then(p => {
       if (!live) return;
       setLocating(false); near.current = p;
-      if (p) { setPinFrom('gps'); lookAround(p); } else setError(new Error('Your location isn’t available. Type the address or tap the map.'));
+      if (modeRef.current === 'remote') return;   // the rep switched to adding remotely while we looked
+      if (p) { setPinFrom('gps'); lookAround(p); } else { setMode('remote'); setNote('Your location isn’t on, so this is set to add remotely: type the business and its address.'); }
     });
     return () => { live = false; };
   }, [at, lookAround]);
 
+  const goRemote = () => {
+    setMode('remote'); setError(null); setNote(null);
+    setPoint(null); setPinFor(null); setAddress(''); setHits([]); setPicked(null);
+    setAdded([]); setKnown([]); setPlaces([]);
+    setTimeout(() => nameRef.current?.focus(), 0);
+  };
+  const goDoor = () => { setMode('door'); setNote(null); void here(); };
   const here = async () => {
     setBusy(true); setError(null);
     const p = await hereNow();
@@ -269,9 +281,16 @@ const AddLead: React.FC<{
       <div className="v2-rep-sheet" role="dialog" aria-label="Add a business" onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center' }}><h2 style={{ flex: 1 }}>Add a business</h2>
           <button type="button" aria-label="Close" onClick={onClose} className="v2-rep-x"><X size={20} /></button></div>
+        <div className="v2-add-mode" role="tablist" aria-label="How are you adding it?">
+          <button type="button" role="tab" aria-selected={mode === 'door'} className={mode === 'door' ? 'on' : ''} onClick={() => mode !== 'door' && goDoor()}>
+            <DoorOpen size={18} /><span><b>I’m at the door</b><small>Pinned where you’re standing</small></span></button>
+          <button type="button" role="tab" aria-selected={mode === 'remote'} className={mode === 'remote' ? 'on' : ''} onClick={() => mode !== 'remote' && goRemote()}>
+            <Search size={18} /><span><b>Add remotely</b><small>From a call or referral: type the address</small></span></button>
+        </div>
         <div className="v2-small" style={{ margin: '4px 0 10px', display: 'flex', gap: 6, alignItems: 'center' }}>
           <LocateFixed size={15} style={{ color: '#2563eb', flexShrink: 0 }} />
-          {locating ? <span className="v2-mut">Finding where you are…</span>
+          {mode === 'remote' && !point ? <span className="v2-mut">Type the business name and its address, tap Find, and pick the right one.</span>
+            : locating ? <span className="v2-mut">Finding where you are…</span>
             : !point ? <span className="v2-mut">No pin yet: type the address, use where you are, or tap the map</span>
             : <span>Pin: <b>{pinFor || (pinFrom === 'gps' ? 'where you are' : 'this spot')}</b>{pinFrom === 'gps' && pinFor ? ' (where you are)' : pinFrom === 'map' && pinFor ? ' (where you tapped)' : ''}</span>}
         </div>
@@ -315,7 +334,7 @@ const AddLead: React.FC<{
         </Field>
         <Field label="Where">
           <div style={{ display: 'flex', gap: 6 }}>
-            <input className="v2-input" placeholder="Street address" value={address} onChange={e => { setAddress(e.target.value); setHits([]); }}
+            <input className="v2-input" placeholder={mode === 'remote' ? 'Street address, city' : 'Street address'} value={address} onChange={e => { setAddress(e.target.value); setHits([]); }}
               onKeyDown={e => { if (e.key === 'Enter') look(); }} autoComplete="off" />
             <Btn kind="o" onClick={look} disabled={!address.trim()}>Find</Btn>
           </div>
@@ -326,7 +345,7 @@ const AddLead: React.FC<{
           <div className="v2-rep-hits">{hits.map(h => (
             <button key={h.label} type="button" onClick={() => chooseHit(h)}>{h.label}</button>))}</div>)}
         <div className="v2-rep-acts" style={{ margin: '0 0 6px' }}>
-          <button type="button" onClick={here} disabled={busy}><LocateFixed size={15} />Use where I am</button>
+          {mode === 'door' && <button type="button" onClick={here} disabled={busy}><LocateFixed size={15} />Use where I am</button>}
           <button type="button" onClick={onPick}><Crosshair size={15} />Tap the map</button>
         </div>
         <Field label="Phone (optional)"><input className="v2-input" type="tel" value={phone} onChange={e => setPhone(e.target.value)} autoComplete="off" /></Field>
