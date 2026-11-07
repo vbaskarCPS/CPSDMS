@@ -3,10 +3,10 @@
 import { db, must } from './client';
 
 /** Four stages, New → Pitched → Booked → Won; Lost is the off-ramp (Not interested, Not a fit). */
-export type Stage = 'new' | 'pitched' | 'booked' | 'won' | 'lost';
+export type Stage = 'new' | 'pitched' | 'questionnaire' | 'booked' | 'won' | 'lost';
 export type Heat = 'hot' | 'warm' | 'cold';
 export const STAGES: { key: Stage; label: string }[] = [
-  { key: 'new', label: 'New' }, { key: 'pitched', label: 'Pitched' },
+  { key: 'new', label: 'New' }, { key: 'pitched', label: 'Pitched' }, { key: 'questionnaire', label: 'Questionnaire' },
   { key: 'booked', label: 'Onboarding booked' }, { key: 'won', label: 'Won' }, { key: 'lost', label: 'Lost' },
 ];
 export const stageLabel = (s: string | undefined) => STAGES.find(x => x.key === s)?.label || s || '';
@@ -19,7 +19,7 @@ export interface BizState {
 }
 export interface PipeRow extends BizState {
   id: string; campaign_id: string; name: string; address: string | null; kind: string; campaign: string; color: string;
-  zone: string | null; rep_id: string | null; rep: string | null;
+  zone: string | null; rep_id: string | null; rep: string | null; lat?: number | null; lng?: number | null;
 }
 export interface TimelineItem { at: string; kind: string; title?: string; outcome?: string; by?: string; text?: string; who?: string; far?: boolean; follow_up_at?: string }
 
@@ -42,7 +42,7 @@ export async function timeline(business: string, campaign: string): Promise<Time
 
 /** Rows by stage, in the board's order. */
 export function byStage(rows: PipeRow[]): Record<Stage, PipeRow[]> {
-  const out = { new: [], pitched: [], booked: [], won: [], lost: [] } as Record<Stage, PipeRow[]>;
+  const out = { new: [], pitched: [], questionnaire: [], booked: [], won: [], lost: [] } as Record<Stage, PipeRow[]>;
   for (const r of rows) (out[r.stage] || out.new).push(r);
   return out;
 }

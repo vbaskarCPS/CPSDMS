@@ -13,6 +13,8 @@ import {
   polygonProblem, proposalFeatures, repColor, saveZone, setZoneCampaigns, setZoneStatus, UNASSIGNED_COLOR, zoneColor, zoneFeatures, type Zone, type ZoneFilter, type ZoneRun,
 } from '../../lib/mainstreet';
 import { listCities, type City } from '../../lib/msCity';
+import { STAGES, pipeline, stageLabel, type PipeRow, type Stage } from '../../lib/msPipeline';
+import { STAGE_PIN } from '../../lib/rep';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 import { coordsOf, createZonesMap, drawFeatures, fit, removeMap, setSource } from './msMap';
 
@@ -42,6 +44,17 @@ export const Zones: React.FC = () => {
   const [genOpen, setGenOpen] = useState(false);
   const [review, setReview] = useState<{ city: City; run: ZoneRun; picked: number[] } | null>(null);
   const [progress, setProgress] = useState<StepState | null>(null);
+
+  // the pipeline on the map: every business a rep has worked, as a pin in its stage's colour
+  const pipe = useLoad(() => pipeline(), []);
+  const [showPipe, setShowPipe] = useState(true);
+  const [stageOff, setStageOff] = useState<Stage[]>([]);
+  const [biz, setBiz] = useState<PipeRow | null>(null);
+  const pipeRows = useMemo(() => (pipe.data || []).filter(r => r.lat != null && r.lng != null), [pipe.data]);
+  const pipeShown = useMemo(() => (showPipe ? pipeRows.filter(r => !stageOff.includes(r.stage)) : []), [pipeRows, showPipe, stageOff]);
+  const stageCount = useMemo(() => { const c: Partial<Record<Stage, number>> = {}; for (const r of pipeRows) c[r.stage] = (c[r.stage] || 0) + 1; return c; }, [pipeRows]);
+  const pickBizRef = useRef<(k: number) => void>(() => {});
+  pickBizRef.current = (k: number) => setBiz(pipeShown[k] || null);
 
   const all = zones.data || [];
   const shown = useMemo(() => filterZones(all, filter, showRetired, q), [all, filter, showRetired, q]);
@@ -78,6 +91,8 @@ export const Zones: React.FC = () => {
           setDraft(d => d ? { ...d, corners: [...d.corners, c] } : d);
           return;
         }
+        const bf = m.queryRenderedFeatures(e.point, { layers: ['ms-biz-pts'] })[0];
+        if (bf?.properties?.k != null) { pickBizRef.current(Number(bf.properties.k)); return; }
         const pf = m.queryRenderedFeatures(e.point, { layers: ['ms-prop-fill'] })[0];
         if (pf?.properties?.key != null) { pickPropRef.current(Number(pf.properties.key)); return; }
         const f = m.queryRenderedFeatures(e.point, { layers: ['ms-zone-fill'] })[0];
@@ -86,6 +101,8 @@ export const Zones: React.FC = () => {
       m.on('dblclick', () => { if (draftRef.current && draftRef.current.corners.length >= 3) setNaming(true); });
       m.on('mousemove', 'ms-zone-fill', () => { if (!draftRef.current) m.getCanvas().style.cursor = 'pointer'; });
       m.on('mouseleave', 'ms-zone-fill', () => { if (!draftRef.current) m.getCanvas().style.cursor = ''; });
+      m.on('mousemove', 'ms-biz-pts', () => { if (!draftRef.current) m.getCanvas().style.cursor = 'pointer'; });
+      m.on('mouseleave', 'ms-biz-pts', () => { if (!draftRef.current) m.getCanvas().style.cursor = ''; });
       setReady(true);
     }, setFailed);
     return () => { removeMap(map.current); map.current = null; setReady(false); };
@@ -99,6 +116,12 @@ export const Zones: React.FC = () => {
     setSource(map.current, 'ms-zones', f.shapes); setSource(map.current, 'ms-labels', f.labels);
     if (!fitted.current && all.length) { fitted.current = true; fit(map.current, all.flatMap(z => coordsOf(z.polygon)), 13); }
   }, [ready, shown, picked, draft?.id, all]);
+  useEffect(() => {
+    if (!ready) return;
+    setSource(map.current, 'ms-biz', { type: 'FeatureCollection', features: (draft ? [] : pipeShown).map((r, k) => ({
+      type: 'Feature', properties: { k, stage: r.stage, color: (STAGE_PIN[r.stage as keyof typeof STAGE_PIN] || STAGE_PIN.new).color },
+      geometry: { type: 'Point', coordinates: [Number(r.lng), Number(r.lat)] } })) });
+  }, [ready, pipeShown, draft]);
   useEffect(() => {
     if (!ready) return;
     const d = drawFeatures(draft?.corners || []);
@@ -308,6 +331,28 @@ export const Zones: React.FC = () => {
           )}
           <div ref={box} className="v2-ms-map" />
           {failed && <div className="v2-err" style={{ margin: 10 }}>{failed}</div>}
+          {!draft && !failed && pipeRows.length > 0 && (
+            <div className="v2-ms-pipebox">
+              <label><input type="checkbox" checked={showPipe} onChange={e => { setShowPipe(e.target.checked); setBiz(null); }} /><b>Pipeline</b><span className="v2-mut">{pipeShown.length}</span></label>
+              {showPipe && <div className="chips">{STAGES.filter(s => stageCount[s.key]).map(s => {
+                const off = stageOff.includes(s.key);
+                return (
+                  <button key={s.key} type="button" className={off ? 'off' : ''} aria-pressed={!off}
+                    onClick={() => { setBiz(null); setStageOff(o => (off ? o.filter(x => x !== s.key) : [...o, s.key])); }}>
+                    <i style={{ background: STAGE_PIN[s.key].color }} />{s.label} {stageCount[s.key]}
+                  </button>);
+              })}</div>}
+            </div>)}
+          {biz && !draft && (
+            <div className="v2-ms-bizcard" role="dialog" aria-label={biz.name}>
+              <button type="button" className="x" aria-label="Close" onClick={() => setBiz(null)}><X size={16} /></button>
+              <b>{biz.name}</b>
+              <span className="st"><i style={{ background: STAGE_PIN[biz.stage].color }} />{stageLabel(biz.stage)}{biz.stage === 'lost' && biz.lost_reason ? ` · ${biz.lost_reason}` : ''}</span>
+              <span className="v2-small">{[biz.rep, biz.zone, biz.campaign].filter(Boolean).join(' · ')}</span>
+              {biz.address && <span className="v2-small v2-mut">{biz.address}</span>}
+              {biz.last_at && <span className="v2-small v2-mut">Last worked {new Date(biz.last_at).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}</span>}
+              <Link to={`/app/mainstreet/pipeline?open=${biz.id}&c=${biz.campaign_id}`}>Open in Pipeline</Link>
+            </div>)}
         </div>
 
       {naming && draft && (
