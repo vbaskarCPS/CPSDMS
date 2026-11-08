@@ -169,3 +169,14 @@ describe('autoRoutes with the houses known', () => {
     expect(streetKey('Thames Close').full).not.toBe(streetKey('Thames Crescent').full);
   });
 });
+
+describe('autoRoutes filling the gaps', () => {
+  it('only takes streets near the lines it is given', () => {
+    const { ways, main } = grid(1600);
+    const near = { lines: [ways.find(w => w.name === '2 Street')!.geometry], m: 150 };
+    const r = autoRoutes({ ways, main, outline: square(-10, -10, 1610, 1610), near });
+    const names = new Set(r.routes.flatMap(rt => rt.pieces.map(p => p.name)));
+    expect(names.has('2 Street')).toBe(true);
+    expect(names.has('12 Street')).toBe(false);
+  });
+});

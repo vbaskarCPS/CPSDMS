@@ -46,6 +46,8 @@ export interface AutoInput {
   targetM?: number;
   /** The civic addresses around the map, to know which stretches have houses. */
   homes?: AutoHome[];
+  /** Filling the gaps in a map that's already drawn: only streets within m metres of these lines (its routes). */
+  near?: { lines: LngLat[][]; m: number };
 }
 export interface AutoPiece { wayId: number; name: string; main: boolean; geometry: LngLat[]; lengthM: number }
 /** homes: the doors on the route (a house is one, each unit of a townhouse complex one), when the addresses are known. */
@@ -220,6 +222,9 @@ export function autoRoutes(input: AutoInput): AutoResult {
   const taken = new SegGrid(60);
   for (const l of input.taken || []) { const xy = l.map(P.xy); for (let k = 1; k < xy.length; k++) taken.add(xy[k - 1], xy[k]); }
   let alreadyMapped = 0, notResidential = 0;
+  const nearGrid = input.near ? new SegGrid(Math.max(60, input.near.m)) : null;
+  for (const l of input.near?.lines || []) { const xy = l.map(P.xy); for (let k = 1; k < xy.length; k++) nearGrid!.add(xy[k - 1], xy[k]); }
+  const nearEnough = (l: XY[]) => !nearGrid || [l[0], along(l, 0.5), l[l.length - 1]].some(p => nearGrid.near(p, input.near!.m));
   const kept: { w: AutoWay; name: string; isMain: boolean; xy: XY[] }[] = [];
   const seenWay = new Set<number>();
   for (const w of input.ways) {
@@ -264,8 +269,8 @@ export function autoRoutes(input: AutoInput): AutoResult {
             // a stub where a street crosses the outline, or what's left beside another map's stretch, under 40 m isn't
             // worth a walk (and would sit apart from any route)
             const cutEnd = a0.startsWith('clip:') || b0.startsWith('clip:') || t0 > 0 || t1 < n;
-            if (d1 - d0 >= (cutEnd ? 40 : 12)) {
-              const part = t0 === 0 && t1 === n ? xy : slice(xy, d0, d1);
+            const part = t0 === 0 && t1 === n ? xy : slice(xy, d0, d1);
+            if (d1 - d0 >= (cutEnd ? 40 : 12) && nearEnough(part)) {
               raws.push({ wayId: w.id, name, main: isMain, xy: part, ll: t0 === 0 && t1 === n ? run : part.map(P.ll), len: lineLen(part),
                 a: t0 === 0 ? a0 : `clip:${clipN++}`, b: t1 === n ? b0 : `clip:${clipN++}` });
             }

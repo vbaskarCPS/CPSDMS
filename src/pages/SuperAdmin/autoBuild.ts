@@ -118,6 +118,9 @@ export interface AutoBuildArgs {
   loadedWays?: AutoWay[];
   targetM?: number;
   onStep?: (msg: string) => void;
+  /** Filling the gaps in a map that's already drawn: its own routes' street lines. They count as taken, and only
+   *  streets within 250 m of them are looked at. */
+  fillAround?: LngLat[][];
 }
 export interface AutoBuildResult extends AutoResult { source: 'tiles' | 'loaded'; nearbyMaps: string[] }
 
@@ -145,7 +148,7 @@ export async function autoBuild(a: AutoBuildArgs): Promise<AutoBuildResult> {
     if (name === a.areaName || r.length < 3 || !overlaps(outlineBox(r), box)) continue;
     near.set(name, [...(near.get(name) || []), r]);
   }
-  const taken: LngLat[][] = [];
+  const taken: LngLat[][] = [...(a.fillAround || [])];
   const nearbyMaps = [...near.keys()];
   if (nearbyMaps.length) {
     const { data, error } = await supabase.from('route_maps').select('segments').in('area_name', nearbyMaps);
@@ -155,6 +158,7 @@ export async function autoBuild(a: AutoBuildArgs): Promise<AutoBuildResult> {
   }
 
   a.onStep?.('Cutting the routes…');
-  const r = autoRoutes({ ways, outline: a.outline, main, exclude, taken, neighbours: [...near.values()].flat(), targetM: a.targetM, homes: homes || undefined });
+  const r = autoRoutes({ ways, outline: a.outline, main, exclude, taken, neighbours: [...near.values()].flat(), targetM: a.targetM, homes: homes || undefined,
+    near: a.fillAround ? { lines: a.fillAround, m: 250 } : undefined });
   return { ...r, source: tileWays && tileWays.length ? 'tiles' : 'loaded', nearbyMaps };
 }
