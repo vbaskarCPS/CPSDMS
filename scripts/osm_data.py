@@ -148,7 +148,8 @@ def cmd_streets(src, out, box):
         if not oid.isdigit(): continue
         c = [[round(x, 7), round(y, 7)] for x, y in g['coordinates']]
         if len(c) < 2: continue
-        it = {'id': int(oid), 'name': name, 'unnamed': not name, 'g': c}
+        # h: the road's class (residential, service, primary…), so Map Builder's Auto-build can keep to streets with homes
+        it = {'id': int(oid), 'name': name, 'unnamed': not name, 'h': p['highway'], 'g': c}
         for (i, j) in tile_keys(c, ST_TILE):
             # only whole tiles inside the box (a tile half outside it would be missing roads)
             if i * ST_TILE >= s - 1e-9 and (i + 1) * ST_TILE <= n + 1e-9 and j * ST_TILE >= w - 1e-9 and (j + 1) * ST_TILE <= e + 1e-9:

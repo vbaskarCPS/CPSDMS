@@ -6,7 +6,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   ArrowLeft, Loader, Check, X, AlertCircle,
   Plus, Map as MapIcon, Scissors, RefreshCw, Pencil, Eye, EyeOff, Edit2,
-  BookOpen, Users, Trash2, ArrowUpDown,
+  BookOpen, Users, Trash2, ArrowUpDown, Wand2, CheckCheck, Undo2,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { db } from '../../v2/lib/client';
@@ -19,6 +19,8 @@ import { readBuilderView, saveBuilderView } from '../../lib/builderView';
 import { placeSearches, roadBox } from '../../lib/roadBox';
 import { fetchRoadsCached } from '../../lib/roadCache';
 import { outlineFeatures, type OutlineInfo, type Outlines } from '../../lib/mapOutlines';
+import { autoBuild, outlineBox } from './autoBuild';
+import type { LngLat } from '../../lib/autoRoutes';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -44,6 +46,8 @@ interface AreaPrefix {
   route_count: number;
   route_start: number;
   city?: string | null;
+  /** The master map's outline (Auto-build cuts routes inside it). */
+  outline?: LngLat[] | null;
 }
 
 interface RouteData {
@@ -353,6 +357,12 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
   const [showGhostRoutes, setShowGhostRoutes] = useState(true);
   const [showOtherMaps, setShowOtherMaps] = useState(true);
   const [wayOverrides, setWayOverrides] = useState<Map<number, OsmWay[]>>(new Map());
+  // Auto-build: the outline being drawn (corners clicked so far), what it's doing, and what it made
+  const [drawingOutline, setDrawingOutline] = useState<LngLat[] | null>(null);
+  const drawingRef = useRef(false);
+  drawingRef.current = drawingOutline != null;
+  const [autoStep, setAutoStep] = useState<string | null>(null);
+  const [autoNote, setAutoNote] = useState<string | null>(null);
   const [splitUndoStack, setSplitUndoStack] = useState<SplitUndoEntry[]>([]);
   const [xKeyHeld, setXKeyHeld] = useState(false);
   const xKeyHeldRef = useRef(false);
@@ -807,6 +817,10 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       map.addLayer({ id: 'other-maps-label', type: 'symbol', source: 'other-maps-labels', layout: {
         'text-field': ['get', 'label'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 12, 'text-allow-overlap': false },
         paint: { 'text-color': '#e5e7eb', 'text-halo-color': '#111827', 'text-halo-width': 1.5 } });
+      // this map's outline (Auto-build), and the one being drawn
+      map.addSource('map-outline', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({ id: 'map-outline-line', type: 'line', source: 'map-outline', paint: { 'line-color': '#facc15', 'line-width': 2.5, 'line-opacity': 0.9, 'line-dasharray': [2, 1.5] } });
+      map.addLayer({ id: 'map-outline-pts', type: 'circle', source: 'map-outline', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#facc15', 'circle-stroke-color': '#111827', 'circle-stroke-width': 1.5 } });
       map.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addSource('roads-ghost', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addLayer({ id: 'roads-ghost-layer', type: 'line', source: 'roads-ghost', paint: { 'line-color': ['get', 'color'], 'line-width': 4, 'line-opacity': 0 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
@@ -855,6 +869,18 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', showOtherMaps ? 'visible' : 'none');
     }
   }, [mapLoaded, otherMaps, currentArea, showOtherMaps]);
+
+  // this map's outline: the saved one, or the corners clicked so far
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const ring = drawingOutline ?? (view === 'map' ? currentArea?.outline ?? null : null);
+    const features: GeoJSON.Feature[] = [];
+    if (ring && ring.length >= 2) features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: drawingOutline ? ring : [...ring, ring[0]] } });
+    if (drawingOutline) for (const p of drawingOutline) features.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: p } });
+    (map.getSource('map-outline') as mapboxgl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features });
+    if (drawingOutline) map.doubleClickZoom.disable(); else map.doubleClickZoom.enable();
+  }, [mapLoaded, drawingOutline, currentArea, view]);
 
   useEffect(() => {
     const canvas = mapRef.current?.getCanvas();
@@ -967,6 +993,11 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
     if (!map || !mapLoaded) return;
     const handleClick = (e: mapboxgl.MapMouseEvent) => {
       if (isDraggingRef.current) return;
+      if (drawingRef.current) {
+        const p: LngLat = [Math.round(e.lngLat.lng * 1e6) / 1e6, Math.round(e.lngLat.lat * 1e6) / 1e6];
+        setDrawingOutline(prev => (prev ? [...prev, p] : [p]));
+        return;
+      }
       setContextMenu(null);
       const features = map.queryRenderedFeatures(e.point, { layers: ['roads-base', 'roads-unnamed', 'roads-selected'] });
       if (!features.length) return;
@@ -1188,6 +1219,71 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
     if (next) setActiveRouteNum(next.num);
   };
 
+  // ── Auto-build: routes cut from the streets inside the map's outline (src/lib/autoRoutes.ts) ──
+  const mapHasRoutes = routes.some(r => r.selectedWayIds.size > 0);
+  const runAutoBuild = async (outline: LngLat[]) => {
+    if (!currentArea) return;
+    setError(null); setAutoNote(null); setAutoStep('Starting…');
+    try {
+      const saved = new Map<string, LngLat[]>();
+      for (const a of areas) if (a.outline && a.outline.length >= 3) saved.set(a.area_name, a.outline);
+      const r = await autoBuild({
+        areaName: currentArea.area_name, outline, outlines: otherMaps?.outlines, savedOutlines: saved,
+        loadedWays: allWaysRef.current.map(w => ({ id: w.rootId ?? w.id, name: w.name, unnamed: w.unnamed, geometry: w.geometry })),
+        onStep: setAutoStep,
+      });
+      if (!r.routes.length) { setError('No streets with homes inside this outline (or they\'re all on other maps already).'); return; }
+      // this map's numbers first, then the next free ones (a new route takes a new number)
+      const taken = takenNumbers(currentArea.prefix, areas, drawnNums, currentArea.area_name);
+      const nums: number[] = routes.map(x => x.num);
+      while (nums.length < r.routes.length) nums.push(firstFree(new Set([...taken, ...nums]), (nums[nums.length - 1] ?? (currentArea.route_start ?? 1) - 1) + 1));
+      const synth: OsmWay[] = [];
+      const made: RouteData[] = r.routes.map((rt, i) => {
+        const ids = new Set<number>();
+        for (const p of rt.pieces) {
+          const w: OsmWay = { id: splitCounterRef.current++, rootId: p.wayId, name: p.name, unnamed: false, geometry: p.geometry };
+          synth.push(w); ids.add(w.id);
+        }
+        return {
+          num: nums[i], color: ROUTE_COLORS[i % ROUTE_COLORS.length], status: 'pending' as const, selectedWayIds: ids, streetNames: rt.streets,
+          aiNotes: `Auto-built: ${(rt.lengthM / 1000).toFixed(1)} km${rt.mainM ? `, ${(rt.mainM / 1000).toFixed(1)} km of it main road` : ''}`, confidence: 0,
+        };
+      });
+      setAllWays(prev => [...prev, ...synth]);
+      setRoutes(made);
+      setActiveRouteNum(made[0].num);
+      const b = outlineBox(outline, 0.002);
+      mapRef.current?.fitBounds([[b.w, b.s], [b.e, b.n]], { padding: 40, duration: 600 });
+      const km = (m: number) => (m / 1000).toFixed(1);
+      const left = r.leftToNext.reduce((t, p) => t + p.lengthM, 0);
+      setAutoNote(`Auto-built ${made.length} routes from ${km(r.totalM)} km of street (${runsLabel(currentArea.prefix, made.map(x => x.num))})`
+        + (r.alreadyMapped ? ` · ${r.alreadyMapped} street pieces left out because ${r.nearbyMaps.length > 1 ? 'the maps next door have' : `${r.nearbyMaps[0] || 'another map'} has`} them` : '')
+        + (left ? ` · ${km(left)} km of edge road left to the map next door` : '')
+        + (r.source === 'loaded' ? ' · the street tiles couldn\'t be reached, so it used the roads loaded here' : '')
+        + '. Check them, then Approve all and Save.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Auto-build didn\'t work — try again.');
+    } finally { setAutoStep(null); }
+  };
+  const handleAutoBuild = () => {
+    if (!currentArea || mapHasRoutes) return;
+    if (currentArea.outline && currentArea.outline.length >= 3) { void runAutoBuild(currentArea.outline); return; }
+    setAutoNote(null); setDrawingOutline([]);
+  };
+  const finishOutline = async () => {
+    if (!currentArea || !drawingOutline || drawingOutline.length < 3) return;
+    const outline = drawingOutline;
+    setDrawingOutline(null);
+    const { error: upErr } = await supabase.from('area_prefixes').update({ outline }).eq('area_name', currentArea.area_name);
+    if (upErr) { setError('Couldn\'t save the outline — try again.'); return; }
+    const withOutline = { ...currentArea, outline };
+    setCurrentArea(withOutline);
+    setAreas(prev => prev.map(a => (a.area_name === withOutline.area_name ? withOutline : a)));
+    await runAutoBuild(outline);
+  };
+  const handleApproveAll = () => setRoutes(prev => prev.map(r => (r.status === 'pending' && r.selectedWayIds.size > 0 ? { ...r, status: 'approved' as const } : r)));
+  const pendingDrawn = routes.filter(r => r.status === 'pending' && r.selectedWayIds.size > 0).length;
+
   const handleSaveAll = async () => {
     if (!currentArea) return;
     // Until the saved routes are back on the map, this tab doesn't hold the whole map: saving would drop them.
@@ -1295,6 +1391,17 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
                   <Scissors size={14} />Undo Split ({splitUndoStack.length})
                 </button>
               )}
+              {currentArea && !mapHasRoutes && (
+                <button onClick={handleAutoBuild} disabled={!!autoStep || drawingOutline != null} title={currentArea.outline?.length ? 'Cut routes from the streets inside this map\'s outline' : 'Draw this map\'s outline, then cut routes from the streets inside it'}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded text-sm border border-yellow-600 bg-yellow-900/20 text-yellow-300 hover:bg-yellow-900/40 disabled:opacity-50">
+                  {autoStep ? <Loader size={14} className="animate-spin" /> : <Wand2 size={14} />}{autoStep || 'Auto-build'}
+                </button>
+              )}
+              {pendingDrawn > 0 && (
+                <button onClick={handleApproveAll} className="flex items-center gap-2 px-3 py-1.5 rounded text-sm border border-green-700 bg-green-900/20 text-green-300 hover:bg-green-900/40">
+                  <CheckCheck size={14} />Approve all {pendingDrawn}
+                </button>
+              )}
               <button onClick={handleSaveAll} disabled={saving || approvedCount === 0} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2">
                 {saving ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}Save {approvedCount} Approved
               </button>
@@ -1322,6 +1429,25 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
         <div className="bg-red-900/30 border-b border-red-700 px-4 py-2 text-sm text-red-300 flex items-center gap-2 flex-shrink-0">
           <AlertCircle size={14} />{error}
           <button onClick={() => setError(null)} className="ml-auto"><X size={14} /></button>
+        </div>
+      )}
+
+      {drawingOutline != null && (
+        <div className="bg-yellow-900/40 border-b border-yellow-700 px-4 py-2 text-sm text-yellow-200 flex items-center gap-3 flex-shrink-0">
+          <Wand2 size={14} className="flex-shrink-0" />
+          <span>Click the corners of {currentArea?.area_name || 'the master map'}, all the way round · {drawingOutline.length} corner{drawingOutline.length === 1 ? '' : 's'}</span>
+          <span className="ml-auto flex items-center gap-2">
+            <button onClick={() => setDrawingOutline(p => (p ? p.slice(0, -1) : p))} disabled={!drawingOutline.length} className="flex items-center gap-1 px-2 py-1 rounded border border-yellow-700 disabled:opacity-40"><Undo2 size={13} />Undo</button>
+            <button onClick={() => void finishOutline()} disabled={drawingOutline.length < 3} className="flex items-center gap-1 px-3 py-1 rounded bg-yellow-600 text-gray-900 font-medium disabled:opacity-40"><Check size={13} />Finish and build</button>
+            <button onClick={() => setDrawingOutline(null)} className="flex items-center gap-1 px-2 py-1 rounded border border-yellow-700"><X size={13} />Cancel</button>
+          </span>
+        </div>
+      )}
+
+      {autoNote && (
+        <div className="bg-yellow-900/20 border-b border-yellow-800 px-4 py-2 text-sm text-yellow-200 flex items-center gap-2 flex-shrink-0">
+          <Wand2 size={14} className="flex-shrink-0" />{autoNote}
+          <button onClick={() => setAutoNote(null)} className="ml-auto" aria-label="Close"><X size={14} /></button>
         </div>
       )}
 

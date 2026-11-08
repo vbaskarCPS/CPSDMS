@@ -1,0 +1,116 @@
+// Map Builder › Auto-build: the route cutter on a made-up grid of streets.
+import { describe, expect, it } from 'vitest';
+import { autoRoutes, type AutoWay, type LngLat, type MainKind } from './autoRoutes';
+
+// a flat patch near Port Coquitlam: metres → [lng, lat]
+const LAT0 = 49.27, LNG0 = -122.75;
+const kx = 111320 * Math.cos(LAT0 * Math.PI / 180), ky = 110540;
+const at = (x: number, y: number): LngLat => [Math.round((LNG0 + x / kx) * 1e7) / 1e7, Math.round((LAT0 + y / ky) * 1e7) / 1e7];
+
+/** A grid of streets every 100 m over size × size metres; each street one way from end to end (nodes shared at corners). */
+function grid(size: number, mainX?: number) {
+  const ways: AutoWay[] = []; const main = new Map<number, MainKind>(); let id = 1;
+  for (let x = 0; x <= size; x += 100) {
+    ways.push({ id, name: x === mainX ? 'Main Street' : `${x / 100} Street`, geometry: Array.from({ length: size / 100 + 1 }, (_, k) => at(x, k * 100)) });
+    if (x === mainX) main.set(id, 'arterial');
+    id++;
+  }
+  for (let y = 0; y <= size; y += 100) ways.push({ id: id++, name: `${y / 100} Avenue`, geometry: Array.from({ length: size / 100 + 1 }, (_, k) => at(k * 100, y)) });
+  return { ways, main };
+}
+const square = (x0: number, y0: number, x1: number, y1: number): LngLat[] => [at(x0, y0), at(x1, y0), at(x1, y1), at(x0, y1)];
+const keyOf = (g: LngLat[]) => g.map(p => p.join(',')).join(';');
+
+describe('autoRoutes', () => {
+  it('uses every street once, in routes of about the target length that are each in one piece', () => {
+    const { ways, main } = grid(1600, 800);
+    const r = autoRoutes({ ways, main, outline: square(-10, -10, 1610, 1610), targetM: 2500 });
+    // 17 streets each way × 1600 m = 54.4 km, roughly 22 routes
+    expect(r.routes.length).toBeGreaterThan(16);
+    expect(r.routes.length).toBeLessThan(28);
+    const all = r.routes.flatMap(rt => rt.pieces.map(p => keyOf(p.geometry)));
+    expect(new Set(all).size).toBe(all.length);                       // no piece twice
+    expect(r.totalM).toBeGreaterThan(54000);                           // nothing dropped
+    const lens = r.routes.map(rt => rt.lengthM);
+    const mean = lens.reduce((t, v) => t + v, 0) / lens.length;
+    expect(Math.min(...lens)).toBeGreaterThan(0.5 * mean);
+    expect(Math.max(...lens)).toBeLessThan(1.8 * mean);
+    // the main road is in the routes, each piece once
+    const mainPieces = r.routes.flatMap(rt => rt.pieces.filter(p => p.main));
+    expect(mainPieces.reduce((t, p) => t + p.lengthM, 0)).toBeGreaterThan(1500);
+  });
+
+  it('numbers routes in rows from the top, left to right', () => {
+    const { ways, main } = grid(1600);
+    const r = autoRoutes({ ways, main, outline: square(-10, -10, 1610, 1610), targetM: 2500 });
+    const cy = (i: number) => { const ps = r.routes[i].pieces.flatMap(p => p.geometry); return ps.reduce((t, p) => t + p[1], 0) / ps.length; };
+    expect(cy(0)).toBeGreaterThan(cy(r.routes.length - 1));
+  });
+
+  it('leaves out streets another master map already has', () => {
+    const { ways, main } = grid(1000);
+    const takenWay = ways.find(w => w.name === '3 Street')!;
+    const r = autoRoutes({ ways, main, outline: square(-10, -10, 1010, 1010), taken: [takenWay.geometry] });
+    expect(r.alreadyMapped).toBeGreaterThan(0);
+    expect(r.routes.flatMap(rt => rt.pieces).some(p => p.name === '3 Street')).toBe(false);
+  });
+
+  it('only takes streets inside the outline, and skips trails, unnamed ways and highways', () => {
+    const { ways, main } = grid(1000);
+    ways.push({ id: 900, name: 'Hyde Creek Trail', geometry: [at(50, 50), at(950, 950)] });
+    ways.push({ id: 901, name: '', unnamed: true, geometry: [at(50, 950), at(950, 50)] });
+    ways.push({ id: 902, name: 'Lougheed Highway', geometry: [at(0, 450), at(1000, 450)] });
+    main.set(902, 'highway');
+    const r = autoRoutes({ ways, main, outline: square(-10, -10, 510, 1010) });
+    const names = new Set(r.routes.flatMap(rt => rt.pieces.map(p => p.name)));
+    expect(names.has('Hyde Creek Trail')).toBe(false);
+    expect(names.has('Lougheed Highway')).toBe(false);
+    expect(names.has('8 Street')).toBe(false);                          // outside the outline
+    expect(names.has('2 Street')).toBe(true);
+    // the avenues are cut at the outline's edge (about 500 m of each, plus the slack)
+    const ave = r.routes.flatMap(rt => rt.pieces).filter(p => p.name === '4 Avenue').reduce((t, p) => t + p.lengthM, 0);
+    expect(ave).toBeGreaterThan(480);
+    expect(ave).toBeLessThan(560);
+  });
+
+  it('leaves a main road on the east edge to the map beside it, and keeps the west edge', () => {
+    const { ways, main } = grid(1000);
+    const east = ways.find(w => w.name === '10 Street')!, west = ways.find(w => w.name === '0 Street')!;
+    main.set(east.id, 'arterial'); main.set(west.id, 'arterial');
+    const outline = square(0, 0, 1000, 1000);
+    const nextDoor = [square(1000, 0, 2000, 1000)];
+    const r = autoRoutes({ ways, main, outline, neighbours: nextDoor });
+    const inRoutes = new Set(r.routes.flatMap(rt => rt.pieces.map(p => p.name)));
+    expect(inRoutes.has('10 Street')).toBe(false);
+    expect(r.leftToNext.every(p => p.name === '10 Street')).toBe(true);
+    expect(inRoutes.has('0 Street')).toBe(true);
+    // with no map beside it, the east edge is this map's
+    const alone = autoRoutes({ ways, main, outline });
+    expect(new Set(alone.routes.flatMap(rt => rt.pieces.map(p => p.name))).has('10 Street')).toBe(true);
+  });
+});
+
+describe('autoRoutes with road classes', () => {
+  it('keeps to streets with homes, and takes main roads from the class when it is known', () => {
+    const { ways } = grid(1000);
+    for (const w of ways) w.kind = 'residential';
+    ways.find(w => w.name === '2 Street')!.kind = 'service';
+    ways.find(w => w.name === '5 Avenue')!.kind = 'secondary';
+    ways.find(w => w.name === '8 Avenue')!.kind = 'motorway';
+    const r = autoRoutes({ ways, main: new Map(), outline: square(-10, -10, 1010, 1010) });
+    const ps = r.routes.flatMap(rt => rt.pieces);
+    expect(ps.some(p => p.name === '2 Street')).toBe(false);
+    expect(ps.some(p => p.name === '8 Avenue')).toBe(false);
+    expect(ps.filter(p => p.name === '5 Avenue').every(p => p.main)).toBe(true);
+    expect(ps.some(p => p.name === '5 Avenue')).toBe(true);
+  });
+
+  it('cuts a route that came out far too long into two that are each in one piece', () => {
+    // one long dead-end street with a comb of short ones: a single pocket of about 9 km
+    const ways: AutoWay[] = [{ id: 1, name: 'Long Road', geometry: Array.from({ length: 31 }, (_, k) => at(k * 100, 0)) }];
+    for (let k = 0; k <= 30; k++) ways.push({ id: 10 + k, name: `${k} Close`, geometry: [at(k * 100, 0), at(k * 100, 180)] });
+    const r = autoRoutes({ ways, main: new Map(), outline: square(-50, -50, 3050, 250), targetM: 2700 });
+    expect(r.routes.length).toBeGreaterThanOrEqual(3);
+    expect(Math.max(...r.routes.map(x => x.lengthM))).toBeLessThan(1.6 * 2700);
+  });
+});
