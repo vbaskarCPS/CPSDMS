@@ -1096,10 +1096,30 @@ export async function fetchStreetChecks(routeCodes: string[]): Promise<StreetChe
 
 /** Street name without its ending ("terra cotta way" → "terra cotta"). */
 export const streetBase = (sn: string) => sn.replace(/\s+\S+$/, '');
+/** "No 2 Rd" and "Number 2 Rd" are the same road (Richmond's numbered roads: maps say Number, Mapbox says No.). */
+export const streetKey = (sn: string) => sn.replace(/^no (\d+)\b/, 'number $1');
+/** Same street, allowing a different ending (Way/Lane) and No./Number. */
+export const sameStreet = (a: string, b: string) => {
+  const x = streetKey(a), y = streetKey(b);
+  return x === y || streetBase(x) === streetBase(y);
+};
+/** Metres of street drawn on the route. */
+function linesLengthM(lines: [number, number][][]): number {
+  let total = 0;
+  for (const cs of lines) {
+    if (cs.length < 2) continue;
+    const kx = Math.cos(cs[0][1] * Math.PI / 180) * M_PER_DEG_LAT, ky = M_PER_DEG_LAT;
+    for (let i = 0; i < cs.length - 1; i++) total += Math.hypot((cs[i + 1][0] - cs[i][0]) * kx, (cs[i + 1][1] - cs[i][1]) * ky);
+  }
+  return total;
+}
+/** A street this long with fewer houses than this is treated as unfinished: one house every 80 m, both sides counted. */
+const SPARSE_MIN_M = 150, SPARSE_M_PER_HOUSE = 80;
 
 export interface RouteStreetGap { norm: string; name: string; lines: [number, number][][] }
 
-/** Streets on this route's map that have no houses on the route. */
+/** Streets on this route's map that have no houses on the route — or far too few for their length (a street the
+ *  first build only half found, like Pintail Dr with 1 house). Each is looked up along its length once (street checks). */
 export function routeStreetGaps(rm: SavedRouteMap, houses: RouteHouse[]): RouteStreetGap[] {
   const byNorm = new Map<string, RouteStreetGap>();
   for (const seg of rm.segments || []) {
@@ -1110,8 +1130,12 @@ export function routeStreetGaps(rm: SavedRouteMap, houses: RouteHouse[]): RouteS
     else byNorm.set(norm, { norm, name: seg.name, lines: [seg.coordinates as [number, number][]] });
   }
   const mine = houses.filter(h => h.routeCode === rm.route_code);
-  return [...byNorm.values()].filter(g =>
-    !mine.some(h => h.streetNorm === g.norm || streetBase(h.streetNorm) === streetBase(g.norm)));
+  return [...byNorm.values()].filter(g => {
+    const n = mine.filter(h => h.streetNorm === g.norm || sameStreet(h.streetNorm, g.norm)).length;
+    if (!n) return true;
+    const len = linesLengthM(g.lines);
+    return len >= SPARSE_MIN_M && n < len / SPARSE_M_PER_HOUSE;
+  });
 }
 
 /** Points along the street, every `step` m, `off` m out on each side. */
@@ -1216,13 +1240,14 @@ export async function fillRouteGaps(
             const addr = props?.context?.address;
             if (!c || !addr || !GEOCODE_GOOD.has(c.accuracy)) continue;
             const sn = normStreet(addr.street_name);
-            if (!sn || (sn !== g.norm && streetBase(sn) !== streetBase(g.norm))) continue;
+            if (!sn || (sn !== g.norm && !sameStreet(sn, g.norm))) continue;
             const m = String(addr.address_number ?? '').trim().match(/^(\d+)\s*([A-Za-z]?)$/);
             if (!m) continue;
             if (pointToLinesMeters(c.longitude, c.latitude, g.lines) > GAP_MAX_FROM_STREET_M) continue;
             const key = `${m[1]}${m[2].toLowerCase()}`;
             if (!found.has(key)) found.set(key, {
-              civicNo: Number(m[1]), suffix: m[2].toLowerCase(), street: addr.street_name,
+              // "No 2 Rd" saved under the route's own name for the road, so the server matches it to the route's street
+              civicNo: Number(m[1]), suffix: m[2].toLowerCase(), street: streetKey(sn) === sn ? addr.street_name : g.name,
               lat: c.latitude, lng: c.longitude, accuracy: c.accuracy,
             });
           }
