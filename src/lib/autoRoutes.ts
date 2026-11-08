@@ -66,6 +66,8 @@ type XY = [number, number];
 interface Piece {
   i: number; wayId: number; name: string; main: boolean;
   ll: LngLat[]; xy: XY[]; len: number; a: string; b: string; mid: XY; samples: XY[];
+  /** The OSM ways it's made of (a street put back together across a bend keeps each way's own piece). */
+  parts: { wayId: number; ll: LngLat[]; len: number }[];
 }
 
 // ───────────── geometry (metres, on a flat patch around the map) ─────────────
@@ -89,6 +91,20 @@ function along(l: XY[], f: number): XY {
     t += d;
   }
   return l[l.length - 1];
+}
+/** The part of a line from d0 to d1 metres along it. */
+function slice(l: XY[], d0: number, d1: number): XY[] {
+  const out: XY[] = []; let t = 0;
+  for (let k = 1; k < l.length; k++) {
+    const d = dist(l[k - 1], l[k]);
+    const at = (v: number): XY => { const u = d ? (v - t) / d : 0; return [l[k - 1][0] + (l[k][0] - l[k - 1][0]) * u, l[k - 1][1] + (l[k][1] - l[k - 1][1]) * u]; };
+    if (t + d >= d0 && t <= d1) {
+      if (!out.length) out.push(at(Math.max(d0, t)));
+      if (t + d <= d1) out.push(l[k]); else { out.push(at(d1)); break; }
+    }
+    t += d;
+  }
+  return out.length >= 2 ? out : [l[0], l[l.length - 1]];
 }
 function inside(p: XY, ring: XY[]): boolean {
   let c = false;
@@ -156,15 +172,14 @@ export function autoRoutes(input: AutoInput): AutoResult {
   }).filter(e => e.x1 > -1e5 && e.x0 < 1e5);
   const inExcluded = (p: XY) => excl.some(e => p[0] >= e.x0 && p[0] <= e.x1 && p[1] >= e.y0 && p[1] <= e.y1 && inside(p, e.xy));
 
-  // 1. pieces: ways cut at every corner, then at the outline
+  // 1. pieces: the streets that are walked, cut only where two of them meet (a driveway, lane or path isn't a corner),
+  //    then at the outline; a stretch another map already has is cut out (only the rest is left); and a street that
+  //    simply carries on past a bend or a change of OSM way is put back together, so it stays in one route
   const key = (p: LngLat) => `${p[0].toFixed(6)},${p[1].toFixed(6)}`;
-  const use = new Map<string, number>();
-  for (const w of input.ways) for (const p of w.geometry) use.set(key(p), (use.get(key(p)) || 0) + 1);
   const taken = new SegGrid(60);
   for (const l of input.taken || []) { const xy = l.map(P.xy); for (let k = 1; k < xy.length; k++) taken.add(xy[k - 1], xy[k]); }
-  const pieces: Piece[] = [];
-  const mainNodes = new Set<string>();
   let alreadyMapped = 0, notResidential = 0;
+  const kept: { w: AutoWay; name: string; isMain: boolean }[] = [];
   const seenWay = new Set<number>();
   for (const w of input.ways) {
     if (seenWay.has(w.id) || w.geometry.length < 2) continue;
@@ -174,29 +189,79 @@ export function autoRoutes(input: AutoInput): AutoResult {
     if (kind === 'highway' || w.unnamed || !name) continue;
     const isMain = kind === 'arterial';
     if (!isMain && (SKIP.test(name) || (w.kind && !HOMES.has(w.kind)))) continue;
-    // quick reject: nowhere near the outline
+    const gxy = w.geometry.map(P.xy);
+    if (!gxy.some(near) && !crossesRing(gxy, ring)) continue;     // nowhere near the outline
+    kept.push({ w, name, isMain });
+  }
+  const use = new Map<string, number>();
+  for (const { w } of kept) for (const p of new Set(w.geometry.map(key))) use.set(p, (use.get(p) || 0) + 1);
+  interface Raw { wayId: number; name: string; main: boolean; ll: LngLat[]; xy: XY[]; len: number; a: string; b: string }
+  const raws: Raw[] = [];
+  let clipN = 0;
+  for (const { w, name, isMain } of kept) {
     const g = w.geometry;
-    const gxy = g.map(P.xy);
-    if (!gxy.some(near) && !crossesRing(gxy, ring)) continue;
+    const corner = (p: LngLat) => (use.get(key(p)) || 0) > 1;
     let cur: LngLat[] = [g[0]];
     for (let k = 1; k < g.length; k++) {
       cur.push(g[k]);
-      if ((use.get(key(g[k])) || 0) > 1 || k === g.length - 1) {
-        for (const run of clip(cur, P, ring, near)) {
-          const xy = run.map(P.xy); const len = lineLen(xy);
-          if (len < 12) continue;
-          const isWholeEnd = (p: LngLat) => (use.get(key(p)) || 0) > 1 || p === g[0] || p === g[g.length - 1];
-          const a = isWholeEnd(run[0]) ? key(run[0]) : `clip:${pieces.length}:a`;
-          const b = isWholeEnd(run[run.length - 1]) ? key(run[run.length - 1]) : `clip:${pieces.length}:b`;
-          if (isMain) { mainNodes.add(a); mainNodes.add(b); }
-          const samples = [0.15, 0.35, 0.5, 0.65, 0.85].map(f => along(xy, f));
-          if (!taken.empty && samples.filter(s => taken.near(s, 9)).length >= 3) { alreadyMapped++; continue; }
-          if (!isMain && excl.length && samples.filter(inExcluded).length >= 3) { notResidential++; continue; }
-          pieces.push({ i: pieces.length, wayId: w.id, name, main: isMain, ll: run, xy, len, a, b, mid: along(xy, 0.5), samples: [xy[0], ...samples, xy[xy.length - 1]] });
+      if (!corner(g[k]) && k !== g.length - 1) continue;
+      for (const run of clip(cur, P, ring, near)) {
+        const xy = run.map(P.xy);
+        const endKey = (p: LngLat) => (corner(p) || p === g[0] || p === g[g.length - 1] ? key(p) : `clip:${clipN++}`);
+        const a0 = endKey(run[0]), b0 = endKey(run[run.length - 1]);
+        // the stretches no other map has (sampled every 8 m), each a piece of its own
+        const L0 = lineLen(xy);
+        const n = Math.max(2, Math.ceil(L0 / 8));
+        const free = Array.from({ length: n + 1 }, (_, t) => taken.empty || !taken.near(along(xy, t / n), 9));
+        if (free.some(f => !f)) alreadyMapped++;
+        let t0 = -1;
+        for (let t = 0; t <= n; t++) {
+          if (free[t] && t0 < 0) t0 = t;
+          if ((!free[t] || t === n) && t0 >= 0) {
+            const t1 = free[t] ? t : t - 1;
+            const d0 = (t0 / n) * L0, d1 = (t1 / n) * L0;
+            if (d1 - d0 >= (t0 === 0 && t1 === n ? 12 : 25)) {
+              const part = t0 === 0 && t1 === n ? xy : slice(xy, d0, d1);
+              raws.push({ wayId: w.id, name, main: isMain, xy: part, ll: t0 === 0 && t1 === n ? run : part.map(P.ll), len: lineLen(part),
+                a: t0 === 0 ? a0 : `clip:${clipN++}`, b: t1 === n ? b0 : `clip:${clipN++}` });
+            }
+            t0 = -1;
+          }
         }
-        cur = [g[k]];
       }
+      cur = [g[k]];
     }
+  }
+  // put streets back together where only they meet (same name, both main or both not)
+  const rawAt = new Map<string, number[]>();
+  raws.forEach((r, i) => { for (const n of [r.a, r.b]) { const l = rawAt.get(n); if (l) l.push(i); else rawAt.set(n, [i]); } });
+  const unitOf = raws.map((_, i) => i);
+  const findU = (i: number): number => (unitOf[i] === i ? i : (unitOf[i] = findU(unitOf[i])));
+  for (const [, ids] of rawAt) {
+    if (ids.length !== 2) continue;
+    const [x, y] = ids;
+    if (x !== y && raws[x].name === raws[y].name && raws[x].main === raws[y].main) unitOf[findU(x)] = findU(y);
+  }
+  const groups = new Map<number, number[]>();
+  raws.forEach((_, i) => { const u = findU(i); const l = groups.get(u); if (l) l.push(i); else groups.set(u, [i]); });
+  const pieces: Piece[] = [];
+  const mainNodes = new Set<string>();
+  for (const ids of groups.values()) {
+    const rs = ids.map(i => raws[i]);
+    // the unit's ends: nodes used once within it
+    const count = new Map<string, number>();
+    for (const r of rs) for (const n of [r.a, r.b]) count.set(n, (count.get(n) || 0) + 1);
+    const ends = [...count.entries()].filter(([, c]) => c === 1).map(([n]) => n);
+    const a = ends[0] ?? rs[0].a, b = ends[1] ?? rs[rs.length - 1].b;
+    const xy = rs.flatMap(r => r.xy);
+    const len = rs.reduce((t, r) => t + r.len, 0);
+    if (len < 12) continue;
+    const longest = rs.reduce((m, r) => (r.len > m.len ? r : m), rs[0]);
+    const samples = [0.15, 0.35, 0.5, 0.65, 0.85].map(f => along(longest.xy, f));
+    if (!rs[0].main && excl.length && samples.filter(inExcluded).length >= 3) { notResidential++; continue; }
+    if (rs[0].main) for (const r of rs) { mainNodes.add(r.a); mainNodes.add(r.b); }
+    pieces.push({ i: pieces.length, wayId: rs[0].wayId, name: rs[0].name, main: rs[0].main, ll: rs.flatMap(r => r.ll), xy, len, a, b,
+      mid: along(longest.xy, 0.5), samples: [...rs.flatMap(r => [r.xy[0], r.xy[r.xy.length - 1]]), ...samples], parts: rs.map(r => ({ wayId: r.wayId, ll: r.ll, len: r.len })) });
   }
   const res = pieces.filter(p => !p.main), mains = pieces.filter(p => p.main);
   const totalRes = res.reduce((t, p) => t + p.len, 0);
@@ -205,11 +270,27 @@ export function autoRoutes(input: AutoInput): AutoResult {
 
   const byNode = new Map<string, number[]>();
   for (const p of pieces) for (const n of [p.a, p.b]) { const l = byNode.get(n); if (l) l.push(p.i); else byNode.set(n, [p.i]); }
+  // side streets off the same main road a short walk apart (250 m along it) count as next to each other, so a
+  // cul-de-sac off a main road joins the route across or along the road, not one on the far side of a park
+  const mainEdges = new Map<string, { to: string; len: number }[]>();
+  for (const m of pieces) if (m.main) for (const [x, y] of [[m.a, m.b], [m.b, m.a]]) { const l = mainEdges.get(x); const e = { to: y, len: m.len }; if (l) l.push(e); else mainEdges.set(x, [e]); }
+  const reach = new Map<string, string[]>();
+  const along250 = (start: string): string[] => {
+    const got = reach.get(start); if (got) return got;
+    const best = new Map<string, number>([[start, 0]]); const todo = [start];
+    while (todo.length) {
+      const n = todo.shift()!; const d = best.get(n)!;
+      for (const e of mainEdges.get(n) || []) { const nd = d + e.len; if (nd <= 250 && nd < (best.get(e.to) ?? Infinity)) { best.set(e.to, nd); todo.push(e.to); } }
+    }
+    const out = [...best.keys()]; reach.set(start, out); return out;
+  };
   const neighboursOf = (i: number, onlyRes: boolean, crossMain: boolean) => {
     const out: number[] = []; const p = pieces[i];
     for (const n of [p.a, p.b]) {
       if (!crossMain && mainNodes.has(n)) continue;
       for (const j of byNode.get(n) || []) if (j !== i && (!onlyRes || !pieces[j].main)) out.push(j);
+      if (crossMain && !p.main && mainNodes.has(n))
+        for (const m of along250(n)) if (m !== n) for (const j of byNode.get(m) || []) if (j !== i && !pieces[j].main) out.push(j);
     }
     return out;
   };
@@ -361,10 +442,10 @@ export function autoRoutes(input: AutoInput): AutoResult {
         }
       }
       if (left.size) {
-        // cut off from the rest (by a highway or a park): it joins the nearest route if that's close, or stays its own
+        // cut off from the rest (by a highway, a park or the map's edge): it joins a route within 150 m, or stays its own
         let best = { d: Infinity, t: -1 };
         routes.forEach((r, t) => { if (t !== k && r.size) { const d = setDist(left, r); if (d < best.d) best = { d, t }; } });
-        if (best.t < 0 || best.d > 400) { routes[k] = left; return; }
+        if (best.t < 0 || best.d > 150) { if (L(left) >= 400) routes[k] = left; routes = routes.filter(r => r.size); return; }
         left.forEach(i => routes[best.t].add(i));
       }
       routes = routes.filter(r => r.size);
@@ -404,6 +485,47 @@ export function autoRoutes(input: AutoInput): AutoResult {
   balance(); shareOutSmall(); splitBig(); balance(); shareOutSmall();
   routes = routes.filter(r => r.size);
 
+  // a main road isn't shared out piece by piece: a piece between two pieces of the same road that another route has
+  // goes to that route too (when the route meets it)
+  for (let pass = 0; pass < 3; pass++) {
+    const owner = new Map<number, number>(); routes.forEach((r, k) => r.forEach(i => owner.set(i, k)));
+    let moved = 0;
+    for (const m of mains) {
+      const k = owner.get(m.i); if (k == null) continue;
+      const sameRoad = neighboursOf(m.i, false, true).filter(j => pieces[j].main && pieces[j].name === m.name);
+      const others = sameRoad.map(j => owner.get(j)).filter((t): t is number => t != null && t !== k);
+      if (others.length < 2 || others[0] !== others[1]) continue;
+      const t = others[0];
+      const rest = new Set(routes[k]); rest.delete(m.i);
+      if (rest.size && !connected(rest)) continue;
+      routes[k] = rest; routes[t].add(m.i); moved++;
+    }
+    if (!moved) break;
+  }
+  // every route in one piece: a bit cut off from its route joins the route it touches (or one within 150 m), or is a
+  // route of its own; a cut-off scrap under 400 m (usually a road through shops at the map's edge) is left out
+  {
+    const owner = new Map<number, number>(); routes.forEach((r, k) => r.forEach(i => owner.set(i, k)));
+    routes.forEach((r, k) => {
+      const comps = components(r, false, true).sort((x, y) => L(y) - L(x));
+      for (const c of comps.slice(1)) {
+        const votes = new Map<number, number>();
+        for (const i of c) for (const j of neighboursOf(i, false, true)) { const t = owner.get(j); if (t != null && t !== k) votes.set(t, (votes.get(t) || 0) + 1); }
+        c.forEach(i => r.delete(i));
+        let t = votes.size ? [...votes.entries()].sort((x, y) => y[1] - x[1])[0][0] : -1;
+        if (t < 0) {
+          let best = { d: Infinity, t: -1 };
+          routes.forEach((o, u) => { if (u !== k && o.size) { const d = setDist(c, o); if (d < best.d) best = { d, t: u }; } });
+          if (best.d <= 150) t = best.t;
+        }
+        if (t >= 0) c.forEach(i => { routes[t].add(i); owner.set(i, t); });
+        else if (L(c) >= 400) { routes.push(c); c.forEach(i => owner.set(i, routes.length - 1)); }
+        else c.forEach(i => owner.delete(i));
+      }
+    });
+    routes = routes.filter(r => r.size && [...r].some(i => !pieces[i].main));
+  }
+
   // number them: rows from the top, left to right
   const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
   const w = Math.max(...xs) - Math.min(...xs) || 1, h = Math.max(...ys) - Math.min(...ys) || 1;
@@ -414,18 +536,18 @@ export function autoRoutes(input: AutoInput): AutoResult {
     const ra = Math.min(rows - 1, Math.floor((top - cs[a][1]) / band)), rb = Math.min(rows - 1, Math.floor((top - cs[b][1]) / band));
     return ra - rb || cs[a][0] - cs[b][0];
   });
-  const out = (p: Piece): AutoPiece => ({ wayId: p.wayId, name: p.name, main: p.main, geometry: p.ll, lengthM: Math.round(p.len) });
+  const out = (p: Piece): AutoPiece[] => p.parts.map(q => ({ wayId: q.wayId, name: p.name, main: p.main, geometry: q.ll, lengthM: Math.round(q.len) }));
   return {
     routes: order.map(k => {
       const ps = [...routes[k]].map(i => pieces[i]);
       return {
-        pieces: ps.map(out),
+        pieces: ps.flatMap(out),
         lengthM: Math.round(ps.reduce((t, p) => t + p.len, 0)),
         mainM: Math.round(ps.filter(p => p.main).reduce((t, p) => t + p.len, 0)),
         streets: [...new Set(ps.map(p => p.name))].sort(),
       };
     }),
-    leftToNext: leftToNext.map(out),
+    leftToNext: leftToNext.flatMap(out),
     alreadyMapped,
     notResidential,
     mainNotWalkedM: Math.round(notWalked.reduce((t, p) => t + p.len, 0)),

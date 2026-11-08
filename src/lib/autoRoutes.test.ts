@@ -114,3 +114,29 @@ describe('autoRoutes with road classes', () => {
     expect(Math.max(...r.routes.map(x => x.lengthM))).toBeLessThan(1.6 * 2700);
   });
 });
+
+describe('autoRoutes keeps streets whole', () => {
+  it('doesn\'t cut a street where driveways and lanes meet it, and puts a street split across OSM ways back together', () => {
+    const ways: AutoWay[] = [
+      { id: 1, name: 'Hoy Street', kind: 'residential', geometry: [at(0, 0), at(0, 100), at(0, 200), at(0, 300)] },
+      { id: 2, name: 'Hoy Street', kind: 'residential', geometry: [at(0, 300), at(0, 400), at(0, 500)] },
+    ];
+    // driveways off every vertex
+    ways.push({ id: 10, name: '', unnamed: true, kind: 'service', geometry: [at(0, 100), at(30, 100)] });
+    ways.push({ id: 11, name: 'Back Lane', kind: 'service', geometry: [at(0, 200), at(-30, 200)] });
+    ways.push({ id: 12, name: '', unnamed: true, kind: 'service', geometry: [at(0, 400), at(30, 400)] });
+    const r = autoRoutes({ ways, main: new Map(), outline: square(-50, -50, 50, 550) });
+    expect(r.routes.length).toBe(1);
+    // one piece per OSM way: no cuts at the driveways
+    expect(r.routes[0].pieces.map(p => p.wayId).sort()).toEqual([1, 2]);
+  });
+
+  it('cuts out only the stretch another map already has', () => {
+    const ways: AutoWay[] = [{ id: 1, name: 'Long Street', kind: 'residential', geometry: [at(0, 0), at(1000, 0)] }];
+    const r = autoRoutes({ ways, main: new Map(), outline: square(-20, -50, 1020, 50), taken: [[at(0, 0), at(400, 0)]] });
+    const len = r.routes.flatMap(x => x.pieces).reduce((t, p) => t + p.lengthM, 0);
+    expect(len).toBeGreaterThan(560);
+    expect(len).toBeLessThan(640);
+    expect(r.alreadyMapped).toBe(1);
+  });
+});
