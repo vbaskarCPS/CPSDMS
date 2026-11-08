@@ -63,6 +63,10 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
   };
 
   const t = plan?.tomorrow;
+  // a session already set up for tomorrow that isn't this suggestion (made later in the Coach chat, or picked by hand)
+  // is what tomorrow is: show it, and keep this panel's earlier idea one tap away instead of on top
+  const other = planned && (!t || planned.name !== t.name) ? planned : null;
+  const [showIdea, setShowIdea] = useState(false);
   const exLine = (e: NonNullable<typeof t>['exercises'][number]) => `${e.name} — ${e.mode === 'time' ? `${e.sets} × ${fmtSec(e.seconds || 60)}` : `${e.sets} × ${e.reps || '8-12'}${e.weight ? ` @ ${e.weight} ${units}` : ''}`}`;
 
   return (
@@ -89,13 +93,28 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
             </div>
           )}
 
-          {t && t.exercises.length > 0 && (
+          {other && (
             <div className="wo-tomorrow">
-              <p className="pl-eyebrow" style={{ marginBottom: 2 }}>Tomorrow · {t.focus} · ~{t.minutes} min</p>
+              <p className="pl-eyebrow" style={{ marginBottom: 2 }}>Tomorrow{other.focus ? ` · ${other.focus}` : ''}{other.minutes ? ` · ~${other.minutes} min` : ''}</p>
+              <b style={{ fontSize: 16 }}>{other.name}</b>
+              <p style={{ fontSize: 13, margin: '2px 0 6px', opacity: .85 }}><CalendarCheck size={14} aria-hidden style={{ verticalAlign: -2 }} /> Set up for tomorrow. It'll be waiting on this page.</p>
+              <div className="wo-hero__list">{other.exercises.map((e, i) => <div className="wo-hero__row" key={i}><span>{e.name} — {e.mode === 'time' ? `${e.targetSets} × ${fmtSec(e.targetSec || 60)}` : `${e.targetSets} × ${e.targetReps || '8-12'}`}</span></div>)}</div>
+              <div className="pl-row" style={{ gap: 8, marginTop: 8 }}>
+                <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} onClick={startPlanned}><Play size={14} /> Start it now</Button>
+                {t && t.exercises.length > 0 && <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} onClick={() => setShowIdea(v => !v)}>{showIdea ? 'Hide' : 'See'} this morning's idea</Button>}
+              </div>
+            </div>
+          )}
+
+          {t && t.exercises.length > 0 && (!other || showIdea) && (
+            <div className="wo-tomorrow">
+              <p className="pl-eyebrow" style={{ marginBottom: 2 }}>{other ? 'Earlier idea' : 'Tomorrow'} · {t.focus} · ~{t.minutes} min</p>
               <b style={{ fontSize: 16 }}>{t.name}</b>
               <p style={{ fontSize: 13, margin: '2px 0 6px', opacity: .85 }}>{t.why}</p>
               <div className="wo-hero__list">{t.exercises.map((e, i) => <div className="wo-hero__row" key={i}><span>{exLine(e)}</span></div>)}</div>
-              {planned
+              {other
+                ? <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)', marginTop: 8 }} disabled={busy === 'save'} onClick={saveTomorrow}>Use this instead of “{other.name}”</Button>
+                : planned
                 ? <>
                     <p style={{ fontSize: 13, margin: '8px 0 6px' }}><CalendarCheck size={14} aria-hidden style={{ verticalAlign: -2 }} /> Set up for tomorrow as “{planned.name}”. It'll be waiting on this page.</p>
                     <div className="pl-row" style={{ gap: 8 }}>
