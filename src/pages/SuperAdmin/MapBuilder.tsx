@@ -1288,6 +1288,83 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
     setAreas(prev => prev.map(a => (a.area_name === withOutline.area_name ? withOutline : a)));
     await runAutoBuild(outline);
   };
+  // ── Fill gaps: streets with houses near this map's routes that no route (on any map) has yet. A small gap joins
+  // the route it touches; a bigger one becomes a new route with the next free number. ──
+  const runFillGaps = async () => {
+    if (!currentArea) return;
+    setError(null); setAutoNote(null); setAutoStep('Starting…');
+    try {
+      const wayById = new Map(allWaysRef.current.map(w => [w.id, w]));
+      const linesOf = (r: RouteData) => [...r.selectedWayIds].map(id => wayById.get(id)?.geometry as LngLat[] | undefined).filter((g): g is LngLat[] => !!g && g.length >= 2);
+      const own = routes.flatMap(linesOf);
+      if (!own.length) { setError('This map has no routes to fill around yet.'); return; }
+      const pts = own.flat(); const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+      const dLat = 250 / 110540, dLng = 250 / (111320 * Math.cos(ys[0] * Math.PI / 180));
+      const [w, e, s0, n] = [Math.min(...xs) - dLng, Math.max(...xs) + dLng, Math.min(...ys) - dLat, Math.max(...ys) + dLat];
+      const outline: LngLat[] = [[w, s0], [e, s0], [e, n], [w, n]];
+      const saved = new Map<string, LngLat[]>();
+      for (const a of areas) if (a.outline && a.outline.length >= 3) saved.set(a.area_name, a.outline);
+      const r = await autoBuild({
+        areaName: currentArea.area_name, outline, outlines: otherMaps?.outlines, savedOutlines: saved, fillAround: own,
+        loadedWays: allWaysRef.current.map(x => ({ id: x.rootId ?? x.id, name: x.name, unnamed: x.unnamed, geometry: x.geometry })),
+        onStep: setAutoStep,
+      });
+      if (!r.routes.length) { setAutoNote('No gaps: every street with houses near this map\'s routes is already on a route.'); return; }
+      // metres between two lines (their points against the other's segments; good enough at street scale)
+      const k = 111320 * Math.cos(ys[0] * Math.PI / 180);
+      const segD = (p: LngLat, a: LngLat, b: LngLat) => {
+        const px = p[0] * k, py = p[1] * 110540, ax = a[0] * k, ay = a[1] * 110540, bx = b[0] * k, by = b[1] * 110540;
+        const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+        const t = L2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L2)) : 0;
+        return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+      };
+      const lineD = (p: LngLat, l: LngLat[]) => { let d = Infinity; for (let i = 1; i < l.length; i++) d = Math.min(d, segD(p, l[i - 1], l[i])); return d; };
+      const existing = routes.filter(x => x.selectedWayIds.size > 0).map(x => ({ num: x.num, lines: linesOf(x) }));
+      const taken = takenNumbers(currentArea.prefix, areas, drawnNums, currentArea.area_name);
+      const used = new Set(routes.map(x => x.num));
+      let next = Math.max(...routes.map(x => x.num), (currentArea.route_start ?? 1) - 1) + 1;
+      const synth: OsmWay[] = [];
+      const joins = new Map<number, { ids: number[]; names: string[]; m: number; homes: number }>();
+      const added: RouteData[] = [];
+      for (const rt of r.routes) {
+        const ids: number[] = [];
+        for (const p of rt.pieces) { const way: OsmWay = { id: splitCounterRef.current++, rootId: p.wayId, name: p.name, unnamed: false, geometry: p.geometry }; synth.push(way); ids.push(way.id); }
+        // the existing route it touches (within 40 m) most
+        let best = { num: -1, hits: 0 };
+        if (rt.lengthM < 1500) {
+          for (const ex of existing) {
+            let hits = 0;
+            for (const p of rt.pieces) for (const q of [p.geometry[0], p.geometry[p.geometry.length - 1]]) if (ex.lines.some(l => lineD(q, l) <= 40)) hits++;
+            if (hits > best.hits) best = { num: ex.num, hits };
+          }
+        }
+        if (best.num >= 0) {
+          const j = joins.get(best.num) || { ids: [], names: [], m: 0, homes: 0 };
+          j.ids.push(...ids); j.names.push(...rt.streets); j.m += rt.lengthM; j.homes += rt.homes || 0;
+          joins.set(best.num, j);
+        } else {
+          while (used.has(next) || taken.has(next)) next++;
+          used.add(next);
+          added.push({ num: next, color: ROUTE_COLORS[(routes.length + added.length) % ROUTE_COLORS.length], status: 'pending' as const, selectedWayIds: new Set(ids), streetNames: rt.streets,
+            aiNotes: `Gap fill: ${(rt.lengthM / 1000).toFixed(1)} km${rt.homes != null ? `, about ${rt.homes} homes` : ''}`, confidence: 0 });
+        }
+      }
+      setAllWays(prev => [...prev, ...synth]);
+      setRoutes(prev => [...prev.map(x => {
+        const j = joins.get(x.num); if (!j) return x;
+        return { ...x, selectedWayIds: new Set([...x.selectedWayIds, ...j.ids]), streetNames: [...new Set([...x.streetNames, ...j.names])].sort(),
+          aiNotes: `${x.aiNotes ? x.aiNotes + ' · ' : ''}gaps filled: +${(j.m / 1000).toFixed(1)} km${j.homes ? `, about ${j.homes} homes` : ''}` };
+      }), ...added].sort((a, b) => a.num - b.num));
+      const km = (m: number) => (m / 1000).toFixed(1);
+      const joinedM = [...joins.values()].reduce((t, j) => t + j.m, 0);
+      setAutoNote(`Filled the gaps: ${km(r.totalM)} km of street with about ${r.homesOnRoutes ?? '?'} addresses no route had`
+        + (joins.size ? ` · ${km(joinedM)} km joined ${joins.size} route${joins.size > 1 ? 's' : ''} it touches` : '')
+        + (added.length ? ` · ${added.length} new route${added.length > 1 ? 's' : ''} (${runsLabel(currentArea.prefix, added.map(x => x.num))})` : '')
+        + '. Check them, then Approve all and Save.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Fill gaps didn\'t work — try again.');
+    } finally { setAutoStep(null); }
+  };
   const handleApproveAll = () => setRoutes(prev => prev.map(r => (r.status === 'pending' && r.selectedWayIds.size > 0 ? { ...r, status: 'approved' as const } : r)));
   const pendingDrawn = routes.filter(r => r.status === 'pending' && r.selectedWayIds.size > 0).length;
 
@@ -1402,6 +1479,12 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
                 <button onClick={handleAutoBuild} disabled={!!autoStep || drawingOutline != null} title={currentArea.outline?.length ? 'Cut routes from the streets inside this map\'s outline' : 'Draw this map\'s outline, then cut routes from the streets inside it'}
                   className="flex items-center gap-2 px-3 py-1.5 rounded text-sm border border-yellow-600 bg-yellow-900/20 text-yellow-300 hover:bg-yellow-900/40 disabled:opacity-50">
                   {autoStep ? <Loader size={14} className="animate-spin" /> : <Wand2 size={14} />}{autoStep || (mapHasRoutes ? 'Auto-build again' : 'Auto-build')}
+                </button>
+              )}
+              {currentArea && mapHasRoutes && (
+                <button onClick={() => void runFillGaps()} disabled={!!autoStep || drawingOutline != null} title="Add the streets with houses near this map's routes that no route has yet: a small gap joins the route it touches, a bigger one becomes a new route"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded text-sm border border-sky-600 bg-sky-900/20 text-sky-300 hover:bg-sky-900/40 disabled:opacity-50">
+                  {autoStep ? <Loader size={14} className="animate-spin" /> : <Wand2 size={14} />}Fill gaps
                 </button>
               )}
               {pendingDrawn > 0 && (
