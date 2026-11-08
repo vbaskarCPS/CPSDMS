@@ -1,7 +1,7 @@
 # Map data from OpenStreetMap (free, ODbL) for BC, Ontario, Alberta and Saskatchewan, so the Map Builder and MainstreetAI never wait
 # on the overloaded Overpass road servers. Downloads each province from Geofabrik, then publishes on the osm-data branch:
 #   ms/{i}_{j}.json       MainstreetAI: main roads, rail, rivers and commercial land, whole provinces, 0.25° tiles
-#   streets/{i}_{j}.json  Map Builder: every street the builder uses, populated areas, 0.1° tiles
+#   streets/{i}_{j}.json  Map Builder: every street the builder uses (with its class, h), populated areas, 0.1° tiles
 #   cities/{PR}.json      MainstreetAI: every municipality's boundary (cities/b/{osm id}.json), for building all cities
 #   index.json            which tiles exist, and when they were made
 # Runs when this file or scripts/osm_data.py changes on the osm-data-job branch, and on the 1st of every third month.
