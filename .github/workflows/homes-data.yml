@@ -1,0 +1,40 @@
+# Where the houses are, for Map Builder › Auto-build: every civic address in the areas the BC master maps cover, from the
+# BC Address Geocoder (DataBC, Open Government Licence – British Columbia). Published on the homes-data branch:
+#   homes/{i}_{j}.json   civic addresses, 0.05° tiles (see scripts/homes_data.py)
+#   homes/index.json     which tiles exist, and when they were made
+# Runs when this file or scripts/homes_data.py changes on the homes-data-job branch, by hand, and on the 1st of every
+# third month.
+name: Homes data
+on:
+  push:
+    branches: [homes-data-job]
+    paths: ['.github/workflows/homes-data.yml', 'scripts/homes_data.py']
+  workflow_dispatch:
+  schedule:
+    - cron: '41 7 1 */3 *'
+permissions:
+  contents: write
+jobs:
+  data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch
+        run: |
+          set -e
+          mkdir -p out
+          python3 scripts/homes_data.py fetch out/homes
+          du -sh out/homes; ls out/homes | wc -l
+      - name: Publish
+        run: |
+          git config user.name "homes-data bot"
+          git config user.email "homes-data@users.noreply.github.com"
+          git checkout --orphan data
+          git rm -rq --cached . || true
+          find . -mindepth 1 -maxdepth 1 ! -name out ! -name .git -exec rm -rf {} +
+          mv out/* . && rmdir out
+          printf 'Contains information licensed under the Open Government Licence – British Columbia (BC Address Geocoder, DataBC).\nhomes/: civic addresses in 0.05° tiles; homes/index.json lists them.\n' > README.txt
+          git add -A
+          git commit -qm "Homes data $(date -u +%F)"
+          git push -f origin HEAD:homes-data
