@@ -1221,6 +1221,8 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
 
   // ── Auto-build: routes cut from the streets inside the map's outline (src/lib/autoRoutes.ts) ──
   const mapHasRoutes = routes.some(r => r.selectedWayIds.size > 0);
+  // a map whose routes all came from Auto-build (and haven't been redrawn by hand) can be auto-built again
+  const autoBuiltOnly = mapHasRoutes && routes.every(r => r.selectedWayIds.size === 0 || r.aiNotes.startsWith('Auto-built'));
   const runAutoBuild = async (outline: LngLat[]) => {
     if (!currentArea) return;
     setError(null); setAutoNote(null); setAutoStep('Starting…');
@@ -1233,9 +1235,11 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
         onStep: setAutoStep,
       });
       if (!r.routes.length) { setError('No streets with homes inside this outline (or they\'re all on other maps already).'); return; }
-      // this map's numbers first, then the next free ones (a new route takes a new number)
+      // this map's numbers first, then the next free ones (a new route takes a new number); built again, it numbers
+      // from the map's first number, and its old numbers that aren't used again are removed on Save
       const taken = takenNumbers(currentArea.prefix, areas, drawnNums, currentArea.area_name);
-      const nums: number[] = routes.map(x => x.num);
+      const rebuilding = routes.some(x => x.selectedWayIds.size > 0);
+      const nums: number[] = rebuilding ? [] : routes.map(x => x.num);
       while (nums.length < r.routes.length) nums.push(firstFree(new Set([...taken, ...nums]), (nums[nums.length - 1] ?? (currentArea.route_start ?? 1) - 1) + 1));
       const synth: OsmWay[] = [];
       const made: RouteData[] = r.routes.map((rt, i) => {
@@ -1249,8 +1253,10 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
           aiNotes: `Auto-built: ${(rt.lengthM / 1000).toFixed(1)} km${rt.mainM ? `, ${(rt.mainM / 1000).toFixed(1)} km of it main road` : ''}`, confidence: 0,
         };
       });
+      const reused = new Set(made.map(x => x.num));
+      const gone: RouteData[] = routes.filter(x => !reused.has(x.num)).map(x => ({ ...x, status: 'pending' as const, selectedWayIds: new Set<number>(), streetNames: [], aiNotes: '' }));
       setAllWays(prev => [...prev, ...synth]);
-      setRoutes(made);
+      setRoutes([...made, ...gone].sort((x, y) => x.num - y.num));
       setActiveRouteNum(made[0].num);
       const b = outlineBox(outline, 0.002);
       mapRef.current?.fitBounds([[b.w, b.s], [b.e, b.n]], { padding: 40, duration: 600 });
@@ -1266,7 +1272,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
     } finally { setAutoStep(null); }
   };
   const handleAutoBuild = () => {
-    if (!currentArea || mapHasRoutes) return;
+    if (!currentArea || (mapHasRoutes && !autoBuiltOnly)) return;
     if (currentArea.outline && currentArea.outline.length >= 3) { void runAutoBuild(currentArea.outline); return; }
     setAutoNote(null); setDrawingOutline([]);
   };
@@ -1391,10 +1397,10 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
                   <Scissors size={14} />Undo Split ({splitUndoStack.length})
                 </button>
               )}
-              {currentArea && !mapHasRoutes && (
+              {currentArea && (!mapHasRoutes || autoBuiltOnly) && (
                 <button onClick={handleAutoBuild} disabled={!!autoStep || drawingOutline != null} title={currentArea.outline?.length ? 'Cut routes from the streets inside this map\'s outline' : 'Draw this map\'s outline, then cut routes from the streets inside it'}
                   className="flex items-center gap-2 px-3 py-1.5 rounded text-sm border border-yellow-600 bg-yellow-900/20 text-yellow-300 hover:bg-yellow-900/40 disabled:opacity-50">
-                  {autoStep ? <Loader size={14} className="animate-spin" /> : <Wand2 size={14} />}{autoStep || 'Auto-build'}
+                  {autoStep ? <Loader size={14} className="animate-spin" /> : <Wand2 size={14} />}{autoStep || (mapHasRoutes ? 'Auto-build again' : 'Auto-build')}
                 </button>
               )}
               {pendingDrawn > 0 && (
