@@ -1402,9 +1402,15 @@ export async function ensureRouteHouses(rm: SavedRouteMap, onProgress?: HouseBui
     if (removed) houses = await fetchRouteHouses([rc]);
   }
 
-  // Fill streets on the route map that have no houses.
+  // Fill streets on the route map that have no houses. A route the register and OpenStreetMap had nothing for
+  // (most of Port Coquitlam #3) is found street by street with Mapbox, as Territory › Build houses does — before,
+  // the worker's map stayed empty, with no houses and no past-client dots.
   if (houses.length) {
     const filled = await fillRouteGaps(rm, houses, onProgress);
+    if (filled) houses = filled;
+  } else if (build?.footprints_at) {
+    onProgress?.(`Finding the houses on ${rc} street by street…`);
+    const filled = await fillRouteGaps(rm, [], onProgress, { fromScratch: true });
     if (filled) houses = filled;
   }
 
