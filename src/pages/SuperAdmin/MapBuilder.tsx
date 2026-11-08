@@ -1109,7 +1109,13 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       }
       setRoadsCapped(capped);
       const ways = await fetchRoads(bbox);
-      setAllWays(ways);
+      // keep the pieces already on the map (split roads, saved shapes, auto-built and gap-filled routes): roads that
+      // finish loading after an Auto-build used to wipe its routes, and Save then wrote them empty
+      setAllWays(prev => {
+        const kept = prev.filter(w => w.rootId != null);
+        const ids = new Set(kept.map(w => w.id));
+        return [...kept, ...ways.filter(w => !ids.has(w.id))];
+      });
       if (!ways.length) setError('No roads came back for this area — your saved routes are shown from their saved shapes. Click "Load More Roads" to try again.');
     } catch { setError('Roads didn\'t load (the road server is busy) — your saved routes are shown from their saved shapes. Click "Load More Roads" to retry.'); }
     finally { setLoadingRoads(false); setRoadsTriedFor(area.area_name); }
@@ -1387,6 +1393,9 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       // Each approved route is written over its saved copy. Only a route this tab lists and no longer has
       // approved is removed — a map this tab never loaded (an older tab, a renumbered map) is left alone;
       // the old "delete everything, then insert" wiped those.
+      // never write a route over with nothing (its streets aren't on the map in this tab): check them all first
+      const empty = approved.filter(r => !effectiveWays.some(w => r.selectedWayIds.has(w.id)));
+      if (empty.length) throw new Error(`${empty.map(r => formatRouteCode(currentArea.prefix, r.num)).slice(0, 5).join(', ')}${empty.length > 5 ? '…' : ''}: the streets aren't loaded in this tab, so nothing was saved. Reload the map and try again.`);
       const keep = new Set(approved.map(r => r.num));
       const dropped = routes.map(r => r.num).filter(n => !keep.has(n));
       if (dropped.length) {
