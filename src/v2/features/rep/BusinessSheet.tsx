@@ -5,7 +5,7 @@
 // to the owner (on its own, or with a follow-up: the copy opens in the email composer to check before sending).
 // Works with no signal: the visit waits on the phone.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Camera, ChevronRight, ClipboardList, ExternalLink, Globe, Mail, MapPin, Navigation, Phone, Presentation, ScanLine, X } from 'lucide-react';
+import { ArrowLeft, Ban, Camera, ChevronRight, ClipboardList, ExternalLink, Globe, Mail, MapPin, Navigation, Phone, Presentation, ScanLine, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { inbox, mailWhen } from '../../lib/mail';
 import { useAuth } from '../../lib/auth';
@@ -50,7 +50,10 @@ export const BusinessSheet: React.FC<{
   onGone?: () => void;
   /** its stage changed here without a visit (presenting the deck makes it Pitched) */
   onStage?: (stage: string) => void;
-}> = ({ id, campaign, fallback, onClose, onSaved, onGone, onStage }) => {
+  /** another rep's lead (their name): shown, but not to be worked from here */
+  takenBy?: string | null;
+}> = ({ id, campaign, fallback, onClose, onSaved, onGone, onStage, takenBy }) => {
+  const locked = !!takenBy;
   const { session } = useAuth();
   const { toast } = useRep();
   const b = useLoad(() => repBusiness(id, campaign), [id, campaign]);
@@ -206,6 +209,7 @@ export const BusinessSheet: React.FC<{
           {d.address && <div className="v2-small">{d.address}</div>}
         </div>
       </div>
+      {locked && <div className="v2-rep-taken" role="note"><Ban size={18} /><span><b>This is {takenBy}’s lead — don’t visit.</b> They’re working it, so it’s off your list. If you think that’s wrong, ask your manager.</span></div>}
       {offline && <div className="v2-rep-note">No signal: you can still log a visit, it sends later.</div>}
       <div className="v2-rep-acts">
         <a href={dirs} target="_blank" rel="noreferrer"><Navigation size={15} />Directions</a>
@@ -214,7 +218,7 @@ export const BusinessSheet: React.FC<{
       </div>
 
       {!offline && <StageCard business={id} campaign={campaign} tick={peopleTick} />}
-      <div className="v2-rep-cards">
+      {!locked && <div className="v2-rep-cards">
         <button type="button" className="v2-rep-card present" disabled={!kit.data?.present_url} onClick={() => {
           setPresenting(true);
           // showing the deck is the pitch: the stage (and the pin) move to Pitched now
@@ -226,7 +230,7 @@ export const BusinessSheet: React.FC<{
           <button type="button" className="v2-rep-card" onClick={() => setShowAnswers(true)}>
             <ClipboardList size={26} /><span><b>Questionnaire &amp; proposal</b><em>{view.proposal ? `About $${Math.round(view.proposal.yearly).toLocaleString('en-CA')} a year · ` : ''}See it or email it to them</em></span><ChevronRight size={20} />
           </button>)}
-      </div>
+      </div>}
       {showAnswers && hasAnswers(view) && (
         <div className="v2-rep-sheet-bg" onClick={() => setShowAnswers(false)}>
           <div className="v2-rep-sheet" role="dialog" aria-label="Questionnaire and proposal" onClick={e => e.stopPropagation()}>
@@ -263,6 +267,7 @@ export const BusinessSheet: React.FC<{
             </Link>))}
         </div>)}
 
+      {!locked && <>
       <div style={{ fontWeight: 800, marginTop: 10 }}>What happened?</div>
       <div className="v2-rep-outs">
         {/* the rest moves the stage by itself: Present (pitched), booking onboarding (booked, the deal), the host (won / lost) */}
@@ -321,11 +326,12 @@ export const BusinessSheet: React.FC<{
       <ErrorBox error={error} />
       {outcome && <Btn onClick={save} disabled={busy || scanning} style={{ width: '100%', justifyContent: 'center', background: '#0f766e', borderColor: '#0f766e', marginTop: 6 }}>
         {busy ? 'Saving…' : outcome === 'closed' ? 'Save deal' : 'Save visit'}</Btn>}
+      </>}
 
       <People business={id} campaign={campaign} offline={offline} tick={peopleTick} />
       {!offline && <History d={d as RepBusinessView} loading={b.loading && !b.data} />}
       {!offline && <TimelineToggle business={id} campaign={campaign} tick={peopleTick} />}
-      {!offline && <DoNotKnock business={id} campaign={campaign} name={d.name}
+      {!offline && !locked && <DoNotKnock business={id} campaign={campaign} name={d.name}
         onDone={r => { toast(`${d.name}: ${dnkLabel(r).toLowerCase()}. It’s off every rep’s list.`); (onGone || onClose)(); }} />}
     </Sheet>
   );
