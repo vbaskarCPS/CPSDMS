@@ -18,6 +18,22 @@ interface Update {
 // newest first
 const UPDATES: Update[] = [
   {
+    id: '2026-11-07-other-reps-leads',
+    title: 'Grey pins: another rep’s lead',
+    intro: 'Businesses another rep is already working now show as grey pins on your map.',
+    steps: [
+      'Grey means it’s someone else’s lead: don’t visit it. Tap it to see whose it is.',
+      'They’re left out of your list to walk and your “to visit” count.',
+      'If the other rep marks it Lost, it opens back up for everyone.',
+    ],
+    picture: (
+      <div className="v2-whatsnew-stages" aria-hidden="true">
+        <span className="on" style={{ borderColor: '#9ca3af' }}><i style={{ background: STAGE_PIN.taken.color }} />{STAGE_PIN.taken.label} · don’t visit</span>
+        <span><i style={{ background: STAGE_PIN.new.color }} />Yours to visit</span>
+      </div>
+    ),
+  },
+  {
     id: '2026-11-07-questionnaire-stage',
     title: 'New stage: Questionnaire',
     intro: 'Businesses now go New → Pitched → Questionnaire → Onboarding booked → Won.',

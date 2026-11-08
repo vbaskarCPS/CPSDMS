@@ -9,7 +9,7 @@ import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import {
   FOLLOW_UP_RING, hereNow, isOpen, kindLabel, STAGE_PIN, stagePin, pinOf, repLeaderboard, byOnboardings, byVisits, setVisitGoal, repFollowups, repHome, repNumbers, repZone, walkOrder, whenLabel,
-  type BoardPeriod, type BoardRep, type FollowUp, type RepBusiness,
+  type BoardPeriod, type StagePin, type BoardRep, type FollowUp, type RepBusiness,
 } from '../../lib/rep';
 import { followUpIcs, metres } from '../../lib/repField';
 import { cacheGet } from '../../lib/repQueue';
@@ -122,9 +122,10 @@ const ZoneScreen: React.FC = () => {
   const setOpen = (id: string | null) => { const n = new URLSearchParams(sp); if (id) n.set('b', id); else n.delete('b'); setSp(n, { replace: !id }); };
   const setView = (v: 'map' | 'list') => { const n = new URLSearchParams(sp); n.set('view', v); setSp(n, { replace: true }); };
 
-  const shown = useMemo(() => (z.data?.businesses || []).filter(b => show === 'all' || isOpen(b.state)), [z.data, show]);
-  const left = (z.data?.businesses || []).filter(b => isOpen(b.state)).length;
-  const pins = useMemo(() => shown.map(b => ({ id: b.id, name: b.name, state: stagePin(b.stage, b.state), fu: b.state === 'follow_up', lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
+  // another rep's lead: on the map greyed out, but not in the list to walk or the count
+  const shown = useMemo(() => (z.data?.businesses || []).filter(b => show === 'all' || (!b.by && isOpen(b.state))), [z.data, show]);
+  const left = (z.data?.businesses || []).filter(b => !b.by && isOpen(b.state)).length;
+  const pins = useMemo(() => (z.data?.businesses || []).filter(b => show === 'all' || b.by || isOpen(b.state)).map(b => ({ id: b.id, name: b.by ? `${b.name} · ${b.by}’s lead` : b.name, state: (b.by ? 'taken' : stagePin(b.stage, b.state)) as StagePin, fu: !b.by && b.state === 'follow_up', lat: b.lat, lng: b.lng, lead: b.lead })), [z.data, show]);
   const fb = z.data?.businesses.find(b => b.id === openId);
 
   return (
@@ -153,7 +154,7 @@ const ZoneScreen: React.FC = () => {
         : <ZoneList items={shown} onPick={setOpen} />)}
       {openId && <BusinessSheet key={openId} id={openId} campaign={campaign}
         fallback={fb ? { id: fb.id, name: fb.name, address: fb.address, kind: fb.kind, lat: fb.lat, lng: fb.lng, hours: fb.hours, lead: fb.lead } : null}
-        onClose={() => setOpen(null)} onSaved={() => { setTick(t => t + 1); setOpen(null); }} onStage={() => setTick(t => t + 1)} />}
+        onClose={() => setOpen(null)} onSaved={() => { setTick(t => t + 1); setOpen(null); }} onStage={() => setTick(t => t + 1)} takenBy={fb?.by || null} />}
     </>
   );
 };
@@ -167,10 +168,10 @@ const ZoneList: React.FC<{ items: RepBusiness[]; onPick: (id: string) => void }>
         {g.items.map(b => {
           return (
             <button key={b.id} type="button" className="v2-rep-item" onClick={() => onPick(b.id)}>
-              <i className="v2-rep-dot" style={{ background: STAGE_PIN[stagePin(b.stage, b.state)].color, width: 14, height: 14, ...(b.state === 'follow_up' ? { boxShadow: `0 0 0 2.5px ${FOLLOW_UP_RING}` } : {}) }} />
+              <i className="v2-rep-dot" style={{ background: STAGE_PIN[b.by ? 'taken' : stagePin(b.stage, b.state)].color, width: 14, height: 14, ...(b.state === 'follow_up' ? { boxShadow: `0 0 0 2.5px ${FOLLOW_UP_RING}` } : {}) }} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div className="n">{b.name}</div>
-                <div className="a">{b.address || kindLabel(b.kind)}</div>
+                <div className="a">{b.by ? `${b.by}’s lead · don’t visit` : b.address || kindLabel(b.kind)}</div>
               </div>
               <div className="v2-small v2-mut" style={{ textAlign: 'right' }}>
                 {b.state === 'follow_up' && b.follow_up_at ? whenLabel(b.follow_up_at) : b.state !== 'new' ? pinOf(b.state).label : ''}

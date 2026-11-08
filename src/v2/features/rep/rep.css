@@ -292,3 +292,7 @@
 .v2-whatsnew-stages span { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 1.5px solid #e5e7eb; border-radius: 999px; padding: 5px 10px; font-size: 13px; color: #111827; }
 .v2-whatsnew-stages span.on { border-color: #7c3aed; font-weight: 700; }
 .v2-whatsnew-stages i { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #374151; }
+
+/* another rep's lead */
+.v2-rep-taken { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0 4px; padding: 10px 12px; border-radius: 12px; background: #f3f4f6; border: 1.5px solid #9ca3af; color: #111827; font-size: 14px; line-height: 1.4; }
+.v2-rep-taken svg { flex-shrink: 0; color: #6b7280; margin-top: 1px; }

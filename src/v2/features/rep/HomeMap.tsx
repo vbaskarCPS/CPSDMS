@@ -51,9 +51,10 @@ export const HomeMap: React.FC = () => {
     return [...seen.values()];
   }, [m, camp]);
   const shown = useMemo(() => (m?.data.businesses || []).filter(b =>
-    (!camp || b.c === camp) && (show === 'all' || isOpen(b.s) || touched.has(`${b.id}|${b.c}`))), [m, camp, show, touched]);
-  const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.n, state: stagePin(b.st, b.s), fu: b.s === 'follow_up', lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
-  const left = useMemo(() => (m?.data.businesses || []).filter(b => (!camp || b.c === camp) && isOpen(b.s)).length, [m, camp]);
+    (!camp || b.c === camp) && (show === 'all' || !!b.by || isOpen(b.s) || touched.has(`${b.id}|${b.c}`))), [m, camp, show, touched]);
+  // another rep's lead stays on the map, greyed out, so nobody knocks on it by accident
+  const pins: MapPin[] = useMemo(() => shown.map(b => ({ id: `${b.id}|${b.c}`, name: b.by ? `${b.n} · ${b.by}’s lead` : b.n, state: b.by ? 'taken' : stagePin(b.st, b.s), fu: !b.by && b.s === 'follow_up', lat: b.lat, lng: b.lng, lead: b.lead })), [shown]);
+  const left = useMemo(() => (m?.data.businesses || []).filter(b => (!camp || b.c === camp) && !b.by && isOpen(b.s)).length, [m, camp]);
 
   const open = useMemo(() => {
     if (!openId || !m) return null;
@@ -117,7 +118,7 @@ export const HomeMap: React.FC = () => {
       {open && (
         <BusinessSheet key={openId} id={open.id} campaign={open.campaign}
           fallback={open.b ? { id: open.b.id, name: open.b.n, address: open.b.a, kind: open.b.k, lat: open.b.lat, lng: open.b.lng, hours: open.b.h, lead: open.b.lead } : null}
-          onClose={() => setOpen(null)} onSaved={onSaved} onStage={onStage}
+          onClose={() => setOpen(null)} onSaved={onSaved} onStage={onStage} takenBy={open.b?.by || null}
           onGone={() => { const cid = open.campaign; setM(cur => cur && { ...cur, data: { ...cur.data, businesses: cur.data.businesses.filter(b => !(b.id === open.id && b.c === cid)) } }); setOpen(null); }} />)}
       {adding && !adding.pick && m && (
         <AddLead campaigns={campaigns} at={adding.at || null}
