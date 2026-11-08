@@ -220,7 +220,10 @@ export function autoRoutes(input: AutoInput): AutoResult {
           if ((!free[t] || t === n) && t0 >= 0) {
             const t1 = free[t] ? t : t - 1;
             const d0 = (t0 / n) * L0, d1 = (t1 / n) * L0;
-            if (d1 - d0 >= (t0 === 0 && t1 === n ? 12 : 25)) {
+            // a stub where a street crosses the outline, or what's left beside another map's stretch, under 40 m isn't
+            // worth a walk (and would sit apart from any route)
+            const cutEnd = a0.startsWith('clip:') || b0.startsWith('clip:') || t0 > 0 || t1 < n;
+            if (d1 - d0 >= (cutEnd ? 40 : 12)) {
               const part = t0 === 0 && t1 === n ? xy : slice(xy, d0, d1);
               raws.push({ wayId: w.id, name, main: isMain, xy: part, ll: t0 === 0 && t1 === n ? run : part.map(P.ll), len: lineLen(part),
                 a: t0 === 0 ? a0 : `clip:${clipN++}`, b: t1 === n ? b0 : `clip:${clipN++}` });
@@ -270,37 +273,37 @@ export function autoRoutes(input: AutoInput): AutoResult {
 
   const byNode = new Map<string, number[]>();
   for (const p of pieces) for (const n of [p.a, p.b]) { const l = byNode.get(n); if (l) l.push(p.i); else byNode.set(n, [p.i]); }
-  // side streets off the same main road a short walk apart (250 m along it) count as next to each other, so a
+  // side streets off the same main road a short walk apart (150 m along it) count as next to each other, so a
   // cul-de-sac off a main road joins the route across or along the road, not one on the far side of a park
   const mainEdges = new Map<string, { to: string; len: number }[]>();
   for (const m of pieces) if (m.main) for (const [x, y] of [[m.a, m.b], [m.b, m.a]]) { const l = mainEdges.get(x); const e = { to: y, len: m.len }; if (l) l.push(e); else mainEdges.set(x, [e]); }
   const reach = new Map<string, string[]>();
-  const along250 = (start: string): string[] => {
+  const alongMain = (start: string): string[] => {
     const got = reach.get(start); if (got) return got;
     const best = new Map<string, number>([[start, 0]]); const todo = [start];
     while (todo.length) {
       const n = todo.shift()!; const d = best.get(n)!;
-      for (const e of mainEdges.get(n) || []) { const nd = d + e.len; if (nd <= 250 && nd < (best.get(e.to) ?? Infinity)) { best.set(e.to, nd); todo.push(e.to); } }
+      for (const e of mainEdges.get(n) || []) { const nd = d + e.len; if (nd <= 150 && nd < (best.get(e.to) ?? Infinity)) { best.set(e.to, nd); todo.push(e.to); } }
     }
     const out = [...best.keys()]; reach.set(start, out); return out;
   };
-  const neighboursOf = (i: number, onlyRes: boolean, crossMain: boolean) => {
+  const neighboursOf = (i: number, onlyRes: boolean, crossMain: boolean, viaMain = crossMain) => {
     const out: number[] = []; const p = pieces[i];
     for (const n of [p.a, p.b]) {
       if (!crossMain && mainNodes.has(n)) continue;
       for (const j of byNode.get(n) || []) if (j !== i && (!onlyRes || !pieces[j].main)) out.push(j);
-      if (crossMain && !p.main && mainNodes.has(n))
-        for (const m of along250(n)) if (m !== n) for (const j of byNode.get(m) || []) if (j !== i && !pieces[j].main) out.push(j);
+      if (viaMain && !p.main && mainNodes.has(n))
+        for (const m of alongMain(n)) if (m !== n) for (const j of byNode.get(m) || []) if (j !== i && !pieces[j].main) out.push(j);
     }
     return out;
   };
   const L = (s: Iterable<number>) => { let t = 0; for (const i of s) t += pieces[i].len; return t; };
-  const components = (ids: Set<number>, onlyRes: boolean, crossMain: boolean): Set<number>[] => {
+  const components = (ids: Set<number>, onlyRes: boolean, crossMain: boolean, viaMain = crossMain): Set<number>[] => {
     const seen = new Set<number>(), out: Set<number>[] = [];
     for (const s of ids) {
       if (seen.has(s)) continue;
       const comp = new Set<number>([s]); seen.add(s); const stack = [s];
-      while (stack.length) { const i = stack.pop()!; for (const j of neighboursOf(i, onlyRes, crossMain)) if (ids.has(j) && !seen.has(j)) { seen.add(j); comp.add(j); stack.push(j); } }
+      while (stack.length) { const i = stack.pop()!; for (const j of neighboursOf(i, onlyRes, crossMain, viaMain)) if (ids.has(j) && !seen.has(j)) { seen.add(j); comp.add(j); stack.push(j); } }
       out.push(comp);
     }
     return out;
@@ -507,6 +510,20 @@ export function autoRoutes(input: AutoInput): AutoResult {
   {
     const owner = new Map<number, number>(); routes.forEach((r, k) => r.forEach(i => owner.set(i, k)));
     routes.forEach((r, k) => {
+      // a short bit (under 300 m) that doesn't meet its route at a corner goes to a route it does meet (or one within
+      // 60 m); with neither, it stays
+      const real = components(r, false, true, false).sort((x, y) => L(y) - L(x));
+      for (const c of real.slice(1).filter(x => L(x) < 300)) {
+        const votes = new Map<number, number>();
+        for (const i of c) for (const j of neighboursOf(i, false, true, false)) { const t = owner.get(j); if (t != null && t !== k) votes.set(t, (votes.get(t) || 0) + 1); }
+        let t = votes.size ? [...votes.entries()].sort((x, y) => y[1] - x[1])[0][0] : -1;
+        if (t < 0) {
+          let best = { d: Infinity, t: -1 };
+          routes.forEach((o, u) => { if (u !== k && o.size) { const d = setDist(c, o); if (d < best.d) best = { d, t: u }; } });
+          if (best.d <= 60) t = best.t;
+        }
+        if (t >= 0) c.forEach(i => { r.delete(i); routes[t].add(i); owner.set(i, t); });
+      }
       const comps = components(r, false, true).sort((x, y) => L(y) - L(x));
       for (const c of comps.slice(1)) {
         const votes = new Map<number, number>();
