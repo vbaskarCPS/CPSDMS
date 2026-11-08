@@ -21,15 +21,28 @@
 //
 // The planner token (planner_sign_in) is checked with planner_me through the anon client; nothing runs
 // without it. Deployed without JWT verification because planner users have no Supabase account.
-// Model: PLANNER_MODEL secret, else a Haiku-class model (cheap: ~1¢ a call).
+// Model: PLANNER_MODEL secret, else a Haiku-class model (cheap: ~1¢ a call). Workout coaching (chat, after-session plan):
+// COACH_MODEL secret, else a Sonnet-class model.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 
 const MODEL = Deno.env.get('PLANNER_MODEL') || 'claude-haiku-5-5';
+// workout coaching reasons over a lot of numbers (sleep, load per muscle, progress): a stronger model, a few cents a call
+const COACH_MODEL = Deno.env.get('COACH_MODEL') || 'claude-sonnet-5-5';
 const WORKSPACE = Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '';
 const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+/** The context, with the coach's worked-out numbers and the person's notes first (long contexts are cut from the end). */
+const coachCtx = (c: unknown, max: number): string => {
+  if (!c || typeof c !== 'object') return JSON.stringify(c ?? {}).slice(0, max);
+  const o = c as Record<string, unknown>;
+  const first = ['today', 'weekday', 'now', 'units', 'training_state', 'about_me_notes_oldest_first', 'workout_in_progress', 'routine'];
+  const ordered: Record<string, unknown> = {};
+  for (const k of first) if (k in o) ordered[k] = o[k];
+  for (const k of Object.keys(o)) if (!(k in ordered)) ordered[k] = o[k];
+  return JSON.stringify(ordered).slice(0, max);
 };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 
@@ -38,7 +51,7 @@ type Msg = { role: 'user' | 'assistant'; content: unknown };
 // Some models think before they answer by default; that thinking counts against max_tokens and once ate the
 // whole budget (an empty reply). Thinking is switched off; if a model rejects the parameter, it's sent without.
 let thinkingParamOk = true;
-async function claudeRaw(system: string, messages: Msg[], maxTokens: number): Promise<{ text: string; stop: string }> {
+async function claudeRaw(system: string, messages: Msg[], maxTokens: number, model = MODEL): Promise<{ text: string; stop: string }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
   // a busy or rate-limited API is tried again (three times, backing off) before it's an error
@@ -47,12 +60,18 @@ async function claudeRaw(system: string, messages: Msg[], maxTokens: number): Pr
     res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-      body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages, ...(thinkingParamOk ? { thinking: { type: 'disabled' } } : {}) }),
+      body: JSON.stringify({ model, max_tokens: maxTokens, system, messages, ...(thinkingParamOk ? { thinking: { type: 'disabled' } } : {}) }),
     });
     data = await res.json().catch(() => ({}));
     if (res.status === 400 && thinkingParamOk && /thinking/i.test(data?.error?.message || '')) {
       console.error('planner-ai: model rejects the thinking parameter, sending without it:', data?.error?.message);
       thinkingParamOk = false;
+      continue;
+    }
+    // the coach's model isn't available on this key: fall back to the planner's model rather than fail
+    if ((res.status === 404 || (res.status === 400 && /model/i.test(data?.error?.message || ''))) && model !== MODEL) {
+      console.error(`planner-ai: ${model} unavailable (${data?.error?.message || res.status}), using ${MODEL}`);
+      model = MODEL;
       continue;
     }
     if (res.ok || !(res.status === 429 || res.status === 529 || res.status >= 500)) break;
@@ -65,36 +84,40 @@ async function claudeRaw(system: string, messages: Msg[], maxTokens: number): Pr
     throw new Error(res?.status === 429 ? `Coach Claude is rate-limited right now — try again in a minute. (${why})` : res?.status === 529 ? 'Coach Claude is overloaded right now — try again in a minute.' : why);
   }
   const text = ((data.content || []) as { type: string; text?: string }[]).filter(c => c.type === 'text').map(c => c.text || '').join('');
-  if (!text.trim()) console.error('planner-ai: empty answer from Anthropic:', JSON.stringify({ stop: data.stop_reason, content: data.content, model: MODEL }).slice(0, 800));
+  if (!text.trim()) console.error('planner-ai: empty answer from Anthropic:', JSON.stringify({ stop: data.stop_reason, content: data.content, model }).slice(0, 800));
   return { text, stop: String(data.stop_reason || '') };
 }
 /** A text answer. An empty answer is asked for again once, then it's an error (never saved as a blank reply);
  *  an answer cut off by max_tokens is continued once, so a long plan isn't left mid-sentence. */
-async function claude(system: string, messages: Msg[], maxTokens = 1500): Promise<string> {
+async function claude(system: string, messages: Msg[], maxTokens = 1500, model = MODEL): Promise<string> {
   // a history that ends in a blank assistant turn (an earlier failure) would be refused by the API
   const clean = messages.filter(m => !(m.role === 'assistant' && !String(m.content ?? '').trim()));
-  let r = await claudeRaw(system, clean, maxTokens);
+  let r = await claudeRaw(system, clean, maxTokens, model);
   // an empty answer that ran out of tokens (thinking used them up) is asked again with a much bigger budget
-  if (!r.text.trim()) r = await claudeRaw(system, clean, r.stop === 'max_tokens' ? Math.max(maxTokens * 4, 4000) : maxTokens);
+  if (!r.text.trim()) r = await claudeRaw(system, clean, r.stop === 'max_tokens' ? Math.max(maxTokens * 4, 4000) : maxTokens, model);
   if (!r.text.trim()) throw new Error('Coach Claude didn’t answer — try again');
   if (r.stop === 'max_tokens') {
-    const more = await claudeRaw(system, [...clean, { role: 'assistant', content: r.text }, { role: 'user', content: 'Continue exactly where you left off — no recap, no repeating what you already wrote.' }], maxTokens);
+    const more = await claudeRaw(system, [...clean, { role: 'assistant', content: r.text }, { role: 'user', content: 'Continue exactly where you left off — no recap, no repeating what you already wrote.' }], maxTokens, model);
     r = { text: r.text + more.text, stop: more.stop };
   }
   return r.text;
 }
 
 /** Ask for a structured answer through a forced tool call: the API guarantees the JSON matches the schema. */
-async function claudeJson<T>(system: string, messages: Msg[], schema: Record<string, unknown>, maxTokens = 4000): Promise<T> {
+async function claudeJson<T>(system: string, messages: Msg[], schema: Record<string, unknown>, maxTokens = 4000, model = MODEL): Promise<T> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-    body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, messages, ...(thinkingParamOk ? { thinking: { type: 'disabled' } } : {}),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages, ...(thinkingParamOk ? { thinking: { type: 'disabled' } } : {}),
       tools: [{ name: 'answer', description: 'The structured answer.', input_schema: schema }], tool_choice: { type: 'tool', name: 'answer' } }),
   });
   const data = await res.json();
+  if (!res.ok && model !== MODEL && (res.status === 404 || (res.status === 400 && /model/i.test(data?.error?.message || '')))) {
+    console.error(`planner-ai: ${model} unavailable (${data?.error?.message || res.status}), using ${MODEL}`);
+    return claudeJson<T>(system, messages, schema, maxTokens, MODEL);
+  }
   if (!res.ok) throw new Error(data?.error?.message || `Anthropic ${res.status}`);
   if (data.stop_reason === 'max_tokens') throw new Error('The answer was too long; try a shorter statement (fewer pages).');
   const use = (data.content || []).find((c: { type: string }) => c.type === 'tool_use');
@@ -115,6 +138,36 @@ macros in grams; kcal consistent with macros. Count cooking oil, butter, dressin
 when they are likely present even if not visible (and say so in "tips"). Photo estimates run low, so lean a little
 generous on portions. Keep "tips" to one short sentence or empty. No text outside the JSON.`;
 
+// How Coach Claude reasons about training: current exercise science, applied to the numbers in training_state.
+const SCIENCE = `
+HOW TO COACH (evidence-based; apply it, don't lecture):
+Read training_state first: readiness (sleep, food), load (sessions, hard sets per muscle per week, RPE trend, weeks since an
+easier week), progress (e1RM per lift: up / flat / stalled / down), pain_or_niggles. Then the about_me notes (goals, age, limits).
+- Readiness: under 6 h sleep last night or a 7-night average under 6.5 h → keep the session but cut hard sets ~25-30%, cap effort
+  at RPE 7 (3 reps in reserve), no max attempts, keep technique work. Protein well under target yesterday/today or training
+  fasted late in the day → favour moderate volume and say to get protein in within a few hours after. Good sleep and fed → push.
+- Effort: most working sets at RPE 7-9 (1-3 reps in reserve); last set of an exercise may go to RPE 9. Hypertrophy works from
+  ~5 to ~30 reps when close to failure; strength needs heavier sets (3-6 reps at 80-90% e1RM). Rest 2-3 min on big compound
+  lifts, 60-90 s on isolation; short rest costs reps on compounds.
+- Volume: count hard sets per muscle per week. ~10 is a solid starting dose, 10-20 the productive range; past ~20 recovery
+  usually lags. Add sets only where progress is stalled AND recovery is good. Train each muscle about 2x a week; give a
+  muscle 48-72 h before loading it hard again (see days_since_trained).
+- Progression: double progression — hit the top of the rep range on all sets at the target RPE, then add the smallest
+  load step (upper body ~2.5-5 lb / 1-2.5 kg, lower ~5-10 lb / 2.5-5 kg) and drop back to the bottom of the range.
+  Assisted lifts progress by REMOVING counterweight. Rising RPE at the same load plus flat/stalled e1RM for 2-3 sessions =
+  fatigue, not weakness.
+- Deloads: after 4-8 weeks of steady hard training (weeks_since_easier_week), or when several lifts stall with RPE drifting
+  up, or sleep is bad for days → one easier week: same exercises, ~half the sets, RPE 6-7.
+- Conditioning: zone 2 = conversational pace (can talk in sentences, ~60-70% of max HR; 220 − age is a rough max) for
+  most cardio; HIIT 1-2x a week max, short work with full-ish rest for beginners. Hard intervals or long runs right before
+  heavy legs blunt the lift — put them after lifting, on upper days, or 6+ h apart.
+- Pain: sharp pain, pain that changes how you move, or pain above ~3/10 that gets worse set to set → stop that lift and swap
+  to a pain-free variation or range (tempo, lighter, partial range, machine). Dull muscle soreness is fine to train around
+  (other muscles, or lighter). Anything that sounds like an injury, swelling, numbness or pain lasting over a week → see a
+  physiotherapist or doctor; stay conservative. Use pain_or_niggles: don't load what's sore without saying how you adapted.
+- Every plan says in one line why it fits today (e.g. "6 h sleep, chest trained 2 days ago → upper pull + legs, RPE 7").
+  Quote the real numbers. Never invent data that isn't in the context.`;
+
 const COACH_SYSTEM = `You are Coach Claude, the personal coach inside this planner app — strength and conditioning first, but also the
 person's whole day: routine, habits, food, sleep, priorities and reviews. The context JSON is the planner's actual data:
 every logged set (weight x reps, @RPE, L/R for one-arm moves), the person's own notes per exercise and per session,
@@ -126,7 +179,7 @@ as an AI model. Sessions you plan only reach the person's planner when they tap 
 they ask to change or plan a session (workout_templates with planned_for_date shows what's planned; today's session is
 still ahead unless workouts_recent has one dated today), reply with the COMPLETE session written out as a plan — every
 exercise with sets x reps or minutes, rest and a cue — and end with: Tap "Make this today's" (or tomorrow's, if today's
-is already done) to swap it in.`;
+is already done) to swap it in.` + SCIENCE;
 
 const REFLECT_SYSTEM = `You are Coach Claude, a warm, direct high-performance coach reviewing one day of a personal planner (morning
 intentions, priorities, habits, evening answers, scores, meals, the workout) with the person's recent days and about_me notes for context. Reply in 2–3 short sentences, second person: one thing
@@ -218,7 +271,9 @@ training goals, health limits and session length). Produce:
    name, exerciseId from the library when one matches, mode 'time' for walks/bike/intervals/holds/flows (seconds), else
    'reps' with sets, reps, restSec, a short note, and a starting weight in the user's units when it applies. Beginner
    HIIT = short work intervals with generous rest (e.g. 20s on / 40s off, 8-10 rounds) on bike/rower/walk-run; mobility =
-   hip/knee-friendly flows and holds; never load painful joints. Keep the person's session length.`;
+   hip/knee-friendly flows and holds; never load painful joints. Keep the person's session length.
+   Use training_state to pick tomorrow's focus: muscles with the most days_since_trained and the fewest hard sets this week
+   first, respect 48-72 h recovery, and lower the dose when readiness is poor. In "why", name the numbers that decided it.` + SCIENCE;
 const DAYPLAN_SCHEMA = {
   type: 'object', properties: {
     review: { type: 'string' },
@@ -370,8 +425,8 @@ Deno.serve(async req => {
     if (action === 'coach') {
       const messages = (Array.isArray(b.messages) ? b.messages : []).slice(-20) as Msg[];
       if (!messages.length) return json({ error: 'No messages' }, 400);
-      const ctx = b.context ? `\n\nContext (JSON):\n${JSON.stringify(b.context).slice(0, 20000)}` : '';
-      const reply = await claude(COACH_SYSTEM + ctx, messages, 3000);
+      const ctx = b.context ? `\n\nContext (JSON):\n${coachCtx(b.context, 40000)}` : '';
+      const reply = await claude(COACH_SYSTEM + ctx, messages, 3000, COACH_MODEL);
       return json({ reply });
     }
     if (action === 'reflect') {
@@ -425,9 +480,9 @@ Deno.serve(async req => {
       const library = (Array.isArray(b.library) ? b.library : []).filter(x => x && typeof x.id === 'string' && typeof x.name === 'string').slice(0, 200) as { id: string; name: string }[];
       const units = b.units === 'kg' ? 'kg' : 'lb';
       const answers = b.answers && typeof b.answers === 'object' ? b.answers as Record<string, string> : null;
-      const ctx = JSON.stringify(b.context ?? {}).slice(0, 24000);
+      const ctx = coachCtx(b.context ?? {}, 40000);
       const r = await claudeJson<Record<string, unknown>>(DAYPLAN_SYSTEM,
-        [{ role: 'user', content: `Units: ${units}\n\nLibrary (id — name):\n${library.map(x => `${x.id} — ${x.name}`).join('\n')}\n\n${answers ? `My answers to your questions: ${JSON.stringify(answers)}\n\n` : ''}Planner (JSON):\n${ctx}` }], DAYPLAN_SCHEMA, 4000);
+        [{ role: 'user', content: `Units: ${units}\n\nLibrary (id — name):\n${library.map(x => `${x.id} — ${x.name}`).join('\n')}\n\n${answers ? `My answers to your questions: ${JSON.stringify(answers)}\n\n` : ''}Planner (JSON):\n${ctx}` }], DAYPLAN_SCHEMA, 4000, COACH_MODEL);
       // the model has answered with the tool's XML as a string once; a tomorrow that isn't a session with exercises is dropped
       const t = r.tomorrow as { exercises?: unknown } | string | null | undefined;
       if (!t || typeof t !== 'object' || !Array.isArray(t.exercises) || !t.exercises.length) r.tomorrow = null;

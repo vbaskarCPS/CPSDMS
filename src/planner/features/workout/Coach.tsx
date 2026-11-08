@@ -78,7 +78,7 @@ export function Coach({ pass }: { pass: PlannerPass }) {
   };
 
   const [life, setLife] = useState<LifeContext | null>(null);
-  const refreshLife = () => lifeContext(units).then(setLife).catch(() => undefined);
+  const refreshLife = () => lifeContext(units).then(l => { setLife(l); return l; }).catch(() => null);
   useEffect(() => { void refreshLife(); }, [units]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     void getDoc<CoachChat>('coachchat', 'current').then(d => setMsgs(d?.messages || []));
@@ -94,8 +94,8 @@ export function Coach({ pass }: { pass: PlannerPass }) {
     const next = [...msgs, { role: 'user' as const, content, at: new Date().toISOString() }];
     setMsgs(next); setBusy(true);
     try {
-      await refreshLife();   // whatever changed since the page opened (a set logged, a meal, a tick)
-      const reply = await coach(next.slice(-20).map(m => ({ role: m.role, content: m.content }) as ChatMessage), life);
+      const fresh = (await refreshLife()) || life;   // whatever changed since the page opened (a set logged, a meal, a tick)
+      const reply = await coach(next.slice(-20).map(m => ({ role: m.role, content: m.content }) as ChatMessage), fresh);
       const done = [...next, { role: 'assistant' as const, content: reply, at: new Date().toISOString() }].slice(-40);
       setMsgs(done); void putDoc('coachchat', 'current', { messages: done });
     } catch (e) { setErr(e instanceof Error ? e.message : 'Coach Claude is unavailable right now.'); }

@@ -6,6 +6,9 @@ import { dayKey, getDocs } from './docs';
 import { loadRoutine, blocks } from './routine';
 import { memoryContext } from './memory';
 import { eventsOn, type CalEvent } from '../features/calendar/types';
+import { trainingState, type MealLite } from '../features/workout/trainingState';
+import { LIBRARY } from '../features/workout/library';
+import type { Exercise, Workout } from '../features/workout/types';
 
 const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return dayKey(d); };
 const daysAhead = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
@@ -20,7 +23,7 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
   const { workoutsDays = 28, fullSessions = 6, daysBack = 7 } = opts;
   const today = dayKey();
   const routine = await loadRoutine();
-  const [memory, days, habits, habitLogs, meals, workouts, templates, events, weights, periods, cycleLogs] = await Promise.all([
+  const [memory, days, habits, habitLogs, meals, workouts, templates, events, weights, periods, cycleLogs, customEx, targets, sleepDays, longWorkouts] = await Promise.all([
     memoryContext(),
     getDocs<AnyDoc>('day', daysAgo(daysBack), today).catch(() => []),
     getDocs<AnyDoc>('habit').catch(() => []),
@@ -32,6 +35,10 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
     getDocs<AnyDoc>('bodyweight', daysAgo(90)).catch(() => []),
     routine.profile === 'morning' ? getDocs<AnyDoc>('period').catch(() => []) : Promise.resolve([]),
     routine.profile === 'morning' ? getDocs<AnyDoc>('cyclelog', daysAgo(45), today).catch(() => []) : Promise.resolve([]),
+    getDocs<Exercise>('exercise').catch(() => []),
+    getDocs<AnyDoc>('foodprefs', 'targets', 'targets').catch(() => []),
+    getDocs<AnyDoc>('day', daysAgo(8), today).catch(() => []),
+    getDocs<Workout>('workout', daysAgo(56), `${today}~￿`).catch(() => []),
   ]);
 
   const habitNames: Record<string, string> = {};
@@ -47,6 +54,18 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
     : { date: w.date, name: w.name, exercises: (w.exercises || []).map((e: AnyDoc) => `${e.name}: ${(e.sets || []).filter((s: AnyDoc) => s.done).map(fmtSet).join(', ')}${e.comment ? ` ("${e.comment}")` : ''}`) });
   const inProgress = workouts.map(d => d.data).find(w => w && !w.endedAt && !w.discarded);
 
+  // the coach's worked-out numbers: recovery, load per muscle, progress, pain notes (features/workout/trainingState.ts)
+  let training_state: unknown;
+  try {
+    const t = targets[0]?.data as { protein?: number; kcal?: number } | undefined;
+    const bw = weights.map(d => d.data?.weight).filter((x: unknown) => typeof x === 'number' && x > 0).pop();
+    training_state = trainingState({
+      today, units, workouts: longWorkouts.map(d => d.data).filter(Boolean), exercises: [...LIBRARY, ...customEx.map(d => d.data).filter(Boolean)],
+      days: sleepDays.map(d => ({ date: d.key, ticks: d.data?.ticks })), meals: meals.map(d => d.data).filter(Boolean) as MealLite[],
+      proteinTarget: t?.protein, kcalTarget: t?.kcal, bodyWeight: bw,
+    });
+  } catch { training_state = undefined; }
+
   return {
     today, weekday: new Date().toLocaleDateString([], { weekday: 'long' }), units,
     now: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -59,6 +78,7 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
     calendar_next_14_days: (() => { const evs = events.map(d => d.data as CalEvent).filter(e => e && e.title); const out: Record<string, string[]> = {}; for (let i = 0; i < 14; i++) { const date = calDate(i); const on = eventsOn(evs, date); if (on.length) out[date] = on.map(e => `${e.time ? e.time + ' ' : 'all day: '}${e.title} (${e.who})`); } return out; })(),
     workout_templates: templates.map(d => d.data).filter(t => t && !t.archived).map((t: AnyDoc) => ({ name: t.name, days: t.days, planned_for_date: t.plannedFor, focus: t.focus, minutes: t.minutes, exercises: (t.exercises || []).map((e: AnyDoc) => `${e.name} ${e.targetSets}x${e.targetReps || e.targetSec + 's'}`) })),
     workout_in_progress: inProgress ? { name: inProgress.name, started: inProgress.startedAt, exercises: (inProgress.exercises || []).map((e: AnyDoc) => ({ name: e.name, sets: (e.sets || []).map((s: AnyDoc) => `${fmtSet(s)}${s.done ? '' : ' (not done)'}`), my_note: e.comment || undefined })) } : undefined,
+    training_state,
     workouts_recent_full_then_condensed: sessions,
     body_weight: weights.map(d => ({ date: d.key, weight: d.data?.weight })).filter(x => x.weight > 0).slice(-12),
     cycle: routine.profile === 'morning' ? { periods_recent: periods.map(d => d.data).slice(-6), logs_recent: cycleLogs.map(d => ({ date: d.key, ...(d.data || {}) })) } : undefined,
