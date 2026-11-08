@@ -1250,7 +1250,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
         }
         return {
           num: nums[i], color: ROUTE_COLORS[i % ROUTE_COLORS.length], status: 'pending' as const, selectedWayIds: ids, streetNames: rt.streets,
-          aiNotes: `Auto-built: ${(rt.lengthM / 1000).toFixed(1)} km${rt.mainM ? `, ${(rt.mainM / 1000).toFixed(1)} km of it main road` : ''}`, confidence: 0,
+          aiNotes: `Auto-built: ${(rt.lengthM / 1000).toFixed(1)} km${rt.mainM ? `, ${(rt.mainM / 1000).toFixed(1)} km of it main road` : ''}${rt.homes != null ? `, about ${rt.homes} homes` : ''}`, confidence: 0,
         };
       });
       const reused = new Set(made.map(x => x.num));
@@ -1265,6 +1265,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       setAutoNote(`Auto-built ${made.length} routes from ${km(r.totalM)} km of street (${runsLabel(currentArea.prefix, made.map(x => x.num))})`
         + (r.alreadyMapped ? ` · ${r.alreadyMapped} street pieces left out because ${r.nearbyMaps.length > 1 ? 'the maps next door have' : `${r.nearbyMaps[0] || 'another map'} has`} them` : '')
         + (left ? ` · ${km(left)} km of edge road left to the map next door` : '')
+        + (r.homesKnown ? ` · ${r.homesOnRoutes} addresses on the routes; ${km(r.noHomesM || 0)} km of road with no houses left out` : ' · house data isn\'t available here, so roads with no houses may be on routes')
         + (r.source === 'loaded' ? ' · the street tiles couldn\'t be reached, so it used the roads loaded here' : '')
         + '. Check them, then Approve all and Save.');
     } catch (e) {
