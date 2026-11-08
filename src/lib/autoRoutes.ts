@@ -56,7 +56,8 @@ export interface AutoResult {
 
 const SLACK = 25;          // m: an edge road just outside the line still counts
 // streets with homes on them; a way of any other known class (service roads, paths, ramps…) isn't walked door to door
-const HOMES = new Set(['residential', 'living_street', 'unclassified', 'road']);
+// (unclassified is left out: in the cities it's mostly industrial roads)
+const HOMES = new Set(['residential', 'living_street', 'road']);
 const MAIN_KINDS = new Set(['primary', 'secondary', 'tertiary']);
 const HIGHWAY_KINDS = new Set(['motorway', 'trunk', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
 const SKIP = /\b(trail|path|greenway|walkway|bikeway|dike|dyke|connector|overpass|underpass|ramp|bridge|parking|driveway|access|crossing|sidewalk|alley)\b/i;
@@ -309,7 +310,7 @@ export function autoRoutes(input: AutoInput): AutoResult {
       // and towers with no side streets meeting it isn't walked)
       const cand = new Set<number>();
       for (const j of neighboursOf(m.i, false, true)) { const t = owner.get(j); if (t != null) cand.add(t); }
-      const ok = [...cand].filter(k => mainLen[k] + m.len <= resLen[k] + 300).sort((x, y) => size[x] - size[y]);
+      const ok = [...cand].filter(k => mainLen[k] + m.len <= 0.6 * resLen[k] + 200).sort((x, y) => size[x] - size[y]);
       if (!ok.length) { if (pass < 2) queue.push(m); else notWalked.push(m); continue; }
       const k = ok[0];
       routes[k].add(m.i); owner.set(m.i, k); size[k] += m.len; mainLen[k] += m.len;
