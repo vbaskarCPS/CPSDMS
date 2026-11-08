@@ -104,8 +104,7 @@ export function blocks(r: Routine): Block[] {
   return [
     { id: 'wake', label: 'Up — straight to the gym', at: r.wake, blurb: `by ${clock(hhmm(minutesOf(r.wake) + r.wakeGrace))} counts · no snooze, shoes on, out the door` },
     { id: 'gym', label: 'Gym', at: r.gym, until: planAt(r), blurb: 'log the session · Complete workout' },
-    ...(r.saunaMin ? [{ id: 'sauna' as BlockId, label: 'Sauna', at: saunaAt(r), until: r.review, blurb: `${r.saunaMin} min · yesterday's review, then today's Brief` }] : []),
-    { id: 'night', label: 'Yesterday, looked back', at: planAt(r), blurb: '3 lines · scorecard · from the sauna' },
+    ...(r.saunaMin ? [{ id: 'sauna' as BlockId, label: 'Sauna', at: saunaAt(r), until: r.review, blurb: `${r.saunaMin} min · plan the meals, then today's Brief` }] : []),
     { id: 'brief', label: "Today's Brief", at: planAt(r), until: r.review, blurb: 'one word · 3 must-dos · → today\'s list' },
     { id: 'work', label: 'Tackle the list', at: r.review, blurb: r.fast ? 'today\'s list · fasting: water, black coffee, tea' : 'today\'s list' },
     r.kitchenClose

@@ -1,13 +1,13 @@
-// The 5 am club (night profile): up → gym → sauna (yesterday looked back, today's Brief) → the list → dinner → lights out.
+// The 5 am club (night profile): up → gym → sauna (the meal plan, today's Brief) → the list → dinner → lights out.
 import { describe, expect, it } from 'vitest';
 import { blocks, currentBlock, NIGHT_ROUTINE, MORNING_ROUTINE, planAt } from './routine';
 
 const at = (h: number, m: number) => { const d = new Date(2026, 10, 6, h, m); return d; };
 
 describe('the 5 am club', () => {
-  it('runs gym first, then the sauna for the review and Brief, and nothing at night but lights out', () => {
+  it('runs gym first, then the sauna for the meal plan and Brief, and nothing at night but lights out', () => {
     const b = blocks(NIGHT_ROUTINE).map(x => `${x.at} ${x.id}`);
-    expect(b).toEqual(['05:00 wake', '05:15 gym', '06:20 sauna', '06:20 night', '06:20 brief', '06:45 work', '14:00 kitchen', '21:30 lightsOut']);
+    expect(b).toEqual(['05:00 wake', '05:15 gym', '06:20 sauna', '06:20 brief', '06:45 work', '14:00 kitchen', '21:30 lightsOut']);
     expect(blocks(NIGHT_ROUTINE).some(x => x.id === 'unwind' || x.id === 'windDown' || x.id === 'shake')).toBe(false);
   });
   it('without a sauna, the review and Brief come straight after the gym', () => {
