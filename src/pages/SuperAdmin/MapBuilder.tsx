@@ -1299,7 +1299,8 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       const own = routes.flatMap(linesOf);
       if (!own.length) { setError('This map has no routes to fill around yet.'); return; }
       const pts = own.flat(); const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-      const dLat = 250 / 110540, dLng = 250 / (111320 * Math.cos(ys[0] * Math.PI / 180));
+      // 1.5 km out: the streets near this map's routes (250 m), and its past clients farther out (to 2.5 km)
+      const dLat = 1500 / 110540, dLng = 1500 / (111320 * Math.cos(ys[0] * Math.PI / 180));
       const [w, e, s0, n] = [Math.min(...xs) - dLng, Math.max(...xs) + dLng, Math.min(...ys) - dLat, Math.max(...ys) + dLat];
       const outline: LngLat[] = [[w, s0], [e, s0], [e, n], [w, n]];
       const saved = new Map<string, LngLat[]>();
@@ -1365,6 +1366,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       const km = (m: number) => (m / 1000).toFixed(1);
       const joinedM = [...joins.values()].reduce((t, j) => t + j.m, 0);
       setAutoNote(`Filled the gaps: ${km(r.totalM)} km of street with about ${r.homesOnRoutes ?? '?'} addresses no route had`
+        + (r.pclAway ? ` (and the streets of ${r.pclAway} past clients farther out)` : '')
         + (joins.size ? ` · ${km(joinedM)} km joined ${joins.size} route${joins.size > 1 ? 's' : ''} it touches` : '')
         + (added.length ? ` · ${added.length} new route${added.length > 1 ? 's' : ''} (${runsLabel(currentArea.prefix, added.map(x => x.num))})` : '')
         + '. Check them, then Approve all and Save.');

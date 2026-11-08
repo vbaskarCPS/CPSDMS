@@ -103,6 +103,20 @@ export async function homesFromGeocoder(b: Box): Promise<AutoHome[] | null> {
   } catch { return null; }
 }
 
+/** Past clients (the PCL) in a box: they're houses, whatever the address register says. */
+export async function pclFromClients(b: Box): Promise<AutoHome[]> {
+  const out: AutoHome[] = [];
+  for (let from = 0; from < 20000; from += 1000) {
+    const { data, error } = await supabase.from('clients').select('lat, lng, street_name')
+      .gte('lat', b.s).lte('lat', b.n).gte('lng', b.w).lte('lng', b.e).range(from, from + 999);
+    if (error) break;
+    for (const c of (data || []) as { lat: number | null; lng: number | null; street_name: string | null }[])
+      if (c.lat != null && c.lng != null && c.street_name) out.push({ at: [c.lng, c.lat], street: c.street_name, pcl: true });
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
 /** The outer rings of a map outline (a Polygon or MultiPolygon). */
 const rings = (g: GeoJSON.Geometry | undefined): LngLat[][] =>
   !g ? [] : g.type === 'Polygon' ? [g.coordinates[0] as LngLat[]] : g.type === 'MultiPolygon' ? g.coordinates.map(p => p[0] as LngLat[]) : [];
@@ -122,7 +136,7 @@ export interface AutoBuildArgs {
    *  streets within 250 m of them are looked at. */
   fillAround?: LngLat[][];
 }
-export interface AutoBuildResult extends AutoResult { source: 'tiles' | 'loaded'; nearbyMaps: string[] }
+export interface AutoBuildResult extends AutoResult { source: 'tiles' | 'loaded'; nearbyMaps: string[]; pclAway?: number }
 
 export async function autoBuild(a: AutoBuildArgs): Promise<AutoBuildResult> {
   const box = outlineBox(a.outline, 0.004);
@@ -132,7 +146,8 @@ export async function autoBuild(a: AutoBuildArgs): Promise<AutoBuildResult> {
   if (!ways.length) throw new Error('No streets came back for this area — try again in a moment.');
 
   a.onStep?.('Finding the main roads, the commercial land and the houses…');
-  const [lines, plazas, homes] = await Promise.all([fetchLines(box).catch(() => []), fetchPlazas(box).catch(() => []), homesFromTiles(outlineBox(a.outline, 0.005)).then(h => h || homesFromGeocoder(outlineBox(a.outline, 0.005)))]);
+  const [lines, plazas, homes, pcl] = await Promise.all([fetchLines(box).catch(() => []), fetchPlazas(box).catch(() => []),
+    homesFromTiles(outlineBox(a.outline, 0.005)).then(h => h || homesFromGeocoder(outlineBox(a.outline, 0.005))), pclFromClients(box).catch(() => [] as AutoHome[])]);
   const main = new Map<number, MainKind>();
   for (const l of lines) if (l.kind === 'arterial' || l.kind === 'highway') main.set(l.osm_id, l.kind);
   const exclude = plazas.filter(p => p.kind !== 'building').map(p => p.coordinates as LngLat[]);
@@ -158,7 +173,34 @@ export async function autoBuild(a: AutoBuildArgs): Promise<AutoBuildResult> {
   }
 
   a.onStep?.('Cutting the routes…');
-  const r = autoRoutes({ ways, outline: a.outline, main, exclude, taken, neighbours: [...near.values()].flat(), targetM: a.targetM, homes: homes || undefined,
-    near: a.fillAround ? { lines: a.fillAround, m: 250 } : undefined });
-  return { ...r, source: tileWays && tileWays.length ? 'tiles' : 'loaded', nearbyMaps };
+  // filling gaps: besides the streets near this map's routes, the streets of the past clients that are nearer this map's
+  // routes than any other map's (up to 2.5 km out), so every PCL ends up on a route
+  let nearLines = a.fillAround;
+  let pclOut = 0;
+  if (a.fillAround && pcl.length) {
+    const kx = 111320 * Math.cos(((box.s + box.n) / 2) * Math.PI / 180), ky = 110540;
+    const cell = 300, grid = new Map<string, { own: boolean; a: LngLat; b: LngLat }[]>();
+    const add = (l: LngLat[], own: boolean) => { for (let i = 1; i < l.length; i++) { const c = `${Math.floor(l[i][0] * kx / cell)}:${Math.floor(l[i][1] * ky / cell)}`; const v = grid.get(c); const e = { own, a: l[i - 1], b: l[i] }; if (v) v.push(e); else grid.set(c, [e]); } };
+    a.fillAround.forEach(l => add(l, true)); taken.slice(a.fillAround.length).forEach(l => add(l, false));
+    const sd = (p: LngLat, s: { a: LngLat; b: LngLat }) => {
+      const px = p[0] * kx, py = p[1] * ky, ax = s.a[0] * kx, ay = s.a[1] * ky, bx = s.b[0] * kx, by = s.b[1] * ky;
+      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy; const t = L2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L2)) : 0;
+      return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+    };
+    const extra: LngLat[][] = [];
+    for (const h of pcl) {
+      const cx = Math.floor(h.at[0] * kx / cell), cy = Math.floor(h.at[1] * ky / cell);
+      let own = Infinity, other = Infinity;
+      for (let r = 0; r <= 9 && Math.min(own, other) > r * cell - cell; r++)
+        for (let i = cx - r; i <= cx + r; i++) for (let j = cy - r; j <= cy + r; j++) {
+          if (Math.max(Math.abs(i - cx), Math.abs(j - cy)) !== r) continue;
+          for (const s of grid.get(`${i}:${j}`) || []) { const d = sd(h.at, s); if (s.own) own = Math.min(own, d); else other = Math.min(other, d); }
+        }
+      if (own <= other && own > 60 && own <= 2500) { extra.push([h.at, h.at]); pclOut++; }
+    }
+    nearLines = [...a.fillAround, ...extra];
+  }
+  const r = autoRoutes({ ways, outline: a.outline, main, exclude, taken, neighbours: [...near.values()].flat(), targetM: a.targetM,
+    homes: [...(homes || []), ...pcl], near: nearLines ? { lines: nearLines, m: 250 } : undefined });
+  return { ...r, source: tileWays && tileWays.length ? 'tiles' : 'loaded', nearbyMaps, pclAway: pclOut };
 }

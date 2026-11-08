@@ -28,7 +28,8 @@ export type LngLat = [number, number];
 /** kind: OpenStreetMap's highway class when known (the published street tiles carry it). */
 export interface AutoWay { id: number; name: string; unnamed?: boolean; kind?: string; geometry: LngLat[] }
 /** A civic address: where it is, the street it's on (any spelling: "Avon|Pl|", "Avon Place"), the units at it. */
-export interface AutoHome { at: LngLat; street: string; units?: number }
+/** pcl: a past client (it makes its street one with houses, but isn't counted again as a door). */
+export interface AutoHome { at: LngLat; street: string; units?: number; pcl?: boolean }
 export type MainKind = 'arterial' | 'highway';
 export interface AutoInput {
   ways: AutoWay[];
@@ -111,6 +112,8 @@ interface Piece {
   parts: { wayId: number; ll: LngLat[]; len: number }[];
   /** Civic addresses on it, the doors they make, and where they are. */
   homes?: number; doors?: number; homeXY?: XY[];
+  /** An unclassified road (walked only for the houses on it). */
+  uncl?: boolean;
 }
 
 // ───────────── geometry (metres, on a flat patch around the map) ─────────────
@@ -224,8 +227,14 @@ export function autoRoutes(input: AutoInput): AutoResult {
   let alreadyMapped = 0, notResidential = 0;
   const nearGrid = input.near ? new SegGrid(Math.max(60, input.near.m)) : null;
   for (const l of input.near?.lines || []) { const xy = l.map(P.xy); for (let k = 1; k < xy.length; k++) nearGrid!.add(xy[k - 1], xy[k]); }
-  const nearEnough = (l: XY[]) => !nearGrid || [l[0], along(l, 0.5), l[l.length - 1]].some(p => nearGrid.near(p, input.near!.m));
-  const kept: { w: AutoWay; name: string; isMain: boolean; xy: XY[] }[] = [];
+  // a long piece is looked at every 40 m along it (a past client near the middle of a long road counts)
+  const nearEnough = (l: XY[]) => {
+    if (!nearGrid) return true;
+    const n = Math.max(2, Math.ceil(lineLen(l) / 40));
+    for (let t = 0; t <= n; t++) if (nearGrid.near(along(l, t / n), input.near!.m)) return true;
+    return false;
+  };
+  const kept: { w: AutoWay; name: string; isMain: boolean; xy: XY[]; uncl?: boolean }[] = [];
   const seenWay = new Set<number>();
   for (const w of input.ways) {
     if (seenWay.has(w.id) || w.geometry.length < 2) continue;
@@ -234,17 +243,19 @@ export function autoRoutes(input: AutoInput): AutoResult {
     const kind: MainKind | undefined = input.main.get(w.id) ?? (w.kind && HIGHWAY_KINDS.has(w.kind) ? 'highway' : w.kind && MAIN_KINDS.has(w.kind) ? 'arterial' : undefined);
     if (kind === 'highway' || w.unnamed || !name) continue;
     const isMain = kind === 'arterial';
-    if (!isMain && (SKIP.test(name) || (w.kind && !HOMES.has(w.kind)))) continue;
+    // unclassified roads (country roads, and industrial roads in town) are walked only where houses are known to be on them
+    const uncl = w.kind === 'unclassified' && !!input.homes?.length;
+    if (!isMain && (SKIP.test(name) || (w.kind && !HOMES.has(w.kind) && !uncl))) continue;
     const gxy = w.geometry.map(P.xy);
     if (!gxy.some(near) && !crossesRing(gxy, ring)) continue;     // nowhere near the outline
-    kept.push({ w, name, isMain, xy: gxy });
+    kept.push({ w, name, isMain, xy: gxy, uncl: !isMain && w.kind === 'unclassified' });
   }
   const use = new Map<string, number>();
   for (const { w } of kept) for (const p of new Set(w.geometry.map(key))) use.set(p, (use.get(p) || 0) + 1);
-  interface Raw { wayId: number; name: string; main: boolean; ll: LngLat[]; xy: XY[]; len: number; a: string; b: string }
+  interface Raw { wayId: number; name: string; main: boolean; ll: LngLat[]; xy: XY[]; len: number; a: string; b: string; uncl?: boolean }
   const raws: Raw[] = [];
   let clipN = 0;
-  for (const { w, name, isMain } of kept) {
+  for (const { w, name, isMain, uncl } of kept) {
     const g = w.geometry;
     const corner = (p: LngLat) => (use.get(key(p)) || 0) > 1;
     let cur: LngLat[] = [g[0]];
@@ -271,7 +282,7 @@ export function autoRoutes(input: AutoInput): AutoResult {
             const cutEnd = a0.startsWith('clip:') || b0.startsWith('clip:') || t0 > 0 || t1 < n;
             const part = t0 === 0 && t1 === n ? xy : slice(xy, d0, d1);
             if (d1 - d0 >= (cutEnd ? 40 : 12) && nearEnough(part)) {
-              raws.push({ wayId: w.id, name, main: isMain, xy: part, ll: t0 === 0 && t1 === n ? run : part.map(P.ll), len: lineLen(part),
+              raws.push({ wayId: w.id, name, main: isMain, uncl, xy: part, ll: t0 === 0 && t1 === n ? run : part.map(P.ll), len: lineLen(part),
                 a: t0 === 0 ? a0 : `clip:${clipN++}`, b: t1 === n ? b0 : `clip:${clipN++}` });
             }
             t0 = -1;
@@ -309,7 +320,7 @@ export function autoRoutes(input: AutoInput): AutoResult {
     const samples = [0.15, 0.35, 0.5, 0.65, 0.85].map(f => along(longest.xy, f));
     if (!rs[0].main && excl.length && samples.filter(inExcluded).length >= 3) { notResidential++; continue; }
     if (rs[0].main) for (const r of rs) { mainNodes.add(r.a); mainNodes.add(r.b); }
-    pieces.push({ i: pieces.length, wayId: rs[0].wayId, name: rs[0].name, main: rs[0].main, ll: rs.flatMap(r => r.ll), xy, len, a, b,
+    pieces.push({ i: pieces.length, wayId: rs[0].wayId, name: rs[0].name, main: rs[0].main, uncl: rs.every(r => r.uncl), ll: rs.flatMap(r => r.ll), xy, len, a, b,
       mid: along(longest.xy, 0.5), samples: [...rs.flatMap(r => [r.xy[0], r.xy[r.xy.length - 1]]), ...samples], parts: rs.map(r => ({ wayId: r.wayId, ll: r.ll, len: r.len })) });
   }
   // houses: each address to the nearest stretch of its own street (within 200 m: big lots set the house well back),
@@ -340,7 +351,7 @@ export function autoRoutes(input: AutoInput): AutoResult {
         const whole = Math.min(...(ways.get(keys[best].full) || []).map(l => lineD(xy, l)));
         if (whole < bd - 25) continue;
         pieces[best].homes = (pieces[best].homes || 0) + 1;
-        pieces[best].doors = (pieces[best].doors || 0) + Math.max(1, Math.min(h.units || 0, 60));
+        if (!h.pcl) pieces[best].doors = (pieces[best].doors || 0) + Math.max(1, Math.min(h.units || 0, 60));
         (pieces[best].homeXY ||= []).push(xy);
         got++;
       }
@@ -351,6 +362,15 @@ export function autoRoutes(input: AutoInput): AutoResult {
   const bare = (p: Piece) => homesKnown && !p.homes && p.len >= 40;
   // a dead end with no houses isn't walked (one a route walks through to reach its houses stays, for now)
   let noHomesM = 0;
+  // an unclassified road with no house on it (or with the houses unknown) isn't a street to walk
+  {
+    const gone = pieces.filter(p => p.uncl && (!homesKnown || !p.homes));
+    if (gone.length) {
+      noHomesM += gone.reduce((t, p) => t + p.len, 0);
+      const g = new Set(gone); pieces = pieces.filter(p => !g.has(p));
+      pieces.forEach((p, i) => { p.i = i; });
+    }
+  }
   if (homesKnown) {
     for (;;) {
       const deg = new Map<string, number>();
