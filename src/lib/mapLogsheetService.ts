@@ -1194,7 +1194,8 @@ export async function fillRouteGaps(
   try {
     let current = houses ? houses.filter(h => h.routeCode === rc) : await fetchRouteHouses([rc]);
     if (!current.length && !opts?.fromScratch) return null;   // route not built yet — the builder handles it
-    const checked = new Set((await fetchStreetChecks([rc])).map(c => c.streetNorm));
+    // a street whose look-up never finished (or was reopened) is tried again; claim_street_check stops two devices at once
+    const checked = new Set((await fetchStreetChecks([rc])).filter(c => c.checkedAt).map(c => c.streetNorm));
     let todo = routeStreetGaps(rm, current).filter(g => !checked.has(g.norm));
     if (!todo.length) return null;
     let changed = false;
