@@ -1329,7 +1329,8 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       for (const rt of r.routes) {
         const ids: number[] = [];
         for (const p of rt.pieces) { const way: OsmWay = { id: splitCounterRef.current++, rootId: p.wayId, name: p.name, unnamed: false, geometry: p.geometry }; synth.push(way); ids.push(way.id); }
-        // the existing route it touches (within 40 m) most
+        // the existing route it touches (within 40 m) most; a short one that touches none joins the nearest route
+        // within 200 m (no stub routes), and a scrap under 300 m with none near is left out
         let best = { num: -1, hits: 0 };
         if (rt.lengthM < 1500) {
           for (const ex of existing) {
@@ -1337,6 +1338,12 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
             for (const p of rt.pieces) for (const q of [p.geometry[0], p.geometry[p.geometry.length - 1]]) if (ex.lines.some(l => lineD(q, l) <= 40)) hits++;
             if (hits > best.hits) best = { num: ex.num, hits };
           }
+        }
+        if (best.num < 0 && rt.lengthM < 800) {
+          let near = { num: -1, d: 200 };
+          for (const ex of existing) for (const p of rt.pieces) for (const q of [p.geometry[0], p.geometry[p.geometry.length - 1]]) for (const l of ex.lines) { const d = lineD(q, l); if (d < near.d) near = { num: ex.num, d }; }
+          if (near.num >= 0) best = { num: near.num, hits: 1 };
+          else if (rt.lengthM < 300) continue;
         }
         if (best.num >= 0) {
           const j = joins.get(best.num) || { ids: [], names: [], m: 0, homes: 0 };
