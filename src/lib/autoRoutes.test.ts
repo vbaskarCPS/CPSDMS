@@ -1,6 +1,6 @@
 // Map Builder › Auto-build: the route cutter on a made-up grid of streets.
 import { describe, expect, it } from 'vitest';
-import { autoRoutes, type AutoWay, type LngLat, type MainKind } from './autoRoutes';
+import { autoRoutes, streetKey, type AutoHome, type AutoWay, type LngLat, type MainKind } from './autoRoutes';
 
 // a flat patch near Port Coquitlam: metres → [lng, lat]
 const LAT0 = 49.27, LNG0 = -122.75;
@@ -138,5 +138,34 @@ describe('autoRoutes keeps streets whole', () => {
     expect(len).toBeGreaterThan(560);
     expect(len).toBeLessThan(640);
     expect(r.alreadyMapped).toBe(1);
+  });
+});
+
+describe('autoRoutes with the houses known', () => {
+  it('leaves out a main road with no houses on it, and a dead end with none', () => {
+    const { ways, main } = grid(1000, 500);
+    for (const w of ways) w.kind = 'residential';
+    ways.push({ id: 950, name: 'Empty Close', kind: 'residential', geometry: [at(1000, 300), at(1150, 300)] });
+    const homes: AutoHome[] = [];
+    // a house every 20 m along every street but the main road and the close
+    for (const w of ways) {
+      if (w.name === 'Main Street' || w.name === 'Empty Close') continue;
+      const [a, b] = [w.geometry[0], w.geometry[w.geometry.length - 1]];
+      for (let f = 0.02; f < 1; f += 0.02) homes.push({ at: [a[0] + (b[0] - a[0]) * f + 0.00012, a[1] + (b[1] - a[1]) * f + 0.00012], street: w.name.replace('Street', 'St').replace('Avenue', 'Ave') });
+    }
+    const r = autoRoutes({ ways, main, outline: square(-10, -10, 1200, 1010), homes });
+    expect(r.homesKnown).toBe(true);
+    const names = new Set(r.routes.flatMap(rt => rt.pieces.map(p => p.name)));
+    expect(names.has('Main Street')).toBe(false);
+    expect(names.has('Empty Close')).toBe(false);
+    expect(names.has('3 Street')).toBe(true);
+    expect(r.routes.every(rt => (rt.homes || 0) > 0)).toBe(true);
+    expect(r.noHomesM).toBeGreaterThan(900);
+  });
+
+  it('knows a street however it is spelled', () => {
+    expect(streetKey('Lúrio Crescent').full).toBe(streetKey('Lurio|Cres|').full);
+    expect(streetKey('East 10th Avenue').full).toBe(streetKey('10th|Ave|E').full);
+    expect(streetKey('Thames Close').full).not.toBe(streetKey('Thames Crescent').full);
   });
 });
