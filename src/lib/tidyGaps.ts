@@ -5,7 +5,8 @@
 // from the master map, or Auto-built) exactly as they are, takes every street the Gap fill routes have, and:
 //   - splits them into the patches that touch each other (streets that share a corner);
 //   - a small patch (a cul-de-sac, a block or two) that touches one of the map's own routes joins it;
-//   - a bigger patch is cut into compact routes by the route cutter (src/lib/autoRoutes.ts), each in one piece;
+//   - the rest go together where they're within 80 m (two patches either side of a street another route walks), and a
+//     cluster over a route long is cut into compact routes by the route cutter (src/lib/autoRoutes.ts);
 //   - nothing is left out: every street that was on a Gap fill route ends up on a route.
 import { autoRoutes, type LngLat } from './autoRoutes';
 
@@ -71,22 +72,48 @@ export function tidyGaps(input: TidyIn): TidyGroup[] {
     const pieces = ids.map(i => ({ wayId: gaps[i].id, name: gaps[i].name, geometry: gaps[i].geometry }));
     return { joinTo, pieces, lengthM: Math.round(pieces.reduce((t, p) => t + len(p.geometry), 0)), streets: [...new Set(pieces.map(p => p.name))].sort() };
   };
+  const T = input.targetM ?? 2700;
+  const patchLen = (ids: number[]) => ids.reduce((t, i) => t + len(gaps[i].geometry), 0);
+  // the own route a patch's ends touch most (within 40 m)
+  const touching = (ids: number[]) => {
+    const hits = new Map<number, number>();
+    for (const i of ids) { const g = gaps[i].geometry; for (const p of [g[0], g[g.length - 1]]) { const n = nearest(xy(p), 40); if (n.num >= 0) hits.set(n.num, (hits.get(n.num) || 0) + 1); } }
+    return [...hits.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  };
+  const nearestOwn = (ids: number[], within: number) => {
+    let best = { num: -1, d: within };
+    for (const i of ids) for (const p of gaps[i].geometry) { const n = nearest(xy(p), best.d); if (n.num >= 0 && n.d < best.d) best = n; }
+    return best.num >= 0 ? best.num : undefined;
+  };
+  // 1. a small patch that touches an own route joins it
+  const loose: number[][] = [];
   for (const ids of patches.values()) {
-    const L = ids.reduce((t, i) => t + len(gaps[i].geometry), 0);
-    if (L < JOIN) {
-      // the own route its ends touch most (within 40 m); a scrap that touches none joins the nearest within 300 m
-      const hits = new Map<number, number>();
-      for (const i of ids) { const g = gaps[i].geometry; for (const p of [g[0], g[g.length - 1]]) { const n = nearest(xy(p), 40); if (n.num >= 0) hits.set(n.num, (hits.get(n.num) || 0) + 1); } }
-      let to = [...hits.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-      if (to == null) {
-        let best = { num: -1, d: 300 };
-        for (const i of ids) for (const p of gaps[i].geometry) { const n = nearest(xy(p), best.d); if (n.num >= 0 && n.d < best.d) best = n; }
-        if (best.num >= 0) to = best.num;
-      }
-      if (to != null) { out.push(group(ids, to)); continue; }
-    }
-    if (L < 1.3 * (input.targetM ?? 2700)) { out.push(group(ids)); continue; }
-    // a big patch: cut into compact routes, each in one piece
+    const to = patchLen(ids) < JOIN ? touching(ids) : undefined;
+    if (to != null) out.push(group(ids, to)); else loose.push(ids);
+  }
+  // 2. the rest, in clusters: patches within 80 m of each other (across a street another route walks) go together
+  const samples = loose.map(ids => ids.flatMap(i => { const g = gaps[i].geometry.map(xy); const pts: XY[] = [];
+    for (let k = 1; k < g.length; k++) { const d = Math.hypot(g[k][0] - g[k - 1][0], g[k][1] - g[k - 1][1]); const n = Math.max(1, Math.ceil(d / 25));
+      for (let t = 0; t < n; t++) pts.push([g[k - 1][0] + (g[k][0] - g[k - 1][0]) * t / n, g[k - 1][1] + (g[k][1] - g[k - 1][1]) * t / n]); }
+    pts.push(g[g.length - 1]); return pts; }));
+  const NEAR = 80;
+  const sg = new Map<string, number[]>();
+  samples.forEach((pts, k) => { for (const p of pts) { const c = `${Math.floor(p[0] / NEAR)}:${Math.floor(p[1] / NEAR)}`; const v = sg.get(c); if (!v) sg.set(c, [k]); else if (v[v.length - 1] !== k) v.push(k); } });
+  const cp = loose.map((_, k) => k);
+  const cf = (k: number): number => (cp[k] === k ? k : (cp[k] = cf(cp[k])));
+  samples.forEach((pts, k) => { for (const p of pts) { const cx = Math.floor(p[0] / NEAR), cy = Math.floor(p[1] / NEAR);
+    for (let x = cx - 1; x <= cx + 1; x++) for (let y = cy - 1; y <= cy + 1; y++) for (const j of sg.get(`${x}:${y}`) || []) {
+      if (j === k || cf(j) === cf(k)) continue;
+      if (samples[j].some(q => Math.hypot(q[0] - p[0], q[1] - p[1]) <= NEAR)) cp[cf(j)] = cf(k);
+    } } });
+  const clusters = new Map<number, number[]>();
+  loose.forEach((ids, k) => { const r = cf(k); const v = clusters.get(r); if (v) v.push(...ids); else clusters.set(r, [...ids]); });
+  for (const ids of clusters.values()) {
+    const L = patchLen(ids);
+    // a scrap on its own (nothing else near) joins the nearest own route within 300 m
+    if (L < 300) { const to = nearestOwn(ids, 300); if (to != null) { out.push(group(ids, to)); continue; } }
+    if (L < 1.3 * T) { out.push(group(ids)); continue; }
+    // a big cluster: cut into compact routes
     const pts = ids.flatMap(i => gaps[i].geometry);
     const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
     const [w, e, s, n] = [Math.min(...xs) - 0.003, Math.max(...xs) + 0.003, Math.min(...ys) - 0.002, Math.max(...ys) + 0.002];
