@@ -23,20 +23,29 @@ REGIONS = [
 ]
 
 lock = threading.Lock()
-stats = {'calls': 0, 'retries': 0, 'split': 0}
+stats = {'calls': 0, 'retries': 0, 'split': 0, 'failed': 0}
+failed = []
 
 
 def get(s, w, n, e):
+    """The sites in a box; None when the geocoder keeps refusing (the box is listed in index.json as missing)."""
     url = f'{API}?bbox={w:.6f},{s:.6f},{e:.6f},{n:.6f}&maxResults={CAP}&outputSRS=4326'
-    for k in range(8):
+    for k in range(12):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'cpsdms-homes-data'}), timeout=60) as r:
-                with lock: stats['calls'] += 1
+                with lock:
+                    stats['calls'] += 1
+                    if stats['calls'] % 200 == 0: print(f"    {stats}", flush=True)
                 return json.load(r).get('features') or []
-        except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError):
-            with lock: stats['retries'] += 1
-            time.sleep(min(60, 2 ** k))
-    raise RuntimeError(f'geocoder kept failing for {url}')
+        except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError, OSError) as ex:
+            with lock:
+                stats['retries'] += 1
+                if stats['retries'] % 50 == 1: print(f'    retrying ({ex})', flush=True)
+            time.sleep(min(30, 1.5 ** k))
+    with lock:
+        stats['failed'] += 1
+        failed.append([s, w, n, e])
+    return None
 
 
 def fetch_all():
@@ -51,11 +60,12 @@ def fetch_all():
                 j += START
             i += START
     print(f'{len(boxes)} boxes to start', flush=True)
-    with ThreadPoolExecutor(6) as pool:
+    with ThreadPoolExecutor(3) as pool:
         while boxes:
             results = list(pool.map(lambda b: (b, get(*b[:4])), boxes))
             boxes = []
             for (s, w, n, e, d), f in results:
+                if f is None: continue
                 if len(f) >= CAP and d < 14:
                     my, mx = (s + n) / 2, (w + e) / 2
                     boxes += [(s, w, my, mx, d + 1), (s, mx, my, e, d + 1), (my, w, n, mx, d + 1), (my, mx, n, e, d + 1)]
@@ -95,7 +105,7 @@ def cmd_fetch(out):
             json.dump({'streets': names, 'h': [[r[0], r[1], ix[r[2]], r[3], r[4]] for r in rows]}, f, separators=(',', ':'))
     with open(f'{out}/index.json', 'w') as f:
         json.dump({'made': time.strftime('%Y-%m-%d'), 'tile': TILE, 'regions': REGIONS, 'tiles': sorted(tiles),
-                   'addresses': len(civ), 'sites': len(sites)}, f)
+                   'addresses': len(civ), 'sites': len(sites), 'missing': failed}, f)
     print(f"{len(sites)} sites → {len(civ)} civic addresses in {len(tiles)} tiles · {stats} · {time.time() - t0:.0f}s")
 
 
