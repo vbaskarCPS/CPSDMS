@@ -20,7 +20,7 @@ const STEPS: Step[] = [
   { to: '/food', title: 'Food', secs: 18, text: "The fast runs to dinner; after that, a photo of the plate becomes calories and protein with a confidence level. Targets, favourites and the late shake all count toward the day." },
   { to: '/calendar', title: 'A shared calendar', secs: 14, text: "One calendar for Vijay and Rosh — Kiaan's swim lesson, dinner at Mum's, repeating gym nights — visible from both planners and on the Today page when something's coming up." },
   { to: '/shop', title: 'Shopping, organised by the flyers', secs: 22, text: "Either of you adds to the list; the planner checks this week's flyers for the stores nearby and sorts the list by where each thing is cheapest — or the everyday price when nothing's on sale. Switch to By section to walk the store, or let it pick the best single trip. The grocers with no flyer get Coach Claude's suggestions instead." },
-  { to: '/plan/sauna', title: 'The sauna', secs: 20, text: "Straight from the gym: a sauna timer with yesterday looked back, the road to 180 g protein (two meals and a couple of shakes, eaten by 2 pm), and today's Brief, which becomes the to-do list." },
+  { to: '/plan/sauna', title: 'The sauna', secs: 20, text: "Straight from the gym: a sauna timer, the day's meal plan (the road to 180 g protein: two meals and a couple of shakes, eaten by 2 pm), then today's Brief, which becomes the to-do list." },
   { to: '/settings', title: 'It gets to know you', secs: 18, text: "Settings hold the routine times and the reminders — and 'Tell Coach Claude', notes it keeps for good: the day you started, how you train, what hurts. That's the planner. Open yours, or start the tour again." },
 ];
 
