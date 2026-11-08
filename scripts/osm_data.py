@@ -19,7 +19,7 @@ BOXES = {
         '-119.75,49.40,-119.45,49.60',   # Penticton
         '-120.60,50.60,-120.15,50.80',   # Kamloops
         '-122.90,53.80,-122.65,54.00',   # Prince George
-        '-123.25,49.65,-123.05,49.80',   # Squamish
+        '-123.30,49.60,-123.00,49.90',   # Squamish (whole 0.1° tiles: Valleycliffe, Garibaldi Highlands, Brackendale)
     ],
     'ontario': [
         '-80.70,42.80,-78.50,44.45',     # GTA, Hamilton, Niagara, Durham, York, Halton, Peel, south Simcoe
