@@ -1,6 +1,7 @@
 // src/planner/features/cycle/useCycle.ts — periods, prefs and the logged days in one load.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { calendarKey, getDoc, getDocs, putDoc } from '../../lib/docs';
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { DEFAULT_PREFS, type CyclePrefs, type DayLog, type Period } from './types';
 import { marksFor, projections, stats, today as todayView } from './predict';
 import { addDays } from './dates';
@@ -27,6 +28,7 @@ export function useCycle() {
     } finally { setLoading(false); }
   }, [todayKey]);
   useEffect(() => { void reload(); }, [reload]);
+  useDocsChanged(['period', 'cyclelog', 'cycleprefs'], () => { void reload(); });
 
   const view = useMemo(() => todayView(periods, prefs, todayKey), [periods, prefs, todayKey]);
   const st = useMemo(() => stats(periods, prefs), [periods, prefs]);

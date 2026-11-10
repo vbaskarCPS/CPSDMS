@@ -29,7 +29,7 @@ function useDay(day: string) {
     } finally { setLoading(false); }
   }, [day]);
   useEffect(() => { void reload(); }, [reload]);
-  useDocsChanged(['meal'], () => { void reload(); });
+  useDocsChanged(['meal', 'foodprefs'], () => { void reload(); });
   const totals: Totals = round(meals.reduce((t, m) => addTotals(t, m.totals), { ...ZERO }));
   return { meals, targets, totals, loading, reload };
 }

@@ -7,6 +7,7 @@ const store = new Map<string, unknown>();
 const k = (kind: string, key: string) => `${kind}|${key}`;
 vi.mock('../../lib/docs', () => ({
   dayKey: () => '2026-11-10',
+  calendarKey: () => '2026-11-10',
   docsChanged: vi.fn(),
   getDoc: async (kind: string, key: string) => structuredClone(store.get(k(kind, key)) ?? null),
   getDocs: async (kind: string, from?: string, to?: string) => [...store.entries()]
@@ -28,13 +29,16 @@ beforeEach(() => {
   store.set('day|2026-11-10', { todos: [{ id: 't1', text: 'Call the bank', done: false, from: 'me' }, { id: 't2', text: 'Email the bank about the mortgage', done: false, from: 'me' }] });
   store.set('shop|s1', { id: 's1', text: 'Milk', done: false, addedAt: '2026-11-01', by: 'vijay' });
   store.set('habit|h1', { id: 'h1', name: 'Read 10 pages', days: [], createdAt: '2026-01-01' });
+  store.set('favmeal|f1', { id: 'f1', name: 'Protein shake', items: [], totals: { kcal: 250, protein: 40, carbs: 10, fat: 4 }, uses: 3, lastUsed: '2026-11-01' });
+  store.set('budget|current', { Groceries: 650 });
+  store.set('period|2026-10-15', { start: '2026-10-15', end: '2026-10-19', source: 'app' });
   store.set('event|2026-11-13~e1', { id: 'e1', title: 'Swim class', date: '2026-11-13', time: '10:00', endTime: '11:00', who: 'kiaan', repeat: 'weekly', createdAt: '2026-01-01' });
 });
 
 describe('Arvy changes', () => {
   it('every change tool can be worked out, and is marked now or confirm', async () => {
     const changes = TOOLS.filter(t => t.change);
-    expect(changes.length).toBe(14);
+    expect(changes.length).toBe(23);
     for (const t of changes) expect(['now', 'confirm']).toContain(changeOf(t.name));
     expect(changeOf('calendar')).toBeUndefined();
     expect(toolsFor('night').map(t => t.name)).toContain('add_event');
@@ -108,5 +112,43 @@ describe('Arvy changes', () => {
 
   it('refuses a made-up money category', async () => {
     await expect(prepare('add_cash_expense', { amount: 20, what: 'Market', category: 'Snacks' })).rejects.toThrow(/isn’t a category/);
+  });
+
+  it('phase 3: favourites, must-dos, habits, budget, targets', async () => {
+    const before = snap();
+    const fav = (await prepare('log_favourite_meal', { favourite: 'shake', time: '07:00' }))!;
+    expect(fav.lines[0]).toMatch(/Protein shake — 250 kcal, 40 g protein/);
+    const undo = await fav.apply();
+    expect((store.get('favmeal|f1') as { uses: number }).uses).toBe(4);
+    await undo();
+    expect(snap()).toBe(before);
+    const must = (await prepare('set_must', { todos: ['call the bank'] }))!;
+    await must.apply();
+    expect((store.get('day|2026-11-10') as { priorities: { text: string }[] }).priorities[0].text).toBe('Call the bank');
+    const h = (await prepare('create_habit', { name: 'Stretch', days: ['mon', 'wed', 'Friday'], two_minute: 'one stretch' }))!;
+    expect(h.confirm).toBe(true);
+    expect(h.lines[0]).toBe('New habit: Stretch, Mon, Wed, Fri (mini: one stretch)');
+    await expect(prepare('create_habit', { name: 'read 10 pages' })).rejects.toThrow(/already/);
+    const p = (await prepare('pause_habit', { habit: 'reading' }))!;
+    await p.apply();
+    expect((store.get('habit|h1') as { archived: boolean }).archived).toBe(true);
+    expect((await prepare('set_budget', { category: 'groceries', amount: 700 }))!.lines[0]).toBe('Budget: Groceries $650 → $700 a month');
+    await expect(prepare('set_budget', { category: 'Income', amount: 10 })).rejects.toThrow(/spending/);
+    expect((await prepare('set_food_targets', { protein: 170 }))!.lines[1]).toMatch(/2200 kcal, 170 g protein/);
+  });
+
+  it('phase 3: the cycle log and periods', async () => {
+    const d = (await prepare('log_cycle_day', { symptoms: ['Cramps', 'unicorns'], mood: ['tired', 'calm'] }))!;
+    expect(d.lines[0]).toBe('Cycle today: cramps; mood calm');
+    await d.apply();
+    await expect(prepare('log_cycle_day', { symptoms: ['unicorns'] })).rejects.toThrow(/Nothing I can log/);
+    const start = (await prepare('log_period', { action: 'started' }))!;
+    const undo = await start.apply();
+    expect(store.get('period|2026-11-10')).toEqual({ start: '2026-11-10', end: '2026-11-14', source: 'app' });
+    const end = (await prepare('log_period', { action: 'ended', date: '2026-11-12' }))!;
+    await end.apply();
+    expect((store.get('period|2026-11-10') as { end: string }).end).toBe('2026-11-12');
+    await undo();
+    expect(store.get('period|2026-11-10')).toBeNull();
   });
 });

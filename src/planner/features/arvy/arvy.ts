@@ -78,6 +78,8 @@ export const TOOL_LABEL: Record<string, string> = {
   add_todos: 'your to-dos', complete_todos: 'your to-dos', remove_todos: 'your to-dos', log_meal: 'that meal', mark_habit: 'your habits',
   log_body_weight: 'your weight', add_event: 'the calendar', change_event: 'the calendar', delete_event: 'the calendar',
   add_cash_expense: 'the cash wallet', recategorize: 'the transactions',
+  set_must: 'your must-dos', log_favourite_meal: 'your favourites', save_favourite: 'your favourites', set_food_targets: 'your food targets',
+  create_habit: 'your habits', pause_habit: 'your habits', set_budget: 'the budget', log_cycle_day: 'your cycle', log_period: 'your cycle',
 };
 
 export function context(path: string, spoken: boolean) {
