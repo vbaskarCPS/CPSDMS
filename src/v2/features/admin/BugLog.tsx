@@ -13,12 +13,31 @@ const TONE: Record<string, 'r' | 'a' | undefined> = { blocking: 'r', annoying: '
 type Tab = 'bugs' | 'requests' | 'done';
 const isRequest = (b: BugReport) => b.kind === 'request';
 
+/** What the scheduled check found: shown first, since it's what to act on. */
+const Findings: React.FC<{ b: BugReport }> = ({ b }) => {
+  const f = b.findings;
+  if (!f) return null;
+  const safePr = f.pr && /^https:\/\/github\.com\//.test(f.pr) ? f.pr : null;
+  return (
+    <div className="v2-bug-found">
+      <div className="v2-bug-found-h"><b>Looked into{b.investigated_at ? ` · ${when(b.investigated_at)}` : ''}</b>{f.verdict && <Tag tone="b">{f.verdict}</Tag>}</div>
+      {f.summary && <p>{f.summary}</p>}
+      {f.cause && <p><span className="v2-mut">Cause: </span>{f.cause}</p>}
+      {f.fix && <p><span className="v2-mut">Proposed fix: </span>{f.fix}{f.size ? ` (${f.size})` : ''}</p>}
+      {f.risk && <p><span className="v2-mut">Risk: </span>{f.risk}</p>}
+      {f.needs && <p><span className="v2-mut">Needs from you: </span>{f.needs}</p>}
+      {safePr && <p><a className="v2-link" href={safePr} target="_blank" rel="noreferrer">Open the pull request</a> (not merged)</p>}
+    </div>
+  );
+};
+
 const Detail: React.FC<{ b: BugReport }> = ({ b }) => {
   const r = b.report || {};
   const row = (label: string, value: React.ReactNode) => value ? <div className="v2-bug-row"><span className="v2-mut">{label}</span><div>{value}</div></div> : null;
   const where = [r.where, b.path && `screen ${b.path}`, r.rm_manager && `RM map for ${r.rm_manager.replace(/^rm_/, '')}`].filter(Boolean).join(' · ');
   return (
     <div className="v2-bug-detail">
+      <Findings b={b} />
       {isRequest(b) ? <>
         {row('They asked', r.asked ? `“${r.asked}”${r.spoken ? ' (spoken)' : ''}` : null)}
         {row('What’s missing', r.why_not)}
@@ -74,6 +93,7 @@ export const BugLog: React.FC = () => {
                       <span className="v2-mut v2-small">{[b.by, b.center, when(b.created_at)].filter(Boolean).join(' · ')}</span></span>
                   </button>
                   {tab === 'done' && <Tag tone={isRequest(b) ? 'b' : undefined}>{isRequest(b) ? 'asked for' : 'bug'}</Tag>}
+                  {b.findings && b.status === 'open' && <Tag tone="g">{b.findings.verdict || 'looked into'}</Tag>}
                   {b.report?.severity && <Tag tone={TONE[b.report.severity]}>{b.report.severity}</Tag>}
                   {b.status === 'open'
                     ? <Btn kind="o" size="sm" icon={Check} disabled={busy === b.id} onClick={() => void set(b, true)}>{isRequest(b) ? 'Mark done' : 'Mark fixed'}</Btn>
