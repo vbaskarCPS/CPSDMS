@@ -1,9 +1,10 @@
-// src/planner/ui/Shell.tsx — bottom navigation around every signed-in screen.
+// src/planner/ui/Shell.tsx — bottom navigation around every signed-in screen, and Arvy's button above it.
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Sunrise, BookOpen, Repeat, Dumbbell, Utensils, Wallet, Heart } from 'lucide-react';
 import { getPass } from '../lib/auth';
 import { profileOf } from '../lib/app';
+import { Arvy } from '../features/arvy/Arvy';
 
 const base = [
   { to: '/', label: 'Today', Icon: Sunrise, end: true },
@@ -22,6 +23,7 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <>
       {children}
+      <Arvy />
       <nav className={`pl-nav ${seven ? 'pl-nav--7' : ''}`} aria-label="Planner">
         {tabs.map(t => (
           <NavLink key={t.to} to={t.to} end={t.end} className={({ isActive }) => (isActive ? 'active' : '')}>
