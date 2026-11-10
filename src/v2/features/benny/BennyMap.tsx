@@ -8,8 +8,8 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import { Maximize2, X } from 'lucide-react';
 import { RM_STYLE, tidyRmBaseMap } from '../../../lib/rmMapStyle';
 import { BLANK_STYLE } from '../bookings/mbMap';
-import { routeShapes, territoryOutlines, type RouteShape } from '../../lib/territory';
-import type { BennyMap as Spec } from '../../lib/benny';
+import { routeShapes, type RouteShape } from '../../lib/territory';
+import { bennyOutlines, type BennyMap as Spec } from '../../lib/benny';
 
 const HL = '#f97316', GREY = '#9ca3af', OUTLINE = '#334155';
 
@@ -47,6 +47,40 @@ export function bennyFeatures(spec: Spec, shapes: RouteShape[], outlines: Record
   };
 }
 
+/** The outline of a set of points (their convex hull), as a polygon: stands in when a map's kept outline isn't there. */
+export function hullOutline(points: [number, number][]): GeoJSON.Polygon | null {
+  const pts = [...new Map(points.map(p => [`${p[0]},${p[1]}`, p])).values()].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (pts.length < 3) return null;
+  const cross = (o: [number, number], a: [number, number], b: [number, number]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const half = (list: [number, number][]) => { const h: [number, number][] = []; for (const p of list) { while (h.length >= 2 && cross(h[h.length - 2], h[h.length - 1], p) <= 0) h.pop(); h.push(p); } h.pop(); return h; };
+  const ring = [...half(pts), ...half([...pts].reverse())];
+  return ring.length < 3 ? null : { type: 'Polygon', coordinates: [[...ring, ring[0]]] };
+}
+
+/** Each asked-for map's outline: the kept one, or the hull of its routes when that's missing. */
+export function outlinesFor(maps: string[], kept: Record<string, GeoJSON.Geometry>, shapes: RouteShape[]): Record<string, GeoJSON.Geometry> {
+  const out: Record<string, GeoJSON.Geometry> = {};
+  for (const m of maps) {
+    const g = kept[m] || hullOutline(shapes.filter(s => s.area === m).flatMap(s => s.lines.flat()));
+    if (g) out[m] = g;
+  }
+  return out;
+}
+
+/**
+ * The map's box. Anything said about the map (loading, an error) is drawn INSIDE this box: a message must never sit
+ * over the chat (an error once covered the whole panel and blocked every tap).
+ */
+export const MapFrame = React.forwardRef<HTMLDivElement, { tall?: boolean; label?: string; message?: string | null; error?: boolean; onRetry?: () => void }>(
+  ({ tall, label, message, error, onRetry }, ref) => (
+    <div ref={ref} className={`benny-map${tall ? ' tall' : ''}`} aria-label={label || 'Map'}>
+      {message && <div className={`benny-map-msg${error ? ' err' : ''}`} role={error ? 'alert' : 'status'}>
+        <span>{message}</span>{error && onRetry && <button type="button" className="benny-link" onClick={onRetry}>Try again</button>}
+      </div>}
+    </div>
+  ));
+MapFrame.displayName = 'MapFrame';
+
 function bboxOf(fcs: GeoJSON.FeatureCollection[]): mapboxgl.LngLatBounds | null {
   const b = new mapboxgl.LngLatBounds(); let any = false;
   const add = (c: unknown): void => { if (Array.isArray(c) && typeof c[0] === 'number') { b.extend(c as [number, number]); any = true; } else if (Array.isArray(c)) c.forEach(add); };
@@ -54,17 +88,27 @@ function bboxOf(fcs: GeoJSON.FeatureCollection[]): mapboxgl.LngLatBounds | null 
   return any ? b : null;
 }
 
-const MapBox: React.FC<{ spec: Spec; tall?: boolean }> = ({ spec, tall }) => {
+const OUTLINE_WAIT_MS = 4000;
+
+const MapBox: React.FC<{ spec: Spec; centerId?: string | null; tall?: boolean }> = ({ spec, centerId, tall }) => {
   const box = useRef<HTMLDivElement>(null);
   const [data, setData] = useState<{ shapes: RouteShape[]; outlines: Record<string, GeoJSON.Geometry> } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [tries, setTries] = useState(0);
   useEffect(() => {
     let off = false;
-    Promise.all([routeShapes(spec.maps), territoryOutlines()])
-      .then(([shapes, outlines]) => { if (!off) setData({ shapes, outlines: outlines as unknown as Record<string, GeoJSON.Geometry> }); })
-      .catch(e => { if (!off) setErr(e instanceof Error ? e.message : 'Map data didn’t load'); });
+    setErr(null);
+    // The routes are the map; the outlines are a nicety. A slow or failed outline request never holds the map up or
+    // breaks it: after a few seconds the map draws with each map's routes' own outline instead.
+    const kept = Promise.race([
+      bennyOutlines(centerId || null, spec.maps).catch(() => ({} as Record<string, GeoJSON.Geometry>)),
+      new Promise<Record<string, GeoJSON.Geometry>>(r => window.setTimeout(() => r({}), OUTLINE_WAIT_MS)),
+    ]);
+    Promise.all([routeShapes(spec.maps), kept])
+      .then(([shapes, outlines]) => { if (!off) setData({ shapes, outlines: outlinesFor(spec.maps, outlines, shapes) }); })
+      .catch(e => { if (!off) setErr(e instanceof Error ? e.message : 'The map’s routes didn’t load'); });
     return () => { off = true; };
-  }, [spec.maps.join('|')]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [spec.maps.join('|'), centerId, tries]);   // eslint-disable-line react-hooks/exhaustive-deps
   const fc = useMemo(() => data ? bennyFeatures(spec, data.shapes, data.outlines) : null, [data, spec]);
 
   useEffect(() => {
@@ -74,7 +118,7 @@ const MapBox: React.FC<{ spec: Spec; tall?: boolean }> = ({ spec, tall }) => {
     let m: mapboxgl.Map;
     try {
       m = new mapboxgl.Map({ container: box.current, style: token && token !== 'pk.test' ? RM_STYLE : BLANK_STYLE, center: [-122.9, 49.2], zoom: 10, attributionControl: false });
-    } catch (e) { setErr(e instanceof Error ? e.message : 'Map failed to load'); return; }
+    } catch (e) { setErr(e instanceof Error ? e.message : 'the map couldn’t start'); return; }
     m.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
     (box.current as HTMLDivElement & { __map?: mapboxgl.Map }).__map = m;   // as mbMap does: lets a check read the drawn map
     m.on('load', () => {
@@ -111,11 +155,11 @@ const MapBox: React.FC<{ spec: Spec; tall?: boolean }> = ({ spec, tall }) => {
     return () => { ro.disconnect(); try { m.remove(); } catch { /* gone */ } };
   }, [fc]);
 
-  if (err) return <div className="benny-map-msg">{err}</div>;
-  return <div ref={box} className={`benny-map${tall ? ' tall' : ''}`} aria-label={spec.title || 'Map'}>{!fc && <div className="benny-map-msg">Loading the map…</div>}</div>;
+  return <MapFrame ref={box} tall={tall} label={spec.title} error={!!err}
+    message={err ? `The map didn’t load: ${err}` : !fc ? 'Loading the map…' : null} onRetry={() => { setData(null); setTries(t => t + 1); }} />;
 };
 
-export const BennyMapCard: React.FC<{ spec: Spec }> = ({ spec }) => {
+export const BennyMapCard: React.FC<{ spec: Spec; centerId?: string | null }> = ({ spec, centerId }) => {
   const [full, setFull] = useState(false);
   useEffect(() => {
     if (!full) return;
@@ -127,12 +171,12 @@ export const BennyMapCard: React.FC<{ spec: Spec }> = ({ spec }) => {
     <div className="benny-mapcard">
       <div className="benny-mapcard-h"><span className="benny-mapcard-t"><b>{spec.title || 'Map'}</b><span className="v2-small">{caption}</span></span>
         <button type="button" className="benny-icon" onClick={() => setFull(true)} aria-label="Open the map full screen"><Maximize2 size={15} /></button></div>
-      {!full && <MapBox spec={spec} />}
+      {!full && <MapBox spec={spec} centerId={centerId} />}
       {full && createPortal(
         <div className="benny-root"><div className="benny-fullmap" role="dialog" aria-modal="true" aria-label={spec.title || 'Map'}>
           <div className="benny-fullmap-h"><b>{spec.title || 'Map'}</b><span className="v2-small">{caption}</span><span className="v2-spacer" />
             <button type="button" className="benny-icon light" onClick={() => setFull(false)} aria-label="Close the map"><X size={18} /></button></div>
-          <MapBox spec={spec} tall />
+          <MapBox spec={spec} centerId={centerId} tall />
         </div></div>, document.body)}
     </div>
   );

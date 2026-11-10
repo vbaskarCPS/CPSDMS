@@ -36,6 +36,14 @@ export async function askBenny(messages: BennyMsg[], context: BennyContext): Pro
   return { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: (data?.proposal as BennyProposal) || null };
 }
 
+/** The kept outlines of these master maps (only the ones that have one). Light, and open to anyone who can use the Benny. */
+export async function bennyOutlines(centerId: string | null, maps: string[]): Promise<Record<string, GeoJSON.Geometry>> {
+  if (!maps.length) return {};
+  const { data, error } = await db.rpc('benny_outlines', { p_center: centerId, p_maps: maps });
+  if (error) throw new Error(error.message);
+  return (data as Record<string, GeoJSON.Geometry>) || {};
+}
+
 /** What to say out loud: the reply without markdown, lists or long numbers of lines (the screen has the rest). */
 export function speakable(text: string, maxSentences = 3): string {
   const plain = text

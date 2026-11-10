@@ -1,9 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('mapbox-gl', () => ({ default: {} }));
-vi.mock('../../lib/territory', () => ({ routeShapes: vi.fn(), territoryOutlines: vi.fn() }));
+vi.mock('../../lib/territory', () => ({ routeShapes: vi.fn() }));
+vi.mock('../../lib/benny', () => ({ bennyOutlines: vi.fn() }));
 vi.mock('../bookings/mbMap', () => ({ BLANK_STYLE: {} }));
 vi.mock('../../../lib/rmMapStyle', () => ({ RM_STYLE: '', tidyRmBaseMap: () => undefined }));
-import { bennyFeatures } from './BennyMap';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { bennyFeatures, hullOutline, MapFrame, outlinesFor } from './BennyMap';
 
 describe('bennyFeatures', () => {
   const shapes = [
@@ -20,5 +23,25 @@ describe('bennyFeatures', () => {
     expect(f.outlines.features).toHaveLength(1);
     expect(f.names.features).toHaveLength(0);   // an outline with no points has nowhere to put its name
     expect(f.pins.features).toHaveLength(1);
+  });
+});
+
+describe('the map’s outlines and messages', () => {
+  it('a missing outline is stood in for by the hull of the map’s routes', () => {
+    const shapes = [{ code: 'A1', area: 'A', number: 1, lines: [[[0, 0], [4, 0]], [[4, 3], [0, 3]], [[2, 1], [2, 2]]] as [number, number][][] }];
+    const kept = { B: { type: 'Polygon', coordinates: [] } as GeoJSON.Geometry };
+    const o = outlinesFor(['A', 'B', 'C'], kept, shapes);
+    expect(o.B).toBe(kept.B);                      // the kept one wins
+    expect(o.C).toBeUndefined();                   // no routes, no outline
+    const ring = (o.A as GeoJSON.Polygon).coordinates[0];
+    expect(ring).toHaveLength(5);                  // the 4 corners, closed; the inside point is left out
+    expect(ring[0]).toEqual(ring[4]);
+    expect(hullOutline([[0, 0], [1, 1]])).toBeNull();
+  });
+  it('an error is drawn inside the map’s own box, never as a layer over the chat', () => {
+    const html = renderToStaticMarkup(React.createElement(MapFrame, { message: 'The map didn’t load: canceling statement due to statement timeout', error: true, onRetry: () => undefined }));
+    expect(html.startsWith('<div class="benny-map"')).toBe(true);
+    expect(html).toMatch(/<div class="benny-map"[^>]*><div class="benny-map-msg err" role="alert">/);
+    expect(html).toContain('Try again');
   });
 });
