@@ -141,14 +141,17 @@ export function readDemo(user: string): DemoSeen {
 export function writeDemo(user: string, d: DemoSeen): void { try { localStorage.setItem(demoKey(user), JSON.stringify(d)); } catch { /* private window: it shows again */ } }
 export const demoDue = (d: DemoSeen) => !d.done && d.opens < 3;
 
-// ── the bug log (Super Admin › Bug log): what people told the Benny was broken ──
+// ── the log (Super Admin › Bug log): what people told the Benny was broken, and what they asked for that it couldn't do ──
 export interface BugReport {
   id: string; created_at: string; title: string; status: 'open' | 'done'; resolved_at?: string; resolved_by?: string;
+  /** a bug, or something someone asked the Benny for that it couldn't do (no tool for it) */
+  kind?: 'bug' | 'request';
   by?: string; center?: string; path?: string;
   report: { what_happened?: string; expected?: string; steps?: string[]; where?: string; severity?: 'blocking' | 'annoying' | 'minor';
+    asked?: string; why_not?: string; would_need?: string; reply?: string; auto?: boolean; spoken?: boolean;
     screen?: string | null; rm_manager?: string | null; diag?: BennyContext['diag'] | null };
 }
-export interface BugLog { open: number; done: number; bugs: BugReport[] }
+export interface BugLog { open: number; done: number; open_bugs?: number; open_requests?: number; bugs: BugReport[] }
 export async function listBugs(status: 'open' | 'done' | null): Promise<BugLog> {
   const { data, error } = await db.rpc('benny_bugs_list', { p_status: status });
   if (error) throw new Error(error.message);

@@ -5,7 +5,7 @@ import { TOOLS, heardRight, system, toolCall, toolsFor } from '../../../supabase
 const ctx = { center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-10', rm_manager: 'rm_x' };
 
 describe('the Benny’s tools', () => {
-  it('every tool calls a database function or files a bug', () => {
+  it('every tool calls a database function or writes to the log', () => {
     for (const t of TOOLS) {
       const call = toolCall(t.name, {}, ctx);
       expect(call, t.name).not.toBeNull();
@@ -15,7 +15,7 @@ describe('the Benny’s tools', () => {
   });
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);
-    expect(rm).toEqual(expect.arrayContaining(['live_team', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'report_bug', 'show_map']));
+    expect(rm).toEqual(expect.arrayContaining(['live_team', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'report_bug', 'log_request', 'show_map']));
     for (const no of ['find_people', 'day', 'maps', 'propose_start_day']) expect(rm).not.toContain(no);
     expect(toolsFor('admin').map(t => t.name)).toEqual(TOOLS.map(t => t.name));
     expect(toolsFor('rm')[0]).not.toHaveProperty('roles');   // only what the model's API accepts is sent
@@ -44,5 +44,15 @@ describe('the Benny’s tools', () => {
     expect(system(ctx, 'rm', vocab)).not.toContain('SPOKEN');
     expect(heardRight(null)).not.toContain('Workers today');   // no list, no empty heading
     expect(system(ctx, 'admin')).toContain('heard_as');          // sound matches are always named
+  });
+  it('what it can’t do goes in the log, and it knows how CPS talks', () => {
+    expect(toolCall('report_bug', {}, ctx)).toEqual({ log: 'bug' });
+    expect(toolCall('log_request', {}, ctx)).toEqual({ log: 'request' });
+    for (const role of ['admin', 'rm'] as const) {
+      const sys = system(ctx, role);
+      expect(sys).toContain('log_request');
+      for (const word of ['Step:', 'Equiv (EQ', 'Payable production ÷ 25', 'Prebook:', 'PCL:', 'Alumni rate', 'Hats:', 'Cart:', 'WDR:', 'Floater:']) expect(sys, word).toContain(word);
+    }
+    expect(TOOLS.find(t => t.name === 'live_team')!.description).toMatch(/steps, equiv, gross, upsells/);
   });
 });

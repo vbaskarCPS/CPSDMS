@@ -9,7 +9,8 @@
 // Who: super admins (everything), route managers (their own team on the live map: carts, routes, connected routes).
 // Runs as the signed-in person: their JWT is passed through, so every lookup (benny_* database functions) is checked by
 // the database against their permissions and the centers they can see. The Benny has no database access of its own.
-// Bug reports are saved in the app's own log (benny_bugs, shown in Super Admin › Bug log): no GitHub issue, no email.
+// Bug reports, and requests it couldn't do (no tool for it), are saved in the app's own log (benny_bugs, shown in
+// Super Admin › Bug log): no GitHub issue, no email.
 // Model: BENNY_MODEL secret, else a Sonnet-class model. The Claude key lives only in ANTHROPIC_API_KEY.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { TOOLS, system, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
@@ -26,20 +27,24 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 type Msg = { role: 'user' | 'assistant'; content: unknown };
 type Proposal = { kind: ProposalKind; check: Record<string, unknown>; team_mode?: string };
 
-/** A bug report goes into the app's own log (Super Admin › Bug log), with what the page knew when it happened. */
-async function reportBug(sb: SupabaseClient, ctx: Ctx, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+/** A bug, or a request the Benny couldn't do, goes into the app's own log (Super Admin › Bug log), with what the page knew. */
+async function logEntry(sb: SupabaseClient, ctx: Ctx, kind: 'bug' | 'request', input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const report = { ...input, user: ctx.user_name || null, center: ctx.center_name || null, path: ctx.path || null, screen: ctx.screen || null,
-    rm_manager: ctx.rm_manager || null, diag: ctx.diag || null, at: new Date().toISOString() };
-  const { data: id, error } = await sb.rpc('benny_bug_save', { p_center: ctx.center_id || null, p_path: ctx.path || null, p_title: String(input.title || ''), p_report: report });
+    rm_manager: ctx.rm_manager || null, spoken: !!ctx.spoken, diag: kind === 'bug' ? ctx.diag || null : null, at: new Date().toISOString() };
+  const { data: id, error } = await sb.rpc('benny_log_save', { p_center: ctx.center_id || null, p_path: ctx.path || null, p_kind: kind, p_title: String(input.title || ''), p_report: report });
   if (error) return { error: error.message };
   return { saved: true, id, where: 'the Bug log in Super Admin' };
 }
+
+/** The Benny said it couldn't, without logging it: caught here so no request goes unseen. */
+const CANT = /\b(can['’]?t|cannot|not able to|unable to|don['’]t have (a|the) (tool|way)|no (tool|way) (to|for)|isn['’]t (something i can|switched on|available)|not (yet )?(supported|possible|available))\b/i;
+const OFF_TOPIC = /only help with the DMS/i;
 
 async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, input: Record<string, unknown>): Promise<{ out: unknown; proposal?: Proposal }> {
   if (!TOOLS.some(t => t.name === name && t.roles.includes(role))) return { out: { error: `${name} isn't available to you` } };
   const call = toolCall(name, input, ctx);
   if (!call) return { out: { error: `unknown tool ${name}` } };
-  if ('bug' in call) return { out: await reportBug(sb, ctx, input) };
+  if ('log' in call) return { out: await logEntry(sb, ctx, call.log, input) };
   const { data, error } = await sb.rpc(call.fn, call.args);
   if (error) return { out: { error: error.message } };
   // a change that checks out becomes a card for the person to confirm
@@ -104,6 +109,7 @@ Deno.serve(async req => {
     const tools = toolsFor(role as Role);
     const msgs: Msg[] = [...history];
     let map: unknown = null; let mapTitle = ''; let proposal: Proposal | null = null;
+    let usedTools = 0; let logged = false;
     // a change that is about routes always comes with its map, even when the Benny didn't draw one
     const mapOf = (p: Proposal | null): unknown => {
       if (!p) return null;
@@ -120,11 +126,18 @@ Deno.serve(async req => {
       const uses = r.content.filter(c => c.type === 'tool_use');
       if (!uses.length || r.stop_reason !== 'tool_use') {
         const reply = r.content.filter(c => c.type === 'text').map(c => c.text || '').join('').trim();
+        // it said it couldn't, straight off, and logged nothing: log it for it
+        if (!logged && usedTools === 0 && !proposal && CANT.test(reply) && !OFF_TOPIC.test(reply)) {
+          const asked = String(history[history.length - 1].content);
+          await logEntry(sb, ctx, 'request', { title: asked.slice(0, 120), asked, reply: reply.slice(0, 600), auto: true });
+        }
         return done(reply || 'Sorry, I didn’t get an answer for that. Try asking another way.');
       }
       msgs.push({ role: 'assistant', content: r.content });
       const results = [];
+      usedTools += uses.length;
       for (const u of uses) {
+        if (u.name === 'log_request' || u.name === 'report_bug') logged = true;
         const { out, proposal: p } = await runTool(sb, ctx, role as Role, u.name || '', u.input || {});
         if (p) proposal = p;
         if (u.name === 'show_map' && out && !(out as { error?: string }).error) { map = out; mapTitle = String(u.input?.title || ''); }

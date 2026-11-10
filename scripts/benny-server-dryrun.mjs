@@ -16,7 +16,7 @@ const fakeSb = `
       if (fn === 'benny_plan_day') return { data: { ok: true, date: args.p_date, maps: ['NORTH VANCOUVER #1', 'NORTH VANCOUVER #2'], assign: [{ managers: [{ id: 'u1', name: 'Vijay' }], routes: [{ code: 'NVN01' }, { code: 'NVN19' }] }], booked: 15, showed: 15 }, error: null };
       if (fn === 'benny_check_give') return { data: { ok: false, problems: ['Which one: Michael A, Michael B?'] }, error: null };
       if (fn === 'benny_live') return { data: { live: true, carts: [] }, error: null };
-      if (fn === 'benny_bug_save') return { data: 'bug-1', error: null };
+      if (fn === 'benny_log_save') return { data: 'log-1', error: null };
       if (fn === 'benny_vocab') return { data: { workers: ['Jahswill Nuetey', 'Kevontae Ragguette'], managers: ['Jovan Chung'], places: ['North Delta (NDEL) #1-#3'] }, error: null };
       if (fn === 'benny_check_move') return { data: { ok: true, date: '2026-11-10', a: { cn: 'I1004', name: 'Jahswill Nuetey', heard_as: 'Jaz will' }, b: { cn: 'I1479', name: 'Kevontae Ragguette' } }, error: null };
       if (fn === 'benny_bug_sent') return { data: null, error: null };
@@ -52,7 +52,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 14); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 15); assert(!('roles' in state.lastAsk.tools[0]));
 console.log('1 start the day: card + map ✓');
 
 // 2. a change with a problem makes no card
@@ -82,8 +82,9 @@ console.log('4 map pins ✓');
 // 5. a bug report goes into the app's own log, with what the page knew — and nowhere else
 state.script = [turn(use('report_bug', { title: 'Houses don’t load on RMD143', what_happened: 'No houses drawn', steps: ['Open RM map', 'Tap RMD143'], severity: 'blocking' })), say('I’ll let Vijay know — it’s in the bug log.')];
 a = await ask('houses arent loading on rmd143', { path: '/app/rm', screen: 'rm', user_name: 'Franklyn Mitchell', center_name: 'BC Fall RJ', diag: { ua: 'UA', viewport: '390×844', errors: ['12:00:01 TypeError: x'] } });
-assert.deepEqual(fns(), ['benny_ok_any', 'benny_bug_save']);
+assert.deepEqual(fns(), ['benny_ok_any', 'benny_log_save']);
 const saved = state.rpc[1][1];
+assert.equal(saved.p_kind, 'bug');
 assert.equal(saved.p_title, 'Houses don’t load on RMD143'); assert.equal(saved.p_path, '/app/rm'); assert.equal(saved.p_center, 'c1');
 assert.equal(saved.p_report.user, 'Franklyn Mitchell'); assert.deepEqual(saved.p_report.steps, ['Open RM map', 'Tap RMD143']); assert.deepEqual(saved.p_report.diag.errors, ['12:00:01 TypeError: x']);
 assert.deepEqual(state.http.map(h => new URL(h[0]).host), ['api.anthropic.com', 'api.anthropic.com']);   // the model, twice; nothing else
@@ -103,6 +104,24 @@ a = await ask('who is on my team', { screen: 'rm', rm_manager: 'rm_me' });
 assert(!fns().includes('benny_vocab')); assert(!state.lastAsk.system.includes('SPOKEN'));
 state.role = 'admin';
 console.log('5b spoken → real names sent along ✓');
+
+// 5c. something it has no tool for goes in the log as a request: by the tool, or caught when the model forgets
+state.role = 'admin';
+state.script = [turn(use('log_request', { title: 'Move a prebook to another route', asked: 'move the oak st prebook to ndel33', why_not: 'no tool changes a booking’s route' })), say('I can’t do that yet. It’s logged for Vijay.')];
+a = await ask('move the oak st prebook to ndel33');
+assert.deepEqual(fns(), ['benny_ok_any', 'benny_log_save']);
+assert.equal(state.rpc[1][1].p_kind, 'request'); assert.equal(state.rpc[1][1].p_report.asked, 'move the oak st prebook to ndel33'); assert.equal(state.rpc[1][1].p_report.diag, null);
+state.script = [say('I can’t change a worker’s rate from here.')];           // forgot to log it
+a = await ask('bump kyles alumni rate to 2 dollars');
+assert.deepEqual(fns(), ['benny_ok_any', 'benny_log_save']);
+assert.equal(state.rpc[1][1].p_kind, 'request'); assert.equal(state.rpc[1][1].p_report.auto, true); assert.equal(state.rpc[1][1].p_title, 'bump kyles alumni rate to 2 dollars');
+state.script = [say('I can only help with the DMS.')];                        // off topic: not logged
+a = await ask('whats the weather'); assert.deepEqual(fns(), ['benny_ok_any']);
+state.script = [turn(use('propose_give_route', { route: 'NDEL33', worker: 'Zorro' })), say('I can’t find a worker called Zorro.')];   // a not-found is not a missing tool
+a = await ask('give zorro ndel33'); assert(!fns().includes('benny_log_save'));
+state.script = [say('8 workers on 8 carts today.')];                          // an answer: not logged
+a = await ask('who is on today'); assert.deepEqual(fns(), ['benny_ok_any']);
+console.log('5c couldn’t-do requests are logged ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;
