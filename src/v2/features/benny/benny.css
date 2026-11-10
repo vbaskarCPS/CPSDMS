@@ -86,3 +86,12 @@
 .benny-root .benny-card-out.done{color:#166534}.benny-root .benny-card-out.failed{color:#b91c1c}.benny-root .benny-card-out.dismissed{color:#475569}
 .benny-root .v2-spacer{flex:1}
 .benny-root .v2-small{font-size:12px}
+
+/* the first-time demo */
+.benny-root .benny-demo{background:#fff7ed;border:2px solid #f97316;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:8px;font-size:14px;line-height:1.5;color:#1e293b}
+.benny-root .benny-demo > b{font-size:16px;color:#0f172a}
+.benny-root .benny-demo p{margin:0}
+.benny-root .benny-demo ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.benny-root .benny-demo-step{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#9a3412}
+.benny-root .benny-demo .benny-chip{margin:0}
+.benny-root .benny-demo .benny-link{align-self:flex-start;padding-left:0}

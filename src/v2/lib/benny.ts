@@ -88,17 +88,55 @@ export function listen(onText: (text: string) => void): { done: Promise<string>;
   return { done, stop: () => rec.stop(), cancel: () => { cancelled = true; rec.abort(); } };
 }
 
-// ── text to speech ──
-export function speak(text: string): void {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+// ── the Benny's voice: Google's (the benny-voice function), never the phone's own ──
+// Phones only let a page play sound that a tap started. The answer arrives later, so a tap (the mic, the speaker
+// switch) first plays a moment of silence on the same player; after that the phone lets it speak.
+const SILENCE = 'data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA';
+let player: HTMLAudioElement | null = null;
+let saying = 0;   // each new line (or a stop) makes older ones, still on their way, stay quiet
+const thePlayer = () => (player = player || new Audio());
+
+/** Call inside a tap, before the answer is asked for. */
+export function primeVoice(): void {
+  if (typeof window === 'undefined' || typeof Audio === 'undefined') return;
+  try {
+    const p = thePlayer();
+    if (!p.paused) return;
+    p.src = SILENCE;
+    void p.play().catch(() => undefined);
+  } catch { /* no sound on this device */ }
+}
+
+/** Say it in the Benny's voice. Rejects with the reason when the voice can't be had (the caller shows it). */
+export async function speak(text: string): Promise<void> {
+  if (typeof window === 'undefined' || typeof Audio === 'undefined') return;
   const line = speakable(text);
   if (!line) return;
-  window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(line);
-  u.lang = 'en-CA'; u.rate = 1.05;
-  window.speechSynthesis.speak(u);
+  const mine = ++saying;
+  const { data, error } = await db.functions.invoke('benny-voice', { body: { text: line } });
+  if (error) {
+    const res = (error as { context?: Response }).context;
+    const msg = res ? await res.json().then((j: { error?: string }) => j.error).catch(() => null) : null;
+    throw new Error(msg || error.message || 'The voice didn’t answer');
+  }
+  if (!data?.audio) throw new Error(data?.error || 'The voice didn’t answer');
+  if (mine !== saying) return;   // stopped, or something newer is being said
+  const p = thePlayer();
+  p.src = `data:audio/mpeg;base64,${data.audio}`;
+  await p.play();
 }
-export const stopSpeaking = () => { try { window.speechSynthesis?.cancel(); } catch { /* none */ } };
+export const stopSpeaking = () => { saying++; try { player?.pause(); } catch { /* none */ } };
+
+// ── the first-time demo: the next time someone who can use the Benny opens the app, it opens and walks them through a
+//    quick try. Remembered per person on each phone; if they close it without finishing it comes back, three times at most.
+export interface DemoSeen { opens: number; done: boolean }
+const demoKey = (user: string) => `benny-demo:${user}`;
+export function readDemo(user: string): DemoSeen {
+  try { const d = JSON.parse(localStorage.getItem(demoKey(user)) || '{}'); return { opens: Number(d.opens) || 0, done: !!d.done }; }
+  catch { return { opens: 0, done: false }; }
+}
+export function writeDemo(user: string, d: DemoSeen): void { try { localStorage.setItem(demoKey(user), JSON.stringify(d)); } catch { /* private window: it shows again */ } }
+export const demoDue = (d: DemoSeen) => !d.done && d.opens < 3;
 
 // ── the bug log (Super Admin › Bug log): what people told the Benny was broken ──
 export interface BugReport {
