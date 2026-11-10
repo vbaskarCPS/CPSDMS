@@ -17,6 +17,7 @@ export interface BookingList {
   center_id: string | null; mine: boolean | null; job_code: string | null;
   total: number; open: number; done: number; cancelled: number; tried: number;
   on_map: number; moved: number; waiting: number; no_location: number;
+  live?: number;                   // loaded into today's live session (the crew has them on the map)
 }
 export interface Services { aeration?: boolean; dethatch?: boolean; fertilizer?: boolean; seed?: boolean; lime?: boolean }
 export interface Booking {
@@ -68,7 +69,7 @@ export function listFor(lists: BookingList[], service: string, year: number): Bo
   const order: ListPart[] = ['fall', 'summer', 'spring'];
   return mine.sort((a, b) => order.indexOf(a.part) - order.indexOf(b.part))[0] || null;
 }
-export interface BookingFilter { q?: string; status?: BookingStatus | 'tried' | null; state?: MapState | null; area?: string | null; route?: string | null }
+export interface BookingFilter { q?: string; status?: BookingStatus | 'tried' | 'live' | null; state?: MapState | null; area?: string | null; route?: string | null }
 export async function listBookings(listId: string, f: BookingFilter = {}, page = 0, size = 200): Promise<{ total: number; rows: Booking[] }> {
   const r = must(await db.rpc('app_mb_list_bookings', {
     p_list: listId, p_q: f.q || null, p_status: f.status || null, p_state: f.state || null, p_area: f.area || null, p_route: f.route || null,

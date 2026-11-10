@@ -2,7 +2,7 @@
 //
 //   Bookings  one season's booking list (Fall Rejuv 2026…): every booking with where it sits on the
 //             digital maps (on map / moved / waiting / no location) and how it's going (open, tried,
-//             done, cancelled). Add a booking, or open one to change it. "Waiting on a map" groups
+//             done, cancelled). Live: the ones loaded into today's session, that the crew has on the map. Add a booking, or open one to change it. "Waiting on a map" groups
 //             the bookings whose maps aren't built yet, busiest first, so the builders know where to go.
 //   Plans     every plan the region has sold (SP Pro, Grub Control…), across seasons, with its bookings.
 import React, { useEffect, useMemo, useState } from 'react';
@@ -21,8 +21,8 @@ import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 const STATES: MapState[] = ['on_map', 'waiting', 'no_location'];
 const mapped = (s: MapState) => (s === 'moved' ? 'on_map' : s);
 const STATE_TONE: Record<MapState, 'g' | 'b' | 'a' | 'r'> = { on_map: 'g', moved: 'b', waiting: 'a', no_location: 'r' };
-type StatusPick = BookingStatus | 'tried';
-const STATUS_LABEL: Record<StatusPick, string> = { open: 'Open', tried: 'Tried', done: 'Done', cancelled: 'Cancelled' };
+type StatusPick = BookingStatus | 'tried' | 'live';
+const STATUS_LABEL: Record<StatusPick, string> = { live: 'Live', open: 'Open', tried: 'Tried', done: 'Done', cancelled: 'Cancelled' };
 const shortDay = (d: string | null | undefined) => {
   if (!d) return ''; const x = new Date(`${d.slice(0, 10)}T12:00:00`);
   return Number.isNaN(x.getTime()) ? d : x.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
@@ -94,10 +94,14 @@ export const BookingsPage: React.FC = () => {
           </div>
 
           <div className="v2-mb-states">
+            <button type="button" className={`v2-card v2-mb-state${status === 'live' ? ' on' : ''}`} onClick={() => setStatus(status === 'live' ? null : 'live')}
+              title="Loaded into today's session: the crew has these on the map today">
+              <i className="dot v2-mb-live" /><span>{STATUS_LABEL.live}</span><b>{list.live ?? 0}</b>
+            </button>
             {(['open', 'tried', 'done', 'cancelled'] as StatusPick[]).map(s => (
               <button key={s} type="button" className={`v2-card v2-mb-state${status === s ? ' on' : ''}`} onClick={() => setStatus(status === s ? null : s)}>
-                <i className="dot" style={{ background: bookingColor({ status: s === 'tried' ? 'open' : s, tried: s === 'tried' }) }} />
-                <span>{STATUS_LABEL[s]}</span><b>{s === 'open' ? list.open - list.tried : s === 'tried' ? list.tried : list[s]}</b>
+                <i className="dot" style={{ background: bookingColor({ status: s === 'tried' ? 'open' : s as BookingStatus, tried: s === 'tried' }) }} />
+                <span>{STATUS_LABEL[s]}</span><b>{s === 'open' ? list.open - list.tried : s === 'tried' ? list.tried : list[s as BookingStatus]}</b>
               </button>
             ))}
             <span className="v2-mb-sep" />
