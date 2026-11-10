@@ -52,7 +52,11 @@
 .benny-root .benny-mapcard-t .v2-small{color:#475569}
 .benny-root .benny-map{position:relative;height:230px;background:#e9eef3}
 .benny-root .benny-map.tall{flex:1;height:auto}
-.benny-root .benny-map-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#475569;font-size:13px;padding:12px;text-align:center}
+/* a map message lives inside the map's own box, and only there: outside one it is plain text, never an overlay */
+.benny-root .benny-map-msg{display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;color:#475569;font-size:13px;padding:12px;text-align:center}
+.benny-root .benny-map > .benny-map-msg{position:absolute;inset:0;z-index:1;background:#e9eef3}
+.benny-root .benny-map-msg.err{color:#b91c1c}
+.benny-root .benny-mapcard{position:relative}
 .benny-root .benny-fullmap{position:fixed;inset:0;z-index:80;background:#0b1424;display:flex;flex-direction:column}
 .benny-root .benny-fullmap-h{display:flex;align-items:center;gap:10px;padding:8px 10px 8px 16px;color:#e5ecf5;min-height:52px}
 .benny-root .benny-fullmap-h .v2-small{color:#9fb0c8}

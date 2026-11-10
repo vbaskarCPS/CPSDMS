@@ -195,7 +195,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
             {msgs.map((m, i) => (
               <div key={i} className={`benny-msg ${m.role}${m.error ? ' err' : ''}`}>
                 <div className="benny-bubble"><Rich text={m.text} /></div>
-                {m.map && <BennyMapCard spec={m.map} />}
+                {m.map && <BennyMapCard spec={m.map} centerId={cid} />}
                 {m.proposal && <ProposalCard p={m.proposal} outcome={m.outcome} busy={doing === i} onDo={() => void confirm(i)}
                   onNo={() => settle(i, { state: 'dismissed', text: 'Not done.' })}
                   onChange={m.proposal.kind === 'start_day' ? () => { const d = (m.proposal as Extract<BennyProposal, { kind: 'start_day' }>).check.date; settle(i, { state: 'dismissed', text: 'Opened Start session to change it.' }); nav(`/app/workerbook/days/${d}/start`); } : undefined} />}
