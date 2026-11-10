@@ -3,8 +3,9 @@
 //   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, user_name, spoken, diag } }
 //     → { reply, map?, proposal? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
-//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking. The Benny never makes
-//              the change itself: the app does, with the same code as its screens, after the person taps Confirm.
+//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails.
+//              The Benny never makes the change itself: the app does, with the same code as its screens, after the person taps
+//              Confirm. booking_emails changes nothing at all: its card opens the Send booking emails screen, where the person sends.
 //
 // Who: super admins (everything), route managers (their own team on the live map: carts, routes, connected routes).
 // Runs as the signed-in person: their JWT is passed through, so every lookup (benny_* database functions) is checked by
@@ -123,6 +124,8 @@ Deno.serve(async req => {
       if (p.kind === 'give_route' && p.check.map) return { maps: [p.check.map], highlight: [p.check.route], pins: [], title: String(p.check.route) };
       // a booking moving to another route: the route, with the house on it
       if (p.kind === 'booking' && p.check.map && p.check.route) return { maps: [p.check.map], highlight: [p.check.route], pins: p.check.pin ? [p.check.pin] : [], title: `${String((p.check.pin as { label?: string } | undefined)?.label || 'Booking')} → ${String(p.check.route)}` };
+      // booking emails: the routes whose customers would be written to
+      if (p.kind === 'booking_emails') return { maps: p.check.maps || [], highlight: ((p.check.routes || []) as { code: string }[]).map(r => r.code), pins: [], title: 'Routes to email' };
       return null;
     };
     const shows = new Set<string>([...FIRST_CARDS, ...(Array.isArray(ctx.cards) ? ctx.cards.map(String) : [])]);

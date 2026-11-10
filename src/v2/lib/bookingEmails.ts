@@ -8,6 +8,8 @@ import { lastAttempt } from './bookingCrew';
 import type { Booking, Services } from './bookings';
 
 export type BookingEmailKind = 'day_before' | 'next_try';
+/** What the Benny hands the Send booking emails screen (router state `benny`): the email, the day, the list and the routes. */
+export interface EmailPreset { kind: BookingEmailKind; date: string; list_id?: string | null; routes: { code: string; area: string; number: number }[] }
 export const KIND_LABEL: Record<BookingEmailKind, string> = { day_before: 'Day before', next_try: 'Next try' };
 
 const WORDS: [keyof Services, string][] = [['aeration', 'aeration'], ['dethatch', 'dethatching'], ['fertilizer', 'fertilizer'], ['seed', 'overseeding'], ['lime', 'lime']];

@@ -1,5 +1,5 @@
 import { describe as d, it, expect } from 'vitest';
-import { bookingSaved, buildBennyPlan, describe, type StartDayCheck } from './bennyActions';
+import { bookingSaved, buildBennyPlan, describe, emailsPreset, type StartDayCheck } from './bennyActions';
 import { planProblems } from './startSession';
 import { defaultRateCard } from './rateCard';
 import type { RosterRow } from './workerbook';
@@ -94,6 +94,21 @@ d('describe', () => {
     expect(many.title).toBe('Change 3575 Latimer St');
     expect(many.lines.slice(1)).toEqual(['Status: open → done', 'Route: none → RMD137', 'Field note: “Old” becomes “New”']);
   });
+  const emails = { ok: true, kind: 'day_before' as const, date: '2026-11-11', list: { id: 'l1', name: 'Fall Rejuv 2026' }, from: 'bcclientcare@propertystars.app',
+    routes: [{ code: 'NDEL27', area: 'NORTH DELTA #2', number: 27 }, { code: 'NDEL28', area: 'NORTH DELTA #2', number: 28 }, { code: 'NEWW01', area: 'NEW WESTMINSTER #1', number: 1 }],
+    counts: { bookings: 22, to_email: 19, no_email: 2, already_sent: 1 } };
+  it('the booking emails card says who gets one, and that nothing is sent from it', () => {
+    const c = describe({ kind: 'booking_emails', check: emails });
+    expect(c.title).toBe('Day-before emails for Wed, Nov 11');
+    expect(c.lines).toEqual(['Routes: NORTH DELTA #2 (2), NEW WESTMINSTER #1 (1)', '19 customers to email · 2 have no email · 1 already got it', 'From bcclientcare@propertystars.app',
+      'Nothing is sent from here: you read every email, then press Send.']);
+    expect(c.action).toBe('Open to read and send');
+    const one = describe({ kind: 'booking_emails', check: { ...emails, kind: 'next_try', counts: { bookings: 1, to_email: 1, no_email: 1, already_sent: 0 }, notes: ['Left out, not on this center’s maps: ZZZ99.'] } });
+    expect(one.title).toBe('Next-try emails for Wed, Nov 11');
+    expect(one.lines[1]).toBe('1 customer to email · 1 has no email');
+    expect(one.lines).toContain('Left out, not on this center’s maps: ZZZ99.');
+    expect(emailsPreset(emails)).toEqual({ kind: 'day_before', date: '2026-11-11', list_id: 'l1', routes: emails.routes });
+  });
   it('every card the app says it can show has its words', () => {
     const booking = { id: 'b1', address: '1 A St', status: 'open' as const };
     const move = { ok: true, date: '2026-11-10', a: { cn: 'I1', name: 'A B' }, b: { cn: 'I2', name: 'C D' } };
@@ -101,6 +116,7 @@ d('describe', () => {
       start_day: { kind: 'start_day', check: check() }, give_route: { kind: 'give_route', check: { ok: true, date: '2026-11-10', route: 'X1', worker: { cn: 'I1', name: 'A B' } } },
       partner: { kind: 'partner', check: move }, solo: { kind: 'solo', check: move },
       booking: { kind: 'booking', check: { ok: true, booking, change: { status: { from: 'open', to: 'done' } }, patch: { status: 'done' }, ask: { status: 'done' }, stamp: 't' } },
+      booking_emails: { kind: 'booking_emails', check: emails },
     };
     for (const k of CARDS) { expect(samples[k], k).toBeTruthy(); expect(describe(samples[k]).title, k).toBeTruthy(); }
   });

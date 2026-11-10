@@ -5,6 +5,8 @@
 //   partner    → RM map › Move worker › to another cart
 //   solo       → RM map › Move worker › own cart
 //   booking    → Bookings › List › save (status, notes, route of one Master Booking)
+// One card changes nothing: booking_emails opens Bookings › Send booking emails with the day and routes picked. The person
+// reads the emails there and sends them; the Benny never sends.
 import { getDay, listRoster, type RosterRow } from './workerbook';
 import { availableManagers, getSession, nextTeamName, planProblems, startSession, type Plan, type PlanManager, type PlanRoute, type PlanTeam } from './startSession';
 import { db, must } from './client';
@@ -14,6 +16,7 @@ import { centerService, type Service } from './permissions';
 import { appShowedDates, countBefore } from './payoutEngine';
 import { fullName } from './workerbook';
 import { saveBooking, type BookingPatch, type BookingStatus } from './bookings';
+import type { BookingEmailKind, EmailPreset } from './bookingEmails';
 
 export type TeamMode = 'roster' | 'solo' | 'pairs';
 export interface StartDayCheck {
@@ -42,7 +45,17 @@ export interface BookingCheck {
   /** the request, to run the same check again right before saving; stamp = when the booking last changed */
   ask: Record<string, string>; stamp: string; map?: string; route?: string;
 }
+/** The booking emails the Benny set up: who would get one (counts only), for the Send booking emails screen to write. */
+export interface EmailsCheck {
+  ok: boolean; problems?: string[]; kind: BookingEmailKind; date: string; list?: { id: string; name: string };
+  routes: { code: string; area: string; number: number }[]; maps?: string[];
+  counts: { bookings: number; to_email: number; no_email: number; already_sent: number }; from?: string; notes?: string[];
+}
+/** What the Send booking emails screen is opened with. */
+export const emailsPreset = (c: EmailsCheck): EmailPreset => ({ kind: c.kind, date: c.date, list_id: c.list?.id || null, routes: c.routes });
+
 export type BennyProposal =
+  | { kind: 'booking_emails'; check: EmailsCheck }
   | { kind: 'start_day'; check: StartDayCheck; team_mode?: TeamMode }
   | { kind: 'give_route'; check: GiveCheck }
   | { kind: 'partner'; check: MoveCheck }
@@ -102,6 +115,24 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         title: `Partner ${c.b?.name.split(' ')[0]} with ${c.a.name.split(' ')[0]}`,
         lines: [`${c.b?.name} joins ${aCart.join(' + ')}’s cart`, `${c.a.name.split(' ')[0]}’s routes stay with the cart`],
         action: 'Partner up',
+      };
+    }
+    case 'booking_emails': {
+      const c = p.check; const n = c.counts;
+      const pretty = new Date(c.date + 'T12:00').toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
+      const byMap = new Map<string, number>();
+      for (const r of c.routes) byMap.set(r.area, (byMap.get(r.area) || 0) + 1);
+      const maps = [...byMap].map(([m, k]) => `${m} (${k})`);
+      return {
+        title: `${c.kind === 'next_try' ? 'Next-try' : 'Day-before'} emails for ${pretty}`,
+        lines: [
+          `Routes: ${maps.length > 4 ? `${c.routes.length} on ${maps.length} maps` : maps.join(', ') || 'none'}`,
+          `${n.to_email} customer${n.to_email === 1 ? '' : 's'} to email${n.no_email ? ` · ${n.no_email} ha${n.no_email === 1 ? 's' : 've'} no email` : ''}${n.already_sent ? ` · ${n.already_sent} already got it` : ''}`,
+          ...(c.from ? [`From ${c.from}`] : []),
+          ...(c.notes || []),
+          'Nothing is sent from here: you read every email, then press Send.',
+        ],
+        action: 'Open to read and send',
       };
     }
     case 'booking': {
@@ -264,5 +295,7 @@ export async function doProposal(p: BennyProposal, center: CenterLite): Promise<
   if (p.kind === 'start_day') return startDayFromBenny(p, center);
   if (p.kind === 'give_route') return giveRouteFromBenny(p, center.id);
   if (p.kind === 'booking') return bookingFromBenny(p, center.id);
+  // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)
+  if (p.kind === 'booking_emails') throw new Error('Open Bookings › Send booking emails to read and send these.');
   return moveFromBenny(p, center.id);
 }
