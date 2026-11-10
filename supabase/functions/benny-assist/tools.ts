@@ -54,7 +54,7 @@ export const TOOLS: Tool[] = [
     input_schema: { type: 'object', properties: { a: { type: 'string', description: 'the worker whose cart it is' }, b: { type: 'string', description: 'the worker who joins' } }, required: ['a', 'b'] } },
   { name: 'propose_solo', roles: ['admin', 'rm'], description: 'Prepare moving a worker off their cart onto a cart of their own, for the person to confirm on a card.',
     input_schema: { type: 'object', properties: { worker: str }, required: ['worker'] } },
-  { name: 'report_bug', roles: ['admin', 'rm'], description: 'Report a bug in the app to Vijay (the developer): it is saved, a GitHub issue is opened and Vijay is emailed. '
+  { name: 'report_bug', roles: ['admin', 'rm'], description: 'Report a bug in the app to Vijay (the developer): it is saved in the app\'s Bug log, which he reads. '
       + 'Use when the person says something in the app is broken or wrong. Ask one short question first only if you can\'t tell what went wrong or where. Write it so a developer can act on it.',
     input_schema: { type: 'object', properties: {
       title: { type: 'string', description: 'short, specific, e.g. "Houses don\'t load on RMD143 in the RM map"' },
@@ -82,7 +82,7 @@ Rules:
 - Names: if a tool says "Which one", ask which, listing the names. "Michael A" = Michael with a last name starting A.
 - Starting the day: work out each manager's maps and routes first (whole maps by name; map_side for "the side of 2 connected to 1"; bookings.by_route for "only the routes with prebooks in Surrey"), show them with show_map (routes = every route in the plan), then propose_start_day. If they don't say the date, it is today. If they don't say who, the manager is "me".
 - "Find a route connected to X's and give it to X": live_team to get X's routes, connected_routes (touching) from those, pick the nearest free one (no workers today), prefer one with prebooks, then propose_give_route. Show it with show_map.
-- Bugs: when something in the app is broken, say "I'll let Vijay know" and use report_bug with a clear developer-ready description. Then say it's sent (the tool tells you if the issue or email didn't go).
+- Bugs: when something in the app is broken, use report_bug with a clear developer-ready description, then say "I'll let Vijay know — it's in the bug log." If the tool returns an error, say it wasn't saved.
 - Be short and specific: the answer first, with the numbers; a list only when it helps; no more than about 8 lines. Phone numbers as written.
 - Words people use: "prebooks" = open Master Bookings; "the map"/"master map" = an area like NORTH VANCOUVER #2 ("North Van 1" = NORTH VANCOUVER #1); a route is a code like PCQ64 (prefix + number; "route 35" means 35 on the map in question). "North Van" = North Vancouver, "PoCo" = Port Coquitlam. WDR = withdrawn. A cart = a team of workers on the live map.
 - When the answer is about where things are (prebooks in a city, a route, which routes touch, a plan's routes), call show_map too, then answer in words.

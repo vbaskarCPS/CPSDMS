@@ -1,6 +1,6 @@
 // scripts/benny-server-dryrun.mjs — run: node scripts/benny-server-dryrun.mjs
 // Dry run of the Benny's server (supabase/functions/benny-assist) with a scripted model and a stand-in database, so its
-// glue can be checked without deploying: sign-in, roles, tools → database calls, cards, the map with a change, bug reports.
+// glue can be checked without deploying: sign-in, roles, tools → database calls, cards, the map with a change, the bug log.
 import { build } from 'esbuild';
 import assert from 'node:assert/strict';
 
@@ -27,8 +27,6 @@ globalThis.Deno = { env: { get: k => ({ ANTHROPIC_API_KEY: 'test', SUPABASE_URL:
 globalThis.fetch = async (url, init) => {
   const u = String(url); const body = init?.body ? JSON.parse(init.body) : null; state.http.push([u, body]);
   if (u.includes('api.anthropic.com')) { const next = state.script.shift(); assert(next, 'the model was asked more times than scripted'); state.lastAsk = body; return new Response(JSON.stringify(next), { status: 200 }); }
-  if (u.includes('api.github.com')) return new Response(JSON.stringify({ html_url: 'https://github.com/x/y/issues/7' }), { status: 201 });
-  if (u.includes('api.resend.com')) return new Response('{}', { status: 200 });
   throw new Error('unexpected fetch ' + u);
 };
 await import('data:text/javascript;base64,' + Buffer.from(r.outputFiles[0].text).toString('base64'));
@@ -79,26 +77,18 @@ assert.equal(a.body.map.title, 'Open prebooks in Surrey'); assert.equal(a.body.m
 assert(String(state.lastAsk.messages.at(-1).content[0].content).includes('"pins":1'));
 console.log('4 map pins ✓');
 
-// 5. bug report without the secrets: saved, and says what didn't go
-state.script = [turn(use('report_bug', { title: 'Houses don’t load on RMD143', what_happened: 'No houses drawn', steps: ['Open RM map', 'Tap RMD143'] })), say('Saved; the issue and email didn’t go.')];
-a = await ask('houses arent loading on rmd143', { path: '/app/rm', diag: { errors: ['12:00:01 TypeError: x'] } });
-assert.deepEqual(fns(), ['benny_ok_any', 'benny_bug_save', 'benny_bug_sent']);
-assert.equal(state.rpc[2][1].p_emailed, false); assert(state.rpc[2][1].p_error.includes('GITHUB_TOKEN is not set'));
-assert(!state.http.some(h => h[0].includes('github') || h[0].includes('resend')));
-console.log('5 bug report, no secrets ✓');
+// 5. a bug report goes into the app's own log, with what the page knew — and nowhere else
+state.script = [turn(use('report_bug', { title: 'Houses don’t load on RMD143', what_happened: 'No houses drawn', steps: ['Open RM map', 'Tap RMD143'], severity: 'blocking' })), say('I’ll let Vijay know — it’s in the bug log.')];
+a = await ask('houses arent loading on rmd143', { path: '/app/rm', screen: 'rm', user_name: 'Franklyn Mitchell', center_name: 'BC Fall RJ', diag: { ua: 'UA', viewport: '390×844', errors: ['12:00:01 TypeError: x'] } });
+assert.deepEqual(fns(), ['benny_ok_any', 'benny_bug_save']);
+const saved = state.rpc[1][1];
+assert.equal(saved.p_title, 'Houses don’t load on RMD143'); assert.equal(saved.p_path, '/app/rm'); assert.equal(saved.p_center, 'c1');
+assert.equal(saved.p_report.user, 'Franklyn Mitchell'); assert.deepEqual(saved.p_report.steps, ['Open RM map', 'Tap RMD143']); assert.deepEqual(saved.p_report.diag.errors, ['12:00:01 TypeError: x']);
+assert.deepEqual(state.http.map(h => new URL(h[0]).host), ['api.anthropic.com', 'api.anthropic.com']);   // the model, twice; nothing else
+assert(String(state.lastAsk.messages.at(-1).content[0].content).includes('"saved":true'));
+console.log('5 bug report → the app’s log only ✓');
 
-// 6. bug report with the secrets: GitHub issue + email, linked
-state.env = { GITHUB_TOKEN: 'gh', RESEND_API_KEY: 're', BENNY_BUG_EMAIL: 'owner@example.test' };
-state.script = [turn(use('report_bug', { title: 'Houses don’t load on RMD143', what_happened: 'No houses drawn', expected: 'Houses', where: 'RM map', severity: 'blocking' })), say('I’ll let Vijay know. It’s sent.')];
-a = await ask('houses arent loading on rmd143', { path: '/app/rm', user_name: 'Franklyn Mitchell', center_name: 'BC Fall RJ', diag: { ua: 'UA', viewport: '390×844', build: 'abc', errors: ['12:00:01 TypeError: x'] } });
-const gh = state.http.find(h => h[0].includes('api.github.com')); const mail = state.http.find(h => h[0].includes('api.resend.com'));
-assert.equal(gh[0], 'https://api.github.com/repos/vbaskarCPS/CPSDMS/issues'); assert(gh[1].title.startsWith('[Benny] Houses')); assert(gh[1].body.includes('TypeError: x') && gh[1].body.includes('/app/rm') && gh[1].body.includes('Franklyn Mitchell'));
-assert.deepEqual(mail[1].to, ['owner@example.test']); assert(mail[1].text.includes('https://github.com/x/y/issues/7'));
-assert.equal(state.rpc[2][1].p_issue_url, 'https://github.com/x/y/issues/7'); assert.equal(state.rpc[2][1].p_emailed, true); assert.equal(state.rpc[2][1].p_error, null);
-console.log('6 bug report → issue + email ✓');
-console.log('--- the GitHub issue body ---\n' + gh[1].body + '\n---');
-
-// 7. who gets in
+// 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;
 state.role = null; a = await ask('hi'); assert.equal(a.status, 403); state.role = 'admin';
 a = await ask('', {}, { messages: [{ role: 'assistant', content: 'hello' }] }); assert.equal(a.status, 400);
@@ -109,4 +99,4 @@ assert.equal(state.lastAsk.messages[0].role, 'user'); assert.equal(state.lastAsk
 // too many steps stops
 state.script = Array.from({ length: 8 }, () => turn(use('live_team', {})));
 a = await ask('loop'); assert(a.body.reply.startsWith('That took too many steps'));
-console.log('7 sign-in, roles, history, step limit ✓');
+console.log('6 sign-in, roles, history, step limit ✓');

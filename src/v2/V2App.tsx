@@ -10,6 +10,7 @@ import { Login, ChangePassword, AccountSetup } from './features/auth/Login';
 import { Users } from './features/admin/Users';
 import { Centers } from './features/admin/Centers';
 import { Availability } from './features/admin/Availability';
+import { BugLog } from './features/admin/BugLog';
 import { RateCards } from './features/workerbook/RateCards';
 import { Contractors } from './features/workerbook/Contractors';
 import { Crew } from './features/workerbook/Crew';
@@ -97,6 +98,7 @@ const V2Routes: React.FC = () => (
     <Route path="admin/users" element={<Guard perm="sa_users"><Users /></Guard>} />
     <Route path="admin/centers" element={<Guard perm="sa_users"><Centers /></Guard>} />
     <Route path="admin/availability" element={<Guard perm="sa_users"><Availability /></Guard>} />
+    <Route path="admin/bugs" element={<Guard perm="sa_users"><BugLog /></Guard>} />
     <Route path="workerbook/rate-cards" element={<Guard perm="workerbook"><RateCards /></Guard>} />
     <Route path="workerbook/contractors" element={<Guard perm="workerbook"><Contractors /></Guard>} />
     <Route path="workerbook/status" element={<Guard perm="workerbook"><Contractors /></Guard>} />

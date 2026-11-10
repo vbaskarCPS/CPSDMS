@@ -92,6 +92,24 @@ export function speak(text: string): void {
 }
 export const stopSpeaking = () => { try { window.speechSynthesis?.cancel(); } catch { /* none */ } };
 
+// ── the bug log (Super Admin › Bug log): what people told the Benny was broken ──
+export interface BugReport {
+  id: string; created_at: string; title: string; status: 'open' | 'done'; resolved_at?: string; resolved_by?: string;
+  by?: string; center?: string; path?: string;
+  report: { what_happened?: string; expected?: string; steps?: string[]; where?: string; severity?: 'blocking' | 'annoying' | 'minor';
+    screen?: string | null; rm_manager?: string | null; diag?: BennyContext['diag'] | null };
+}
+export interface BugLog { open: number; done: number; bugs: BugReport[] }
+export async function listBugs(status: 'open' | 'done' | null): Promise<BugLog> {
+  const { data, error } = await db.rpc('benny_bugs_list', { p_status: status });
+  if (error) throw new Error(error.message);
+  return (data as BugLog) || { open: 0, done: 0, bugs: [] };
+}
+export async function resolveBug(id: string, done: boolean): Promise<void> {
+  const { error } = await db.rpc('benny_bug_resolve', { p_id: id, p_done: done });
+  if (error) throw new Error(error.message);
+}
+
 // ── for bug reports: the last errors on the page, the browser and the app build ──
 const errors: string[] = [];
 let listening = false;

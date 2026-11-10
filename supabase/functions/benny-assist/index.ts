@@ -9,16 +9,13 @@
 // Who: super admins (everything), route managers (their own team on the live map: carts, routes, connected routes).
 // Runs as the signed-in person: their JWT is passed through, so every lookup (benny_* database functions) is checked by
 // the database against their permissions and the centers they can see. The Benny has no database access of its own.
-// Bug reports: saved in the app, then a GitHub issue (GITHUB_TOKEN, BENNY_GITHUB_REPO) and an email (RESEND_API_KEY,
-// BENNY_BUG_EMAIL). Secrets are set by the owner; none are in this file.
+// Bug reports are saved in the app's own log (benny_bugs, shown in Super Admin › Bug log): no GitHub issue, no email.
 // Model: BENNY_MODEL secret, else a Sonnet-class model. The Claude key lives only in ANTHROPIC_API_KEY.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { TOOLS, system, toolCall, toolsFor, type Ctx, type ProposalKind, type Role } from './tools.ts';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
 const WORKSPACE = Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '';
-const REPO = Deno.env.get('BENNY_GITHUB_REPO') || 'vbaskarCPS/CPSDMS';
-const MAIL_FROM = Deno.env.get('BENNY_MAIL_FROM') || 'benny@propertystars.app';
 const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -29,46 +26,13 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 type Msg = { role: 'user' | 'assistant'; content: unknown };
 type Proposal = { kind: ProposalKind; check: Record<string, unknown>; team_mode?: string };
 
+/** A bug report goes into the app's own log (Super Admin › Bug log), with what the page knew when it happened. */
 async function reportBug(sb: SupabaseClient, ctx: Ctx, input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const report = { ...input, user: ctx.user_name || null, center: ctx.center_name || null, path: ctx.path || null, screen: ctx.screen || null,
     rm_manager: ctx.rm_manager || null, diag: ctx.diag || null, at: new Date().toISOString() };
   const { data: id, error } = await sb.rpc('benny_bug_save', { p_center: ctx.center_id || null, p_path: ctx.path || null, p_title: String(input.title || ''), p_report: report });
   if (error) return { error: error.message };
-  const steps = Array.isArray(input.steps) && input.steps.length ? (input.steps as string[]).map((s, i) => `${i + 1}. ${s}`).join('\n') : '_Not given_';
-  const errs = ctx.diag?.errors?.length ? '```\n' + ctx.diag.errors.slice(-8).join('\n').slice(0, 3000) + '\n```' : '_None caught on the page_';
-  const body = [
-    `**Reported by** ${ctx.user_name || 'someone'} through The Benny${ctx.center_name ? ` · ${ctx.center_name}` : ''} · ${input.severity || 'severity not given'}`,
-    '', '### What happened', String(input.what_happened || ''),
-    '', '### Expected', String(input.expected || '_Not given_'),
-    '', '### Steps', steps,
-    '', '### Where', `${input.where || ''}\n\nScreen: \`${ctx.path || '?'}\`${ctx.rm_manager ? ` (RM map for ${ctx.rm_manager})` : ''}`,
-    '', '### Browser', `${ctx.diag?.ua || '?'} · ${ctx.diag?.viewport || '?'} · build ${ctx.diag?.build || '?'}`,
-    '', '### Recent errors on the page', errs,
-    '', `<sub>Benny bug ${id}</sub>`,
-  ].join('\n');
-  let issueUrl: string | null = null; let emailed = false; const errors: string[] = [];
-  const gh = Deno.env.get('GITHUB_TOKEN');
-  if (gh) {
-    const r = await fetch(`https://api.github.com/repos/${REPO}/issues`, {
-      method: 'POST', headers: { Authorization: `Bearer ${gh}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'User-Agent': 'the-benny' },
-      body: JSON.stringify({ title: `[Benny] ${String(input.title).slice(0, 180)}`, body, labels: ['bug', 'from-benny'] }),
-    }).catch(e => ({ ok: false, status: 0, text: () => Promise.resolve(String(e)) } as unknown as Response));
-    if (r.ok) issueUrl = (await r.json() as { html_url?: string }).html_url || null;
-    else errors.push(`GitHub ${r.status}: ${(await r.text()).slice(0, 160)}`);
-  } else errors.push('GITHUB_TOKEN is not set');
-  const resend = Deno.env.get('RESEND_API_KEY'); const to = Deno.env.get('BENNY_BUG_EMAIL');
-  if (resend && to) {
-    const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!));
-    const r = await fetch('https://api.resend.com/emails', {
-      method: 'POST', headers: { Authorization: `Bearer ${resend}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: `The Benny <${MAIL_FROM}>`, to: [to], subject: `Bug: ${String(input.title).slice(0, 150)}`,
-        text: `${issueUrl ? `GitHub issue: ${issueUrl}\n\n` : ''}${body}`,
-        html: `${issueUrl ? `<p><a href="${issueUrl}">Open the GitHub issue</a></p>` : ''}<pre style="white-space:pre-wrap;font:14px/1.5 system-ui,sans-serif">${esc(body)}</pre>` }),
-    }).catch(e => ({ ok: false, status: 0, text: () => Promise.resolve(String(e)) } as unknown as Response));
-    if (r.ok) emailed = true; else errors.push(`Email ${r.status}: ${(await r.text()).slice(0, 160)}`);
-  } else errors.push(!resend ? 'RESEND_API_KEY is not set' : 'BENNY_BUG_EMAIL is not set');
-  await sb.rpc('benny_bug_sent', { p_id: id, p_issue_url: issueUrl, p_emailed: emailed, p_error: errors.join('; ') || null });
-  return { saved: true, issue: issueUrl, emailed, problems: errors };
+  return { saved: true, id, where: 'the Bug log in Super Admin' };
 }
 
 async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, input: Record<string, unknown>): Promise<{ out: unknown; proposal?: Proposal }> {
