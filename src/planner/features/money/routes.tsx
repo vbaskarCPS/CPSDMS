@@ -4,6 +4,9 @@ import { Transactions } from './screens/Transactions';
 import { Budget } from './screens/Budget';
 import { Accounts } from './screens/Accounts';
 import { Recurring } from './screens/Recurring';
+import { AddReceipt } from './screens/AddReceipt';
+import { AddCash } from './screens/AddCash';
+import { Receipts } from './screens/Receipts';
 
 export const moneyRoutes: { path: string; element: JSX.Element }[] = [
   { path: '/money', element: <Overview /> },
@@ -12,6 +15,9 @@ export const moneyRoutes: { path: string; element: JSX.Element }[] = [
   { path: '/money/budget', element: <Budget /> },
   { path: '/money/accounts', element: <Accounts /> },
   { path: '/money/recurring', element: <Recurring /> },
+  { path: '/money/receipts', element: <Receipts /> },
+  { path: '/money/receipt', element: <AddReceipt /> },
+  { path: '/money/cash', element: <AddCash /> },
   // Plaid sends people back here after an OAuth bank's own sign-in page (registered in the Plaid dashboard)
   { path: '/plaid-oauth', element: <Accounts resume /> },
 ];

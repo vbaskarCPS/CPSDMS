@@ -1,15 +1,25 @@
-// /money — the month at a glance.
-import { useMemo, useState } from 'react';
+// /money — the month at a glance. Snap a receipt or log cash from the top; opening it also matches any receipt
+// whose card charge has come in since (receipts.ts matchPending).
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Upload, ListOrdered, PiggyBank, Landmark, RefreshCw, Wallet } from 'lucide-react';
-import { Page, Header, Card, Button, Progress, Stat, Empty, Bars } from '../../../ui/primitives';
+import { ChevronLeft, ChevronRight, Upload, ListOrdered, PiggyBank, Landmark, RefreshCw, Wallet, Camera, Banknote, Receipt as ReceiptIcon } from 'lucide-react';
+import { Page, Header, Card, Button, Progress, Stat, Empty, Bars, useToast } from '../../../ui/primitives';
 import { useMoney } from '../useMoney';
 import { budgetTotal, dailySpend, money, monthKey, monthLabel, shiftMonth, sumByCategory, totals, daysInMonth } from '../lib';
 import { CategoryIcon, categoryColor } from '../CategoryIcon';
+import { matchPending } from '../receipts';
 
 export function Overview() {
   const [m, setM] = useState(monthKey());
-  const { accounts, months, budget, loading, error } = useMoney(shiftMonth(m, -3), m);
+  const { accounts, months, budget, loading, error, reload } = useMoney(shiftMonth(m, -3), m);
+  const [toast, say] = useToast();
+  // receipts waiting for their card charge: match the ones that have come in
+  useEffect(() => {
+    let on = true;
+    matchPending().then(res => { if (on && res.linked.length) { say(`${res.linked.length} receipt${res.linked.length === 1 ? '' : 's'} matched to the bank`, 'good'); void reload(); } }).catch(() => undefined);
+    return () => { on = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const rows = months[m] || [];
   const t = useMemo(() => totals(rows), [rows]);
   const cats = useMemo(() => Object.entries(sumByCategory(rows)).sort((a, b) => b[1] - a[1]), [rows]);
@@ -33,6 +43,11 @@ export function Overview() {
 
       {error && <p className="pl-error">{error}</p>}
 
+      <div className="mo-quick">
+        <Link to="/money/receipt" className="pl-btn"><Camera /> Receipt</Link>
+        <Link to="/money/cash" className="pl-btn"><Banknote /> Cash</Link>
+      </div>
+
       {!loading && !anyData ? (
         <Card><Empty icon={<Wallet />} title="No transactions yet" blurb="Download a CSV from TD EasyWeb and import it here. Categories, budgets and recurring bills fill in from there."
           action={<Link to="/money/import" className="pl-btn pl-btn--primary">Import a CSV</Link>} /></Card>
@@ -51,6 +66,7 @@ export function Overview() {
           <div className="mo-links">
             <Link to={`/money/transactions?m=${m}`}><ListOrdered /> All</Link>
             <Link to="/money/budget"><PiggyBank /> Budget</Link>
+            <Link to="/money/receipts"><ReceiptIcon /> Receipts</Link>
             <Link to="/money/recurring"><RefreshCw /> Recurring</Link>
             <Link to="/money/accounts"><Landmark /> Accounts</Link>
           </div>
@@ -91,7 +107,7 @@ export function Overview() {
               <div className="pl-list">
                 {live.map(a => (
                   <div key={a.id} className="mo-acct">
-                    <div className="mo-acct__icon"><Landmark /></div>
+                    <div className="mo-acct__icon">{a.type === 'cash' ? <Wallet /> : <Landmark />}</div>
                     <div className="pl-grow"><b>{a.name}</b><br /><small className="pl-muted">{a.type}{a.last4 ? ` ····${a.last4}` : ''}{a.balanceAsOf ? ` · as of ${a.balanceAsOf}` : ''}</small></div>
                     <span className="mo-amt">{a.balance === undefined ? '—' : money(a.balance)}</span>
                   </div>
@@ -101,6 +117,7 @@ export function Overview() {
           )}
         </>
       )}
+      {toast}
     </Page>
   );
 }

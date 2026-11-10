@@ -1,9 +1,14 @@
 // src/planner/features/money/types.ts — the finance tracker's documents (see ../../lib/docs).
-export type AccountType = 'chequing' | 'savings' | 'credit';
+export type AccountType = 'chequing' | 'savings' | 'credit' | 'cash';
 /** Set when the account is connected to the bank through Plaid (planner-plaid edge function). While it is,
  *  the bank's rows are the record and this account's CSV rows are hidden (kept, not deleted). */
 export interface AccountLink { itemId: string; plaidId: string; institution?: string; linkedAt: string; removedAt?: string }
-export interface Account { id: string; name: string; type: AccountType; last4?: string; balance?: number; balanceAsOf?: string; order: number; archived?: boolean; plaid?: AccountLink }
+export interface Account {
+  id: string; name: string; type: AccountType; last4?: string; balance?: number; balanceAsOf?: string; order: number; archived?: boolean; plaid?: AccountLink;
+  /** The cash wallet (id 'cash'): the first day cash spending was logged. From then on an ATM withdrawal moves money
+   *  into the wallet (shown as a transfer) and what's bought with the cash is the spending, so nothing counts twice. */
+  cashSince?: string;
+}
 
 export type TxnSource = 'rule' | 'builtin' | 'ai' | 'manual' | 'plaid';   // 'plaid': Plaid's own category
 export interface Txn {
@@ -17,7 +22,35 @@ export interface Txn {
   category: string;
   source: TxnSource;
   note?: string;
+  /** Display only (never saved): an ATM withdrawal shown as money moved into the cash wallet. */
+  toWallet?: boolean;
 }
+
+/** kind 'receipt', key `${date}~${id}`: a photo of a receipt or of a payment screen, read by the AI. A card receipt is
+ *  matched to its bank row (and gives that row its category); a cash receipt makes a row in the cash wallet. */
+export interface ReceiptItem { name: string; amount: number; category: string }
+export interface Receipt {
+  id: string;
+  date: string;              // YYYY-MM-DD
+  time?: string;
+  merchant: string;          // as printed, e.g. "Costco Wholesale"
+  total: number;             // positive: what was paid (tip included)
+  tax?: number;
+  tip?: number;
+  payment: 'card' | 'cash';
+  cardLast4?: string;
+  items: ReceiptItem[];
+  category: string;          // where most of the money went
+  note?: string;
+  kind?: 'receipt' | 'transaction';
+  photos: number;            // kind 'receiptimg', keys `${id}~0` …
+  txnId?: string;            // the bank row it matched, or its cash row
+  txnMonth?: string;         // YYYY-MM of that row
+  matchedAt?: string;
+  matchedBy?: 'auto' | 'hand' | 'cash';
+  addedAt: string;
+}
+export const CASH_ACCOUNT_ID = 'cash';
 export interface TxnMonth { rows: Txn[] }        // kind 'txns', key YYYY-MM
 export interface Rule { category: string }       // kind 'rule', key = merchant
 export type Budget = Record<string, number>;     // kind 'budget', key 'current'

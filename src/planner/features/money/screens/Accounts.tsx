@@ -1,7 +1,7 @@
 // /money/accounts — the accounts: connected banks (Plaid) and the ones the CSVs come from. Archiving hides
 // one; nothing is ever removed. /plaid-oauth lands here too, to finish a bank's own sign-in page.
 import { useState } from 'react';
-import { Landmark, Link2, Plus, Archive, ArchiveRestore } from 'lucide-react';
+import { Landmark, Link2, Plus, Archive, ArchiveRestore, Wallet } from 'lucide-react';
 import { Page, Header, Card, Button, Field, Input, Sheet, Empty, useToast, uid } from '../../../ui/primitives';
 import { useMoney } from '../useMoney';
 import { money, saveAccount } from '../lib';
@@ -27,8 +27,8 @@ export function Accounts({ resume }: { resume?: boolean } = {}) {
 
   const row = (a: Account) => (
     <button key={a.id} type="button" className="mo-acct" style={{ width: '100%', background: 'none', border: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => setEdit({ ...a })}>
-      <div className="mo-acct__icon">{a.plaid && !a.plaid.removedAt ? <Link2 /> : <Landmark />}</div>
-      <div className="pl-grow"><b>{a.name}</b><br /><small className="pl-muted">{a.type}{a.last4 ? ` ····${a.last4}` : ''}{a.plaid && !a.plaid.removedAt ? ` · connected${a.plaid.institution ? ` to ${a.plaid.institution}` : ''}` : ''}{a.balanceAsOf ? ` · balance as of ${a.balanceAsOf}` : ''}</small></div>
+      <div className="mo-acct__icon">{a.plaid && !a.plaid.removedAt ? <Link2 /> : a.type === 'cash' ? <Wallet /> : <Landmark />}</div>
+      <div className="pl-grow"><b>{a.name}</b><br /><small className="pl-muted">{a.type === 'cash' ? `cash wallet${a.cashSince ? ` · counting from ${a.cashSince}` : ''}` : a.type}{a.last4 ? ` ····${a.last4}` : ''}{a.plaid && !a.plaid.removedAt ? ` · connected${a.plaid.institution ? ` to ${a.plaid.institution}` : ''}` : ''}{a.balanceAsOf ? ` · balance as of ${a.balanceAsOf}` : ''}</small></div>
       <span className="mo-amt">{a.balance === undefined ? '—' : money(a.balance)}</span>
     </button>
   );
@@ -50,9 +50,16 @@ export function Accounts({ resume }: { resume?: boolean } = {}) {
               <Field label="Type">
                 <select className="pl-input" value={edit.type} onChange={e => setEdit({ ...edit, type: e.target.value as AccountType })}>
                   <option value="chequing">Chequing</option><option value="savings">Savings</option><option value="credit">Credit card</option>
+                  {edit.type === 'cash' && <option value="cash">Cash wallet</option>}
                 </select>
               </Field>
-              <Field label="Last 4 digits"><Input inputMode="numeric" maxLength={4} value={edit.last4 || ''} onChange={e => setEdit({ ...edit, last4: e.target.value.replace(/\D/g, '') })} /></Field>
+              {edit.type === 'cash' ? (
+                <Field label="Counting cash from" hint="ATM withdrawals from this day on move cash into the wallet instead of counting as spending">
+                  <Input type="date" value={edit.cashSince || ''} onChange={e => setEdit({ ...edit, cashSince: e.target.value || undefined })} />
+                </Field>
+              ) : (
+                <Field label="Last 4 digits"><Input inputMode="numeric" maxLength={4} value={edit.last4 || ''} onChange={e => setEdit({ ...edit, last4: e.target.value.replace(/\D/g, '') })} /></Field>
+              )}
             </div>
             <Button primary block disabled={busy || !edit.name.trim()} onClick={() => void save(edit)}>{busy ? 'Saving…' : 'Save'}</Button>
             {accounts.some(a => a.id === edit.id) && (

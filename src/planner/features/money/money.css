@@ -24,7 +24,30 @@
 .mo-file svg { width: 28px; height: 28px; color: var(--accent); }
 .mo-budget-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
 .mo-budget-row .pl-input { max-width: 120px; text-align: right; }
-.mo-links { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.mo-links { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 .mo-links a { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); text-decoration: none; font-size: 11px; font-weight: 600; color: var(--ink-2); }
 .mo-links a svg { width: 20px; height: 20px; color: var(--accent); }
 .mo-search { position: sticky; top: 0; background: var(--bg); padding: 4px 0 8px; z-index: 2; }
+
+/* receipts and cash */
+.mo-quick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mo-quick .pl-btn { gap: 8px; font-weight: 600; text-decoration: none; color: inherit; }
+.mo-quick svg { width: 18px; height: 18px; color: var(--accent); }
+.mo-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mo-rcpt-row { width: 100%; background: none; border: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+.mo-status { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.mo-status--good { color: var(--good); background: color-mix(in srgb, var(--good) 12%, transparent); }
+.mo-status--amber { color: var(--amber-2); background: color-mix(in srgb, var(--amber-2) 14%, transparent); }
+.mo-status--muted { color: var(--ink-2); background: var(--bg-2); }
+.mo-has-rcpt { width: 13px; height: 13px; margin-left: 5px; vertical-align: -1px; color: var(--accent); }
+.mo-rcpt-photos { display: flex; gap: 8px; overflow-x: auto; max-height: 48vh; }
+.mo-rcpt-photos img { max-height: 48vh; max-width: 100%; border-radius: 10px; border: 1px solid var(--line); background: #fff; object-fit: contain; flex: none; }
+.mo-rcpt-lines summary { cursor: pointer; font-size: 14px; font-weight: 600; padding: 4px 0; }
+.mo-rcpt-line { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; border-top: 1px solid var(--line); }
+.mo-rcpt-line span.pl-grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mo-rcpt-line select { font-size: 12px; max-width: 120px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-2); color: inherit; padding: 2px 4px; }
+.mo-rcpt-match { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); }
+.mo-rcpt-match p { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.mo-rcpt-match p svg, .mo-rcpt-result svg { width: 18px; height: 18px; flex: none; color: var(--accent); }
+.mo-rcpt-result { display: flex; align-items: flex-start; gap: 10px; font-size: 15px; line-height: 1.4; }
+.mo-rcpt-warn { font-size: 13px; padding: 8px 12px; border-radius: 10px; color: var(--amber-2); background: color-mix(in srgb, var(--amber-2) 12%, transparent); }

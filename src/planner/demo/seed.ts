@@ -161,5 +161,19 @@ export function demoSeed(): SeedDoc[] {
     { role: 'assistant', content: "Good one. Goblet squat went 45 × 11, 11, 10 — first time at 45 and the knees held, so that's the real win. Bench stayed at 30s for 13, 12, 12: ready for 35 next time. One-arm row finally matched sides at 30 × 12. You noted the right hip was tight on squats, which is why tomorrow is a mobility night rather than another lift. Keep the shake at 11 and get the lights out by 1 — Thursday's session is the one you want to be fresh for.", at: iso(today, '22:10') },
   ] });
   put('prefs', 'habitsSeeded', { seeded: true });
+
+  // ── money: a card with this month's charges (yesterday's Costco run is the one the sample receipt matches)
+  put('account', 'visa', { id: 'visa', name: 'TD Visa', type: 'credit', last4: '4421', order: 0 });
+  const txn = (id: string, date: string, desc: string, merchant: string, amount: number, category: string) =>
+    ({ id, date, desc, merchant, amount, accountId: 'visa', category, source: 'builtin' });
+  const rows = [
+    txn('d1', addDays(today, -6), 'NO FRILLS #3121', 'NO FRILLS', -64.18, 'Groceries'),
+    txn('d2', addDays(today, -5), 'TIM HORTONS #2231', 'TIM HORTONS', -6.42, 'Coffee'),
+    txn('d3', addDays(today, -4), 'ESSO 7741', 'ESSO', -58.5, 'Gas'),
+    txn('d4', addDays(today, -3), 'NETFLIX.COM', 'NETFLIX.COM', -20.99, 'Subscriptions'),
+    txn('d5', addDays(today, -2), 'SHOPPERS DRUG MART #1022', 'SHOPPERS DRUG MART', -31.6, 'Health'),
+    txn('d6', y1, 'COSTCO WHOLESAL W540', 'COSTCO WHOLESAL', -182.37, 'Groceries'),
+  ].filter(r => r.date.slice(0, 7) === today.slice(0, 7));
+  if (rows.length) put('txns', today.slice(0, 7), { rows });
   return docs;
 }
