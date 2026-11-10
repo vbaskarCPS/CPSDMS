@@ -1,14 +1,17 @@
-// /money/transactions — every line, grouped by day; tap the category to change it (and teach a rule).
-import { useMemo, useState } from 'react';
+// /money/transactions — every line, grouped by day; tap the category to change it (and teach a rule). A charge with a
+// receipt shows a receipt mark and opens it; a cash row without a receipt can be removed.
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, X } from 'lucide-react';
+import { ReceiptText, Search, Trash2, X } from 'lucide-react';
 import { Page, Header, Card, Button, Input, Sheet, Empty, useToast } from '../../../ui/primitives';
 import { putDoc } from '../../../lib/docs';
 import { useMoney, allRows } from '../useMoney';
 import { CATEGORIES } from '../categories';
-import { dayLabel, money, monthKey, monthLabel, recategorize, shiftMonth } from '../lib';
+import { dayLabel, money, monthKey, monthLabel, niceName, recategorize, shiftMonth } from '../lib';
+import { loadReceipts, removeCashRow } from '../receipts';
+import { ReceiptSheet } from '../ReceiptSheet';
 import { CategoryIcon } from '../CategoryIcon';
-import type { Txn } from '../types';
+import type { Receipt, Txn } from '../types';
 
 export function Transactions() {
   const [params, setParams] = useSearchParams();
@@ -16,11 +19,16 @@ export function Transactions() {
   const cat = params.get('cat') || '';
   const acc = params.get('acc') || '';
   const q = params.get('q') || '';
-  const { accounts, months, loading, setData } = useMoney(shiftMonth(m, -11), m);   // a year back, so "apply to others" reaches
+  const { accounts, months, loading, setData, reload } = useMoney(shiftMonth(m, -11), m);   // a year back, so "apply to others" reaches
   const [pick, setPick] = useState<Txn | null>(null);
   const [busy, setBusy] = useState(false);
   const [applyAll, setApplyAll] = useState(true);
   const [toast, say] = useToast();
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [openReceipt, setOpenReceipt] = useState<Receipt | null>(null);
+  const [sure, setSure] = useState(false);
+  useEffect(() => { let on = true; loadReceipts(shiftMonth(m, -11), m).then(r => on && setReceipts(r)).catch(() => undefined); return () => { on = false; }; }, [m]);
+  const byTxn = useMemo(() => new Map(receipts.filter(r => r.txnId).map(r => [r.txnId!, r])), [receipts]);
 
   const set = (k: string, v: string) => { const p = new URLSearchParams(params); if (v) p.set(k, v); else p.delete(k); setParams(p, { replace: true }); };
   const accName = (id: string) => accounts.find(a => a.id === id)?.name || '';
@@ -43,6 +51,17 @@ export function Transactions() {
   }, [rows]);
 
   const others = useMemo(() => (pick ? allRows(months).filter(t => t.merchant === pick.merchant && t.id !== pick.id) : []), [pick, months]);
+
+  async function removeCash(t: Txn) {
+    if (!sure) { setSure(true); return; }
+    setBusy(true);
+    try {
+      await removeCashRow(t.id, t.date.slice(0, 7));
+      setData(d => ({ ...d, months: { ...d.months, [t.date.slice(0, 7)]: (d.months[t.date.slice(0, 7)] || []).filter(x => x.id !== t.id) } }));
+      say('Cash entry removed', 'good'); setPick(null);
+    } catch (e) { say(e instanceof Error ? e.message : 'Could not remove', 'bad'); }
+    finally { setBusy(false); setSure(false); }
+  }
 
   async function change(category: string, applyAll: boolean) {
     if (!pick) return;
@@ -91,8 +110,8 @@ export function Transactions() {
                   <div key={t.id} className="mo-txn">
                     <CategoryIcon name={t.category} size={20} />
                     <div className="mo-txn__main">
-                      <b>{t.merchant.replace(/\b\w+/g, w => w[0] + w.slice(1).toLowerCase())}</b>
-                      <small>{t.desc}{accounts.length > 1 ? ` · ${accName(t.accountId)}` : ''}</small>
+                      <b>{niceName(t.merchant)}{byTxn.has(t.id) && <ReceiptText className="mo-has-rcpt" aria-label="has a receipt" />}</b>
+                      <small>{t.toWallet ? 'Cash moved to the wallet' : t.desc}{accounts.length > 1 ? ` · ${accName(t.accountId)}` : ''}</small>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                       <span className={`mo-amt ${t.amount > 0 ? 'mo-amt--in' : ''}`}>{money(t.amount, { sign: true })}</span>
@@ -106,7 +125,7 @@ export function Transactions() {
         </Card>
       )}
 
-      <Sheet open={!!pick} onClose={() => setPick(null)} title={pick?.merchant.replace(/\b\w+/g, w => w[0] + w.slice(1).toLowerCase())}>
+      <Sheet open={!!pick} onClose={() => { setPick(null); setSure(false); }} title={pick ? niceName(pick.merchant) : ''}>
         {pick && (
           <>
             <p className="pl-muted" style={{ fontSize: 13 }}>{pick.desc} · {money(pick.amount, { sign: true })}{others.length ? ` · ${others.length} other${others.length === 1 ? '' : 's'} from this merchant` : ''}</p>
@@ -124,9 +143,20 @@ export function Transactions() {
               ))}
             </div>
             <p className="pl-muted" style={{ fontSize: 12 }}>Future imports of "{pick.merchant}" get this category.</p>
+            {byTxn.has(pick.id) && <Button block onClick={() => { setOpenReceipt(byTxn.get(pick.id)!); setPick(null); }}><ReceiptText style={{ width: 18, height: 18 }} /> Open the receipt</Button>}
+            {pick.id.startsWith('cash_') && !byTxn.has(pick.id) && (
+              <Button block ghost danger disabled={busy} onClick={() => void removeCash(pick)}><Trash2 style={{ width: 16, height: 16 }} /> {sure ? 'Tap again to remove this cash entry' : 'Remove this cash entry'}</Button>
+            )}
           </>
         )}
       </Sheet>
+      <ReceiptSheet receipt={openReceipt} others={receipts} accounts={accounts} onClose={() => setOpenReceipt(null)}
+        onChange={(next, before) => {
+          setReceipts(rs => [...rs.filter(r => r.id !== before.id), ...(next ? [next] : [])]);
+          setOpenReceipt(next);
+          if (!next) say('Receipt removed', 'good');
+          void reload();
+        }} />
       {toast}
     </Page>
   );

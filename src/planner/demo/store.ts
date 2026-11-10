@@ -81,6 +81,14 @@ export async function demoInvoke(body: Record<string, unknown>): Promise<unknown
       { name: 'Glute bridge', description: 'On your back, heels close, drive the hips up and pause at the top.', tip: 'Ribs down; squeeze the glutes, not the lower back.', videos: [{ id: 'dQw4w9WgXcQ', title: 'Glute bridge form — 40 s', seconds: 41 }] },
     ], videos: [{ id: 'dQw4w9WgXcQ', title: 'Mobility flow for tight hips — 3 min', seconds: 185 }] };
     case 'deals': return { items: [], specialty: [] };
+    case 'receipt': {
+      const d = new Date(`${String(body.today || '').slice(0, 10) || new Date().toISOString().slice(0, 10)}T12:00:00`); d.setDate(d.getDate() - 1);
+      return { kind: 'receipt', merchant: 'Costco Wholesale', date: d.toISOString().slice(0, 10), time: '14:12', total: 182.37, subtotal: 171.9, tax: 10.47, tip: 0, payment: 'card', card_last4: '4421',
+        items: [{ name: 'KS Organic Eggs 24ct', amount: 9.99, category: 'Groceries' }, { name: 'Chicken Thighs 2.4 kg', amount: 24.89, category: 'Groceries' }, { name: 'Basmati Rice 10 kg', amount: 21.99, category: 'Groceries' },
+          { name: 'Greek Yogurt 2 kg', amount: 7.49, category: 'Groceries' }, { name: 'Bananas', amount: 1.99, category: 'Groceries' }, { name: 'KS Paper Towels 12', amount: 23.99, category: 'Shopping' },
+          { name: 'Tide Pods 104', amount: 29.99, category: 'Shopping' }, { name: 'Kids Snow Boots', amount: 29.99, category: 'Kids' }, { name: 'Strawberries 2 lb', amount: 6.99, category: 'Groceries' }, { name: 'Almond Milk 3 pk', amount: 14.59, category: 'Groceries' }],
+        category: 'Groceries', confidence: 'high', confidence_note: '' };
+    }
     case 'plan': return { name: 'Coach plan', exercises: [] };
     case 'recipe': case 'recipe_idea': return { name: body.action === 'recipe' ? 'Chicken shawarma bowls' : 'Lemon garlic salmon & lentils', servings: 2, minutes: 30, source: typeof body.url === 'string' ? body.url : undefined,
       perServing: { kcal: 610, protein: Number(body.protein) || 52, carbs: 48, fat: 22 },

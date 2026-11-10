@@ -66,6 +66,47 @@ export async function categorize(merchants: string[], categories: string[]): Pro
   return (await invoke<{ categories: Record<string, string> }>({ action: 'categorize', merchants, categories })).categories || {};
 }
 
+export interface ReceiptRead {
+  kind: 'receipt' | 'transaction' | 'other';
+  merchant: string; date: string; time: string;
+  total: number; subtotal: number; tax: number; tip: number;
+  payment: 'card' | 'cash' | 'unknown'; cardLast4: string;
+  items: { name: string; amount: number; category: string }[];
+  category: string; confidence: 'high' | 'medium' | 'low'; confidenceNote: string;
+}
+const money2 = (v: unknown) => (typeof v === 'number' && isFinite(v) ? Math.round(Math.abs(v) * 100) / 100 : 0);
+/** Up to 4 photos of one receipt (or one payment screenshot) → merchant, date, total, how it was paid and the lines, by category. */
+export async function readReceipt(photos: { base64: string; mediaType: string }[], categories: string[], today: string, note?: string): Promise<ReceiptRead> {
+  const r = await invoke<Record<string, unknown>>({ action: 'receipt', images: photos.slice(0, 4).map(p => ({ media_type: p.mediaType, data: p.base64 })), categories, today, note });
+  const pick = (c: unknown) => (typeof c === 'string' && categories.includes(c) ? c : 'Other');
+  const items = (Array.isArray(r.items) ? r.items : []).map(i => i as Record<string, unknown>)
+    .map(i => ({ name: String(i.name || '').trim() || 'Item', amount: money2(i.amount), category: pick(i.category) })).filter(i => i.amount > 0);
+  return {
+    kind: r.kind === 'transaction' || r.kind === 'other' ? r.kind : 'receipt',
+    merchant: String(r.merchant || '').trim(),
+    date: typeof r.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.date) ? r.date : '',
+    time: typeof r.time === 'string' && /^\d{1,2}:\d{2}$/.test(r.time) ? r.time.padStart(5, '0') : '',
+    total: money2(r.total), subtotal: money2(r.subtotal), tax: money2(r.tax), tip: money2(r.tip),
+    payment: r.payment === 'card' || r.payment === 'cash' ? r.payment : 'unknown',
+    cardLast4: String(r.card_last4 || '').replace(/\D/g, '').slice(-4),
+    items, category: pick(r.category),
+    confidence: r.confidence === 'high' || r.confidence === 'low' ? r.confidence : 'medium',
+    confidenceNote: String(r.confidence_note || '').trim(),
+  };
+}
+
+/** The copy of a receipt photo that's kept: black and white, ≤ 1000 px, light JPEG (a receipt stays readable at ~60 KB). */
+export async function keeperImage(file: File): Promise<string> {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, 1000 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+  const g = c.getContext('2d')!;
+  g.filter = 'grayscale(1) contrast(1.15)';
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.55);
+}
+
 /** Shrink a photo for upload (≤ `max` px on the long side) and return base64 JPEG. */
 export async function shrinkImage(file: File, max = 1280, quality = 0.82): Promise<{ base64: string; mediaType: string; dataUrl: string }> {
   const bmp = await createImageBitmap(file);

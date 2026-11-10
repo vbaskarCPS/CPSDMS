@@ -14,6 +14,8 @@
 //        this week's flyer deals near a postal code (Flipp's flyer data, unofficial) matched to the shopping list
 //   POST { token, action: 'categorize', merchants: [string], categories: [string] }
 //        → { categories: { [merchant]: category } }
+//   POST { token, action: 'receipt', images: [up to 4 photos of one receipt or one transaction screen], note?, categories: [string], today }
+//        → { kind, merchant, date, time, total, subtotal, tax, tip, payment, card_last4, items: [{ name, amount, category }], category, confidence }
 //   POST { token, action: 'reflect', context }                     → { reply }  (2–3 sentences on the day)
 //   POST { token, action: 'sway', items: [string] }               → { tags: { [item]: 'go'|'ease'|'neutral' } }  (the girl-sway food guide)
 //   POST { token, action: 'statement', text, hint? }               → { rows: [{ date, desc, amount, balance? }], period?, account_type? }
@@ -556,6 +558,48 @@ Deno.serve(async req => {
         return { id: it.id, section: pick?.section && SECTIONS.includes(pick.section) ? pick.section : 'Other', deals, suggestedStore: sug?.name, reason: sug ? pick?.reason : undefined };
       });
       return json({ items: out, stores_seen: [...new Set(found.flatMap(f => f.cands.map(c => c.merchant_name)))] });
+    }
+    if (action === 'receipt') {
+      // a paper receipt, or a screenshot of a transaction (banking app, e-transfer, order confirmation): what was paid,
+      // where, when, how, and what for. Totals have to be exact (they're matched to the bank's amounts), so a stronger model.
+      type Img = { media_type: string; data: string };
+      const imgs = ((Array.isArray(b.images) ? b.images : [b.image]) as (Img | undefined)[]).filter((x): x is Img => !!x?.data).slice(0, 4);
+      if (!imgs.length) return json({ error: 'No image' }, 400);
+      const cats = (Array.isArray(b.categories) ? b.categories : []).filter(c => typeof c === 'string').slice(0, 40) as string[];
+      if (!cats.length) return json({ error: 'No categories' }, 400);
+      const today = typeof b.today === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.today) ? b.today : new Date().toISOString().slice(0, 10);
+      const note = typeof b.note === 'string' && b.note.trim() ? `\nThe user adds: ${b.note.trim().slice(0, 400)}` : '';
+      const schema = {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['receipt', 'transaction', 'other'], description: 'receipt = a paper or emailed receipt/invoice; transaction = a screenshot of a bank/card/e-transfer/payment screen; other = neither' },
+          merchant: { type: 'string', description: 'The store or payee as a person would say it, e.g. "Costco", "Tim Hortons", "Rogers". For an e-transfer, the person it went to.' },
+          date: { type: 'string', description: 'YYYY-MM-DD, or "" if not shown' },
+          time: { type: 'string', description: 'HH:MM 24-hour, or "" if not shown' },
+          total: { type: 'number', description: 'The amount actually paid, in dollars, positive. Include a tip if one is written or printed. For a refund, still positive (say so in confidence_note).' },
+          subtotal: { type: 'number', description: 'Before tax; 0 if not shown' },
+          tax: { type: 'number', description: 'All taxes (HST/GST/PST) together; 0 if not shown' },
+          tip: { type: 'number', description: 'Tip/gratuity included in total; 0 if none' },
+          payment: { type: 'string', enum: ['card', 'cash', 'unknown'], description: 'card = credit/debit/tap/Apple Pay/e-transfer/online; cash = paid in cash; unknown = not shown' },
+          card_last4: { type: 'string', description: 'Last 4 digits of the card if printed, else ""' },
+          items: {
+            type: 'array', description: 'The lines bought, at most 40. Merge tiny repeated lines. Amounts are what each line cost (after line discounts), positive.',
+            items: { type: 'object', properties: { name: { type: 'string' }, amount: { type: 'number' }, category: { type: 'string', enum: cats } }, required: ['name', 'amount', 'category'] },
+          },
+          category: { type: 'string', enum: cats, description: 'The category most of the money went to' },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'How sure you are of the total and date' },
+          confidence_note: { type: 'string', description: 'One short sentence if something is unclear (blurry total, refund, foreign currency), else ""' },
+        },
+        required: ['kind', 'merchant', 'date', 'time', 'total', 'subtotal', 'tax', 'tip', 'payment', 'card_last4', 'items', 'category', 'confidence', 'confidence_note'],
+      };
+      const many = imgs.length > 1 ? `These ${imgs.length} photos are ONE receipt or transaction (a long receipt in parts, or front and back). Count each line once.` : 'Read this.';
+      const out = await claudeJson<Record<string, unknown>>(
+        `You read receipts and payment screenshots for a Canadian household's budget. Amounts are in dollars. Read numbers exactly as printed; never guess a total that isn't visible (use the sum of the lines only if the total is cut off, and say so). Today is ${today}; if the year isn't printed, use the most recent date on or before today. Categories describe what was bought, not where (e.g. household items at Costco are Shopping, food there is Groceries; Shoppers Drug Mart medicine is Health, snacks there are Groceries). Use Other only when nothing fits.`,
+        [{ role: 'user', content: [
+          ...imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.media_type || 'image/jpeg', data: img.data } })),
+          { type: 'text', text: `${many}${note}` },
+        ] }], schema, 4000, Deno.env.get('RECEIPT_MODEL') || COACH_MODEL);
+      return json(out);
     }
     if (action === 'categorize') {
       const merchants = (Array.isArray(b.merchants) ? b.merchants : []).filter(m => typeof m === 'string').slice(0, 200) as string[];

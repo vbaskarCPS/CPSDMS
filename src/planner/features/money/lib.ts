@@ -3,7 +3,7 @@
 import { getDocs, putDoc, putDocs } from '../../lib/docs';
 import { categorize } from '../../lib/ai';
 import { builtinCategory, CATEGORY_NAMES, SPENDING_CATEGORIES } from './categories';
-import type { Account, Budget, Rule, Txn, TxnMonth } from './types';
+import { CASH_ACCOUNT_ID, type Account, type Budget, type Rule, type Txn, type TxnMonth } from './types';
 
 // ── formatting ──
 const cad = new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -15,6 +15,8 @@ export function money(n: number, opts: { sign?: boolean; whole?: boolean } = {})
   return s;
 }
 export const round2 = (n: number) => Math.round(n * 100) / 100;
+/** "COSTCO WHOLESAL" → "Costco Wholesal" (merchant names are kept upper case). */
+export const niceName = (s: string) => s.replace(/\b\w+/g, w => w[0] + w.slice(1).toLowerCase());
 
 // ── months & dates ──
 export const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -138,15 +140,25 @@ export async function recategorize(months: Record<string, Txn[]>, ids: Set<strin
   return keys;
 }
 
-/** What the screens show: a connected account's CSV rows are hidden (see hideReplaced). */
+/** What the screens show: a connected account's CSV rows are hidden (see hideReplaced), and once cash spending is
+ *  logged (the cash wallet's cashSince), an ATM withdrawal is shown as a transfer into the wallet: the cash
+ *  rows are the spending, so the withdrawal mustn't count too. Display only; writes go through loadMonths. */
 export function visibleMonths(months: Record<string, Txn[]>, accounts: Account[]): Record<string, Txn[]> {
   const linked: Record<string, { removedAt?: string }> = {};
   for (const a of accounts) if (a.plaid) linked[a.id] = { removedAt: a.plaid.removedAt };
-  if (!Object.keys(linked).length) return months;
+  const since = accounts.find(a => a.id === CASH_ACCOUNT_ID)?.cashSince;
+  if (!Object.keys(linked).length && !since) return months;
   const out: Record<string, Txn[]> = {};
-  for (const [m, rows] of Object.entries(months)) out[m] = hideReplaced(rows, linked);
+  for (const [m, rows] of Object.entries(months)) {
+    let list = Object.keys(linked).length ? hideReplaced(rows, linked) : rows;
+    if (since) list = list.map(t => (isWithdrawalToWallet(t, since) ? { ...t, category: 'Transfers', toWallet: true } : t));
+    out[m] = list;
+  }
   return out;
 }
+/** An ATM/cash withdrawal from a bank account on or after the day cash tracking started. */
+export const isWithdrawalToWallet = (t: Txn, since: string) =>
+  t.accountId !== CASH_ACCOUNT_ID && t.amount < 0 && t.category === 'Cash' && t.date >= since;
 
 // ── sums ──
 export const isSpending = (t: Txn) => t.amount < 0 && SPENDING_CATEGORIES.includes(t.category);
