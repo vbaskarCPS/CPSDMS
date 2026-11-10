@@ -25,9 +25,13 @@ export function forServer(messages: BennyMsg[]) {
     content: m.outcome ? `${m.text}\n\n[The card: ${m.outcome.state === 'done' ? 'confirmed, done' : m.outcome.state}: ${m.outcome.text}]` : m.text }));
 }
 
+/** The change cards this build of the app can show. Sent with every question, so the server never sends a card that an
+ *  older open tab can't draw (it says "refresh" instead). Add a kind here when describe() and doProposal() handle it. */
+export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking'];
+
 export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null }> {
   const lastAsk = [...messages].reverse().find(m => m.role === 'user');
-  const body = { messages: forServer(messages), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag() } };
+  const body = { messages: forServer(messages), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag(), cards: CARDS } };
   const { data, error } = await db.functions.invoke('benny-assist', { body });
   if (error) {
     // the function's own message (e.g. "for super admins") rides in the response body
@@ -36,7 +40,8 @@ export async function askBenny(messages: BennyMsg[], context: BennyContext): Pro
     throw new Error(msg || error.message || 'The Benny didn’t answer');
   }
   if (data?.error) throw new Error(data.error);
-  return { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: (data?.proposal as BennyProposal) || null };
+  const proposal = (data?.proposal as BennyProposal) || null;
+  return { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: proposal && CARDS.includes(proposal.kind) ? proposal : null };
 }
 
 /** The kept outlines of these master maps (only the ones that have one). Light, and open to anyone who can use the Benny. */

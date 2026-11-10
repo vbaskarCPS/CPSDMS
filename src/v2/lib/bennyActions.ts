@@ -4,6 +4,7 @@
 //   give_route → RM map › Assign route (whole route, with its prebooks; moves the route to the cart's manager)
 //   partner    → RM map › Move worker › to another cart
 //   solo       → RM map › Move worker › own cart
+//   booking    → Bookings › List › save (status, notes, route of one Master Booking)
 import { getDay, listRoster, type RosterRow } from './workerbook';
 import { availableManagers, getSession, nextTeamName, planProblems, startSession, type Plan, type PlanManager, type PlanRoute, type PlanTeam } from './startSession';
 import { db, must } from './client';
@@ -12,6 +13,7 @@ import { cardFor, defaultRateCard, type RateCardData } from './rateCard';
 import { centerService, type Service } from './permissions';
 import { appShowedDates, countBefore } from './payoutEngine';
 import { fullName } from './workerbook';
+import { saveBooking, type BookingPatch, type BookingStatus } from './bookings';
 
 export type TeamMode = 'roster' | 'solo' | 'pairs';
 export interface StartDayCheck {
@@ -22,11 +24,43 @@ export interface StartDayCheck {
 export interface LiveWorker { cn: string; name: string; cart_id?: string; manager?: string }
 export interface GiveCheck { ok: boolean; problems?: string[]; date: string; route: string; map?: string; worker: LiveWorker; cart?: { cn: string; name: string }[]; now?: string[]; route_manager?: string; open_prebooks?: number }
 export interface MoveCheck { ok: boolean; problems?: string[]; date: string; a: LiveWorker; b?: LiveWorker; carts?: Record<string, string[]> }
+/** A Master Booking as the Benny sees it (no phones, no emails). */
+export interface BennyBooking {
+  id: string; address: string; city?: string; list?: string; job?: string; status: BookingStatus; done_on?: string; done_by?: string;
+  tried?: number; last_try?: string; route?: string; map?: string; placed?: string; prepaid?: boolean; people?: string[];
+  field_note?: string; office_note?: string; on_live_map?: boolean;
+}
+export interface NoteChange { mode: 'set' | 'add' | 'replace' | 'clear'; text: string; was?: string }
+export interface BookingCheck {
+  ok: boolean; problems?: string[]; booking: BennyBooking; heard_as?: string;
+  /** the change in words (for the card) */
+  change: { status?: { from: BookingStatus; to: BookingStatus }; route?: { from?: string; to: string; map?: string }; field_note?: NoteChange; office_note?: NoteChange };
+  /** exactly the fields the Bookings save gets */
+  patch: Pick<BookingPatch, 'status' | 'route_code' | 'field_notes' | 'office_notes'>;
+  /** cautions to read before saving */
+  notes?: string[];
+  /** the request, to run the same check again right before saving; stamp = when the booking last changed */
+  ask: Record<string, string>; stamp: string; map?: string; route?: string;
+}
 export type BennyProposal =
   | { kind: 'start_day'; check: StartDayCheck; team_mode?: TeamMode }
   | { kind: 'give_route'; check: GiveCheck }
   | { kind: 'partner'; check: MoveCheck }
-  | { kind: 'solo'; check: MoveCheck };
+  | { kind: 'solo'; check: MoveCheck }
+  | { kind: 'booking'; check: BookingCheck };
+
+const NOTE = { field_note: 'field note', office_note: 'office note' } as const;
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** What was saved, in a few words: "marked done, moved to RMD137, field note added". */
+export function bookingSaved(change: BookingCheck['change']): string {
+  const out: string[] = [];
+  if (change.status) out.push(change.status.to === 'done' ? 'marked done' : change.status.to === 'cancelled' ? 'cancelled' : 'open again');
+  if (change.route) out.push(`moved to ${change.route.to}`);
+  for (const k of ['field_note', 'office_note'] as const) {
+    const n = change[k]; if (n) out.push(`${NOTE[k]} ${n.mode === 'clear' ? 'cleared' : n.mode === 'replace' ? 'changed' : 'added'}`);
+  }
+  return out.join(', ');
+}
 
 /** What the confirm card says (pure, so it's tested). */
 export function describe(p: BennyProposal): { title: string; lines: string[]; action: string } {
@@ -69,6 +103,25 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         lines: [`${c.b?.name} joins ${aCart.join(' + ')}’s cart`, `${c.a.name.split(' ')[0]}’s routes stay with the cart`],
         action: 'Partner up',
       };
+    }
+    case 'booking': {
+      const c = p.check; const ch = c.change; const a = c.booking.address;
+      const one = Object.keys(ch).length === 1;
+      const note = ch.field_note ? 'field_note' as const : ch.office_note ? 'office_note' as const : null;
+      const title = !one ? `Change ${a}`
+        : ch.status ? (ch.status.to === 'done' ? `Mark ${a} done` : ch.status.to === 'cancelled' ? `Cancel ${a}` : `Reopen ${a}`)
+        : ch.route ? `Move ${a} to ${ch.route.to}`
+        : note && ch[note]!.mode === 'clear' ? `Clear the ${NOTE[note]} on ${a}`
+        : note && ch[note]!.mode === 'replace' ? `Change the ${NOTE[note]} on ${a}`
+        : note ? `Add ${note === 'office_note' ? 'an' : 'a'} ${NOTE[note]} to ${a}` : `Change ${a}`;
+      const lines = [[c.booking.city, c.booking.list, c.booking.job, c.booking.people?.[0]].filter(Boolean).join(' · ')].filter(Boolean);
+      if (ch.status) lines.push(`Status: ${ch.status.from} → ${ch.status.to}`);
+      if (ch.route) lines.push(`Route: ${ch.route.from || 'none'} → ${ch.route.to}${ch.route.map ? ` (${ch.route.map})` : ''}`);
+      for (const k of ['field_note', 'office_note'] as const) {
+        const n = ch[k]; if (!n) continue;
+        lines.push(`${cap(NOTE[k])}: ${n.mode === 'clear' ? `cleared (was “${n.was}”)` : n.mode === 'replace' ? `“${n.was}” becomes “${n.text}”` : n.mode === 'add' ? `adds “${n.text}”` : `“${n.text}”`}`);
+      }
+      return { title, lines: [...lines, ...(c.notes || [])], action: 'Save' };
     }
     case 'solo': {
       const c = p.check;
@@ -196,8 +249,20 @@ export async function moveFromBenny(p: Extract<BennyProposal, { kind: 'partner' 
   return `${c.b.name} is on ${c.a.name.split(' ')[0]}’s cart now.`;
 }
 
+/** Bookings › List › save: the same save, after the same check that made the card says nothing moved since. */
+export async function bookingFromBenny(p: Extract<BennyProposal, { kind: 'booking' }>, centerId: string): Promise<string> {
+  const c = await recheck<BookingCheck>('benny_check_booking', { p_center: centerId, p_booking: p.check.booking.id, p_change: p.check.ask });
+  if (c.stamp !== p.check.stamp) throw new Error(`${c.booking.address} was changed since I checked. Ask me again.`);
+  const saved = await saveBooking(c.booking.id, null, c.patch);
+  const kept = (k: 'field_notes' | 'office_notes') => !(k in c.patch) || (saved[k] || '') === (c.patch[k] || '');
+  if ((c.patch.status && saved.status !== c.patch.status) || (c.patch.route_code && saved.route_code !== c.patch.route_code) || !kept('field_notes') || !kept('office_notes'))
+    throw new Error(`${c.booking.address} didn’t save. Try it in Bookings › List.`);
+  return `${c.booking.address}: ${bookingSaved(c.change)}.`;
+}
+
 export async function doProposal(p: BennyProposal, center: CenterLite): Promise<string> {
   if (p.kind === 'start_day') return startDayFromBenny(p, center);
   if (p.kind === 'give_route') return giveRouteFromBenny(p, center.id);
+  if (p.kind === 'booking') return bookingFromBenny(p, center.id);
   return moveFromBenny(p, center.id);
 }

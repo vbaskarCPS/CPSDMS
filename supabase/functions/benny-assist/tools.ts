@@ -9,6 +9,8 @@ export interface Ctx {
   spoken?: boolean;
   /** for bug reports: browser, screen size, app build, recent errors on the page */
   diag?: { ua?: string; viewport?: string; build?: string; errors?: string[] };
+  /** the change cards this open app can show (a tab opened before a new kind existed doesn't list it) */
+  cards?: string[];
 }
 /** The names to expect in a spoken message (benny_vocab). */
 export interface Vocab { workers?: string[]; managers?: string[]; places?: string[] }
@@ -24,6 +26,9 @@ export const TOOLS: Tool[] = [
     input_schema: { type: 'object', properties: { date: { type: 'string', description: 'YYYY-MM-DD' } }, required: ['date'] } },
   { name: 'bookings', roles: ['admin', 'rm'], description: 'Master Bookings (prebooks) for the current center: total, counts by map, by route and by status, and the first 30 bookings. Filter by a map name, city or street, and/or one route.',
     input_schema: { type: 'object', properties: { where: { type: 'string', description: 'map name, city or street, e.g. "Surrey", "NORTH VANCOUVER #2"' }, route: str, status: { type: 'string', enum: ['open', 'done', 'cancelled', 'any'], description: 'default open' } } } },
+  { name: 'booking', roles: ['admin'], description: 'One Master Booking (people also say prebook, job or service ticket) by its address, house number first in digits ("3575 Latimer"), or by the client\'s name: '
+      + 'status (open, done, cancelled), list, job code, route and map, prepaid, the people, field note (what the crew reads) and office note, tries so far, and whether it is loaded on today\'s live map. No phone numbers or emails.',
+    input_schema: { type: 'object', properties: { q: { type: 'string', description: 'house number and street ("3575 Latimer"), a client name, or the id from an earlier result' } }, required: ['q'] } },
   { name: 'maps', roles: ['admin'], description: "Master maps in the center's region matching a name or city: route range, number of routes, houses built, past clients.",
     input_schema: { type: 'object', properties: { q: { type: 'string', description: 'map name or city; empty = all' } } } },
   { name: 'route', roles: ['admin', 'rm'], description: 'One route: its map, streets, houses, past clients (by service), open prebooks, and who has it on a date.',
@@ -58,6 +63,15 @@ export const TOOLS: Tool[] = [
     input_schema: { type: 'object', properties: { a: { type: 'string', description: 'the worker whose cart it is' }, b: { type: 'string', description: 'the worker who joins' } }, required: ['a', 'b'] } },
   { name: 'propose_solo', roles: ['admin', 'rm'], description: 'Prepare moving a worker off their cart onto a cart of their own, for the person to confirm on a card.',
     input_schema: { type: 'object', properties: { worker: str }, required: ['worker'] } },
+  { name: 'propose_booking', roles: ['admin'], description: 'Prepare a change to one Master Booking (prebook / job / service ticket) for the person to confirm on a card: mark it done, cancelled or open again; '
+      + 'add to or replace its field note (what the crew reads at the door) or its office note; move it to another route. One booking per call; several changes to the same booking go in one call. '
+      + 'It finds the booking by address itself, so call it directly; when it answers "Which one", ask, then call again with that booking\'s id.',
+    input_schema: { type: 'object', properties: {
+      booking: { type: 'string', description: 'house number and street, digits first ("3575 Latimer"), or the id from booking / a which list' },
+      status: { type: 'string', enum: ['open', 'done', 'cancelled'] },
+      field_note: { type: 'string', description: 'for the crew: gate code, dog, where to start' }, office_note: { type: 'string', description: 'for the office only' },
+      note_mode: { type: 'string', enum: ['add', 'replace'], description: 'add (default) goes under what is there; replace overwrites it, and replace with empty text clears it' },
+      route: { type: 'string', description: 'route code to move it to, e.g. RMD137' } }, required: ['booking'] } },
   { name: 'report_bug', roles: ['admin', 'rm'], description: 'Report a bug in the app to Vijay (the developer): it is saved in the app\'s Bug log, which he reads. '
       + 'Use when the person says something in the app is broken or wrong. Ask one short question first only if you can\'t tell what went wrong or where. Write it so a developer can act on it.',
     input_schema: { type: 'object', properties: {
@@ -68,9 +82,9 @@ export const TOOLS: Tool[] = [
   { name: 'log_request', roles: ['admin', 'rm'], description: 'Log something the person asked for that you could not do because you have no tool for it (a change you cannot prepare, numbers no tool returns), so Vijay sees what to build next. '
       + 'Call it every time that happens, then tell the person you can\'t do that yet and that it\'s logged. Not for things outside the DMS, and not for something you did answer.',
     input_schema: { type: 'object', properties: {
-      title: { type: 'string', description: 'what they wanted, short, e.g. "Move a prebook to another route"' },
+      title: { type: 'string', description: 'what they wanted, short, e.g. "Change the price on a booking"' },
       asked: { type: 'string', description: 'their request, in their words' },
-      why_not: { type: 'string', description: 'what is missing, e.g. "no tool changes a booking\'s route"' },
+      why_not: { type: 'string', description: 'what is missing, e.g. "no tool changes a booking\'s services or price"' },
       would_need: { type: 'string', description: 'what it would take, if you can tell (a lookup of X, a change to Y)' } }, required: ['title', 'asked'] } },
 ];
 
@@ -86,7 +100,7 @@ CPS words (use them the way the crew does, and answer in them):
 - Gross: production dollars before any of that. Upsell: an add-on sold at the door (paid as commission, not equiv). IOS: a small per-item bonus.
 - Payout rate: dollars per equiv = the season's base (one rate solo, a higher one in a team of 2 or more) + the worker's alumni rate + silver rate. Alumni rate: extra per equiv for returning contractors. Silver rate: extra per equiv from hats. Hats: a worker's experience count per service (AER, RJ, SE, CL).
 - Cart: the workers sharing one logsheet (a team); a solo cart is one worker. Ramp crew (RC1, RC2): the asphalt crew in sealing. Equiv split / upsell split: how a cart shares its equiv and its upsell commission.
-- Prebook: an open Master Booking waiting to be done on a route. PCL: past client list, the past customers on a route. Flats (office flats): office-set jobs worth a fixed amount (SP, RJ, FSL, AFSL). Prepaid, billed, cash, cheque, e-transfer, card: how a job is paid.
+- Prebook: an open Master Booking waiting to be done on a route. Service ticket, ticket, job (at an address): the same thing, a Master Booking; "close the ticket" = mark it done. Field note: what the crew reads at the door. Office note: for the office only. PCL: past client list, the past customers on a route. Flats (office flats): office-set jobs worth a fixed amount (SP, RJ, FSL, AFSL). Prepaid, billed, cash, cheque, e-transfer, card: how a job is paid.
 - CN: contractor number (like I1225). WDR: withdrawn. Q: quit. NS: no-show. Roll call: who showed. Next day: who is booked for tomorrow. Shuttle: their ride in.
 - Session: the day once it is started (managers, routes, carts). Live map: today's routes and carts in the field. Close day, payouts, payslips: the end-of-day pay. Rate card: the season's pay rules. Product cost %: taken off production before equiv.
 - RM: route manager. Floater: a manager covering other managers' teams. Center (command center): the office, like BC Fall RJ. Season: Aeration, Lawn Rejuv, Sealing or Cleaning. Master map: an area like NORTH VANCOUVER #2; a route is one numbered piece of it (NVN19).`;
@@ -113,12 +127,13 @@ Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown
 Rules:
 - Answer from the tools, never from memory or guesses. If the tools can't answer it, say so and name the screen that can.
 - Only the app's data and work. Anything else: "I can only help with the DMS."
-- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers and solo carts' : 'giving a route to a cart, partnering workers and solo carts'} with the propose_ tools. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
+- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, and changing a booking (status, notes, route)' : 'giving a route to a cart, partnering workers and solo carts'} with the propose_ tools. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
 - One change per answer. If they ask for several, prepare the first and say you'll do the next after.
 - Names: if a tool says "Which one", ask which, listing the names. "Michael A" = Michael with a last name starting A.
 - Starting the day: work out each manager's maps and routes first (whole maps by name; map_side for "the side of 2 connected to 1"; bookings.by_route for "only the routes with prebooks in Surrey"), show them with show_map (routes = every route in the plan), then propose_start_day. If they don't say the date, it is today. If they don't say who, the manager is "me".
 - "Find a route connected to X's and give it to X": live_team to get X's routes, connected_routes (touching) from those, pick the nearest free one (no workers today), prefer one with prebooks, then propose_give_route. Show it with show_map.
-- Bugs: when something in the app is broken, use report_bug with a clear developer-ready description, then say "I'll let Vijay know — it's in the bug log." If the tool returns an error, say it wasn't saved.
+${role === 'admin' ? `- Bookings: to change a booking (a "service ticket") use propose_booking with the address as they said it, house number first in digits ("thirty five seventy five Latimer" = "3575 Latimer"). "Close", "complete", "finish" = done; "reopen" = open. A note with no kind: field note when it is for the crew (gate code, dog, where to start), office note otherwise; ask if you can't tell. "Add a note" = add; "change the note to" = replace. Say the card's cautions in a few words. Then "Tap Save to do it." Address, people, phone, services and price change in Bookings › List, not here.
+` : ''}- Bugs: when something in the app is broken, use report_bug with a clear developer-ready description, then say "I'll let Vijay know — it's in the bug log." If the tool returns an error, say it wasn't saved.
 - Be short and specific: the answer first, with the numbers; a list only when it helps; no more than about 8 lines. Phone numbers as written.
 - Words people use: "prebooks" = open Master Bookings; "the map"/"master map" = an area like NORTH VANCOUVER #2 ("North Van 1" = NORTH VANCOUVER #1); a route is a code like PCQ64 (prefix + number; "route 35" means 35 on the map in question). "North Van" = North Vancouver, "PoCo" = Port Coquitlam. WDR = withdrawn. A cart = a team of workers on the live map.
 - When the answer is about where things are (prebooks in a city, a route, which routes touch, a plan's routes), call show_map too, then answer in words.
@@ -130,7 +145,7 @@ Rules:
 ` + CPS_WORDS + (ctx.spoken ? heardRight(vocab) : '');
 }
 
-export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo';
+export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking';
 /** What a tool does: a database function to call (as the signed-in person), and for a change the card it becomes. */
 export type ToolCall =
   | { fn: string; args: Record<string, unknown>; card?: { kind: ProposalKind; team_mode?: string } }
@@ -143,6 +158,7 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     case 'find_people': return { fn: 'benny_find_people', args: { p_center: c, p_q: String(input.q || '') } };
     case 'day': return { fn: 'benny_day', args: { p_center: c, p_date: String(input.date || ctx.today) } };
     case 'bookings': return { fn: 'benny_bookings', args: { p_center: c, p_where: input.where ?? null, p_route: input.route ?? null, p_status: input.status ?? 'open' } };
+    case 'booking': return { fn: 'benny_booking', args: { p_center: c, p_q: String(input.q || '') } };
     case 'maps': return { fn: 'benny_maps', args: { p_center: c, p_q: input.q ?? null } };
     case 'route': return { fn: 'benny_route', args: { p_center: c, p_route: String(input.route || ''), p_date: input.date ?? null } };
     case 'show_map': return { fn: 'benny_map', args: { p_center: c, p_maps: input.maps ?? [], p_routes: input.routes ?? null, p_prebooks: !!input.prebooks } };
@@ -156,6 +172,11 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     case 'propose_give_route': return { fn: 'benny_check_give', args: { p_center: c, p_route: String(input.route || ''), p_worker: String(input.worker || '') }, card: { kind: 'give_route' } };
     case 'propose_partner': return { fn: 'benny_check_move', args: { p_center: c, p_a: String(input.a || ''), p_b: String(input.b || '') }, card: { kind: 'partner' } };
     case 'propose_solo': return { fn: 'benny_check_move', args: { p_center: c, p_a: String(input.worker || ''), p_b: null }, card: { kind: 'solo' } };
+    case 'propose_booking': {
+      const change: Record<string, unknown> = {};
+      for (const k of ['status', 'route', 'field_note', 'office_note', 'note_mode']) if (typeof input[k] === 'string') change[k] = input[k];
+      return { fn: 'benny_check_booking', args: { p_center: c, p_booking: String(input.booking || ''), p_change: change }, card: { kind: 'booking' } };
+    }
     case 'report_bug': return { log: 'bug' };
     case 'log_request': return { log: 'request' };
     default: return null;

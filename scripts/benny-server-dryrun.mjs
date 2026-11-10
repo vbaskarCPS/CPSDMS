@@ -20,6 +20,11 @@ const fakeSb = `
       if (fn === 'benny_vocab') return { data: { workers: ['Jahswill Nuetey', 'Kevontae Ragguette'], managers: ['Jovan Chung'], places: ['North Delta (NDEL) #1-#3'] }, error: null };
       if (fn === 'benny_check_move') return { data: { ok: true, date: '2026-11-10', a: { cn: 'I1004', name: 'Jahswill Nuetey', heard_as: 'Jaz will' }, b: { cn: 'I1479', name: 'Kevontae Ragguette' } }, error: null };
       if (fn === 'benny_bug_sent') return { data: null, error: null };
+      if (fn === 'benny_check_booking') return args.p_booking === '1 Nowhere'
+        ? { data: { ok: false, problems: ['No booking found for “1 Nowhere” in this center.'] }, error: null }
+        : { data: { ok: true, booking: { id: 'b1', address: '3575 Latimer St', status: 'open', route: 'RMD57' }, change: args.p_change.route ? { route: { from: 'RMD57', to: 'RMD137', map: 'RICHMOND #7' } } : { status: { from: 'open', to: 'done' } },
+            patch: args.p_change.route ? { route_code: 'RMD137' } : { status: 'done' }, ask: args.p_change, stamp: 's1', notes: [],
+            ...(args.p_change.route ? { map: 'RICHMOND #7', route: 'RMD137', pin: { lat: 49.1, lng: -123.1, label: '3575 Latimer St', route: 'RMD137' } } : {}) }, error: null };
       if (fn === 'benny_map') return { data: { maps: ['SURREY #1'], highlight: ['SRY01'], pins: [{ lat: 1, lng: 2, label: 'x', route: 'SRY01' }] }, error: null };
       return { data: null, error: { message: 'no such function ' + fn } }; } }; }`;
 const r = await build({ entryPoints: ['supabase/functions/benny-assist/index.ts'], bundle: true, format: 'esm', write: false, logLevel: 'silent',
@@ -52,7 +57,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 15); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 17); assert(!('roles' in state.lastAsk.tools[0]));
 console.log('1 start the day: card + map ✓');
 
 // 2. a change with a problem makes no card
@@ -122,6 +127,30 @@ a = await ask('give zorro ndel33'); assert(!fns().includes('benny_log_save'));
 state.script = [say('8 workers on 8 carts today.')];                          // an answer: not logged
 a = await ask('who is on today'); assert.deepEqual(fns(), ['benny_ok_any']);
 console.log('5c couldn’t-do requests are logged ✓');
+
+// 5d. changing a booking ("service ticket"): a card, never a save; a move comes with its map and the house; admins only
+state.script = [turn(use('propose_booking', { booking: '3575 Latimer', status: 'done' })), say('Tap Save to do it.')];
+a = await ask('update the service ticket for 3575 Latimer to done');
+assert.equal(a.body.proposal, null); assert.match(a.body.reply, /Refresh the page/);   // a tab from before booking cards existed
+state.script = [turn(use('propose_booking', { booking: '3575 Latimer', status: 'done' })), say('Tap Save to do it.')];
+a = await ask('update the service ticket for 3575 Latimer to done', { cards: ['booking'] });
+assert.equal(a.body.proposal.kind, 'booking'); assert.deepEqual(a.body.proposal.check.patch, { status: 'done' }); assert.equal(a.body.map, null);
+assert.deepEqual(state.rpc.at(-1), ['benny_check_booking', { p_center: 'c1', p_booking: '3575 Latimer', p_change: { status: 'done' } }]);
+assert(!fns().some(f => /save/.test(f)), 'the server never saves a booking');
+state.script = [turn(use('propose_booking', { booking: '3575 Latimer', route: 'RMD137' })), say('Tap Save to do it.')];
+a = await ask('move 3575 latimer to rmd137', { cards: ['booking'] });
+assert.deepEqual(a.body.map, { maps: ['RICHMOND #7'], highlight: ['RMD137'], pins: [{ lat: 49.1, lng: -123.1, label: '3575 Latimer St', route: 'RMD137' }], title: '3575 Latimer St → RMD137' });
+state.script = [turn(use('propose_booking', { booking: '1 Nowhere', status: 'done' })), say('I couldn’t find a booking at 1 Nowhere in BC Fall RJ.')];
+a = await ask('close the ticket at 1 nowhere', { cards: ['booking'] });
+assert.equal(a.body.proposal, null);
+assert(!fns().includes('benny_log_save'), 'a booking that isn’t found is an answer, not a missing tool');
+state.role = 'rm';
+state.script = [turn(use('propose_booking', { booking: '3575 Latimer', status: 'done' }), use('log_request', { title: 'Mark a booking done', asked: 'mark 3575 latimer done' })), say('I can’t do that yet. It’s logged for Vijay.')];
+a = await ask('mark 3575 latimer done', { screen: 'rm', rm_manager: 'rm_me' });
+assert.equal(a.body.proposal, null); assert(!fns().includes('benny_check_booking')); assert(fns().includes('benny_log_save'));
+assert(!state.lastAsk.tools.some(t => ['booking', 'propose_booking'].includes(t.name)));
+state.role = 'admin';
+console.log('5d booking change: a card for admins, its map on a move, never saved by the server, "refresh" for an old tab ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

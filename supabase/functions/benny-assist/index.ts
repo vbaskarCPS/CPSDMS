@@ -3,7 +3,7 @@
 //   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, user_name, spoken, diag } }
 //     → { reply, map?, proposal? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
-//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo. The Benny never makes
+//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking. The Benny never makes
 //              the change itself: the app does, with the same code as its screens, after the person taps Confirm.
 //
 // Who: super admins (everything), route managers (their own team on the live map: carts, routes, connected routes).
@@ -35,6 +35,9 @@ async function logEntry(sb: SupabaseClient, ctx: Ctx, kind: 'bug' | 'request', i
   if (error) return { error: error.message };
   return { saved: true, id, where: 'the Bug log in Super Admin' };
 }
+
+/** The change cards every build of the app can show. Newer kinds are sent only to an app that says it can show them (context.cards). */
+const FIRST_CARDS = ['start_day', 'give_route', 'partner', 'solo'];
 
 /** The Benny said it couldn't, without logging it: caught here so no request goes unseen. */
 const CANT = /\b(can['’]?t|cannot|not able to|unable to|don['’]t have (a|the) (tool|way)|no (tool|way) (to|for)|isn['’]t (something i can|switched on|available)|not (yet )?(supported|possible|available))\b/i;
@@ -118,9 +121,16 @@ Deno.serve(async req => {
         return { maps: p.check.maps || [], highlight: assign.flatMap(a => (a.routes || []).map(r => r.code)), pins: [], title: 'The plan’s routes' };
       }
       if (p.kind === 'give_route' && p.check.map) return { maps: [p.check.map], highlight: [p.check.route], pins: [], title: String(p.check.route) };
+      // a booking moving to another route: the route, with the house on it
+      if (p.kind === 'booking' && p.check.map && p.check.route) return { maps: [p.check.map], highlight: [p.check.route], pins: p.check.pin ? [p.check.pin] : [], title: `${String((p.check.pin as { label?: string } | undefined)?.label || 'Booking')} → ${String(p.check.route)}` };
       return null;
     };
-    const done = (reply: string) => json({ reply, map: map ? { ...(map as object), title: mapTitle } : mapOf(proposal), proposal });
+    const shows = new Set<string>([...FIRST_CARDS, ...(Array.isArray(ctx.cards) ? ctx.cards.map(String) : [])]);
+    const done = (reply: string) => {
+      // a tab opened before this kind of card existed can't draw it: say so, rather than send a card it would choke on
+      if (proposal && !shows.has(proposal.kind)) return json({ reply: 'I can do that, but this screen is on an older version of the app. Refresh the page, then ask me again.', map: null, proposal: null });
+      return json({ reply, map: map ? { ...(map as object), title: mapTitle } : mapOf(proposal), proposal });
+    };
     for (let round = 0; round < 8; round++) {
       const r = await claude(sys, msgs, tools);
       const uses = r.content.filter(c => c.type === 'tool_use');
