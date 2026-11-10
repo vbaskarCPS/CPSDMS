@@ -7,6 +7,7 @@ import type { PlannerPass } from '../../lib/auth';
 import { Page, Header, Card, Button, Sheet, Field, Input, useToast, uid } from '../../ui/primitives';
 import { BuildSheet } from './BuildSheet';
 import { loadList, loadPrefs, refreshDeals, removeItem, saveItem, savePrefs } from './store';
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { ANYWHERE, bestDeal, DEFAULT_PREFS, isFlyer, liveDeals, perLabel, saleNote, sectionRank, storeOf, type ShopItem, type ShopPrefs } from './types';
 
 const money = (n: number | null | undefined) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
@@ -36,6 +37,7 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
     }).catch(() => setLoading(false));
     return () => { on = false; };
   }, []);
+  useDocsChanged(['shop'], () => { loadList().then(setItems).catch(() => undefined); });
 
   const add = async () => {
     const t = text.trim(); if (!t) return;

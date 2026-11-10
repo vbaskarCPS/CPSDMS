@@ -1,4 +1,5 @@
 // src/planner/features/food/FoodToday.tsx — the day: ring, macros, meals; plus the Today-screen card.
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BookOpen, Camera, ChevronLeft, ChevronRight, Plus, Utensils, X, History, Target, Star } from 'lucide-react';
@@ -28,6 +29,7 @@ function useDay(day: string) {
     } finally { setLoading(false); }
   }, [day]);
   useEffect(() => { void reload(); }, [reload]);
+  useDocsChanged(['meal'], () => { void reload(); });
   const totals: Totals = round(meals.reduce((t, m) => addTotals(t, m.totals), { ...ZERO }));
   return { meals, targets, totals, loading, reload };
 }

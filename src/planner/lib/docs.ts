@@ -20,6 +20,13 @@ export async function putDoc(kind: string, key: string, data: unknown | null): P
   if (!d.ok) throw new Error(d.reason || 'Could not save');
 }
 
+// ── changes made outside a screen (Arvy): screens holding a copy of these kinds reload it, so they don't save over it ──
+const changed = new Set<(kinds: string[]) => void>();
+/** Listen for docs another part of the app changed. Returns the unsubscribe. */
+export function onDocsChanged(fn: (kinds: string[]) => void): () => void { changed.add(fn); return () => { changed.delete(fn); }; }
+/** Say these kinds changed (after Arvy writes or undoes). */
+export function docsChanged(kinds: string[]): void { for (const fn of [...changed]) { try { fn(kinds); } catch { /* a screen's reload failed: it has its own error */ } } }
+
 export async function putDocs(docs: { kind: string; key: string; data: unknown | null }[]): Promise<void> {
   if (!docs.length) return;
   const d = await call<{ ok: boolean }>('planner_put_many', { p_docs: docs });

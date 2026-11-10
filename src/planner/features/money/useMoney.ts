@@ -1,5 +1,6 @@
 // src/planner/features/money/useMoney.ts — one load for the finance screens: accounts, the months in
 // range (a connected account's CSV rows hidden), the user's rules and the budget.
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { useCallback, useEffect, useState } from 'react';
 import { loadAccounts, loadBudget, loadMonths, loadRules, visibleMonths } from './lib';
 import type { Account, Budget, Txn } from './types';
@@ -19,6 +20,7 @@ export function useMoney(from?: string, to?: string) {
     finally { setLoading(false); }
   }, [from, to]);
   useEffect(() => { setLoading(true); void reload(); }, [reload]);
+  useDocsChanged(['txns', 'account', 'budget', 'rule'], () => { void reload(); });
   return { ...data, loading, error, reload, setData };
 }
 

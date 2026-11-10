@@ -1,6 +1,6 @@
 // src/planner/lib/useDoc.ts — load one planner doc and save it back with a short delay after each change.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getDoc, getDocs, putDoc, type Doc } from './docs';
+import { getDoc, getDocs, onDocsChanged, putDoc, type Doc } from './docs';
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -38,7 +38,9 @@ export function useDoc<T>(kind: string, key: string, empty: T, delay = 800) {
     // back from the background with nothing unsaved: pick up what another screen or device wrote
     const onShow = () => { if (document.visibilityState === 'visible' && !dirty.current && loaded.current) void load(g, true); };
     document.addEventListener('visibilitychange', onShow);
-    return () => { window.clearTimeout(timer.current); document.removeEventListener('visibilitychange', onShow); };
+    // Arvy changed this kind: pick it up (when nothing here is unsaved)
+    const off = onDocsChanged(ks => { if (ks.includes(kind) && !dirty.current && loaded.current) void load(g, true); });
+    return () => { window.clearTimeout(timer.current); document.removeEventListener('visibilitychange', onShow); off(); };
   }, [kind, key, load]);
 
   const flush = useCallback(async () => {
@@ -78,5 +80,6 @@ export function useDocs<T>(kind: string, from?: string, to?: string) {
   const [loading, setLoading] = useState(true);
   const reload = useCallback(async () => { try { setDocs(await getDocs<T>(kind, from, to)); } finally { setLoading(false); } }, [kind, from, to]);
   useEffect(() => { setLoading(true); void reload(); }, [reload]);
+  useEffect(() => onDocsChanged(ks => { if (ks.includes(kind)) void reload(); }), [kind, reload]);
   return { docs, loading, reload, setDocs };
 }
