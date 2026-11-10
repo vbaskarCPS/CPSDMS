@@ -59,3 +59,19 @@ describe('dayState and completion', () => {
     expect(c.due).toBe(30); expect(c.done).toBe(2); expect(c.pct).toBe(7);
   });
 });
+
+describe('a planned rest day (skip)', () => {
+  const logs: Logs = { '2026-10-27': { a: 'done' }, '2026-10-28': { a: 'skip' }, '2026-10-29': { a: 'skip' }, '2026-10-30': { a: 'done' } };
+  it('is neither a hit nor a miss: two rest days in a row keep the chain', () => {
+    expect(currentStreak(h(), logs, '2026-10-30')).toBe(2);
+    expect(bestStreak(h(), logs, '2026-10-30')).toBe(2);
+    expect(dayState(h(), logs, '2026-10-28', '2026-10-30')).toBe('off');
+  });
+  it("doesn't count as the miss before today, or against completion", () => {
+    expect(missedLastDue(h(), { '2026-10-29': { a: 'skip' }, '2026-10-28': { a: 'done' } }, '2026-10-30')).toBe(false);
+    expect(completion(h(), logs, '2026-10-30', 4)).toEqual({ done: 2, due: 2, pct: 100 });
+  });
+  it('the home challenge (mini) after a missed gym day keeps it going', () => {
+    expect(currentStreak(h(), { '2026-10-28': { a: 'done' }, '2026-10-29': { a: 'mini' }, '2026-10-30': { a: 'done' } }, '2026-10-30')).toBe(3);
+  });
+});

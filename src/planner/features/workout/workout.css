@@ -119,3 +119,11 @@
 .wo-parts button small { margin-left: auto; color: var(--ink-2); flex: none; }
 .wo-parts button.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg-2)); }
 .wo-parts button.is-on b { background: var(--accent); color: var(--accent-ink); }
+
+/* "Did you miss the gym?" → back on track (MissedGym.tsx) */
+.back-on-track__list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.back-on-track__list li { display: flex; color: var(--ink); justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); font-size: 14px; }
+.back-on-track__list li b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.today-gym-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px; color: var(--ink-2); }
+small.today-gym-status { display: block; }
+.today-gym-status.is-good { color: var(--good); }

@@ -9,6 +9,7 @@ export type MealSource = 'photo' | 'text' | 'favourite' | 'manual';
 export interface Meal {
   id: string; date: string; time: string; name: string; items: FoodItem[]; totals: Totals;
   thumb?: string; note?: string; source: MealSource;
+  guessed?: boolean;   // logged afterwards from a rough description of a day with nothing logged (GuessMeals)
 }
 export interface Targets { kcal: number; protein: number; carbs?: number; fat?: number }
 export interface FavMeal { id: string; name: string; items: FoodItem[]; totals: Totals; thumb?: string; uses: number; lastUsed: string }

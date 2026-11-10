@@ -1,7 +1,7 @@
 // supabase/functions/planner-ai/index.ts — the planner's AI: food photos → items and calories, the
 // workout coach, bank-transaction categories, and short reflections on a day. Separate from Benny.
 //
-//   POST { token, action: 'food_photo', image: { media_type, data(base64) }, note? }
+//   POST { token, action: 'food_photo', image: { media_type, data(base64) } | images: [up to 4 of the same meal], note? }
 //        → { items: [{ name, portion, grams?, kcal, protein, carbs, fat, confidence }], tips?: string }
 //   POST { token, action: 'food_text', text }                     → same shape
 //   POST { token, action: 'coach', messages: [{ role, content }], context }   → { reply }
@@ -407,12 +407,17 @@ Deno.serve(async req => {
 
     const action = b.action;
     if (action === 'food_photo') {
-      const img = b.image as { media_type: string; data: string } | undefined;
-      if (!img?.data) return json({ error: 'No image' }, 400);
-      const note = typeof b.note === 'string' && b.note.trim() ? `\nThe user adds: ${b.note.trim()}` : '';
+      // one photo (`image`) or up to 4 of the same meal (`images`: other angles, a close-up, the label or menu)
+      type Img = { media_type: string; data: string };
+      const imgs = ((Array.isArray(b.images) ? b.images : [b.image]) as (Img | undefined)[]).filter((x): x is Img => !!x?.data).slice(0, 4);
+      if (!imgs.length) return json({ error: 'No image' }, 400);
+      const note = typeof b.note === 'string' && b.note.trim() ? `\nThe user adds: ${b.note.trim().slice(0, 600)}` : '';
+      const many = imgs.length > 1
+        ? `These ${imgs.length} photos are ONE meal (other angles, a close-up, or a label/menu). Count each food once, use the extra photos to judge portions and hidden items, and read any nutrition label or menu numbers you can see.`
+        : 'Estimate this meal.';
       const text = await claude(FOOD_SYSTEM, [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: img.media_type || 'image/jpeg', data: img.data } },
-        { type: 'text', text: `Estimate this meal.${note}` },
+        ...imgs.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.media_type || 'image/jpeg', data: img.data } })),
+        { type: 'text', text: `${many}${note}` },
       ] }]);
       return json(parseJson(text));
     }

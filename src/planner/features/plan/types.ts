@@ -47,7 +47,12 @@ export interface Day {
   scores: Scores;
   reflection?: string;
   protein?: ProteinPlan;
+  gym?: GymCheck;   // "Did you miss the gym?" answered (features/workout/homeChallenge.ts)
 }
+
+/** The missed-gym question's answer for a day; `challenge` = the home challenge started (and finished) after a miss. */
+export type GymAnswer = 'missed' | 'went' | 'rest';
+export interface GymCheck { answer: GymAnswer; at: string; challenge?: { id: string; doneAt?: string } }
 
 export const briefDone = (d: Day): boolean => !!d.brief.finishedAt;
 
@@ -100,6 +105,7 @@ export function normalizeDay(d: Partial<Day> | null | undefined): Day {
     scores: d.scores || {},
     reflection: d.reflection,
     protein: d.protein && Array.isArray(d.protein.slots) ? { ...d.protein, slots: d.protein.slots.filter(x => x && typeof x.id === 'string') } : undefined,
+    gym: d.gym && typeof d.gym.answer === 'string' ? d.gym : undefined,
   };
 }
 

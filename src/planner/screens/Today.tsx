@@ -14,7 +14,8 @@ import { InstallHint } from '../ui/InstallHint';
 import { Stat } from '../ui/primitives';
 import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, todosDone, wakeStreak, TodoList, MissedBedtime, isMorningHours, type Day } from '../features/plan';
 import { HabitsTodayCard, SlotHabits, SlotHabitsProvider, autoMark } from '../features/habits';
-import { WorkoutTodayCard } from '../features/workout';
+import { WorkoutTodayCard, MissedGym, GymStatus } from '../features/workout';
+import { GuessMeals } from '../features/food/GuessMeals';
 import { FoodTodayCard, alreadyLoggedFor, fromRoad, mealKey, saveMeal, slotMeal } from '../features/food';
 import type { Meal } from '../features/food/model';
 import type { ProteinSlot } from '../features/plan';
@@ -165,6 +166,8 @@ export function Today({ pass }: { pass: PlannerPass }) {
       </header>
 
       <MissedBedtime routine={routine} open={askBed} onClose={() => setAskBed(false)} />
+      <MissedGym routine={routine} day={day} set={set} today={today} loading={loading} />
+      <GuessMeals routine={routine} today={today} />
       {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
       <div className="pl-stats today-streaks">
         <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Up on time</span>} value={streaks ? streaks.up : '–'} sub={`by ${clock(routine.wake)}`} tone={streaks && streaks.up > 0 ? 'good' : undefined} />
@@ -240,6 +243,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
                   </div>
                 )}
 
+                {b.id === 'gym' && <GymStatus day={day} set={set} today={today} />}
                 <SlotHabits block={b.id} when="after" />
                 <div className="today-block__actions">
                   {canTick && <button type="button" className={`pl-btn pl-btn--small ${done ? 'pl-btn--ghost' : isCur ? 'pl-btn--primary' : ''}`} onClick={() => tick(b.id as TickId)}>{done ? 'Undo' : b.id === 'wake' ? "I'm up" : b.id === 'lightsOut' ? (isMorning ? 'In bed' : 'Lights out') : b.id === 'kiaanUp' ? "He's up" : 'Done'}</button>}

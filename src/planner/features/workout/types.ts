@@ -25,7 +25,8 @@ export interface WorkoutExercise { exerciseId: string; name: string; restSec: nu
 /** What the coach prescribed for next time, per exercise, when a session was completed. Numbers prefill the next session. */
 export interface NextRx { weight?: number; reps?: number; repsR?: number; sets?: number; seconds?: number; restSec?: number; cue?: string }
 // review = the coach's paragraph written when the session was completed; next = its per-exercise prescriptions (by exerciseId)
-export interface Workout { id: string; date: string; startedAt: string; endedAt?: string; templateId?: string; name: string; exercises: WorkoutExercise[]; notes?: string; prs?: string[]; discarded?: boolean; review?: string; next?: Record<string, NextRx> }
+// kind 'home' = the back-on-track challenge done at home after a missed gym day (homeChallenge.ts): it doesn't tick the gym
+export interface Workout { id: string; date: string; startedAt: string; endedAt?: string; templateId?: string; name: string; exercises: WorkoutExercise[]; notes?: string; prs?: string[]; discarded?: boolean; review?: string; next?: Record<string, NextRx>; kind?: 'home' }
 
 export interface BodyWeight { weight: number }
 export interface CoachChat { messages: { role: 'user' | 'assistant'; content: string; at?: string }[] }

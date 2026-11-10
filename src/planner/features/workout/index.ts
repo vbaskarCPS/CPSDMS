@@ -27,3 +27,4 @@ export const workoutRoutes: { path: string; element: JSX.Element }[] = [
 ];
 
 export function WorkoutTodayCard({ pass }: { pass: PlannerPass }): JSX.Element { return createElement(TodayCard, { pass }); }
+export { MissedGym, GymStatus } from './MissedGym';

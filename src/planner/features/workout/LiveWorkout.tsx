@@ -204,13 +204,20 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     done.prs = detectPRs(done, history);
     persist(done, true); setSummary(done);
     reviewSession(done);
-    // the routine's gym block is done
+    // the routine's gym block is done — or, for the home challenge after a missed gym day, the small version of it:
+    // the gym stays unticked, the gym habit gets a 'mini' (keeps the streak) and the day notes the challenge was done
     void (async () => {
       try {
-        const k = dayKey();
+        const k = done.date || dayKey();
         const d = normalizeDay(await getDoc<Day>('day', k));
+        if (done.kind === 'home') {
+          const at = new Date().toISOString();
+          await putDoc('day', k, { ...d, gym: { answer: 'missed', at: d.gym?.at || at, challenge: { id: done.id, doneAt: at } } });
+          void autoMark('gym', true, k, 'mini');
+          return;
+        }
         if (!d.ticks.gym) await putDoc('day', k, { ...d, ticks: { ...d.ticks, gym: nowHM() } });
-        void autoMark('gym', true);
+        void autoMark('gym', true, k);
       } catch { /* the Today screen can be ticked by hand */ }
     })();
   };
