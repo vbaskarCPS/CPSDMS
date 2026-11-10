@@ -54,5 +54,6 @@ describe('the Benny’s tools', () => {
       for (const word of ['Step:', 'Equiv (EQ', 'Payable production ÷ 25', 'Prebook:', 'PCL:', 'Alumni rate', 'Hats:', 'Cart:', 'WDR:', 'Floater:']) expect(sys, word).toContain(word);
     }
     expect(TOOLS.find(t => t.name === 'live_team')!.description).toMatch(/steps, equiv, gross, upsells/);
+    expect(system(ctx, 'admin')).toMatch(/live map \(live_team\) is what is true NOW/);   // the session is the plan at the start, not a bug when it differs
   });
 });
