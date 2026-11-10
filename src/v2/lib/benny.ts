@@ -127,6 +127,17 @@ export async function speak(text: string): Promise<void> {
 }
 export const stopSpeaking = () => { saying++; try { player?.pause(); } catch { /* none */ } };
 
+// ── the first-time demo: the next time someone who can use the Benny opens the app, it opens and walks them through a
+//    quick try. Remembered per person on each phone; if they close it without finishing it comes back, three times at most.
+export interface DemoSeen { opens: number; done: boolean }
+const demoKey = (user: string) => `benny-demo:${user}`;
+export function readDemo(user: string): DemoSeen {
+  try { const d = JSON.parse(localStorage.getItem(demoKey(user)) || '{}'); return { opens: Number(d.opens) || 0, done: !!d.done }; }
+  catch { return { opens: 0, done: false }; }
+}
+export function writeDemo(user: string, d: DemoSeen): void { try { localStorage.setItem(demoKey(user), JSON.stringify(d)); } catch { /* private window: it shows again */ } }
+export const demoDue = (d: DemoSeen) => !d.done && d.opens < 3;
+
 // ── the bug log (Super Admin › Bug log): what people told the Benny was broken ──
 export interface BugReport {
   id: string; created_at: string; title: string; status: 'open' | 'done'; resolved_at?: string; resolved_by?: string;

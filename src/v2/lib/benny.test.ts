@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { speakable } from './benny';
+import { demoDue, speakable } from './benny';
 
 describe('speakable', () => {
   it('reads the first sentences without markdown or list marks', () => {
@@ -21,5 +21,14 @@ describe('the Benny’s voice', () => {
     const fn = readFileSync(new URL('../../../supabase/functions/benny-voice/index.ts', import.meta.url), 'utf8');
     expect(fn).toContain('texttospeech.googleapis.com');
     expect(fn).toMatch(/BENNY_VOICE'\) \|\| 'Charon'/);   // a man's voice by default
+  });
+});
+
+describe('the first-time demo', () => {
+  it('comes up until it’s finished or skipped, three times at most', () => {
+    expect(demoDue({ opens: 0, done: false })).toBe(true);
+    expect(demoDue({ opens: 2, done: false })).toBe(true);
+    expect(demoDue({ opens: 3, done: false })).toBe(false);
+    expect(demoDue({ opens: 1, done: true })).toBe(false);
   });
 });
