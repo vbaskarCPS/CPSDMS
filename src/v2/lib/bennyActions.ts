@@ -5,7 +5,8 @@
 //   partner    → RM map › Move worker › to another cart
 //   solo       → RM map › Move worker › own cart
 import { getDay, listRoster, type RosterRow } from './workerbook';
-import { availableManagers, nextTeamName, planProblems, startSession, type Plan, type PlanManager, type PlanRoute, type PlanTeam } from './startSession';
+import { availableManagers, getSession, nextTeamName, planProblems, startSession, type Plan, type PlanManager, type PlanRoute, type PlanTeam } from './startSession';
+import { db, must } from './client';
 import { listRateCards, listSeasons, regionTax } from './data';
 import { cardFor, defaultRateCard, type RateCardData } from './rateCard';
 import { centerService, type Service } from './permissions';
@@ -19,8 +20,8 @@ export interface StartDayCheck {
   booked: number; showed: number; teams: number; no_team: number; open_prebooks: number; maps?: string[]; live_map_on?: string | null;
 }
 export interface LiveWorker { cn: string; name: string; cart_id?: string; manager?: string }
-export interface GiveCheck { ok: boolean; date: string; route: string; map?: string; worker: LiveWorker; cart?: { cn: string; name: string }[]; now?: string[]; route_manager?: string; open_prebooks?: number }
-export interface MoveCheck { ok: boolean; date: string; a: LiveWorker; b?: LiveWorker; carts?: Record<string, string[]> }
+export interface GiveCheck { ok: boolean; problems?: string[]; date: string; route: string; map?: string; worker: LiveWorker; cart?: { cn: string; name: string }[]; now?: string[]; route_manager?: string; open_prebooks?: number }
+export interface MoveCheck { ok: boolean; problems?: string[]; date: string; a: LiveWorker; b?: LiveWorker; carts?: Record<string, string[]> }
 export type BennyProposal =
   | { kind: 'start_day'; check: StartDayCheck; team_mode?: TeamMode }
   | { kind: 'give_route'; check: GiveCheck }
@@ -119,6 +120,7 @@ export async function startDayFromBenny(p: Extract<BennyProposal, { kind: 'start
   const c = p.check;
   const day = await getDay(center.id, c.date);
   if (!day) throw new Error(`Nobody is booked on ${c.date}.`);
+  if (await getSession(day.id)) throw new Error(`The session for ${c.date} has already started.`);   // an old card tapped again
   const [roster, managers, seasons] = await Promise.all([listRoster(day.id), availableManagers(center.id, c.date), listSeasons(center.id)]);
   const season = seasons.find(s => s.starts_on <= c.date && c.date <= s.ends_on) || null;
   const cards = season ? await listRateCards(season.id) : [];
@@ -133,6 +135,14 @@ export async function startDayFromBenny(p: Extract<BennyProposal, { kind: 'start
   return `Started ${c.date}: ${plan.routes.length} routes, ${plan.teams.length} carts, ${plan.showed.size} workers. Managers sign in to Route Manager › Map.`;
 }
 
+/** The same check that made the card, run again right before the change: the team may have moved since. */
+async function recheck<T extends { ok: boolean; problems?: string[] }>(fn: string, args: Record<string, unknown>): Promise<T> {
+  const fresh = must(await db.rpc(fn, args)) as T;
+  if (!fresh?.ok) throw new Error(fresh?.problems?.[0] || 'That can’t be done any more. Ask me again.');
+  return fresh;
+}
+const same = (a?: string[] | null, b?: string[] | null) => [...(a || [])].sort().join('|') === [...(b || [])].sort().join('|');
+
 async function legacy(centerId: string) {
   const { pointLegacyAt } = await import('./legacy');
   await pointLegacyAt(centerId);
@@ -143,7 +153,8 @@ async function legacy(centerId: string) {
 
 /** RM map › Assign route, whole route (the same steps as RMMapTab's handleAssign). */
 export async function giveRouteFromBenny(p: Extract<BennyProposal, { kind: 'give_route' }>, centerId: string): Promise<string> {
-  const c = p.check;
+  const c = await recheck<GiveCheck>('benny_check_give', { p_center: centerId, p_route: p.check.route, p_worker: p.check.worker.cn });
+  if (!same(c.now, p.check.now)) throw new Error(`${c.route} changed hands since I checked${c.now?.length ? ` (${c.now.join(' + ')} has it now)` : ''}. Ask me again.`);
   const { sessionService, date, seasonHasTeams } = await legacy(centerId);
   if (date !== c.date) throw new Error('The live day changed since I checked. Ask me again.');
   const session = await sessionService.getWorkerLogsheetSession(c.worker.cn);
@@ -171,7 +182,7 @@ export async function giveRouteFromBenny(p: Extract<BennyProposal, { kind: 'give
 
 /** RM map › Move worker: b joins a's cart, or a goes solo. */
 export async function moveFromBenny(p: Extract<BennyProposal, { kind: 'partner' | 'solo' }>, centerId: string): Promise<string> {
-  const c = p.check;
+  const c = await recheck<MoveCheck>('benny_check_move', { p_center: centerId, p_a: p.check.a.cn, p_b: p.check.b?.cn ?? null });
   const { sessionService, date } = await legacy(centerId);
   if (date !== c.date) throw new Error('The live day changed since I checked. Ask me again.');
   if (p.kind === 'solo') {

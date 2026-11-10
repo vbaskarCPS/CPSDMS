@@ -91,6 +91,10 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
     } finally { setBusy(false); }
   }, [msgs, busy, cid, centerName, loc.pathname, mute, variant, rmManager, profile?.full_name]);
 
+  // the mic's "done talking" arrives later: it must send with the chat as it is then, not as it was when listening began
+  const sendRef = useRef(send);
+  sendRef.current = send;
+
   const settle = (i: number, outcome: NonNullable<BennyMsg['outcome']>) => setMsgs(m => m.map((x, j) => j === i ? { ...x, outcome } : x));
   const confirm = async (i: number) => {
     const p = msgs[i]?.proposal; if (!p || !cid || doing !== null) return;
@@ -110,7 +114,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
     stopSpeaking(); rec.current?.cancel();
     setHearing(mode); setText('');
     const r = listen(t => setText(t)); rec.current = r;
-    r.done.then(words => { if (rec.current === r) { rec.current = null; setHearing(null); if (words) void send(words, true); } })
+    r.done.then(words => { if (rec.current === r) { rec.current = null; setHearing(null); if (words) void sendRef.current(words, true); } })
       .catch(e => { rec.current = null; setHearing(null); setMsgs(m => [...m, { role: 'assistant', text: e instanceof Error ? e.message : 'The mic didn’t work', error: true }]); });
   };
   // tap vs hold on the mic button
