@@ -10,6 +10,7 @@ import { actAsLegacyRouteManager, actAsSharedViewer, legacyLiveSession, legacyRo
 import { legacyManagerId } from '../../lib/startSession';
 import { beginManagerDay } from '../../../lib/offline/fieldDay';
 import { Btn, ErrorBox, Loading } from '../../ui';
+import { Benny } from '../benny/BennyPanel';
 
 const RMLogbook = React.lazy(() => import('../../../pages/Management/RMLogbook'));
 
@@ -17,6 +18,7 @@ export const RMMap: React.FC = () => {
   const { profile, center, can } = useAuth();
   const centerId = profile?.rm_center_id || center?.id || null;
   const [viewing, setViewing] = useState<string | null>(null);
+  const [viewingName, setViewingName] = useState<string | null>(null);
   const own = profile ? legacyManagerId(profile.full_name) : null;
   const who = viewing || own;
 
@@ -41,7 +43,10 @@ export const RMMap: React.FC = () => {
   if (state.loading) return <div className="v2"><Loading label="Opening the map…" /></div>;
   if (state.error) return <div className="v2"><div className="v2-main v2-narrow"><ErrorBox error={state.error} /></div></div>;
   const s = state.data;
-  if (s?.kind === 'ok') return <Suspense fallback={<div className="v2"><Loading label="Opening the map…" /></div>}><RMLogbook key={who || ''} /></Suspense>;
+  if (s?.kind === 'ok') return <>
+    <Suspense fallback={<div className="v2"><Loading label="Opening the map…" /></div>}><RMLogbook key={who || ''} /></Suspense>
+    <Benny variant="fab" rmManager={who} rmName={viewing && viewing !== own ? viewingName : null} centerId={centerId} />
+  </>;
 
   return (
     <div className="v2"><div className="v2-main v2-narrow">
@@ -53,7 +58,7 @@ export const RMMap: React.FC = () => {
           <div style={{ marginBottom: 12 }}>You aren’t a route manager on today’s session{center ? ` at ${center.display_name}` : ''}, and no manager has shared their map with you. Once one does (RM map › Layers › Share with), it opens here.</div>
           {s.managers.length > 0 && <>
             <div className="v2-card-h">Open a manager’s map</div>
-            <div className="v2-row">{s.managers.map(m => <Btn key={m.user_id} kind="o" onClick={() => setViewing(m.user_id)}>{m.name}</Btn>)}</div>
+            <div className="v2-row">{s.managers.map(m => <Btn key={m.user_id} kind="o" onClick={() => { setViewing(m.user_id); setViewingName(m.name); }}>{m.name}</Btn>)}</div>
           </>}
         </>}
       </div>

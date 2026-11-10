@@ -1,0 +1,84 @@
+.benny-root{font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.benny-root *,.benny-root *::before,.benny-root *::after{box-sizing:border-box}
+/* The Benny: top-bar buttons, the panel (right side / bottom sheet), messages, the map card and full-screen map */
+.benny-root .benny-ask{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 13px;border-radius:17px;border:1px solid #f97316;
+  background:rgba(249,115,22,.14);color:#fdba74;font-weight:600;font-size:13px;line-height:1;font-family:inherit;cursor:pointer}
+.benny-root .benny-ask:hover,.benny-root .benny-ask.on{background:#f97316;color:#1a0d03}
+.benny-root .benny-ask:focus-visible,.benny-root .benny-mic:focus-visible,.benny-root .benny-icon:focus-visible,.benny-root .benny-chip:focus-visible{outline:2px solid #fb923c;outline-offset:2px}
+.benny-root .benny-mic{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:17px;border:0;
+  background:#f97316;color:#1a0d03;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;flex:none}
+.benny-root .benny-mic.big{width:44px;height:44px;border-radius:22px}
+.benny-root .benny-mic.on{box-shadow:0 0 0 7px rgba(249,115,22,.25);animation:benny-pulse 1.2s ease-in-out infinite}
+.benny-root .benny-mic:disabled{opacity:.5;cursor:default}
+@keyframes benny-pulse{50%{box-shadow:0 0 0 11px rgba(249,115,22,.12)}}
+@media (prefers-reduced-motion:reduce){.benny-root .benny-mic.on{animation:none}}
+
+.benny-root .benny-panel{position:fixed;z-index:58;top:58px;right:0;bottom:0;width:min(440px,100vw);background:#f8fafc;color:#0f172a;
+  display:flex;flex-direction:column;border-left:1px solid #1e2b42;box-shadow:-10px 0 30px rgba(0,0,0,.3)}
+@media (max-width:640px){
+  .benny-root .benny-panel{top:auto;left:0;width:auto;height:78vh;height:78dvh;border-left:0;border-radius:18px 18px 0 0;box-shadow:0 -8px 24px rgba(15,23,42,.25)}
+  .benny-root .benny-panel::before{content:"";width:40px;height:4px;border-radius:2px;background:#cbd5e1;align-self:center;margin-top:8px}
+}
+.benny-root .benny-h{display:flex;align-items:center;gap:9px;min-height:54px;padding:0 12px 0 16px;border-bottom:1px solid #e2e8f0}
+.benny-root .benny-dot{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:13px;background:#f97316;color:#1a0d03}
+.benny-root .benny-h b{white-space:nowrap}
+.benny-root .benny-mut{color:#475569;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.benny-root .benny-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:0;border-radius:8px;background:transparent;color:#475569;cursor:pointer}
+.benny-root .benny-icon:hover{background:#e2e8f0;color:#0f172a}
+.benny-root .benny-icon.light{color:#e5ecf5}.benny-root .benny-icon.light:hover{background:rgba(255,255,255,.12);color:#fff}
+.benny-root .benny-link{border:0;background:none;color:#475569;font-weight:500;font-size:12px;font-family:inherit;cursor:pointer;padding:6px}
+.benny-root .benny-link:hover{color:#0f172a;text-decoration:underline}
+.benny-root .benny-list{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;overscroll-behavior:contain}
+.benny-root .benny-hello p{margin:0 0 10px;color:#334155;font-size:14px;line-height:1.5}
+.benny-root .benny-chip{display:block;width:100%;text-align:left;margin:0 0 6px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;color:#0f172a;font-size:14px;font-family:inherit;cursor:pointer}
+.benny-root .benny-chip:hover{border-color:#f97316}
+.benny-root .benny-msg{display:flex;flex-direction:column;gap:8px}
+.benny-root .benny-msg.user{align-items:flex-end}
+.benny-root .benny-bubble{font-size:14px;line-height:1.5;color:#1e293b;max-width:100%;overflow-wrap:anywhere}
+.benny-root .benny-msg.user .benny-bubble{max-width:85%;background:#0f172a;color:#fff;padding:9px 13px;border-radius:14px 14px 4px 14px}
+.benny-root .benny-msg.err .benny-bubble{color:#b91c1c}
+.benny-root .benny-typing{display:inline-flex;gap:4px;padding:6px 0}
+.benny-root .benny-typing i{width:7px;height:7px;border-radius:50%;background:#94a3b8;animation:benny-dot 1s infinite}
+.benny-root .benny-typing i:nth-child(2){animation-delay:.15s}.benny-root .benny-typing i:nth-child(3){animation-delay:.3s}
+@keyframes benny-dot{50%{opacity:.3}}
+.benny-root .benny-in{display:flex;gap:10px;align-items:center;padding:12px 14px calc(12px + env(safe-area-inset-bottom));border-top:1px solid #e2e8f0}
+.benny-root .benny-in input{flex:1;min-width:0;height:44px;border-radius:22px;border:1px solid #cbd5e1;padding:0 16px;font-size:16px;font-family:inherit;background:#fff;color:#0f172a}
+.benny-root .benny-in input:focus{outline:2px solid #fb923c;outline-offset:0;border-color:transparent}
+.benny-root .benny-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+.benny-root .benny-mapcard{background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden}
+.benny-root .benny-mapcard-h{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 12px;font-size:13px}
+.benny-root .benny-mapcard-t{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.3}
+.benny-root .benny-mapcard-t .v2-small{color:#475569}
+.benny-root .benny-map{position:relative;height:230px;background:#e9eef3}
+.benny-root .benny-map.tall{flex:1;height:auto}
+.benny-root .benny-map-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#475569;font-size:13px;padding:12px;text-align:center}
+.benny-root .benny-fullmap{position:fixed;inset:0;z-index:80;background:#0b1424;display:flex;flex-direction:column}
+.benny-root .benny-fullmap-h{display:flex;align-items:center;gap:10px;padding:8px 10px 8px 16px;color:#e5ecf5;min-height:52px}
+.benny-root .benny-fullmap-h .v2-small{color:#9fb0c8}
+
+/* the route manager map's button and sheet */
+/* the phone RM map says where its own round Menu button is (--benny-fab-bottom); the Benny sits just above it */
+.benny-root .benny-fab{position:fixed;z-index:25;right:var(--benny-fab-right,18px);bottom:var(--benny-fab-bottom,44px);width:56px;height:56px;border-radius:28px;border:0;
+  background:#f97316;color:#1a0d03;box-shadow:0 6px 18px rgba(249,115,22,.45);display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none}
+.benny-root .benny-fab:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.benny-root .benny-panel.sheet{z-index:70;top:auto;left:auto;right:0;bottom:0;width:min(440px,100vw);height:min(560px,78dvh);border-radius:18px 18px 0 0;border-left:0;
+  box-shadow:0 -8px 24px rgba(15,23,42,.25)}
+@media (max-width:640px){.benny-root .benny-panel.sheet{left:0;width:auto}}
+
+/* confirm cards */
+.benny-root .benny-card{background:#fff;border:2px solid #f97316;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.benny-root .benny-card.dismissed{border-color:#cbd5e1}
+.benny-root .benny-card.failed{border-color:#dc2626}
+.benny-root .benny-card.done{border-color:#16a34a}
+.benny-root .benny-card-t{font-size:14px;color:#0f172a}
+.benny-root .benny-card ul{margin:0;padding:0 0 0 18px;font-size:13px;line-height:1.55;color:#334155}
+.benny-root .benny-card-b{display:flex;gap:8px;flex-wrap:wrap}
+.benny-root .benny-go{flex:1;min-width:120px;height:42px;border-radius:10px;border:0;background:#f97316;color:#1a0d03;font-weight:700;font-size:14px;font-family:inherit;cursor:pointer}
+.benny-root .benny-go:disabled{opacity:.6;cursor:default}
+.benny-root .benny-alt{height:42px;padding:0 12px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;color:#0f172a;font-size:13px;font-family:inherit;cursor:pointer}
+.benny-root .benny-go:focus-visible,.benny-root .benny-alt:focus-visible{outline:2px solid #fb923c;outline-offset:2px}
+.benny-root .benny-card-out{display:flex;gap:6px;align-items:flex-start;font-size:13px;line-height:1.45}
+.benny-root .benny-card-out.done{color:#166534}.benny-root .benny-card-out.failed{color:#b91c1c}.benny-root .benny-card-out.dismissed{color:#475569}
+.benny-root .v2-spacer{flex:1}
+.benny-root .v2-small{font-size:12px}

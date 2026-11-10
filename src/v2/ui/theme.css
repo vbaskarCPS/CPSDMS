@@ -746,3 +746,18 @@
 .v2-ms-bizcard .st { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
 .v2-ms-bizcard .x { position: absolute; right: 6px; top: 6px; border: 0; background: none; cursor: pointer; color: #6b7280; padding: 2px; }
 .v2-ms-bizcard a { margin-top: 4px; font-size: 13px; font-weight: 600; color: #0f766e; text-decoration: underline; }
+
+/* Super Admin › Bug log */
+.v2-bug { border-bottom: 1px solid var(--line-soft); }
+.v2-bug:last-child { border-bottom: 0; }
+.v2-bug-h { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.v2-bug-t { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; text-align: left; background: none; border: 0; padding: 2px 0; }
+.v2-bug-t > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.v2-bug-t > svg { flex: none; margin-top: 2px; }
+.v2-bug-t b { font-size: 14px; overflow-wrap: anywhere; }
+.v2-bug-t:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 6px; }
+.v2-bug-detail { padding: 2px 14px 14px 38px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.v2-bug-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; }
+.v2-bug-row ol { margin: 0; padding-left: 18px; }
+.v2-bug-row pre { margin: 0; padding: 8px 10px; background: var(--soft); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .v2-bug-row { grid-template-columns: 1fr; gap: 2px; } .v2-bug-detail { padding-left: 14px; } .v2-bug-h { flex-wrap: wrap; } .v2-bug-t { flex-basis: 100%; } }

@@ -4,7 +4,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Map, BookOpen, CalendarCheck, Phone, Shield, Calendar, FileText, SlidersHorizontal, UserPlus, Contact, AlertCircle,
-  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck, BadgeCheck, Mail, Send, Columns3,
+  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck, BadgeCheck, Mail, Send, Columns3, Bug,
 } from 'lucide-react';
 import type { ColorName } from '../ui';
 import type { Permission } from '../lib/permissions';
@@ -77,13 +77,14 @@ export const COMPONENTS: Component[] = [
     { key: 'availability', label: 'Availability', icon: CalendarOff, color: 'amber', path: '/app/admin/availability', ready: true },
     { key: 'territory', label: 'Territory & Client Data', icon: MapPin, color: 'sky', path: '/app/admin/territory', ready: true },
     { key: 'accounts', label: 'Accounts Reporting', icon: Receipt, color: 'green', path: '/app/admin/accounts', ready: true },
+    { key: 'bugs', label: 'Bug log', icon: Bug, color: 'amber', path: '/app/admin/bugs', ready: true },
     { key: 'reporting', label: 'Reporting', icon: BarChart3, color: 'violet', path: '/app/admin/reporting', ready: false },
   ] },
 ];
 
 /** Which permission each Super Admin subcomponent needs. */
 export const SA_SUB_PERM: Record<string, Permission> = {
-  users: 'sa_users', centers: 'sa_users', availability: 'sa_users', territory: 'sa_territory', accounts: 'sa_reporting', reporting: 'sa_reporting',
+  users: 'sa_users', centers: 'sa_users', availability: 'sa_users', territory: 'sa_territory', accounts: 'sa_reporting', bugs: 'sa_users', reporting: 'sa_reporting',
 };
 
 export function visibleComponents(can: (p: Permission) => boolean): Component[] {
