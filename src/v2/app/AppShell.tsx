@@ -10,6 +10,7 @@ import { Btn } from '../ui';
 import { MsLogo, MsTab } from '../ui/MsLogo';
 import { visibleComponents, findByPath, homeOf } from './nav';
 import { ContractorCardProvider } from '../features/workerbook/ContractorCard';
+import { Benny } from '../features/benny/BennyPanel';
 
 export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { profile, centers, center, setCenterId, can, signOut } = useAuth();
@@ -50,6 +51,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
           </> : <b>Home</b>}
         </span>
         <span className="v2-spacer" />
+        {!brand && <Benny />}
         {brand ? null : centers.length > 1 ? (
           <select className="v2-select-pill" value={center?.id || ''} onChange={e => setCenterId(e.target.value)} aria-label="Command center">
             {centers.map(c => <option key={c.id} value={c.id}>{c.display_name}</option>)}
