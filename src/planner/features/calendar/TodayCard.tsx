@@ -5,12 +5,14 @@ import { CalendarDays, ChevronRight } from 'lucide-react';
 import { calendarKey } from '../../lib/docs';
 import { clock } from '../../lib/routine';
 import { loadEvents } from './store';
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { addDays, eventsOn, WHO_LABEL, type CalEvent } from './types';
 
 export function CalendarTodayCard() {
   const today = calendarKey(), tomorrow = addDays(today, 1);
   const [events, setEvents] = useState<CalEvent[] | null>(null);
   useEffect(() => { loadEvents(today, tomorrow).then(setEvents).catch(() => setEvents([])); }, [today, tomorrow]);
+  useDocsChanged(['event'], () => { loadEvents(today, tomorrow).then(setEvents).catch(() => undefined); });
   const t = events ? eventsOn(events, today) : [], n = events ? eventsOn(events, tomorrow) : [];
   return (
     <Link to="/calendar" className="pl-card pl-stack" style={{ textDecoration: 'none', color: 'inherit', gap: 6 }}>

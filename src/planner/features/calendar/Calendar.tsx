@@ -6,6 +6,7 @@ import { calendarKey } from '../../lib/docs';
 import { clock } from '../../lib/routine';
 import { Page, Header, Card, Button, Sheet, Field, Input, TextArea, useToast, uid } from '../../ui/primitives';
 import { loadEvents, removeEvent, saveEvent } from './store';
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { addDays, addMonths, eventsOn, WHO_LABEL, type CalEvent, type Repeat, type Who } from './types';
 
 const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -42,6 +43,7 @@ export function Calendar({ pass }: { pass: PlannerPass }) {
     finally { setLoading(false); }
   }, [grid]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void reload(); }, [reload]);
+  useDocsChanged(['event'], () => { void reload(); });
 
   const byDay = useMemo(() => Object.fromEntries(grid.map(d => [d, eventsOn(events, d)])), [grid, events]);
   const dayEvents = byDay[selected] || eventsOn(events, selected);

@@ -1,6 +1,7 @@
 // src/planner/features/habits/useHabits.ts — every habit plus the last 12 weeks of logs, and marking.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getDocs, putDoc, dayKey } from '../../lib/docs';
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { addDays, type Logs } from './streak';
 import type { Habit, HabitLog, HabitMark } from './types';
 import { seedHabitsIfEmpty } from './seed';
@@ -30,6 +31,7 @@ export function useHabits() {
   }, [today]);
 
   useEffect(() => { void reload(); }, [reload]);
+  useDocsChanged(['habit', 'habitlog'], () => { void reload(); });
 
   /** Set (or clear with undefined) one habit's mark for a day. Optimistic; the log doc is rewritten whole. */
   const mark = useCallback(async (habitId: string, m: HabitMark | undefined, key = today) => {

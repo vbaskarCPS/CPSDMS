@@ -4,8 +4,9 @@
 //
 // The planner keeps everything as documents and the code that reads and edits them lives in the app, so Arvy's tools
 // run in the app (the same functions the screens use); the server only talks to Claude.
-// Phase 1: Arvy looks things up, answers, remembers, and opens screens. It doesn't change your plan, calendar, food,
-// money or anything else yet: a request it can't do is noted (cant_do_yet) so we know what to build next.
+// Arvy looks things up, answers, remembers and opens screens, and makes changes (`change` tools, run by
+// src/planner/features/arvy/act.ts): small everyday ones straight away with an Undo, bigger ones (calendar, removing
+// anything, money) only after a Confirm tap. Anything else it's asked to do is noted (cant_do_yet) for later.
 
 export type Profile = 'night' | 'morning';
 export interface ArvyCtx {
@@ -19,9 +20,12 @@ export interface ArvyCtx {
   spoken?: boolean;       // the message was spoken (speech-to-text): words may be misheard
   units?: string;         // lb | kg
 }
-export interface ArvyTool { name: string; description: string; input_schema: Record<string, unknown>; morningOnly?: boolean }
+/** change: 'now' = done straight away with an Undo; 'confirm' = waits for them to tap Confirm. */
+export interface ArvyTool { name: string; description: string; input_schema: Record<string, unknown>; morningOnly?: boolean; change?: 'now' | 'confirm' }
 
 const date = (d: string) => ({ type: 'string', description: `${d} (YYYY-MM-DD)` });
+const strs = (d: string) => ({ type: 'array', items: { type: 'string' }, description: d });
+const WHO = { type: 'string', enum: ['vijay', 'rosh', 'both', 'kiaan'], description: 'whose event it is' };
 
 /** Where Arvy can take you (open_screen). */
 export const SCREENS: Record<string, string> = {
@@ -56,12 +60,46 @@ export const TOOLS: ArvyTool[] = [
     input_schema: { type: 'object', properties: { note: { type: 'string', description: 'one sentence, in the third person, e.g. "Prefers to train in the evening."' } }, required: ['note'] } },
   { name: 'open_screen', description: 'Open a screen of the planner for them (e.g. "show me my budget"). The chat stays open.',
     input_schema: { type: 'object', properties: { path: { type: 'string', enum: Object.keys(SCREENS) } }, required: ['path'] } },
-  { name: 'cant_do_yet', description: 'Note something they asked you to DO that you have no tool for yet (adding, changing or deleting anything: to-dos, events, shopping items, meals, habits, workouts, money…), so it gets built. Call it, then tell them it’s noted and, when there is one, open the screen where they can do it themselves.',
+  { name: 'cant_do_yet', description: 'Note something they asked you to DO that none of your tools can do (for example: create a habit or workout, change a budget, log a period, edit a recipe), so it gets built. Call it, then tell them it’s noted and, when there is one, open the screen where they can do it themselves.',
     input_schema: { type: 'object', properties: { request: { type: 'string', description: 'what they asked for, in a few words' }, area: { type: 'string', enum: ['plan', 'calendar', 'shopping', 'food', 'habits', 'workout', 'money', 'cycle', 'other'] } }, required: ['request', 'area'] } },
+
+  // ── changes: done straight away, with an Undo ──
+  { name: 'add_shopping_items', change: 'now', description: 'Add items to the shared shopping list (an item already on it gets the quantity merged).',
+    input_schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { text: { type: 'string', description: 'the item, e.g. "Milk"' }, qty: { type: 'string', description: 'optional, e.g. "2 L" or "x3"' } }, required: ['text'] } } }, required: ['items'] } },
+  { name: 'check_off_shopping', change: 'now', description: 'Tick items off the shopping list as got (done true, the default) or put ticked items back (done false). Names as they are on the list.',
+    input_schema: { type: 'object', properties: { items: strs('item names'), done: { type: 'boolean' } }, required: ['items'] } },
+  { name: 'add_todos', change: 'now', description: 'Add to-dos to a day’s plan page.',
+    input_schema: { type: 'object', properties: { todos: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, time: { type: 'string', description: 'optional, HH:MM 24-hour' }, must: { type: 'boolean', description: 'a must-do for the day' } }, required: ['text'] } }, date: date('the day; default today') }, required: ['todos'] } },
+  { name: 'complete_todos', change: 'now', description: 'Mark to-dos on a day’s plan done (done true, the default) or not done (done false). Names as they are on the plan.',
+    input_schema: { type: 'object', properties: { todos: strs('to-do texts'), done: { type: 'boolean' }, date: date('the day; default today') }, required: ['todos'] } },
+  { name: 'log_meal', change: 'now', description: 'Log something they ate or drank: the calories and protein/carbs/fat are estimated from the description.',
+    input_schema: { type: 'object', properties: { description: { type: 'string', description: 'what and how much, in their words, e.g. "2 eggs on toast and a latte"' }, name: { type: 'string', description: 'short meal name, e.g. "Breakfast"' }, time: { type: 'string', description: 'HH:MM 24-hour; default now' }, date: date('default today') }, required: ['description'] } },
+  { name: 'mark_habit', change: 'now', description: 'Mark a habit for a day: done, mini (a smaller version), skip (a planned rest day) or clear (unmark).',
+    input_schema: { type: 'object', properties: { habit: { type: 'string', description: 'the habit’s name' }, mark: { type: 'string', enum: ['done', 'mini', 'skip', 'clear'] }, date: date('default today') }, required: ['habit'] } },
+  { name: 'log_body_weight', change: 'now', description: 'Log their body weight for a day, in their units.',
+    input_schema: { type: 'object', properties: { weight: { type: 'number' }, date: date('default today') }, required: ['weight'] } },
+
+  // ── changes that wait for a Confirm tap ──
+  { name: 'remove_shopping_items', change: 'confirm', description: 'Remove items from the shopping list altogether (not ticking them off).',
+    input_schema: { type: 'object', properties: { items: strs('item names') }, required: ['items'] } },
+  { name: 'remove_todos', change: 'confirm', description: 'Remove to-dos from a day’s plan altogether (not marking them done).',
+    input_schema: { type: 'object', properties: { todos: strs('to-do texts'), date: date('the day; default today') }, required: ['todos'] } },
+  { name: 'add_event', change: 'confirm', description: 'Add an event to the household calendar. "who" is whose it is: default the person you’re talking with; "both" for the two of them; "kiaan" for their son.',
+    input_schema: { type: 'object', properties: { title: { type: 'string' }, date: date('the day (the first one, if it repeats)'), time: { type: 'string', description: 'HH:MM 24-hour; leave out for all day' }, end_time: { type: 'string', description: 'HH:MM 24-hour' }, who: WHO, repeat: { type: 'string', enum: ['none', 'daily', 'weekly', 'biweekly', 'monthly', 'yearly'] }, until: date('last day it repeats'), notes: { type: 'string' } }, required: ['title', 'date'] } },
+  { name: 'change_event', change: 'confirm', description: 'Change a calendar event: find it by the day it’s on (and its title if there are several that day), then give only what changes. A repeating event changes every time it repeats, and can’t be moved to another day here.',
+    input_schema: { type: 'object', properties: { date: date('a day it’s on'), title: { type: 'string', description: 'its current title' }, new_title: { type: 'string' }, new_date: date('move it to this day'), new_time: { type: 'string', description: 'HH:MM 24-hour (the end moves with it)' }, new_end_time: { type: 'string', description: 'HH:MM 24-hour' }, all_day: { type: 'boolean' }, who: WHO, notes: { type: 'string', description: 'replaces the notes; empty to clear' } }, required: ['date'] } },
+  { name: 'delete_event', change: 'confirm', description: 'Delete a calendar event, found by the day it’s on (and its title). For a repeating event, scope "this" skips just that day; "all" deletes the whole series.',
+    input_schema: { type: 'object', properties: { date: date('the day it’s on'), title: { type: 'string' }, scope: { type: 'string', enum: ['this', 'all'] } }, required: ['date'] } },
+  { name: 'add_cash_expense', change: 'confirm', description: 'Record something paid in cash in the cash wallet (Money). Category is one of the spending categories (e.g. Groceries, Dining, Gas, Shopping, Kids, Health).',
+    input_schema: { type: 'object', properties: { amount: { type: 'number', description: 'dollars' }, what: { type: 'string', description: 'what or where, e.g. "Farmers market"' }, category: { type: 'string' }, date: date('default today') }, required: ['amount', 'category'] } },
+  { name: 'recategorize', change: 'confirm', description: 'Move a month’s transactions whose merchant or description has the search words to another category (e.g. all the Costco ones to Groceries).',
+    input_schema: { type: 'object', properties: { search: { type: 'string' }, category: { type: 'string' }, month: { type: 'string', description: 'YYYY-MM; default this month' } }, required: ['search', 'category'] } },
 ];
 
 export const toolsFor = (profile?: Profile) => TOOLS.filter(t => !t.morningOnly || profile === 'morning')
   .map(({ name, description, input_schema }) => ({ name, description, input_schema }));
+/** How a tool changes things: 'now', 'confirm', or undefined for a look-up. */
+export const changeOf = (name: string) => TOOLS.find(t => t.name === name)?.change;
 
 /** What Arvy is told. */
 export function system(ctx: ArvyCtx): string {
@@ -75,7 +113,10 @@ export function system(ctx: ArvyCtx): string {
     '- Use your tools to look things up: never guess or make up their data. Call several at once when a question needs them.',
     '- Keep it short: lead with what matters most, then two or three sentences (about 60 words) unless they ask for detail or a full list. No headings. A short list only when they asked for a list (like the shopping list). Numbers rounded, dates said naturally ("Saturday at 6").',
     '- Sound like a friend who knows their planner inside out: a quick nod to what they’ve done well, then what’s next. End with a short offer (open a screen, look at something else) only when it’s useful.',
-    '- Right now you can look things up, answer, remember notes and open screens. You can’t add, change or delete anything yet. When they ask you to, call cant_do_yet, say it’s on the way, and open the screen where they can do it.',
+    '- You can make changes for them: shopping list, to-dos, meals, habit marks and body weight happen straight away (they get an Undo button). Calendar events, removing anything, and money wait for them to tap Confirm: when a tool says waiting_for_confirm, say what you set up in a few words and ask them to tap Confirm. Never say it’s done until it is.',
+    '- Do what they ask without double-checking first, unless something important is missing (like the day for an event): then ask one short question. If a tool says not_done, explain why in a sentence (and ask which one, if several match).',
+    '- Anything to add, change or delete that no tool covers: call cant_do_yet, say it’s on the way, and open the screen where they can do it.',
+    '- After a change, confirm it in one short sentence ("Added milk and eggs to the list!"). Don’t repeat the details shown under your reply.',
     '- When something would be easier to see on its screen, offer to open it (or just open it if they asked to see it).',
     '- Money: talk about spending and budgets; you never move money, pay anything, or see account numbers.',
     '- Food and training: encourage, don’t lecture. Health questions beyond the planner: keep it general and suggest a professional when it matters.',

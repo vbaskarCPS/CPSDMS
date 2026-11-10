@@ -3,11 +3,13 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ShoppingCart, ChevronRight } from 'lucide-react';
 import { loadList } from './store';
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { ANYWHERE, storeOf, type ShopItem } from './types';
 
 export function ShopTodayCard() {
   const [items, setItems] = useState<ShopItem[] | null>(null);
   useEffect(() => { loadList().then(setItems).catch(() => setItems([])); }, []);
+  useDocsChanged(['shop'], () => { loadList().then(setItems).catch(() => undefined); });
   const open = (items || []).filter(i => !i.done);
   const byStore: Record<string, number> = {};
   for (const i of open) byStore[storeOf(i)] = (byStore[storeOf(i)] || 0) + 1;
