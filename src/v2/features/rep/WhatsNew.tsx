@@ -18,6 +18,16 @@ interface Update {
 // newest first
 const UPDATES: Update[] = [
   {
+    id: '2026-11-10-back-on-main-server',
+    title: 'The app is back',
+    intro: 'The app was closed for a short time on Nov 10 while we moved it back to its main server.',
+    steps: [
+      'Everything saved before then is still here.',
+      'If the app asks you to sign in, sign in the same way as before.',
+      'If something you entered around 8:30–9:30 am that morning is missing, tell your manager.',
+    ],
+  },
+  {
     id: '2026-11-07-other-reps-leads',
     title: 'Grey pins: another rep’s lead',
     intro: 'Businesses another rep is already working now show as grey pins on your map.',

@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './index.css';
 import { UpdateBanner } from './components/UpdateBanner';
+import { MaintenanceLock, lockMessage, watchLock } from './components/MaintenanceLock';
 import { registerAppWorker, watchForStaleBuild } from './lib/offline/appUpdate';
 import { ready as fieldDayReady } from './lib/offline/dayStore';
 import { msDemo } from './lib/msDemoFlag';
@@ -23,12 +24,18 @@ if (msDemo) {
     root.render(<StrictMode><Demo /></StrictMode>);
   });
 } else {
-  root.render(
-    <StrictMode>
-      <BrowserRouter>
-        <App />
-        <UpdateBanner />
-      </BrowserRouter>
-    </StrictMode>
-  );
+  const showLock = (message: string) => root.render(<StrictMode><MaintenanceLock message={message} /></StrictMode>);
+  // closed for maintenance? (src/components/MaintenanceLock.tsx — no signal or no answer: open as usual)
+  void lockMessage().then(message => {
+    if (message) { showLock(message); watchLock(true, showLock); return; }
+    root.render(
+      <StrictMode>
+        <BrowserRouter>
+          <App />
+          <UpdateBanner />
+        </BrowserRouter>
+      </StrictMode>
+    );
+    watchLock(false, showLock);
+  });
 }
