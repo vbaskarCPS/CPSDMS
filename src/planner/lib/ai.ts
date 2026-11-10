@@ -11,7 +11,7 @@ export interface FoodItem { name: string; portion: string; grams?: number; kcal:
 export interface FoodEstimate { items: FoodItem[]; tips?: string }
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 
-async function invoke<T>(body: Record<string, unknown>, fn = 'planner-ai'): Promise<T> {
+export async function invoke<T>(body: Record<string, unknown>, fn = 'planner-ai'): Promise<T> {
   const p = getPass();
   if (!p) throw new SignedOut();
   if (isDemo()) return (await demoInvoke(body)) as T;
