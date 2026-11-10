@@ -37,7 +37,7 @@ export const TOOLS: Tool[] = [
       + 'call it once per manager with the other manager\'s maps as versus, so every route of the map goes to exactly one of them. With no versus it returns the nearer half. Returns codes (route codes) to pass on.',
     input_schema: { type: 'object', properties: { of_maps: strs('the map being split'), near_maps: strs('maps this side is connected to'), near_routes: strs('or routes this side is connected to'),
       versus_maps: strs('the other side\'s maps'), versus_routes: strs('or the other side\'s routes') }, required: ['of_maps'] } },
-  { name: 'live_team', roles: ['admin', 'rm'], description: "Today's live map (the old app's open day): the carts (cart_id, workers with CN and name, their routes) and the routes (manager, workers, split) "
+  { name: 'live_team', roles: ['admin', 'rm'], description: "Today's live map (the old app's open day): the carts (cart_id, workers with CN and name, their routes, and the day's numbers so far: steps, equiv, gross, upsells), totals (steps, equiv, gross, upsells) and the routes (manager, workers, split) "
       + 'for one manager (manager = old-app id like rm_franklynmitchell; default: the map that is open / your own team), plus the day\'s route managers.',
     input_schema: { type: 'object', properties: { manager: { type: 'string', description: 'rm_… id; omit for the open map' } } } },
   { name: 'show_map', roles: ['admin', 'rm'], description: 'Show a map in the chat: the named master maps (or every map in a city) outlined, the given routes highlighted and the rest grey, and optionally every open prebook in those maps as a pin with its route highlighted. Use whenever the answer is about where things are.',
@@ -65,11 +65,31 @@ export const TOOLS: Tool[] = [
       what_happened: str, expected: str, steps: strs('steps to make it happen, if known'),
       where: { type: 'string', description: 'screen / route / map / worker involved' },
       severity: { type: 'string', enum: ['blocking', 'annoying', 'minor'] } }, required: ['title', 'what_happened'] } },
+  { name: 'log_request', roles: ['admin', 'rm'], description: 'Log something the person asked for that you could not do because you have no tool for it (a change you cannot prepare, numbers no tool returns), so Vijay sees what to build next. '
+      + 'Call it every time that happens, then tell the person you can\'t do that yet and that it\'s logged. Not for things outside the DMS, and not for something you did answer.',
+    input_schema: { type: 'object', properties: {
+      title: { type: 'string', description: 'what they wanted, short, e.g. "Move a prebook to another route"' },
+      asked: { type: 'string', description: 'their request, in their words' },
+      why_not: { type: 'string', description: 'what is missing, e.g. "no tool changes a booking\'s route"' },
+      would_need: { type: 'string', description: 'what it would take, if you can tell (a lookup of X, a change to Y)' } }, required: ['title', 'asked'] } },
 ];
 
 export function toolsFor(role: Role) {
   return TOOLS.filter(t => t.roles.includes(role)).map(({ roles: _r, ...t }) => t);
 }
+
+/** How CPS people talk. The Benny uses these words the way the crew does, and answers in them. */
+export const CPS_WORDS = `
+CPS words (use them the way the crew does, and answer in them):
+- Step: one job logged on a logsheet (a production job, a sale or an upgrade each count as one). "Steps" = jobs done so far; "how many steps" is live_team's steps.
+- Equiv (EQ, equivs, equivalents): the pay unit. Payable production ÷ 25. Payable = production after tax, with prepaid and billed jobs counted at part weight, less the product cost %; office flats count at their set value. Workers are paid per equiv.
+- Gross: production dollars before any of that. Upsell: an add-on sold at the door (paid as commission, not equiv). IOS: a small per-item bonus.
+- Payout rate: dollars per equiv = the season's base (one rate solo, a higher one in a team of 2 or more) + the worker's alumni rate + silver rate. Alumni rate: extra per equiv for returning contractors. Silver rate: extra per equiv from hats. Hats: a worker's experience count per service (AER, RJ, SE, CL).
+- Cart: the workers sharing one logsheet (a team); a solo cart is one worker. Ramp crew (RC1, RC2): the asphalt crew in sealing. Equiv split / upsell split: how a cart shares its equiv and its upsell commission.
+- Prebook: an open Master Booking waiting to be done on a route. PCL: past client list, the past customers on a route. Flats (office flats): office-set jobs worth a fixed amount (SP, RJ, FSL, AFSL). Prepaid, billed, cash, cheque, e-transfer, card: how a job is paid.
+- CN: contractor number (like I1225). WDR: withdrawn. Q: quit. NS: no-show. Roll call: who showed. Next day: who is booked for tomorrow. Shuttle: their ride in.
+- Session: the day once it is started (managers, routes, carts). Live map: today's routes and carts in the field. Close day, payouts, payslips: the end-of-day pay. Rate card: the season's pay rules. Product cost %: taken off production before equiv.
+- RM: route manager. Floater: a manager covering other managers' teams. Center (command center): the office, like BC Fall RJ. Season: Aeration, Lawn Rejuv, Sealing or Cleaning. Master map: an area like NORTH VANCOUVER #2; a route is one numbered piece of it (NVN19).`;
 
 /** For a spoken message: how to hear this app's own words, and the real names to match against. */
 export function heardRight(vocab?: Vocab | null): string {
@@ -102,15 +122,17 @@ Rules:
 - Be short and specific: the answer first, with the numbers; a list only when it helps; no more than about 8 lines. Phone numbers as written.
 - Words people use: "prebooks" = open Master Bookings; "the map"/"master map" = an area like NORTH VANCOUVER #2 ("North Van 1" = NORTH VANCOUVER #1); a route is a code like PCQ64 (prefix + number; "route 35" means 35 on the map in question). "North Van" = North Vancouver, "PoCo" = Port Coquitlam. WDR = withdrawn. A cart = a team of workers on the live map.
 - When the answer is about where things are (prebooks in a city, a route, which routes touch, a plan's routes), call show_map too, then answer in words.
+- Can't do it: when they ask for something in the DMS that you have no tool for (a change you can't prepare, numbers no tool returns), call log_request with what they wanted, then say plainly that you can't do that yet and that it's logged for Vijay. Never pretend, and never leave it unlogged.
 - A tool result with heard_as matched the name by sound: say which name you used. A result with which or closest lists near matches: ask which one, or use it when only one fits.
-- Never reveal passwords, card numbers or ID numbers; the tools don't return them.` + (ctx.spoken ? heardRight(vocab) : '');
+- Never reveal passwords, card numbers or ID numbers; the tools don't return them.
+` + CPS_WORDS + (ctx.spoken ? heardRight(vocab) : '');
 }
 
 export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo';
 /** What a tool does: a database function to call (as the signed-in person), and for a change the card it becomes. */
 export type ToolCall =
   | { fn: string; args: Record<string, unknown>; card?: { kind: ProposalKind; team_mode?: string } }
-  | { bug: true }
+  | { log: 'bug' | 'request' }
   | null;
 
 export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx): ToolCall {
@@ -132,7 +154,8 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     case 'propose_give_route': return { fn: 'benny_check_give', args: { p_center: c, p_route: String(input.route || ''), p_worker: String(input.worker || '') }, card: { kind: 'give_route' } };
     case 'propose_partner': return { fn: 'benny_check_move', args: { p_center: c, p_a: String(input.a || ''), p_b: String(input.b || '') }, card: { kind: 'partner' } };
     case 'propose_solo': return { fn: 'benny_check_move', args: { p_center: c, p_a: String(input.worker || ''), p_b: null }, card: { kind: 'solo' } };
-    case 'report_bug': return { bug: true };
+    case 'report_bug': return { log: 'bug' };
+    case 'log_request': return { log: 'request' };
     default: return null;
   }
 }
