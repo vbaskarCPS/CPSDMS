@@ -1,8 +1,9 @@
 import { describe as d, it, expect } from 'vitest';
-import { buildBennyPlan, describe, type StartDayCheck } from './bennyActions';
+import { bookingSaved, buildBennyPlan, describe, type StartDayCheck } from './bennyActions';
 import { planProblems } from './startSession';
 import { defaultRateCard } from './rateCard';
 import type { RosterRow } from './workerbook';
+import { CARDS } from './benny';
 
 const row = (id: string, first: string, team: string | null = null, attendance: 'showed' | 'no_show' | null = null): RosterRow => ({
   id: 'r' + id, day_id: 'd', hire_id: id, shuttle: null, manager_id: null, team, confirmed_at: null, confirmed_via: null, attendance,
@@ -71,5 +72,41 @@ d('describe', () => {
       b: { cn: 'I1013', name: 'Michael Asiegbunam', cart_id: 's10' }, carts: { s3: ['Nathan Clark'] } } });
     expect(p.title).toBe('Partner Michael with Nathan');
     expect(p.lines[0]).toBe('Michael Asiegbunam joins Nathan Clark’s cart');
+  });
+  it('booking cards say exactly what will be saved', () => {
+    const booking = { id: 'b1', address: '3575 Latimer St', city: 'Richmond', list: 'Fall Rejuv 2026', job: 'AFSL', status: 'open' as const, route: 'RMD57', people: ['Jane Smith'] };
+    const base = { ok: true, booking, patch: {}, ask: {}, stamp: 't' };
+    const done = describe({ kind: 'booking', check: { ...base, change: { status: { from: 'open', to: 'done' } }, notes: ['Marked done by the office: no worker is credited.'] } });
+    expect(done.title).toBe('Mark 3575 Latimer St done');
+    expect(done.lines).toEqual(['Richmond · Fall Rejuv 2026 · AFSL · Jane Smith', 'Status: open → done', 'Marked done by the office: no worker is credited.']);
+    expect(done.action).toBe('Save');
+    expect(describe({ kind: 'booking', check: { ...base, change: { status: { from: 'open', to: 'cancelled' } } } }).title).toBe('Cancel 3575 Latimer St');
+    expect(describe({ kind: 'booking', check: { ...base, change: { status: { from: 'done', to: 'open' } } } }).title).toBe('Reopen 3575 Latimer St');
+    const move = describe({ kind: 'booking', check: { ...base, change: { route: { from: 'RMD57', to: 'RMD137', map: 'RICHMOND #7' } } } });
+    expect(move.title).toBe('Move 3575 Latimer St to RMD137');
+    expect(move.lines[1]).toBe('Route: RMD57 → RMD137 (RICHMOND #7)');
+    const note = describe({ kind: 'booking', check: { ...base, change: { field_note: { mode: 'add', text: 'Dog in yard', was: 'Side gate' } } } });
+    expect(note.title).toBe('Add a field note to 3575 Latimer St');
+    expect(note.lines[1]).toBe('Field note: adds “Dog in yard”');
+    expect(describe({ kind: 'booking', check: { ...base, change: { office_note: { mode: 'set', text: 'Call first' } } } }).title).toBe('Add an office note to 3575 Latimer St');
+    expect(describe({ kind: 'booking', check: { ...base, change: { office_note: { mode: 'clear', text: '', was: 'Old' } } } }).lines[1]).toBe('Office note: cleared (was “Old”)');
+    const many = describe({ kind: 'booking', check: { ...base, change: { status: { from: 'open', to: 'done' }, route: { to: 'RMD137' }, field_note: { mode: 'replace', text: 'New', was: 'Old' } } } });
+    expect(many.title).toBe('Change 3575 Latimer St');
+    expect(many.lines.slice(1)).toEqual(['Status: open → done', 'Route: none → RMD137', 'Field note: “Old” becomes “New”']);
+  });
+  it('every card the app says it can show has its words', () => {
+    const booking = { id: 'b1', address: '1 A St', status: 'open' as const };
+    const move = { ok: true, date: '2026-11-10', a: { cn: 'I1', name: 'A B' }, b: { cn: 'I2', name: 'C D' } };
+    const samples: Record<string, Parameters<typeof describe>[0]> = {
+      start_day: { kind: 'start_day', check: check() }, give_route: { kind: 'give_route', check: { ok: true, date: '2026-11-10', route: 'X1', worker: { cn: 'I1', name: 'A B' } } },
+      partner: { kind: 'partner', check: move }, solo: { kind: 'solo', check: move },
+      booking: { kind: 'booking', check: { ok: true, booking, change: { status: { from: 'open', to: 'done' } }, patch: { status: 'done' }, ask: { status: 'done' }, stamp: 't' } },
+    };
+    for (const k of CARDS) { expect(samples[k], k).toBeTruthy(); expect(describe(samples[k]).title, k).toBeTruthy(); }
+  });
+  it('what a saved booking change says', () => {
+    expect(bookingSaved({ status: { from: 'open', to: 'done' } })).toBe('marked done');
+    expect(bookingSaved({ status: { from: 'done', to: 'open' }, route: { to: 'RMD137' }, field_note: { mode: 'add', text: 'x' }, office_note: { mode: 'clear', text: '' } }))
+      .toBe('open again, moved to RMD137, field note added, office note cleared');
   });
 });

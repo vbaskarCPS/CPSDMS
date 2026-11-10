@@ -16,16 +16,25 @@ describe('the Benny’s tools', () => {
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);
     expect(rm).toEqual(expect.arrayContaining(['live_team', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'report_bug', 'log_request', 'show_map']));
-    for (const no of ['find_people', 'day', 'maps', 'propose_start_day']) expect(rm).not.toContain(no);
+    for (const no of ['find_people', 'day', 'maps', 'propose_start_day', 'booking', 'propose_booking']) expect(rm).not.toContain(no);
     expect(toolsFor('admin').map(t => t.name)).toEqual(TOOLS.map(t => t.name));
     expect(toolsFor('rm')[0]).not.toHaveProperty('roles');   // only what the model's API accepts is sent
   });
   it('changes become cards; lookups don’t', () => {
     const kinds = TOOLS.map(t => { const c = toolCall(t.name, {}, ctx); return c && 'fn' in c && c.card ? c.card.kind : null; }).filter(Boolean);
-    expect(kinds.sort()).toEqual(['give_route', 'partner', 'solo', 'start_day']);
+    expect(kinds.sort()).toEqual(['booking', 'give_route', 'partner', 'solo', 'start_day']);
     const start = toolCall('propose_start_day', { assign: [], team_mode: 'whatever' }, ctx);
     expect(start && 'fn' in start && start.card?.team_mode).toBe('roster');
     expect(toolCall('propose_start_day', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
+  });
+  it('a booking change sends only what was asked, and only super admins are told they can', () => {
+    const c = toolCall('propose_booking', { booking: '3575 Latimer', status: 'done', field_note: 'gate code 1234', route: null, extra: 'x' }, ctx);
+    expect(c).toMatchObject({ fn: 'benny_check_booking', args: { p_center: 'c1', p_booking: '3575 Latimer', p_change: { status: 'done', field_note: 'gate code 1234' } }, card: { kind: 'booking' } });
+    expect(c && 'fn' in c && Object.keys(c.args.p_change as object)).toEqual(['status', 'field_note']);
+    expect(toolCall('booking', { q: '3575 Latimer' }, ctx)).toMatchObject({ fn: 'benny_booking', args: { p_q: '3575 Latimer' } });
+    expect(system(ctx, 'admin')).toContain('service ticket');
+    expect(system(ctx, 'admin')).toContain('changing a booking');
+    expect(system(ctx, 'rm')).not.toContain('propose_booking');
   });
   it('“my team” on the RM map is the map that’s open', () => {
     expect(toolCall('live_team', {}, ctx)).toMatchObject({ args: { p_manager: 'rm_x' } });

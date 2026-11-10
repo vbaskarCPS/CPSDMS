@@ -5,7 +5,7 @@
 //             done, cancelled). Live: the ones loaded into today's session, that the crew has on the map. Add a booking, or open one to change it. "Waiting on a map" groups
 //             the bookings whose maps aren't built yet, busiest first, so the builders know where to go.
 //   Plans     every plan the region has sold (SP Pro, Grub Control…), across seasons, with its bookings.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, MapPin, Plus, RefreshCw, Search } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
@@ -59,6 +59,13 @@ export const BookingsPage: React.FC = () => {
     [list?.id, qq, status, state, page]);
   const wait = useLoad(() => (list && list.waiting ? waiting(list.id) : Promise.resolve([])), [list?.id, list?.waiting]);
   const refresh = () => { rows.reload(); lists.reload(); wait.reload(); };
+  // a booking changed from the Benny's card: show it
+  const refreshNow = useRef(refresh); refreshNow.current = refresh;
+  useEffect(() => {
+    const on = (e: Event) => { if ((e as CustomEvent).detail === 'booking') refreshNow.current(); };
+    window.addEventListener('benny:changed', on);
+    return () => window.removeEventListener('benny:changed', on);
+  }, []);
 
   if (!can('bookings')) return <div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to Master Bookings.</div></div>;
   if (!center) return <div className="v2-main v2-narrow"><div className="v2-card v2-mut">Pick a center in the top bar to see its bookings.</div></div>;
