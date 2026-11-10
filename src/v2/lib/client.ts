@@ -7,11 +7,9 @@ import { createClient } from '@supabase/supabase-js';
 import { trackedFetch } from '../../lib/offline/net';
 
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env || {};
-// TEMPORARY (Nov 2026): the hosting's VITE_SUPABASE_* still name the paused main project, so they're ignored here
-// while the app runs on cps-temp-bc. Revert with the switch.
-void env;
-const url = 'https://gfvdbxuzaqagvephzwup.supabase.co';
-const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdmdmRieHV6YXFhZ3ZlcGh6d3VwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQxODcxNTEsImV4cCI6MjEwOTc2MzE1MX0.l4MMsyCfTx6Z6zrJtsQ4LernJTcKF7ZQn9L-oGc2da8';
+const url = env.VITE_SUPABASE_URL || 'https://mipvcafqrmwxnoqmicxh.supabase.co';
+const anonKey = env.VITE_SUPABASE_ANON_KEY
+  || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1pcHZjYWZxcm13eG5vcW1pY3hoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU3NDk5OTQsImV4cCI6MjA4MTMyNTk5NH0.EWr6S_W0FZzbAv8TI1KwqE3pTedryaVBjIOv6tVkOBg';
 
 export const db = createClient(url, anonKey, {
   auth: { persistSession: true, autoRefreshToken: true, storageKey: 'cpsdms-v2-auth' },
