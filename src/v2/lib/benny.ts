@@ -147,6 +147,9 @@ export interface BugReport {
   /** a bug, or something someone asked the Benny for that it couldn't do (no tool for it) */
   kind?: 'bug' | 'request';
   by?: string; center?: string; path?: string;
+  /** what the scheduled check found when it looked into this entry */
+  findings?: { verdict?: string; summary?: string; cause?: string; fix?: string; size?: string; risk?: string; needs?: string; pr?: string } | null;
+  investigated_at?: string;
   report: { what_happened?: string; expected?: string; steps?: string[]; where?: string; severity?: 'blocking' | 'annoying' | 'minor';
     asked?: string; why_not?: string; would_need?: string; reply?: string; auto?: boolean; spoken?: boolean;
     screen?: string | null; rm_manager?: string | null; diag?: BennyContext['diag'] | null };

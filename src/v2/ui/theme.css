@@ -757,6 +757,9 @@
 .v2-bug-t b { font-size: 14px; overflow-wrap: anywhere; }
 .v2-bug-t:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 6px; }
 .v2-bug-detail { padding: 2px 14px 14px 38px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.v2-bug-found { background: var(--sel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.v2-bug-found p { margin: 0; }
+.v2-bug-found-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .v2-bug-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; }
 .v2-bug-row ol { margin: 0; padding-left: 18px; }
 .v2-bug-row pre { margin: 0; padding: 8px 10px; background: var(--soft); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
