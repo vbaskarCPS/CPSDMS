@@ -269,7 +269,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
                 <b>That’s it. Three things to know</b>
                 <ol>
                   <li>{mic ? <><b>Talk instead of typing.</b> Tap the mic and pause when you’re done, or hold it and let go.</> : <><b>Type it like a text.</b> Short and plain works best.</>}</li>
-                  <li><b>Changes wait for you.</b> {variant === 'fab' ? 'Say “partner up Wilson with Michael A” or “give Wilson route 35”' : 'Say “start tomorrow with me, North Van 1” or “give Wilson route 35”'} and I show a card. Nothing happens until you tap it.</li>
+                  <li><b>Changes wait for you.</b> {variant === 'fab' ? 'Say “give Wilson route 35”, “drop a pin at Wilson called Lunch” or “plan my pickup order”' : 'Say “start tomorrow with me, North Van 1” or “give Wilson route 35”'} and I show a card. Nothing happens until you tap it.</li>
                   <li><b>Something broken?</b> Tell me what happened and it goes straight into Vijay’s bug log.</li>
                 </ol>
                 <div className="benny-card-b"><button type="button" className="benny-go" onClick={endDemo}>Got it</button></div>

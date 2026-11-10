@@ -1,5 +1,5 @@
 import { describe as d, it, expect } from 'vitest';
-import { bookingSaved, buildBennyPlan, describe, emailsPreset, type StartDayCheck } from './bennyActions';
+import { bookingSaved, buildBennyPlan, describe, emailsPreset, stopPin, type StartDayCheck } from './bennyActions';
 import { planProblems } from './startSession';
 import { defaultRateCard } from './rateCard';
 import type { RosterRow } from './workerbook';
@@ -109,6 +109,31 @@ d('describe', () => {
     expect(one.lines).toContain('Left out, not on this center’s maps: ZZZ99.');
     expect(emailsPreset(emails)).toEqual({ kind: 'day_before', date: '2026-11-11', list_id: 'l1', routes: emails.routes });
   });
+  const pin = { ok: true, date: '2026-11-10', manager: 'rm_franklynmitchell', label: 'Lunch', lat: 49.15, lng: -122.92, at: 'on NDEL32', visibility: 'private' as const, seen_by: 'Just you', route: 'NDEL32' };
+  const order = { ok: true, kind: 'pickup' as const, date: '2026-11-10', manager: 'rm_franklynmitchell', start: { lat: 49.24, lng: -122.88 }, km: 18.6, replaces: 5, left_out: ['Mugove (no route yet)'],
+    stops: [{ n: 1, label: 'Pickup 1 · Nathan', who: 'Nathan', lat: 49.25, lng: -122.93, by: 'knock' as const, route: 'NBY70', age_min: 12 },
+      { n: 2, label: 'Pickup 2 · Kyle + David', who: 'Kyle + David', lat: 49.15, lng: -122.92, by: 'route' as const, route: 'NDEL28' },
+      { n: 3, label: 'Pickup 3 · Favour', who: 'Favour', lat: 49.15, lng: -122.9, by: 'phone' as const, age_min: 2 }] };
+  it('a pin card says where it goes and who sees it', () => {
+    expect(describe({ kind: 'pin', check: pin })).toEqual({ title: 'Drop a pin: “Lunch”', lines: ['On NDEL32', 'Seen by: just you'], action: 'Drop the pin' });
+    expect(describe({ kind: 'pin', check: { ...pin, at: 'where David last knocked, 8 min ago', visibility: 'manager', seen_by: 'Sent to Jovan Chung' } }).lines)
+      .toEqual(['Where David last knocked, 8 min ago', 'Seen by: sent to Jovan Chung']);
+  });
+  it('an order card lists the stops in order, with how each was found, and what it replaces', () => {
+    const c = describe({ kind: 'stops', check: order });
+    expect(c.title).toBe('Pickup order: 3 stops');
+    expect(c.lines).toEqual(['1. Nathan · last knock, 12 min ago', '2. Kyle + David · route NDEL28', '3. Favour · phone, 2 min ago', 'About 18.6 km in a straight line, from where you are',
+      'Left out: Mugove (no route yet)', 'Replaces your 5 earlier pickup pins', 'Only you see these pins. Tap one on the map, then Navigate.']);
+    expect(c.action).toBe('Drop the pins');
+    const one = describe({ kind: 'stops', check: { ...order, kind: 'drop', start: undefined, replaces: undefined, left_out: [], stops: [order.stops[1]], km: 0 } });
+    expect(one.title).toBe('Drop order: 1 stop'); expect(one.action).toBe('Drop the pin');
+    expect(one.lines[1]).toBe('About 0 km in a straight line, starting at Kyle + David (I don’t have your location)');
+  });
+  it('an order only ever replaces its own kind of pin', () => {
+    expect(stopPin('drop').test('Drop 3 · Kyle')).toBe(true);
+    expect(stopPin('drop').test('Drop 12 · Kyle + David')).toBe(true);
+    for (const other of ['Pickup 3 · Kyle', 'Drop off', 'Drop 3 Kyle', 'Lunch', 'My Drop 3 · Kyle', 'Pin 4']) expect(stopPin('drop').test(other), other).toBe(false);
+  });
   it('every card the app says it can show has its words', () => {
     const booking = { id: 'b1', address: '1 A St', status: 'open' as const };
     const move = { ok: true, date: '2026-11-10', a: { cn: 'I1', name: 'A B' }, b: { cn: 'I2', name: 'C D' } };
@@ -117,6 +142,7 @@ d('describe', () => {
       partner: { kind: 'partner', check: move }, solo: { kind: 'solo', check: move },
       booking: { kind: 'booking', check: { ok: true, booking, change: { status: { from: 'open', to: 'done' } }, patch: { status: 'done' }, ask: { status: 'done' }, stamp: 't' } },
       booking_emails: { kind: 'booking_emails', check: emails },
+      pin: { kind: 'pin', check: pin }, stops: { kind: 'stops', check: order },
     };
     for (const k of CARDS) { expect(samples[k], k).toBeTruthy(); expect(describe(samples[k]).title, k).toBeTruthy(); }
   });

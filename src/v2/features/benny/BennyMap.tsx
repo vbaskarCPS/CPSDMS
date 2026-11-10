@@ -11,7 +11,7 @@ import { BLANK_STYLE } from '../bookings/mbMap';
 import { routeShapes, type RouteShape } from '../../lib/territory';
 import { bennyOutlines, type BennyMap as Spec } from '../../lib/benny';
 
-const HL = '#f97316', GREY = '#9ca3af', OUTLINE = '#334155';
+const HL = '#f97316', GREY = '#9ca3af', OUTLINE = '#334155', STOP = '#1d4ed8';
 
 /** The map's features, from the spec and the routes' lines (pure, so it's tested). */
 export function bennyFeatures(spec: Spec, shapes: RouteShape[], outlines: Record<string, GeoJSON.Geometry>) {
@@ -37,8 +37,17 @@ export function bennyFeatures(spec: Spec, shapes: RouteShape[], outlines: Record
     return { type: 'Feature', properties: { name: o.properties!.name }, geometry: { type: 'Point', coordinates: [midLng, top[1]] } } as GeoJSON.Feature;
   }).filter((n): n is GeoJSON.Feature => !!n);
   const pins: GeoJSON.Feature[] = spec.pins.filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng))
-    .map(p => ({ type: 'Feature', properties: { label: p.label, route: p.route || '' }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } }));
+    .map(p => ({ type: 'Feature', properties: { label: p.label, route: p.route || '', ...(typeof p.n === 'number' ? { n: p.n } : {}) }, geometry: { type: 'Point', coordinates: [p.lng, p.lat] } }));
+  // an order: its stops joined in order, from where the manager is when that is known
+  const stops = spec.pins.filter(p => typeof p.n === 'number' && Number.isFinite(p.lat) && Number.isFinite(p.lng)).sort((a, b) => a.n! - b.n!);
+  const start = spec.start && Number.isFinite(spec.start.lat) && Number.isFinite(spec.start.lng) ? spec.start : null;
+  const line = [...(start && stops.length ? [[start.lng, start.lat]] : []), ...stops.map(p => [p.lng, p.lat])];
+  const path: GeoJSON.Feature[] = [
+    ...(line.length > 1 ? [{ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: line } } as GeoJSON.Feature] : []),
+    ...(start && stops.length ? [{ type: 'Feature', properties: { kind: 'start' }, geometry: { type: 'Point', coordinates: [start.lng, start.lat] } } as GeoJSON.Feature] : []),
+  ];
   return {
+    path: { type: 'FeatureCollection', features: path } as GeoJSON.FeatureCollection,
     routes: { type: 'FeatureCollection', features: routes } as GeoJSON.FeatureCollection,
     nums: { type: 'FeatureCollection', features: nums } as GeoJSON.FeatureCollection,
     outlines: { type: 'FeatureCollection', features: outs } as GeoJSON.FeatureCollection,
@@ -133,11 +142,21 @@ const MapBox: React.FC<{ spec: Spec; centerId?: string | null; tall?: boolean }>
       m.addLayer({ id: 'b-routes-grey', type: 'line', source: 'b-routes', filter: ['==', ['get', 'on'], 0], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': GREY, 'line-width': w(0.8, 4), 'line-opacity': 0.6 } });
       m.addLayer({ id: 'b-routes-on', type: 'line', source: 'b-routes', filter: ['==', ['get', 'on'], 1], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': HL, 'line-width': w(1.4, 6), 'line-opacity': 0.92 } });
       m.addLayer({ id: 'b-out', type: 'line', source: 'b-out', layout: { 'line-join': 'round' }, paint: { 'line-color': OUTLINE, 'line-width': 2.5, 'line-dasharray': [2, 1.5] } });
-      m.addLayer({ id: 'b-nums', type: 'symbol', source: 'b-nums', layout: { 'text-field': ['get', 'label'], 'text-size': 13, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': false, 'text-padding': 3 },
+      // route codes, except under an order: its numbered stops sit where the codes would, and the card names each stop's route
+      const ordered = fc.pins.features.some(f => typeof (f.properties as { n?: number }).n === 'number');
+      m.addLayer({ id: 'b-nums', type: 'symbol', source: 'b-nums', layout: { visibility: ordered ? 'none' : 'visible', 'text-field': ['get', 'label'], 'text-size': 13, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': false, 'text-padding': 3 },
         paint: { 'text-color': '#7c2d12', 'text-halo-color': '#fff', 'text-halo-width': 2 } });
       m.addLayer({ id: 'b-out-name', type: 'symbol', source: 'b-names', layout: { 'text-field': ['get', 'name'], 'text-size': 13, 'text-anchor': 'bottom', 'text-offset': [0, -0.4], 'text-allow-overlap': true,
         'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'] }, paint: { 'text-color': '#0f172a', 'text-halo-color': '#fff', 'text-halo-width': 2 } });
-      m.addLayer({ id: 'b-pins', type: 'circle', source: 'b-pins', paint: { 'circle-radius': 6, 'circle-color': '#dc2626', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+      // an order's line and "you are here", under the pins
+      m.addSource('b-path', { type: 'geojson', data: fc.path });
+      m.addLayer({ id: 'b-path', type: 'line', source: 'b-path', filter: ['==', ['get', 'kind'], 'line'], layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': STOP, 'line-width': 3, 'line-dasharray': [0.6, 1.8], 'line-opacity': 0.9 } });
+      m.addLayer({ id: 'b-start', type: 'circle', source: 'b-path', filter: ['==', ['get', 'kind'], 'start'], paint: { 'circle-radius': 7, 'circle-color': '#16a34a', 'circle-stroke-color': '#fff', 'circle-stroke-width': 3 } });
+      // pins: a stop in an order is bigger and carries its number
+      m.addLayer({ id: 'b-pins', type: 'circle', source: 'b-pins', paint: { 'circle-radius': ['case', ['has', 'n'], 12, 6], 'circle-color': ['case', ['has', 'n'], STOP, '#dc2626'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
+      m.addLayer({ id: 'b-pin-n', type: 'symbol', source: 'b-pins', filter: ['has', 'n'], layout: { 'text-field': ['to-string', ['get', 'n']], 'text-size': 13, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
+        'text-allow-overlap': true, 'text-ignore-placement': true }, paint: { 'text-color': '#fff' } });
       m.on('click', 'b-pins', e => {
         const f = e.features?.[0]; if (!f) return;
         const p = f.properties as { label: string; route: string };
@@ -148,7 +167,7 @@ const MapBox: React.FC<{ spec: Spec; centerId?: string | null; tall?: boolean }>
       m.on('mouseleave', 'b-pins', () => { m.getCanvas().style.cursor = ''; });
       // frame: the highlighted routes and pins when there are some (with the outlines when that's all of a map), else the maps
       const on: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: fc.routes.features.filter(x => (x.properties as { on: number }).on) };
-      const b = bboxOf(fc.pins.features.length || on.features.length ? [fc.pins, on] : [fc.outlines, fc.routes]);
+      const b = bboxOf(fc.pins.features.length || on.features.length ? [fc.pins, on, fc.path] : [fc.outlines, fc.routes]);
       if (b) m.fitBounds(b, { padding: { top: 44, bottom: 36, left: 36, right: 48 }, maxZoom: 15, duration: 0 });
     });
     const ro = new ResizeObserver(() => m.resize()); ro.observe(box.current);
@@ -166,7 +185,11 @@ export const BennyMapCard: React.FC<{ spec: Spec; centerId?: string | null }> = 
     const esc = (e: KeyboardEvent) => e.key === 'Escape' && setFull(false);
     window.addEventListener('keydown', esc); return () => window.removeEventListener('keydown', esc);
   }, [full]);
-  const caption = `${spec.highlight.length} route${spec.highlight.length === 1 ? '' : 's'} highlighted${spec.pins.length ? ` · ${spec.pins.length} pin${spec.pins.length === 1 ? '' : 's'}` : ''}`;
+  const ordered = spec.pins.some(p => typeof p.n === 'number');
+  const caption = [
+    spec.highlight.length || !spec.pins.length ? `${spec.highlight.length} route${spec.highlight.length === 1 ? '' : 's'} highlighted` : '',
+    spec.pins.length ? (ordered ? `${spec.pins.length} stop${spec.pins.length === 1 ? '' : 's'} in order` : `${spec.pins.length} pin${spec.pins.length === 1 ? '' : 's'}`) : '',
+  ].filter(Boolean).join(' · ');
   return (
     <div className="benny-mapcard">
       <div className="benny-mapcard-h"><span className="benny-mapcard-t"><b>{spec.title || 'Map'}</b><span className="v2-small">{caption}</span></span>

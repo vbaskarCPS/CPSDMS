@@ -23,6 +23,19 @@ describe('bennyFeatures', () => {
     expect(f.outlines.features).toHaveLength(1);
     expect(f.names.features).toHaveLength(0);   // an outline with no points has nowhere to put its name
     expect(f.pins.features).toHaveLength(1);
+    expect(f.pins.features[0].properties).not.toHaveProperty('n');   // a plain pin carries no number
+    expect(f.path.features).toHaveLength(0);                          // and has no line
+  });
+  it('an order is drawn as numbered stops joined in order, from where the manager is', () => {
+    const pins = [{ lat: 2, lng: 20, label: 'Drop 2 · B', route: null, n: 2 }, { lat: 1, lng: 10, label: 'Drop 1 · A', route: 'SRY12', n: 1 }, { lat: 3, lng: 30, label: 'Drop 3 · C', route: null, n: 3 }];
+    const f = bennyFeatures({ maps: ['Surrey #1'], highlight: [], pins, start: { lat: 0, lng: 5 } }, shapes, {});
+    expect(f.pins.features.map(x => x.properties!.n)).toEqual([2, 1, 3]);
+    const line = f.path.features.find(x => x.properties!.kind === 'line')!;
+    expect((line.geometry as GeoJSON.LineString).coordinates).toEqual([[5, 0], [10, 1], [20, 2], [30, 3]]);   // start, then 1, 2, 3
+    expect(f.path.features.filter(x => x.properties!.kind === 'start')).toHaveLength(1);
+    const noStart = bennyFeatures({ maps: ['Surrey #1'], highlight: [], pins }, shapes, {});
+    expect((noStart.path.features[0].geometry as GeoJSON.LineString).coordinates).toEqual([[10, 1], [20, 2], [30, 3]]);
+    expect(noStart.path.features).toHaveLength(1);
   });
 });
 

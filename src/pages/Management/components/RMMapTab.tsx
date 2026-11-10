@@ -4535,7 +4535,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   useEffect(() => {
     reloadMapPins();
     const id = setInterval(reloadMapPins, MAP_PIN_POLL_MS);
-    return () => clearInterval(id);
+    // a pin or an order dropped through the Benny shows straight away
+    const onBenny = () => { void reloadMapPins(); };
+    window.addEventListener('benny:changed', onBenny);
+    return () => { clearInterval(id); window.removeEventListener('benny:changed', onBenny); };
   }, [reloadMapPins]);
 
   // --- DROPPED PIN: TAP THE MAP TO DROP ---

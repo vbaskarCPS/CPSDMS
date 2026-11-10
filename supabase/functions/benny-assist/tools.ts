@@ -77,6 +77,16 @@ export const TOOLS: Tool[] = [
       + 'It checks and counts who would get one; the card then opens Bookings › Send booking emails with the day and routes picked and the emails written, and the person reads them and presses Send there. You never send an email, and you get no customer names or addresses from this.',
     input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['day_before', 'next_try'] }, date: { type: 'string', description: 'YYYY-MM-DD: tomorrow (default) or the day after' },
       maps: strs('whole maps, e.g. ["NORTH DELTA #1"]'), routes: strs('route codes') }, required: ['kind'] } },
+  { name: 'propose_pin', roles: ['admin', 'rm'], description: 'Prepare a pin on the route manager map for the person to confirm on a card. Give exactly one place: route (a route code: the pin goes on its streets), '
+      + 'worker (a name: where they are now, from their last knock or their phone, else their route), address (house number and street: a booking or any house on the maps), or here (where the manager is right now). '
+      + 'see = who can see it: "me" (default), "everyone" (every manager in the center), "manager" (one manager: put the name in to), or "driver" (a stop on a worker driver\'s queue: put the worker in to).',
+    input_schema: { type: 'object', properties: { label: { type: 'string', description: 'the pin\'s name, short, e.g. "Lunch", "Truck", "Meet here"; leave out if they gave none' },
+      route: str, worker: str, address: { type: 'string', description: 'house number first, in digits, e.g. "10992 Brandy Dr"' }, here: { type: 'boolean' },
+      see: { type: 'string', enum: ['me', 'everyone', 'manager', 'driver'] }, to: { type: 'string', description: 'the manager or the worker driver, when see is manager or driver' } } } },
+  { name: 'propose_stops', roles: ['admin', 'rm'], description: 'Plan a drop, pickup or check order for the manager\'s carts on today\'s live map, as numbered pins for the person to confirm on a card. '
+      + 'kind "drop" = taking each cart to its route; "pickup" = collecting each cart from where it is now; "check" = visiting each cart where it is now (now = their last knock or their phone; else their route). '
+      + 'It puts the stops in the shortest driving order in straight lines, from where the manager is when their location is known, and says who was left out and why. only = just these workers\' carts.',
+    input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['drop', 'pickup', 'check'] }, only: strs('worker names, when they want just some carts') }, required: ['kind'] } },
   { name: 'report_bug', roles: ['admin', 'rm'], description: 'Report a bug in the app to Vijay (the developer): it is saved in the app\'s Bug log, which he reads. '
       + 'Use when the person says something in the app is broken or wrong. Ask one short question first only if you can\'t tell what went wrong or where. Write it so a developer can act on it.',
     input_schema: { type: 'object', properties: {
@@ -107,6 +117,7 @@ CPS words (use them the way the crew does, and answer in them):
 - Cart: the workers sharing one logsheet (a team); a solo cart is one worker. Ramp crew (RC1, RC2): the asphalt crew in sealing. Equiv split / upsell split: how a cart shares its equiv and its upsell commission.
 - Booking emails (service notification emails): the emails to customers about their booking. Day before = the crew is coming tomorrow. Next try = we missed you, we're coming back.
 - Prebook: an open Master Booking waiting to be done on a route. Service ticket, ticket, job (at an address): the same thing, a Master Booking; "close the ticket" = mark it done. Field note: what the crew reads at the door. Office note: for the office only. PCL: past client list, the past customers on a route. Flats (office flats): office-set jobs worth a fixed amount (SP, RJ, FSL, AFSL). Prepaid, billed, cash, cheque, e-transfer, card: how a job is paid.
+- Pin: a marker dropped on the route manager map (seen by just me, everyone, one manager, or a worker driver as a stop). Drop order: the order to take the carts to their routes. Pickup order: the order to collect them. Check order: the order to visit each cart during the day.
 - CN: contractor number (like I1225). WDR: withdrawn. Q: quit. NS: no-show. Roll call: who showed. Next day: who is booked for tomorrow. Shuttle: their ride in.
 - Session: the day once it is started (managers, routes, carts). Live map: today's routes and carts in the field. Close day, payouts, payslips: the end-of-day pay. Rate card: the season's pay rules. Product cost %: taken off production before equiv.
 - RM: route manager. Floater: a manager covering other managers' teams. Center (command center): the office, like BC Fall RJ. Season: Aeration, Lawn Rejuv, Sealing or Cleaning. Master map: an area like NORTH VANCOUVER #2; a route is one numbered piece of it (NVN19).`;
@@ -133,14 +144,15 @@ Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown
 Rules:
 - Answer from the tools, never from memory or guesses. If the tools can't answer it, say so and name the screen that can.
 - Only the app's data and work. Anything else: "I can only help with the DMS."
-- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, changing a booking (status, notes, route), and setting up the booking emails to customers' : 'giving a route to a cart, partnering workers and solo carts'} with the propose_ tools. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
+- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, changing a booking (status, notes, route), and setting up the booking emails to customers' : 'giving a route to a cart, partnering workers and solo carts'} with the propose_ tools, and on the route manager map dropping a pin and planning a drop, pickup or check order. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
 - One change per answer. If they ask for several, prepare the first and say you'll do the next after.
 - Names: if a tool says "Which one", ask which, listing the names. "Michael A" = Michael with a last name starting A.
 - Starting the day: work out each manager's maps and routes first (whole maps by name; map_side for "the side of 2 connected to 1"; bookings.by_route for "only the routes with prebooks in Surrey"), show them with show_map (routes = every route in the plan), then propose_start_day. If they don't say the date, it is today. If they don't say who, the manager is "me".
 - "Find a route connected to X's and give it to X": live_team to get X's routes, connected_routes (touching) from those, pick the nearest free one (no workers today), prefer one with prebooks, then propose_give_route. Show it with show_map.
 ${role === 'admin' ? `- Booking emails ("service notification emails", "day-before emails", "let the customers know we're coming"): use propose_booking_emails with the kind, the day and that day's routes or whole maps. If they don't say which routes or maps, ask; "the routes with prebooks in Surrey" = bookings.by_route first. After ok, say how many customers get one, how many have no email and how many already got it, then "Tap Open to read and send." Never say an email was sent: the person reads them and sends them on that screen.
 - Bookings: to change a booking (a "service ticket") use propose_booking with the address as they said it, house number first in digits ("thirty five seventy five Latimer" = "3575 Latimer"). "Close", "complete", "finish" = done; "reopen" = open. A note with no kind: field note when it is for the crew (gate code, dog, where to start), office note otherwise; ask if you can't tell. "Add a note" = add; "change the note to" = replace. Say the card's cautions in a few words. Then "Tap Save to do it." Address, people, phone, services and price change in Bookings › List, not here.
-` : ''}- Bugs: when something in the app is broken, use report_bug with a clear developer-ready description, then say "I'll let Vijay know — it's in the bug log." If the tool returns an error, say it wasn't saved.
+` : ''}- Pins and orders (the route manager map): "drop a pin at/on …" = propose_pin with one place (a route code, a worker, an address, or here = where they are) and the name they gave it, if any. Only they see it unless they say everyone, name a manager, or say it is a stop for a driver. "Plan my drop order / pickup order / check order" = propose_stops. After ok, say the order in one line by first names, the distance (it is straight-line km, say "about"), anyone left out and why, and that it replaces their earlier pins of that kind when it says so. Then "Tap Drop the pins to do it." ("Drop the pin" for one). Never say a pin is on the map before they tap.
+- Bugs: when something in the app is broken, use report_bug with a clear developer-ready description, then say "I'll let Vijay know — it's in the bug log." If the tool returns an error, say it wasn't saved.
 - Be short and specific: the answer first, with the numbers; a list only when it helps; no more than about 8 lines. Phone numbers as written.
 - Words people use: "prebooks" = open Master Bookings; "the map"/"master map" = an area like NORTH VANCOUVER #2 ("North Van 1" = NORTH VANCOUVER #1); a route is a code like PCQ64 (prefix + number; "route 35" means 35 on the map in question). "North Van" = North Vancouver, "PoCo" = Port Coquitlam. WDR = withdrawn. A cart = a team of workers on the live map.
 - When the answer is about where things are (prebooks in a city, a route, which routes touch, a plan's routes), call show_map too, then answer in words.
@@ -152,7 +164,7 @@ ${role === 'admin' ? `- Booking emails ("service notification emails", "day-befo
 ` + CPS_WORDS + (ctx.spoken ? heardRight(vocab) : '');
 }
 
-export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails';
+export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops';
 /** What a tool does: a database function to call (as the signed-in person), and for a change the card it becomes. */
 export type ToolCall =
   | { fn: string; args: Record<string, unknown>; card?: { kind: ProposalKind; team_mode?: string } }
@@ -186,6 +198,12 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     }
     case 'propose_booking_emails': return { fn: 'benny_check_emails', args: { p_center: c, p_kind: String(input.kind || 'day_before'), p_date: /^\d{4}-\d{2}-\d{2}$/.test(String(input.date || '')) ? input.date : null,
       p_today: /^\d{4}-\d{2}-\d{2}$/.test(ctx.today || '') ? ctx.today : null, p_routes: input.routes ?? null, p_maps: input.maps ?? null }, card: { kind: 'booking_emails' } };
+    case 'propose_pin': {
+      const text = (k: string) => (typeof input[k] === 'string' && String(input[k]).trim() ? String(input[k]).trim() : null);
+      const place: Record<string, unknown> = text('route') ? { route: text('route') } : text('worker') ? { worker: text('worker') } : text('address') ? { address: text('address') } : input.here === true ? { here: true } : {};
+      return { fn: 'benny_check_pin', args: { p_center: c, p_manager: ctx.rm_manager ?? null, p_place: place, p_label: text('label'), p_see: text('see') || 'me', p_to: text('to') }, card: { kind: 'pin' } };
+    }
+    case 'propose_stops': return { fn: 'benny_plan_stops', args: { p_center: c, p_manager: ctx.rm_manager ?? null, p_kind: String(input.kind || ''), p_only: Array.isArray(input.only) ? input.only : null }, card: { kind: 'stops' } };
     case 'report_bug': return { log: 'bug' };
     case 'log_request': return { log: 'request' };
     default: return null;
