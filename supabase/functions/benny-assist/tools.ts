@@ -72,6 +72,11 @@ export const TOOLS: Tool[] = [
       field_note: { type: 'string', description: 'for the crew: gate code, dog, where to start' }, office_note: { type: 'string', description: 'for the office only' },
       note_mode: { type: 'string', enum: ['add', 'replace'], description: 'add (default) goes under what is there; replace overwrites it, and replace with empty text clears it' },
       route: { type: 'string', description: 'route code to move it to, e.g. RMD137' } }, required: ['booking'] } },
+  { name: 'propose_booking_emails', roles: ['admin'], description: 'Set up the booking emails to customers (people also say service notification emails) for the person to read and send themselves. '
+      + 'kind "day_before" = the reminder that the crew comes that day (open bookings); "next_try" = we missed you and are coming back (bookings already tried). For tomorrow or the day after only, for the routes or whole maps being worked that day. '
+      + 'It checks and counts who would get one; the card then opens Bookings › Send booking emails with the day and routes picked and the emails written, and the person reads them and presses Send there. You never send an email, and you get no customer names or addresses from this.',
+    input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['day_before', 'next_try'] }, date: { type: 'string', description: 'YYYY-MM-DD: tomorrow (default) or the day after' },
+      maps: strs('whole maps, e.g. ["NORTH DELTA #1"]'), routes: strs('route codes') }, required: ['kind'] } },
   { name: 'report_bug', roles: ['admin', 'rm'], description: 'Report a bug in the app to Vijay (the developer): it is saved in the app\'s Bug log, which he reads. '
       + 'Use when the person says something in the app is broken or wrong. Ask one short question first only if you can\'t tell what went wrong or where. Write it so a developer can act on it.',
     input_schema: { type: 'object', properties: {
@@ -100,6 +105,7 @@ CPS words (use them the way the crew does, and answer in them):
 - Gross: production dollars before any of that. Upsell: an add-on sold at the door (paid as commission, not equiv). IOS: a small per-item bonus.
 - Payout rate: dollars per equiv = the season's base (one rate solo, a higher one in a team of 2 or more) + the worker's alumni rate + silver rate. Alumni rate: extra per equiv for returning contractors. Silver rate: extra per equiv from hats. Hats: a worker's experience count per service (AER, RJ, SE, CL).
 - Cart: the workers sharing one logsheet (a team); a solo cart is one worker. Ramp crew (RC1, RC2): the asphalt crew in sealing. Equiv split / upsell split: how a cart shares its equiv and its upsell commission.
+- Booking emails (service notification emails): the emails to customers about their booking. Day before = the crew is coming tomorrow. Next try = we missed you, we're coming back.
 - Prebook: an open Master Booking waiting to be done on a route. Service ticket, ticket, job (at an address): the same thing, a Master Booking; "close the ticket" = mark it done. Field note: what the crew reads at the door. Office note: for the office only. PCL: past client list, the past customers on a route. Flats (office flats): office-set jobs worth a fixed amount (SP, RJ, FSL, AFSL). Prepaid, billed, cash, cheque, e-transfer, card: how a job is paid.
 - CN: contractor number (like I1225). WDR: withdrawn. Q: quit. NS: no-show. Roll call: who showed. Next day: who is booked for tomorrow. Shuttle: their ride in.
 - Session: the day once it is started (managers, routes, carts). Live map: today's routes and carts in the field. Close day, payouts, payslips: the end-of-day pay. Rate card: the season's pay rules. Product cost %: taken off production before equiv.
@@ -127,12 +133,13 @@ Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown
 Rules:
 - Answer from the tools, never from memory or guesses. If the tools can't answer it, say so and name the screen that can.
 - Only the app's data and work. Anything else: "I can only help with the DMS."
-- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, and changing a booking (status, notes, route)' : 'giving a route to a cart, partnering workers and solo carts'} with the propose_ tools. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
+- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, changing a booking (status, notes, route), and setting up the booking emails to customers' : 'giving a route to a cart, partnering workers and solo carts'} with the propose_ tools. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
 - One change per answer. If they ask for several, prepare the first and say you'll do the next after.
 - Names: if a tool says "Which one", ask which, listing the names. "Michael A" = Michael with a last name starting A.
 - Starting the day: work out each manager's maps and routes first (whole maps by name; map_side for "the side of 2 connected to 1"; bookings.by_route for "only the routes with prebooks in Surrey"), show them with show_map (routes = every route in the plan), then propose_start_day. If they don't say the date, it is today. If they don't say who, the manager is "me".
 - "Find a route connected to X's and give it to X": live_team to get X's routes, connected_routes (touching) from those, pick the nearest free one (no workers today), prefer one with prebooks, then propose_give_route. Show it with show_map.
-${role === 'admin' ? `- Bookings: to change a booking (a "service ticket") use propose_booking with the address as they said it, house number first in digits ("thirty five seventy five Latimer" = "3575 Latimer"). "Close", "complete", "finish" = done; "reopen" = open. A note with no kind: field note when it is for the crew (gate code, dog, where to start), office note otherwise; ask if you can't tell. "Add a note" = add; "change the note to" = replace. Say the card's cautions in a few words. Then "Tap Save to do it." Address, people, phone, services and price change in Bookings › List, not here.
+${role === 'admin' ? `- Booking emails ("service notification emails", "day-before emails", "let the customers know we're coming"): use propose_booking_emails with the kind, the day and that day's routes or whole maps. If they don't say which routes or maps, ask; "the routes with prebooks in Surrey" = bookings.by_route first. After ok, say how many customers get one, how many have no email and how many already got it, then "Tap Open to read and send." Never say an email was sent: the person reads them and sends them on that screen.
+- Bookings: to change a booking (a "service ticket") use propose_booking with the address as they said it, house number first in digits ("thirty five seventy five Latimer" = "3575 Latimer"). "Close", "complete", "finish" = done; "reopen" = open. A note with no kind: field note when it is for the crew (gate code, dog, where to start), office note otherwise; ask if you can't tell. "Add a note" = add; "change the note to" = replace. Say the card's cautions in a few words. Then "Tap Save to do it." Address, people, phone, services and price change in Bookings › List, not here.
 ` : ''}- Bugs: when something in the app is broken, use report_bug with a clear developer-ready description, then say "I'll let Vijay know — it's in the bug log." If the tool returns an error, say it wasn't saved.
 - Be short and specific: the answer first, with the numbers; a list only when it helps; no more than about 8 lines. Phone numbers as written.
 - Words people use: "prebooks" = open Master Bookings; "the map"/"master map" = an area like NORTH VANCOUVER #2 ("North Van 1" = NORTH VANCOUVER #1); a route is a code like PCQ64 (prefix + number; "route 35" means 35 on the map in question). "North Van" = North Vancouver, "PoCo" = Port Coquitlam. WDR = withdrawn. A cart = a team of workers on the live map.
@@ -145,7 +152,7 @@ ${role === 'admin' ? `- Bookings: to change a booking (a "service ticket") use p
 ` + CPS_WORDS + (ctx.spoken ? heardRight(vocab) : '');
 }
 
-export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking';
+export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails';
 /** What a tool does: a database function to call (as the signed-in person), and for a change the card it becomes. */
 export type ToolCall =
   | { fn: string; args: Record<string, unknown>; card?: { kind: ProposalKind; team_mode?: string } }
@@ -177,6 +184,8 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
       for (const k of ['status', 'route', 'field_note', 'office_note', 'note_mode']) if (typeof input[k] === 'string') change[k] = input[k];
       return { fn: 'benny_check_booking', args: { p_center: c, p_booking: String(input.booking || ''), p_change: change }, card: { kind: 'booking' } };
     }
+    case 'propose_booking_emails': return { fn: 'benny_check_emails', args: { p_center: c, p_kind: String(input.kind || 'day_before'), p_date: /^\d{4}-\d{2}-\d{2}$/.test(String(input.date || '')) ? input.date : null,
+      p_today: /^\d{4}-\d{2}-\d{2}$/.test(ctx.today || '') ? ctx.today : null, p_routes: input.routes ?? null, p_maps: input.maps ?? null }, card: { kind: 'booking_emails' } };
     case 'report_bug': return { log: 'bug' };
     case 'log_request': return { log: 'request' };
     default: return null;

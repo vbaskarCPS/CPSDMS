@@ -25,6 +25,8 @@ const fakeSb = `
         : { data: { ok: true, booking: { id: 'b1', address: '3575 Latimer St', status: 'open', route: 'RMD57' }, change: args.p_change.route ? { route: { from: 'RMD57', to: 'RMD137', map: 'RICHMOND #7' } } : { status: { from: 'open', to: 'done' } },
             patch: args.p_change.route ? { route_code: 'RMD137' } : { status: 'done' }, ask: args.p_change, stamp: 's1', notes: [],
             ...(args.p_change.route ? { map: 'RICHMOND #7', route: 'RMD137', pin: { lat: 49.1, lng: -123.1, label: '3575 Latimer St', route: 'RMD137' } } : {}) }, error: null };
+      if (fn === 'benny_check_emails') return { data: { ok: true, kind: args.p_kind, date: args.p_date || '2026-11-11', list: { id: 'l1', name: 'Fall Rejuv 2026' }, maps: ['NORTH DELTA #2'],
+        routes: [{ code: 'NDEL27', area: 'NORTH DELTA #2', number: 27 }, { code: 'NDEL28', area: 'NORTH DELTA #2', number: 28 }], counts: { bookings: 5, to_email: 4, no_email: 1, already_sent: 0 }, from: 'bcclientcare@propertystars.app' }, error: null };
       if (fn === 'benny_map') return { data: { maps: ['SURREY #1'], highlight: ['SRY01'], pins: [{ lat: 1, lng: 2, label: 'x', route: 'SRY01' }] }, error: null };
       return { data: null, error: { message: 'no such function ' + fn } }; } }; }`;
 const r = await build({ entryPoints: ['supabase/functions/benny-assist/index.ts'], bundle: true, format: 'esm', write: false, logLevel: 'silent',
@@ -57,7 +59,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 17); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 18); assert(!('roles' in state.lastAsk.tools[0]));
 console.log('1 start the day: card + map ✓');
 
 // 2. a change with a problem makes no card
@@ -151,6 +153,19 @@ assert.equal(a.body.proposal, null); assert(!fns().includes('benny_check_booking
 assert(!state.lastAsk.tools.some(t => ['booking', 'propose_booking'].includes(t.name)));
 state.role = 'admin';
 console.log('5d booking change: a card for admins, its map on a move, never saved by the server, "refresh" for an old tab ✓');
+
+// 5e. booking emails ("service notification emails"): set up for the person to read and send; the server never sends one
+state.script = [turn(use('propose_booking_emails', { kind: 'day_before', maps: ['North Delta 2'] })), say('4 customers get one, 1 has no email. Tap Open to read and send.')];
+a = await ask('send the service notification emails for north delta 2 tomorrow', { cards: ['booking', 'booking_emails'] });
+assert.equal(a.body.proposal.kind, 'booking_emails'); assert.equal(a.body.proposal.check.counts.to_email, 4);
+assert.deepEqual(state.rpc.at(-1), ['benny_check_emails', { p_center: 'c1', p_kind: 'day_before', p_date: null, p_today: '2026-11-10', p_routes: null, p_maps: ['North Delta 2'] }]);
+assert.deepEqual(a.body.map, { maps: ['NORTH DELTA #2'], highlight: ['NDEL27', 'NDEL28'], pins: [], title: 'Routes to email' });
+assert(!state.http.some(([u]) => !u.includes('api.anthropic.com')), 'nothing but the model is called: no mail goes out');
+assert(!fns().some(f => /mail|send/.test(f) && f !== 'benny_check_emails'), 'no mail function is called');
+state.script = [turn(use('propose_booking_emails', { kind: 'day_before', maps: ['North Delta 2'] })), say('Tap Open to read and send.')];
+a = await ask('send the day before emails', { cards: ['booking'] });   // a tab from before this card existed
+assert.equal(a.body.proposal, null); assert.match(a.body.reply, /Refresh the page/);
+console.log('5e booking emails: set up on a card with its routes, nothing sent, "refresh" for an old tab ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

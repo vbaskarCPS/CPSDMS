@@ -11,7 +11,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Check, Mic, Send, Sparkles, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { askBenny, canListen, demoDue, listen, primeVoice, readDemo, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
-import { describe, doProposal, type BennyProposal } from '../../lib/bennyActions';
+import { describe, doProposal, emailsPreset, type BennyProposal } from '../../lib/bennyActions';
 import { BennyMapCard } from './BennyMap';
 import './benny.css';
 
@@ -126,6 +126,14 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
   const settle = (i: number, outcome: NonNullable<BennyMsg['outcome']>) => setMsgs(m => m.map((x, j) => j === i ? { ...x, outcome } : x));
   const confirm = async (i: number) => {
     const p = msgs[i]?.proposal; if (!p || !cid || doing !== null) return;
+    // booking emails: nothing changes here. The Send booking emails screen opens with the day and routes picked and writes
+    // the emails; the person reads them and presses Send there.
+    if (p.kind === 'booking_emails') {
+      settle(i, { state: 'dismissed', text: 'Opened Send booking emails with these routes. Nothing is sent until you press Send there.' });
+      stopSpeaking(); setOpen(false);
+      nav('/app/bookings/emails', { state: { benny: emailsPreset(p.check) } });
+      return;
+    }
     setDoing(i);
     try {
       const done = await doProposal(p, { id: cid, region: center?.id === cid ? center.region : null, services: center?.id === cid ? center.services : null });

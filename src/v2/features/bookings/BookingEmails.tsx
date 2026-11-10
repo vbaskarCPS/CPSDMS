@@ -7,8 +7,11 @@
 //   3. Read them all, change or untick any, then Send. They go out from the centre's customer mailbox
 //      (replies come back there) and each booking remembers it was emailed for that day, so nobody gets two.
 //      The set shows as one group in that mailbox's Sent folder, with how many were delivered or bounced.
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+//
+// The Benny can open this screen with step 1 done (router state `benny`: the email, the day, the routes): step 2 then
+// runs by itself, so the person lands on step 3. Reading and Send stay with the person.
+import React, { useEffect, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { Mail, Send, Sparkles } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
@@ -17,7 +20,7 @@ import { centerAreas, routeShapes, type Area } from '../../lib/territory';
 import type { PlanManager, PlanRoute } from '../../lib/startSession';
 import { MapRoutePicker } from '../workerbook/MapRoutePicker';
 import { aiBookingNotes, boxName, emailTemplates, myBoxes, sendMail, dateFriendly } from '../../lib/mail';
-import { alreadySent, emailsOf, KIND_LABEL, markEmailed, nextDays, noteHtml, renderDraft, type BookingDraft, type BookingEmailKind } from '../../lib/bookingEmails';
+import { alreadySent, emailsOf, KIND_LABEL, markEmailed, nextDays, noteHtml, renderDraft, type BookingDraft, type BookingEmailKind, type EmailPreset } from '../../lib/bookingEmails';
 import { useLists } from './BookingsPage';
 import { Btn, ErrorBox, Field, Loading, Tag } from '../../ui';
 
@@ -27,6 +30,7 @@ const plain = (html: string) => html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p
 
 export const BookingEmails: React.FC = () => {
   const { center, can } = useAuth();
+  const loc = useLocation();
   const { lists, sorted, list, setPick } = useLists(center?.id);
   const days = nextDays();
   const [kind, setKind] = useState<BookingEmailKind>('day_before');
@@ -48,17 +52,46 @@ export const BookingEmails: React.FC = () => {
   const shapes = useLoad(() => routeShapes((mapAreas.data || []).map(a => a.name)), [mapAreas.data]);
   const status = kind === 'next_try' ? 'tried' : 'open';
   const codes = [...routes.keys()].sort();
+  // what was found is kept with what it was found for, so a change of routes never shows (or writes to) the last pick's bookings
+  const pickedFor = `${list?.id || ''}|${status}|${codes.join('|')}`;
   const picked = useLoad(async () => {
-    if (!list || !codes.length) return [] as Booking[];
+    if (!list || !codes.length) return { key: pickedFor, rows: [] as Booking[] };
     const got = await Promise.all(codes.map(route => listBookings(list.id, { route, status }, 0, 1000)));
     const seen = new Set<string>();
-    return got.flatMap(g => g.rows).filter(b => (seen.has(b.id) ? false : (seen.add(b.id), true)));
-  }, [list?.id, status, codes.join('|')]);
+    return { key: pickedFor, rows: got.flatMap(g => g.rows).filter(b => (seen.has(b.id) ? false : (seen.add(b.id), true))) };
+  }, [pickedFor]);
+  const finding = picked.loading || picked.data?.key !== pickedFor;
 
-  const chosen = picked.data || [];
+  const chosen = picked.data?.key === pickedFor ? picked.data.rows : [];
   const ready = chosen.filter(b => emailsOf(b).length && !alreadySent(b, kind, date));
   const noEmail = chosen.filter(b => !emailsOf(b).length).length;
   const sentBefore = chosen.filter(b => emailsOf(b).length && alreadySent(b, kind, date)).length;
+
+  // Opened from the Benny's card: the email, day and routes arrive picked, and the emails are written straight away.
+  const [benny, setBenny] = useState<{ codes: string; wrote: boolean; note: string | null } | null>(null);
+  const writeNow = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    const p = (loc.state as { benny?: EmailPreset } | null)?.benny;
+    if (!p || !Array.isArray(p.routes) || !p.routes.length) return;
+    const d = nextDays();
+    const dayOk = p.date === d.tomorrow || p.date === d.after;
+    setKind(p.kind === 'next_try' ? 'next_try' : 'day_before');
+    if (dayOk) setDate(p.date);
+    if (p.list_id) setPick(p.list_id);
+    setRoutes(new Map(p.routes.map(r => [r.code, { code: r.code, area: r.area, number: r.number, managerId: PICKER[0].id }] as [string, PlanRoute])));
+    setDrafts(null); setDone(null); setError(null);
+    setBenny({ codes: p.routes.map(r => r.code).sort().join('|'), wrote: false,
+      note: dayOk ? null : 'That was set up for a day that has passed, so nothing was written. Pick the day, then press Write.' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.key]);
+  useEffect(() => {
+    if (!benny || benny.wrote || benny.note || busy || drafts || !center) return;
+    if (codes.join('|') !== benny.codes) { setBenny(null); return; }               // the routes were changed by hand: it's theirs now
+    if (lists.loading || templates.loading || boxes.loading || finding) return;   // still loading what writing needs
+    setBenny({ ...benny, wrote: true });
+    if (ready.length && template && box) writeNow.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [benny, busy, drafts, pickedFor, finding, lists.loading, templates.loading, boxes.loading]);
 
   if (!can('bookings')) return <div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to Master Bookings.</div></div>;
   if (!center) return <div className="v2-main v2-narrow"><div className="v2-card v2-mut">Pick a center in the top bar.</div></div>;
@@ -101,6 +134,8 @@ export const BookingEmails: React.FC = () => {
     picked.reload();
   };
 
+  writeNow.current = write;
+
   const left = drafts?.filter(d => d.include && d.status !== 'sent').length || 0;
   return (
     <div className="v2-main">
@@ -111,6 +146,18 @@ export const BookingEmails: React.FC = () => {
       {!boxes.loading && !box && <div className="v2-err" style={{ marginBottom: 10 }}>You’re not on {center.display_name}’s customer mailbox, so you can’t send from it. The Super Admin sets it up in Centers › Email and adds you.</div>}
       {!templates.loading && !template && <div className="v2-err" style={{ marginBottom: 10 }}>There’s no {KIND_LABEL[kind]} template saved for {center.display_name}. <Link to="/app/bookings/templates">Make one</Link> first.</div>}
 
+      {benny && (
+        <div className="v2-card" style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, marginBottom: 10, alignItems: 'flex-start', borderColor: '#fdba74', background: '#fff7ed' }} role="status">
+          <Sparkles size={16} style={{ color: '#c2410c', flexShrink: 0, marginTop: 2 }} />
+          <div className="v2-small">
+            <b>Set up by the Benny:</b> the {KIND_LABEL[kind].toLowerCase()} email for {dateFriendly(date)}, {routes.size} route{routes.size === 1 ? '' : 's'}.{' '}
+            {benny.note ? benny.note
+              : drafts ? 'Read each one, change or untick any, then press Send. Nothing has been sent.'
+              : benny.wrote && !busy ? (!template || !box ? 'It can’t be written yet: see above.' : !ready.length ? 'There’s nobody to write to on these routes.' : 'Press Write to write them.')
+              : 'Writing them for you to read…'}
+          </div>
+        </div>
+      )}
       {!drafts ? (
         <>
           <div className="v2-card" style={{ marginBottom: 10 }}>
@@ -141,7 +188,7 @@ export const BookingEmails: React.FC = () => {
               footer={
                 <div className="v2-card" style={{ padding: 12 }}>
                   {!routes.size ? <div className="v2-mut v2-small">Pick the routes you’re doing {date === days.tomorrow ? 'tomorrow' : 'the day after'}: open a map, then tap route numbers or “Email whole map”.</div>
-                    : picked.loading ? <Loading label="Finding the bookings…" />
+                    : finding ? <Loading label="Finding the bookings…" />
                     : <div className="v2-small">
                         <b>{routes.size} route{routes.size === 1 ? '' : 's'}</b> · {chosen.length} {kind === 'next_try' ? 'tried' : 'open'} booking{chosen.length === 1 ? '' : 's'}
                         <div className="v2-mut" style={{ marginTop: 4 }}>{ready.length} to write{noEmail ? ` · ${noEmail} have no email` : ''}{sentBefore ? ` · ${sentBefore} already got the ${KIND_LABEL[kind].toLowerCase()} email for ${dateFriendly(date)}` : ''}</div>
