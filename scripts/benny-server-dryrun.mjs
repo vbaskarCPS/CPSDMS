@@ -17,6 +17,8 @@ const fakeSb = `
       if (fn === 'benny_check_give') return { data: { ok: false, problems: ['Which one: Michael A, Michael B?'] }, error: null };
       if (fn === 'benny_live') return { data: { live: true, carts: [] }, error: null };
       if (fn === 'benny_bug_save') return { data: 'bug-1', error: null };
+      if (fn === 'benny_vocab') return { data: { workers: ['Jahswill Nuetey', 'Kevontae Ragguette'], managers: ['Jovan Chung'], places: ['North Delta (NDEL) #1-#3'] }, error: null };
+      if (fn === 'benny_check_move') return { data: { ok: true, date: '2026-11-10', a: { cn: 'I1004', name: 'Jahswill Nuetey', heard_as: 'Jaz will' }, b: { cn: 'I1479', name: 'Kevontae Ragguette' } }, error: null };
       if (fn === 'benny_bug_sent') return { data: null, error: null };
       if (fn === 'benny_map') return { data: { maps: ['SURREY #1'], highlight: ['SRY01'], pins: [{ lat: 1, lng: 2, label: 'x', route: 'SRY01' }] }, error: null };
       return { data: null, error: { message: 'no such function ' + fn } }; } }; }`;
@@ -87,6 +89,20 @@ assert.equal(saved.p_report.user, 'Franklyn Mitchell'); assert.deepEqual(saved.p
 assert.deepEqual(state.http.map(h => new URL(h[0]).host), ['api.anthropic.com', 'api.anthropic.com']);   // the model, twice; nothing else
 assert(String(state.lastAsk.messages.at(-1).content[0].content).includes('"saved":true'));
 console.log('5 bug report → the app’s log only ✓');
+
+// 5b. a spoken message brings the day's real names; a typed one doesn't
+state.role = 'rm';
+state.script = [turn(use('propose_partner', { a: 'Jahswill', b: 'Kevontae' })), say('I heard Jaz will and Kevin Tay: Kevontae joins Jahswill’s cart. Tap Partner up to do it.')];
+a = await ask('partner up jaz will with kevin tay', { screen: 'rm', rm_manager: 'rm_me', spoken: true });
+assert.deepEqual(fns(), ['benny_ok_any', 'benny_my_rm_ids', 'benny_vocab', 'benny_check_move']);
+assert.deepEqual(state.rpc[2][1], { p_center: 'c1', p_date: '2026-11-10', p_manager: 'rm_me' });
+assert(state.lastAsk.system.includes('SPOKEN') && state.lastAsk.system.includes('Workers today: Jahswill Nuetey, Kevontae Ragguette'));
+assert.equal(a.body.proposal.kind, 'partner'); assert.equal(a.body.proposal.check.a.name, 'Jahswill Nuetey');
+state.script = [say('ok')];
+a = await ask('who is on my team', { screen: 'rm', rm_manager: 'rm_me' });
+assert(!fns().includes('benny_vocab')); assert(!state.lastAsk.system.includes('SPOKEN'));
+state.role = 'admin';
+console.log('5b spoken → real names sent along ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

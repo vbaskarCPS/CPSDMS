@@ -14,6 +14,8 @@ export interface BennyContext {
   center_id?: string; center_name?: string; today: string; path: string; screen?: string;
   /** on the RM map: the old-app id of the manager whose map is open */
   rm_manager?: string; user_name?: string;
+  /** the last message was spoken: the server sends the day's real names along so misheard ones are put right */
+  spoken?: boolean;
   diag?: { ua?: string; viewport?: string; build?: string; errors?: string[] };
 }
 
@@ -24,7 +26,8 @@ export function forServer(messages: BennyMsg[]) {
 }
 
 export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null }> {
-  const body = { messages: forServer(messages), context: { ...context, diag: diag() } };
+  const lastAsk = [...messages].reverse().find(m => m.role === 'user');
+  const body = { messages: forServer(messages), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag() } };
   const { data, error } = await db.functions.invoke('benny-assist', { body });
   if (error) {
     // the function's own message (e.g. "for super admins") rides in the response body
