@@ -21,6 +21,8 @@ export function weekday(key: string): number { return dateOf(key).getDay(); }
 
 export const isDue = (h: Pick<Habit, 'days'>, key: string) => (h.days?.length ? h.days : [0, 1, 2, 3, 4, 5, 6]).includes(weekday(key));
 export const counts = (m: HabitMark | undefined) => m === 'done' || m === 'mini';
+/** A planned rest day ('skip'): like a day the habit isn't due — neither a hit nor a miss. */
+export const rested = (m: HabitMark | undefined) => m === 'skip';
 
 /** What a day looks like for one habit. `today` decides what's future; today itself is never 'missed'. */
 export function dayState(h: Pick<Habit, 'days' | 'createdAt'>, logs: Logs, key: string, today: string): DayState {
@@ -28,7 +30,7 @@ export function dayState(h: Pick<Habit, 'days' | 'createdAt'>, logs: Logs, key: 
   const m = logs[key]?.[(h as Habit).id];
   if (m === 'done') return 'done';
   if (m === 'mini') return 'mini';
-  if (!isDue(h, key)) return 'off';
+  if (rested(m) || !isDue(h, key)) return 'off';
   if (key === today) return 'off';          // still time today
   if (h.createdAt && key < h.createdAt.slice(0, 10)) return 'off';
   return 'missed';
@@ -43,7 +45,7 @@ export function currentStreak(h: Habit, logs: Logs, today: string): number {
   for (let i = 0; i < 3660 && key >= start; i++, key = addDays(key, -1)) {
     const m = logs[key]?.[h.id];
     if (counts(m)) { streak++; misses = 0; continue; }
-    if (!isDue(h, key) || key === today) continue;
+    if (rested(m) || !isDue(h, key) || key === today) continue;
     misses++;
     if (misses >= 2) break;
   }
@@ -58,7 +60,7 @@ export function bestStreak(h: Habit, logs: Logs, today: string): number {
   for (let key = start; key <= today; key = addDays(key, 1)) {
     const m = logs[key]?.[h.id];
     if (counts(m)) { run++; misses = 0; best = Math.max(best, run); continue; }
-    if (!isDue(h, key) || key === today) continue;
+    if (rested(m) || !isDue(h, key) || key === today) continue;
     misses++;
     if (misses >= 2) { run = 0; misses = 0; }
   }
@@ -70,7 +72,7 @@ export function missedLastDue(h: Habit, logs: Logs, today: string): boolean {
   let key = addDays(today, -1);
   const start = h.createdAt ? h.createdAt.slice(0, 10) : '1970-01-01';
   for (let i = 0; i < 14 && key >= start; i++, key = addDays(key, -1)) {
-    if (!isDue(h, key)) continue;
+    if (!isDue(h, key) || rested(logs[key]?.[h.id])) continue;
     return !counts(logs[key]?.[h.id]);
   }
   return false;
@@ -85,7 +87,7 @@ export function completion(h: Habit, logs: Logs, today: string, n = 30): { done:
     if (key < start) break;
     const hit = counts(logs[key]?.[h.id]);
     if (key === today) { if (hit) { done++; due++; } continue; }
-    if (!isDue(h, key)) continue;
+    if (!isDue(h, key) || rested(logs[key]?.[h.id])) continue;
     due++; if (hit) done++;
   }
   return { done, due, pct: due ? Math.round((done / due) * 100) : 0 };

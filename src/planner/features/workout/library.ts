@@ -78,6 +78,7 @@ export const LIBRARY: Exercise[] = [
   ex('reverse-lunge', 'Reverse Lunge', ['quads', 'glutes'], 'dumbbell', 5),
   ex('bulgarian-split-squat', 'Bulgarian Split Squat', ['quads', 'glutes'], 'dumbbell', 5),
   ex('step-up', 'Step-up', ['quads', 'glutes'], 'dumbbell', 5),
+  ex('bodyweight-squat', 'Bodyweight Squat', ['quads', 'glutes'], 'bodyweight'),
   ex('sissy-squat', 'Sissy Squat', ['quads'], 'bodyweight'),
   ex('box-jump', 'Box Jump', ['quads', 'glutes'], 'bodyweight'),
   // hamstrings / glutes
@@ -128,6 +129,7 @@ export const LIBRARY: Exercise[] = [
   ex('kb-goblet-squat', 'Kettlebell Goblet Squat', ['quads', 'glutes'], 'kettlebell', 5),
   ex('turkish-getup', 'Turkish Get-up', ['full', 'core', 'shoulders'], 'kettlebell', 5),
   ex('burpee', 'Burpee', ['full', 'cardio'], 'bodyweight'),
+  timed('jumping-jack', 'Jumping Jacks', ['cardio', 'full'], 'bodyweight'),
   ex('band-pull-apart', 'Band Pull-Apart', ['shoulders', 'back'], 'band'),
   ex('band-row', 'Band Row', ['back', 'biceps'], 'band'),
   ex('band-face-pull', 'Band Face Pull', ['shoulders', 'back'], 'band'),

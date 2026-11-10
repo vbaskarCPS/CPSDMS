@@ -37,6 +37,10 @@ const num = (v: unknown) => (typeof v === 'number' && isFinite(v) ? Math.round(v
 export async function estimateFoodPhoto(base64: string, mediaType: string, note?: string): Promise<FoodEstimate> {
   return clean(await invoke<FoodEstimate>({ action: 'food_photo', image: { media_type: mediaType, data: base64 }, note }));
 }
+/** Up to 4 photos of one meal (other angles, a close-up, the label or menu) plus a short note, in one estimate. */
+export async function estimateFoodPhotos(photos: { base64: string; mediaType: string }[], note?: string): Promise<FoodEstimate> {
+  return clean(await invoke<FoodEstimate>({ action: 'food_photo', images: photos.slice(0, 4).map(p => ({ media_type: p.mediaType, data: p.base64 })), note }));
+}
 export async function estimateFoodText(text: string): Promise<FoodEstimate> {
   return clean(await invoke<FoodEstimate>({ action: 'food_text', text }));
 }

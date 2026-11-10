@@ -1,8 +1,8 @@
 // src/planner/features/food/AddMeal.tsx — photo, description or favourite → the AI's draft → confirm.
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Camera, Image, Loader2, Star, Utensils } from 'lucide-react';
-import { estimateFoodPhoto, estimateFoodText, shrinkImage, type FoodEstimate } from '../../lib/ai';
+import { Camera, Image, Loader2, Star, Utensils, X } from 'lucide-react';
+import { estimateFoodPhotos, estimateFoodText, shrinkImage, type FoodEstimate } from '../../lib/ai';
 import { dayKey, getDoc, getDocs, putDoc } from '../../lib/docs';
 import { Button, Card, Empty, Field, Header, Page, Segmented, TextArea, useToast, uid } from '../../ui/primitives';
 import { MealEditor, type Draft } from './MealEditor';
@@ -11,6 +11,7 @@ import { fromRoad, likelySame } from './dupes';
 import type { Day } from '../plan/types';
 
 type Mode = 'photo' | 'text' | 'fav';
+const MAX_PHOTOS = 4;
 
 function guessName(time: string, items: { name: string }[]): string {
   const h = Number(time.split(':')[0]);
@@ -32,7 +33,8 @@ export function AddMeal() {
   const [note, setNote] = useState('');
   const [text, setText] = useState('');
   const [preview, setPreview] = useState<string | null>(null);
-  const [lastFile, setLastFile] = useState<File | null>(null);
+  // the meal's photos (up to 4: other angles, a close-up, the label or menu), sent together in one estimate
+  const [photos, setPhotos] = useState<{ id: string; file: File; thumb: string }[]>([]);
   const [favs, setFavs] = useState<FavMeal[]>([]);
   const [saving, setSaving] = useState(false);
   const [same, setSame] = useState<Meal | null>(null);   // probably already logged: ask before adding it twice
@@ -48,19 +50,32 @@ export function AddMeal() {
     setTips(est.tips || undefined); setSource(src);
   };
 
-  const analyse = async (file: File) => {
-    setError(null); setLastFile(file);
-    setBusy('Looking at your plate…');
+  const analyse = async () => {
+    if (!photos.length) return;
+    setError(null);
+    setBusy(photos.length > 1 ? `Looking at your ${photos.length} photos…` : 'Looking at your plate…');
     try {
-      const [big, small] = await Promise.all([shrinkImage(file, 1280, 0.82), shrinkImage(file, 160, 0.6)]);
-      setPreview(big.dataUrl);
-      const est = await estimateFoodPhoto(big.base64, big.mediaType, note);
-      if (!est.items.length) setError("Couldn't find any food in that photo. Try again or describe it.");
-      else toDraft(est, small.dataUrl, 'photo');
+      // one photo goes at full size; several are sent a little smaller so the request stays light
+      const size = photos.length > 1 ? 1024 : 1280;
+      const big = await Promise.all(photos.map(p => shrinkImage(p.file, size, 0.8)));
+      setPreview(big[0].dataUrl);
+      const est = await estimateFoodPhotos(big.map(b => ({ base64: b.base64, mediaType: b.mediaType })), note);
+      if (!est.items.length) setError(`Couldn't find any food in ${photos.length > 1 ? 'those photos' : 'that photo'}. Try again or describe it.`);
+      else toDraft(est, photos[0].thumb, 'photo');
     } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong.'); }
     finally { setBusy(null); }
   };
-  const onPick = (e: ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void analyse(f); };
+  const onPick = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []); e.target.value = '';
+    const room = MAX_PHOTOS - photos.length;
+    if (!files.length || room <= 0) return;
+    setError(null);
+    try {
+      const added = await Promise.all(files.slice(0, room).map(async file => ({ id: uid(), file, thumb: (await shrinkImage(file, 200, 0.6)).dataUrl })));
+      setPhotos(p => [...p, ...added].slice(0, MAX_PHOTOS));
+      if (files.length > room) setError(`Up to ${MAX_PHOTOS} photos a meal; the first ${room} were added.`);
+    } catch { setError("Couldn't read that photo. Try another."); }
+  };
 
   const describe = async () => {
     if (!text.trim()) return;
@@ -127,7 +142,7 @@ export function AddMeal() {
           </Card>
         )}
         <MealEditor draft={draft} setDraft={setDraft} tips={tips} onSave={() => void save()} saving={saving} />
-        <Button block ghost onClick={() => { setDraft(null); setPreview(null); }}>Start over</Button>
+        <Button block ghost onClick={() => { setDraft(null); setPreview(null); setPhotos([]); }}>Start over</Button>
         {toast}
       </Page>
     );
@@ -142,19 +157,39 @@ export function AddMeal() {
         <Card><div className="fd-spinner"><Loader2 className="pl-spin" />{preview && <img className="fd-preview" src={preview} alt="" style={{ maxHeight: 180 }} />}<b>{busy}</b><small className="pl-muted">One look, about a cent.</small></div></Card>
       ) : mode === 'photo' ? (
         <>
-          <label className="fd-bigbtn">
-            <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPick} />
-            <Camera /><span>Take a photo</span>
-            <small className="pl-muted" style={{ fontWeight: 400 }}>Overhead for plates, 45° for bowls</small>
-          </label>
-          <label className="pl-btn pl-btn--block" style={{ cursor: 'pointer' }}>
-            <input ref={libRef} type="file" accept="image/*" onChange={onPick} style={{ display: 'none' }} />
-            <Image style={{ width: 18, height: 18 }} /> Choose from library
-          </label>
-          <Field label="Anything the photo can't show? (optional)" hint="e.g. “2 rotis, dal, cooked in ghee” — helps the estimate a lot">
+          {photos.length > 0 && (
+            <div className="fd-photos" aria-label="This meal's photos">
+              {photos.map((p, i) => (
+                <div key={p.id} className="fd-photos__item">
+                  <img src={p.thumb} alt={`Photo ${i + 1}`} />
+                  <button type="button" aria-label={`Remove photo ${i + 1}`} onClick={() => setPhotos(ps => ps.filter(x => x.id !== p.id))}><X /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          {photos.length < MAX_PHOTOS && (photos.length === 0 ? (
+            <label className="fd-bigbtn">
+              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={e => void onPick(e)} />
+              <Camera /><span>Take a photo</span>
+              <small className="pl-muted" style={{ fontWeight: 400 }}>Overhead for plates, 45° for bowls · add up to {MAX_PHOTOS} of the same meal</small>
+            </label>
+          ) : (
+            <label className="pl-btn pl-btn--block" style={{ cursor: 'pointer' }}>
+              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={e => void onPick(e)} style={{ display: 'none' }} />
+              <Camera style={{ width: 18, height: 18 }} /> Add another angle ({photos.length}/{MAX_PHOTOS})
+            </label>
+          ))}
+          {photos.length < MAX_PHOTOS && (
+            <label className="pl-btn pl-btn--block" style={{ cursor: 'pointer' }}>
+              <input ref={libRef} type="file" accept="image/*" multiple onChange={e => void onPick(e)} style={{ display: 'none' }} />
+              <Image style={{ width: 18, height: 18 }} /> {photos.length ? 'Add from library' : 'Choose from library'}
+            </label>
+          )}
+          <Field label="A short description (optional)" hint="What the photos can't show: “2 rotis, dal, cooked in ghee”, “the big bowl”, “ate half”. A close-up or the label in another photo helps too.">
             <TextArea value={note} onChange={e => setNote(e.target.value)} placeholder="2 rotis, dal, no oil" />
           </Field>
-          {error && <Card><p className="pl-error">{error}</p>{lastFile && <Button small onClick={() => void analyse(lastFile)} style={{ marginTop: 8 }}>Try again</Button>}</Card>}
+          {error && <p className="pl-error">{error}</p>}
+          <Button primary block disabled={!photos.length} onClick={() => void analyse()}>{photos.length > 1 ? `Estimate from ${photos.length} photos` : 'Estimate'}</Button>
         </>
       ) : mode === 'text' ? (
         <>

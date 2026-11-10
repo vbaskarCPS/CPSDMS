@@ -210,7 +210,7 @@ export function FoodToday() {
             {meals.map(m => (
               <Link key={m.id} to={`/food/meal/${encodeURIComponent(mealKey(m))}`} className="pl-item">
                 <Thumb m={m} />
-                <div className="pl-grow"><b>{m.name || 'Meal'}</b><small>{m.time}{afterKitchen(m.time, r) ? <span style={{ color: 'var(--amber-2)', fontWeight: 600 }}> · after the kitchen closed</span> : null} · {m.items.map(i => i.name).slice(0, 3).join(', ')}{m.items.length > 3 ? '…' : ''}</small></div>
+                <div className="pl-grow"><b>{m.name || 'Meal'}</b><small>{m.guessed ? 'rough guess, logged after' : m.time}{!m.guessed && afterKitchen(m.time, r) ? <span style={{ color: 'var(--amber-2)', fontWeight: 600 }}> · after the kitchen closed</span> : null} · {m.items.map(i => i.name).slice(0, 3).join(', ')}{m.items.length > 3 ? '…' : ''}</small></div>
                 <span className="fd-kcal">{m.totals.kcal}</span>
               </Link>
             ))}

@@ -94,3 +94,19 @@
 .today-block--slot .today-block__head { justify-content: flex-start; align-items: center; }
 button.pl-item { width: 100%; background: none; border: 0; border-radius: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; padding-left: 0; padding-right: 0; }
 button.pl-item + button.pl-item { border-top: 1px solid var(--line); }
+
+/* "No meals logged — roughly what did you eat?" (GuessMeals.tsx) */
+.guess-meals__list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.guess-meals__list li { display: flex; color: var(--ink); align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); font-size: 14px; }
+.guess-meals__list li > span { flex: 1; min-width: 0; }
+.guess-meals__list .pl-muted { color: var(--ink-2); }
+.guess-meals__list li > b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.guess-meals__x { border: 0; background: none; color: var(--ink-2); font-size: 18px; line-height: 1; padding: 2px 4px; cursor: pointer; }
+.guess-meals .pl-error { display: block; margin-top: 6px; }
+
+/* Several photos of one meal (AddMeal.tsx) */
+.fd-photos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.fd-photos__item { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: var(--bg-2); border: 1px solid var(--line); }
+.fd-photos__item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fd-photos__item button { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 999px; border: 0; display: grid; place-items: center; background: rgba(0, 0, 0, .6); color: #fff; cursor: pointer; padding: 0; }
+.fd-photos__item button svg { width: 15px; height: 15px; }

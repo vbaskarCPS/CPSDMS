@@ -79,6 +79,12 @@ a { color: inherit; }
 .pl-card { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
 .pl-card--accent { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
 .pl-card--accent .pl-muted, .pl-card--accent .pl-eyebrow { color: color-mix(in srgb, var(--accent-ink) 70%, transparent); }
+/* buttons and fields on an accent card: the plain ones stay light with dark text, primary flips to light-on-accent */
+.pl-card--accent .pl-input { color: var(--ink); }
+.pl-card--accent .pl-btn { background: color-mix(in srgb, var(--accent-ink) 14%, transparent); color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent-ink) 32%, transparent); }
+.pl-card--accent .pl-btn--primary { background: var(--accent-ink); color: var(--accent); border-color: transparent; }
+.pl-card--accent .pl-btn--ghost { background: transparent; }
+.pl-card--accent .pl-error { color: #ffb4b4; }
 
 .pl-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 0 18px; border-radius: 14px; border: 1px solid var(--line); background: var(--bg-2); font-weight: 600; cursor: pointer; }
 .pl-btn:disabled { opacity: 0.5; cursor: default; }
