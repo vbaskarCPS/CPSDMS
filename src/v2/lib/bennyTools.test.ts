@@ -1,6 +1,6 @@
 // The Benny's tools (supabase/functions/benny-assist/tools.ts): who gets which, and that each one goes somewhere.
 import { describe, it, expect } from 'vitest';
-import { TOOLS, system, toolCall, toolsFor } from '../../../supabase/functions/benny-assist/tools';
+import { TOOLS, heardRight, system, toolCall, toolsFor } from '../../../supabase/functions/benny-assist/tools';
 
 const ctx = { center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-10', rm_manager: 'rm_x' };
 
@@ -33,5 +33,16 @@ describe('the Benny’s tools', () => {
     expect(system({ ...ctx, screen: 'rm' }, 'rm')).toContain('route manager map');
     expect(system(ctx, 'rm')).not.toContain('starting the day,');
     expect(system(ctx, 'admin')).toContain('starting the day,');
+  });
+  it('a spoken message comes with the day’s real names, a typed one doesn’t', () => {
+    const vocab = { workers: ['Jahswill Nuetey', 'Kevontae Ragguette'], managers: ['Jovan Chung'], places: ['North Vancouver (NVN) #1-#5'] };
+    const spoken = system({ ...ctx, spoken: true }, 'rm', vocab);
+    expect(spoken).toContain('SPOKEN');
+    expect(spoken).toContain('Workers today: Jahswill Nuetey, Kevontae Ragguette');
+    expect(spoken).toContain('Route managers: Jovan Chung');
+    expect(spoken).toContain('North Vancouver (NVN) #1-#5');
+    expect(system(ctx, 'rm', vocab)).not.toContain('SPOKEN');
+    expect(heardRight(null)).not.toContain('Workers today');   // no list, no empty heading
+    expect(system(ctx, 'admin')).toContain('heard_as');          // sound matches are always named
   });
 });

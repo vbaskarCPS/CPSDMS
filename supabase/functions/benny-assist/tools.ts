@@ -5,9 +5,13 @@ export interface Ctx {
   center_id?: string; center_name?: string; today?: string; path?: string; screen?: string;
   /** on the route manager map: the old-app id of the manager whose map is open (rm_…) */
   rm_manager?: string; user_name?: string;
+  /** the last message was spoken (speech-to-text): names and codes may be misheard */
+  spoken?: boolean;
   /** for bug reports: browser, screen size, app build, recent errors on the page */
   diag?: { ua?: string; viewport?: string; build?: string; errors?: string[] };
 }
+/** The names to expect in a spoken message (benny_vocab). */
+export interface Vocab { workers?: string[]; managers?: string[]; places?: string[] }
 export interface Tool { name: string; description: string; input_schema: Record<string, unknown>; roles: Role[] }
 
 const str = { type: 'string' };
@@ -67,7 +71,19 @@ export function toolsFor(role: Role) {
   return TOOLS.filter(t => t.roles.includes(role)).map(({ roles: _r, ...t }) => t);
 }
 
-export function system(ctx: Ctx, role: Role): string {
+/** For a spoken message: how to hear this app's own words, and the real names to match against. */
+export function heardRight(vocab?: Vocab | null): string {
+  const list = (label: string, items?: string[]) => (items?.length ? `\n${label}: ${items.slice(0, 220).join(', ')}` : '');
+  return `
+
+The last message was SPOKEN and turned into text by the phone, which doesn't know this app's words.
+- Names and codes may be misheard as ordinary words: "Jaz will" = Jahswill, "Kevin Tay" = Kevontae, "Joe Van" = Jovan, "N Dell 33" or "endel thirty three" = NDEL33, "poco 64" = PCQ64, "north van one" = NORTH VANCOUVER #1.
+- Before using a tool, match what you heard to the real names below BY SOUND and use the real one. When the name you use differs from what was heard, say so in a few words ("I heard Kevin Tay: using Kevontae Ragguette").
+- If two real names could fit, ask which. If nothing sounds close, say what you heard and ask who they mean. Never guess a person for a change.
+- A route code is a place's prefix + the number (two digits under 10: "NVN 7" = NVN07). A map is the place + #number.${list('Workers today', vocab?.workers)}${list('Route managers', vocab?.managers)}${list('Places (route prefix) and how many maps', vocab?.places)}`;
+}
+
+export function system(ctx: Ctx, role: Role, vocab?: Vocab | null): string {
   const who = role === 'admin' ? 'a super admin' : 'a route manager';
   const onRm = ctx.screen === 'rm';
   return `You are The Benny, the assistant inside the Property Stars DMS app (lawn and property services: aeration, lawn rejuv, sealing).
@@ -86,7 +102,8 @@ Rules:
 - Be short and specific: the answer first, with the numbers; a list only when it helps; no more than about 8 lines. Phone numbers as written.
 - Words people use: "prebooks" = open Master Bookings; "the map"/"master map" = an area like NORTH VANCOUVER #2 ("North Van 1" = NORTH VANCOUVER #1); a route is a code like PCQ64 (prefix + number; "route 35" means 35 on the map in question). "North Van" = North Vancouver, "PoCo" = Port Coquitlam. WDR = withdrawn. A cart = a team of workers on the live map.
 - When the answer is about where things are (prebooks in a city, a route, which routes touch, a plan's routes), call show_map too, then answer in words.
-- Never reveal passwords, card numbers or ID numbers; the tools don't return them.`;
+- A tool result with heard_as matched the name by sound: say which name you used. A result with which or closest lists near matches: ask which one, or use it when only one fits.
+- Never reveal passwords, card numbers or ID numbers; the tools don't return them.` + (ctx.spoken ? heardRight(vocab) : '');
 }
 
 export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo';

@@ -1,6 +1,6 @@
 // supabase/functions/benny-assist/index.ts — The Benny, the in-app assistant.
 //
-//   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, user_name, diag } }
+//   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, user_name, spoken, diag } }
 //     → { reply, map?, proposal? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
 //   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo. The Benny never makes
@@ -12,7 +12,7 @@
 // Bug reports are saved in the app's own log (benny_bugs, shown in Super Admin › Bug log): no GitHub issue, no email.
 // Model: BENNY_MODEL secret, else a Sonnet-class model. The Claude key lives only in ANTHROPIC_API_KEY.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { TOOLS, system, toolCall, toolsFor, type Ctx, type ProposalKind, type Role } from './tools.ts';
+import { TOOLS, system, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
 const WORKSPACE = Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '';
@@ -94,7 +94,13 @@ Deno.serve(async req => {
     while (history.length && history[0].role !== 'user') history.shift();
     if (!history.length || history[history.length - 1].role !== 'user') return json({ error: 'No question' }, 400);
 
-    const sys = system(ctx, role as Role);
+    // a spoken message: the real names it may have been trying to say (the phone's speech-to-text doesn't know them)
+    let vocab: Vocab | null = null;
+    if (ctx.spoken) {
+      const { data } = await sb.rpc('benny_vocab', { p_center: ctx.center_id || null, p_date: /^\d{4}-\d{2}-\d{2}$/.test(ctx.today || '') ? ctx.today : null, p_manager: ctx.rm_manager || null });
+      vocab = (data as Vocab) || null;
+    }
+    const sys = system(ctx, role as Role, vocab);
     const tools = toolsFor(role as Role);
     const msgs: Msg[] = [...history];
     let map: unknown = null; let mapTitle = ''; let proposal: Proposal | null = null;
