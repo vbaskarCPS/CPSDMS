@@ -27,6 +27,10 @@ const fakeSb = `
             ...(args.p_change.route ? { map: 'RICHMOND #7', route: 'RMD137', pin: { lat: 49.1, lng: -123.1, label: '3575 Latimer St', route: 'RMD137' } } : {}) }, error: null };
       if (fn === 'benny_check_emails') return { data: { ok: true, kind: args.p_kind, date: args.p_date || '2026-11-11', list: { id: 'l1', name: 'Fall Rejuv 2026' }, maps: ['NORTH DELTA #2'],
         routes: [{ code: 'NDEL27', area: 'NORTH DELTA #2', number: 27 }, { code: 'NDEL28', area: 'NORTH DELTA #2', number: 28 }], counts: { bookings: 5, to_email: 4, no_email: 1, already_sent: 0 }, from: 'bcclientcare@propertystars.app' }, error: null };
+      if (fn === 'benny_check_pin') return { data: args.p_manager ? { ok: true, date: '2026-11-10', manager: args.p_manager, label: args.p_label || 'NDEL32', lat: 49.15, lng: -122.92, at: 'on NDEL32', visibility: 'private', seen_by: 'Just you',
+        map: 'NORTH DELTA #2', route: 'NDEL32', pin: { lat: 49.15, lng: -122.92, label: args.p_label || 'NDEL32', route: 'NDEL32' } } : { ok: false, problems: ['Open a route manager’s map first: pins live on a manager’s map.'] }, error: null };
+      if (fn === 'benny_plan_stops') return { data: { ok: true, kind: args.p_kind, date: '2026-11-10', manager: args.p_manager, start: { lat: 49.24, lng: -122.88 }, km: 4.2, maps: ['NORTH DELTA #2'], routes: ['NDEL28', 'NDEL32'],
+        stops: [{ n: 1, label: 'Drop 1 · David', who: 'David', lat: 49.153, lng: -122.923, by: 'route', route: 'NDEL28' }, { n: 2, label: 'Drop 2 · Michael', who: 'Michael', lat: 49.15, lng: -122.925, by: 'route', route: 'NDEL32' }], left_out: ['Kyle (no route yet)'] }, error: null };
       if (fn === 'benny_map') return { data: { maps: ['SURREY #1'], highlight: ['SRY01'], pins: [{ lat: 1, lng: 2, label: 'x', route: 'SRY01' }] }, error: null };
       return { data: null, error: { message: 'no such function ' + fn } }; } }; }`;
 const r = await build({ entryPoints: ['supabase/functions/benny-assist/index.ts'], bundle: true, format: 'esm', write: false, logLevel: 'silent',
@@ -59,7 +63,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 18); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 20); assert(!('roles' in state.lastAsk.tools[0]));
 console.log('1 start the day: card + map ✓');
 
 // 2. a change with a problem makes no card
@@ -166,6 +170,23 @@ state.script = [turn(use('propose_booking_emails', { kind: 'day_before', maps: [
 a = await ask('send the day before emails', { cards: ['booking'] });   // a tab from before this card existed
 assert.equal(a.body.proposal, null); assert.match(a.body.reply, /Refresh the page/);
 console.log('5e booking emails: set up on a card with its routes, nothing sent, "refresh" for an old tab ✓');
+
+// 5f. pins and orders on the route manager map: cards with their maps; the server drops nothing
+state.role = 'rm';
+state.script = [turn(use('propose_pin', { label: 'Lunch', route: 'NDEL32' })), say('Tap Drop the pin to do it.')];
+a = await ask('drop a pin on ndel32 called lunch', { screen: 'rm', rm_manager: 'rm_me', cards: ['pin', 'stops'] });
+assert.equal(a.body.proposal.kind, 'pin'); assert.equal(a.body.proposal.check.manager, 'rm_me');
+assert.deepEqual(a.body.map, { maps: ['NORTH DELTA #2'], highlight: ['NDEL32'], pins: [{ lat: 49.15, lng: -122.92, label: 'Lunch', route: 'NDEL32' }], title: 'Lunch' });
+state.script = [turn(use('propose_stops', { kind: 'drop' })), say('David, then Michael: about 4.2 km. Kyle has no route yet. Tap Drop the pins to do it.')];
+a = await ask('plan my drop order', { screen: 'rm', rm_manager: 'rm_me', cards: ['pin', 'stops'] });
+assert.equal(a.body.proposal.kind, 'stops'); assert.equal(a.body.map.title, 'Drop order');
+assert.deepEqual(a.body.map.pins.map(p => p.n), [1, 2]); assert.deepEqual(a.body.map.start, { lat: 49.24, lng: -122.88 }); assert.deepEqual(a.body.map.highlight, ['NDEL28', 'NDEL32']);
+assert(!fns().some(f => /pin|stop/.test(f) && !['benny_check_pin', 'benny_plan_stops'].includes(f)), 'the server only checks and plans: it writes no pin');
+state.role = 'admin';
+state.script = [turn(use('propose_pin', { here: true })), say('Open a route manager’s map first: pins live on a manager’s map.')];
+a = await ask('drop a pin here', { cards: ['pin', 'stops'] });   // the top bar, no map open
+assert.equal(a.body.proposal, null); assert.equal(state.rpc.at(-1)[1].p_manager, null);
+console.log('5f pins and orders: cards with their maps for the open map, nothing written by the server ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

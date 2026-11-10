@@ -3,7 +3,7 @@
 //   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, user_name, spoken, diag } }
 //     → { reply, map?, proposal? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
-//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails.
+//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops.
 //              The Benny never makes the change itself: the app does, with the same code as its screens, after the person taps
 //              Confirm. booking_emails changes nothing at all: its card opens the Send booking emails screen, where the person sends.
 //
@@ -124,6 +124,13 @@ Deno.serve(async req => {
       if (p.kind === 'give_route' && p.check.map) return { maps: [p.check.map], highlight: [p.check.route], pins: [], title: String(p.check.route) };
       // a booking moving to another route: the route, with the house on it
       if (p.kind === 'booking' && p.check.map && p.check.route) return { maps: [p.check.map], highlight: [p.check.route], pins: p.check.pin ? [p.check.pin] : [], title: `${String((p.check.pin as { label?: string } | undefined)?.label || 'Booking')} → ${String(p.check.route)}` };
+      // a pin: where it would go. An order: its stops, numbered, from where the manager is
+      if (p.kind === 'pin' && p.check.pin && p.check.map) return { maps: [p.check.map], highlight: p.check.route ? [p.check.route] : [], pins: [p.check.pin], title: String(p.check.label || 'Pin') };
+      if (p.kind === 'stops' && Array.isArray(p.check.maps) && p.check.maps.length) {
+        const stops = (p.check.stops || []) as { lat: number; lng: number; label: string; route?: string; n: number }[];
+        return { maps: p.check.maps, highlight: p.check.routes || [], pins: stops.map(s => ({ lat: s.lat, lng: s.lng, label: s.label, route: s.route || null, n: s.n })), start: p.check.start || null,
+          title: `${String(p.check.kind).charAt(0).toUpperCase()}${String(p.check.kind).slice(1)} order` };
+      }
       // booking emails: the routes whose customers would be written to
       if (p.kind === 'booking_emails') return { maps: p.check.maps || [], highlight: ((p.check.routes || []) as { code: string }[]).map(r => r.code), pins: [], title: 'Routes to email' };
       return null;

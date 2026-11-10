@@ -5,6 +5,8 @@
 //   partner    → RM map › Move worker › to another cart
 //   solo       → RM map › Move worker › own cart
 //   booking    → Bookings › List › save (status, notes, route of one Master Booking)
+//   pin        → RM map › Pins › drop a pin (the map's own createMapPin)
+//   stops      → RM map › Pins: one numbered pin per cart, in the planned order; an earlier order of the same kind is replaced
 // One card changes nothing: booking_emails opens Bookings › Send booking emails with the day and routes picked. The person
 // reads the emails there and sends them; the Benny never sends.
 import { getDay, listRoster, type RosterRow } from './workerbook';
@@ -54,7 +56,25 @@ export interface EmailsCheck {
 /** What the Send booking emails screen is opened with. */
 export const emailsPreset = (c: EmailsCheck): EmailPreset => ({ kind: c.kind, date: c.date, list_id: c.list?.id || null, routes: c.routes });
 
+/** One pin, checked: where it goes, its name and who sees it (the map's own four choices). */
+export interface PinCheck {
+  ok: boolean; problems?: string[]; date: string; manager: string; label: string; lat: number; lng: number; at: string;
+  visibility: 'private' | 'all' | 'manager' | 'worker'; seen_by: string; target_manager?: string; target_worker?: string; map?: string; route?: string;
+}
+export type StopKind = 'drop' | 'pickup' | 'check';
+export interface Stop { n: number; label: string; who: string; lat: number; lng: number; by: 'route' | 'knock' | 'phone'; route?: string; age_min?: number }
+/** A drop / pickup / check order: the team's carts as numbered stops, in driving order. */
+export interface StopsCheck {
+  ok: boolean; problems?: string[]; kind: StopKind; date: string; manager: string; start?: { lat: number; lng: number };
+  stops: Stop[]; left_out?: string[]; km: number; replaces?: number; maps?: string[]; routes?: string[];
+}
+const STOP_WORD: Record<StopKind, string> = { drop: 'Drop', pickup: 'Pickup', check: 'Check' };
+/** The pins an order of this kind leaves on the map: "Drop 3 · Kyle". */
+export const stopPin = (kind: StopKind) => new RegExp(`^${STOP_WORD[kind]} \\d+ · `);
+
 export type BennyProposal =
+  | { kind: 'pin'; check: PinCheck }
+  | { kind: 'stops'; check: StopsCheck }
   | { kind: 'booking_emails'; check: EmailsCheck }
   | { kind: 'start_day'; check: StartDayCheck; team_mode?: TeamMode }
   | { kind: 'give_route'; check: GiveCheck }
@@ -115,6 +135,26 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         title: `Partner ${c.b?.name.split(' ')[0]} with ${c.a.name.split(' ')[0]}`,
         lines: [`${c.b?.name} joins ${aCart.join(' + ')}’s cart`, `${c.a.name.split(' ')[0]}’s routes stay with the cart`],
         action: 'Partner up',
+      };
+    }
+    case 'pin': {
+      const c = p.check;
+      return { title: `Drop a pin: “${c.label}”`, lines: [cap(c.at), `Seen by: ${c.seen_by.charAt(0).toLowerCase()}${c.seen_by.slice(1)}`], action: 'Drop the pin' };
+    }
+    case 'stops': {
+      const c = p.check; const many = c.stops.length !== 1;
+      const where = (s: Stop) => s.by === 'route' ? `route ${s.route || '?'}` : `${s.by === 'phone' ? 'phone' : 'last knock'}, ${s.age_min ?? 0} min ago`;
+      return {
+        title: `${STOP_WORD[c.kind]} order: ${c.stops.length} stop${many ? 's' : ''}`,
+        lines: [
+          ...c.stops.slice(0, 10).map(s => `${s.n}. ${s.who} · ${where(s)}`),
+          ...(c.stops.length > 10 ? [`+ ${c.stops.length - 10} more`] : []),
+          c.start ? `About ${c.km} km in a straight line, from where you are` : `About ${c.km} km in a straight line, starting at ${c.stops[0]?.who} (I don’t have your location)`,
+          ...(c.left_out?.length ? [`Left out: ${c.left_out.join(', ')}`] : []),
+          ...(c.replaces ? [`Replaces your ${c.replaces} earlier ${c.kind} pin${c.replaces === 1 ? '' : 's'}`] : []),
+          'Only you see these pins. Tap one on the map, then Navigate.',
+        ],
+        action: many ? 'Drop the pins' : 'Drop the pin',
       };
     }
     case 'booking_emails': {
@@ -291,10 +331,37 @@ export async function bookingFromBenny(p: Extract<BennyProposal, { kind: 'bookin
   return `${c.booking.address}: ${bookingSaved(c.change)}.`;
 }
 
+/** RM map › Pins › drop a pin: the map's own save, on the day and manager the check was made for. */
+export async function pinFromBenny(p: Extract<BennyProposal, { kind: 'pin' }>, centerId: string): Promise<string> {
+  const c = p.check;
+  const { sessionService, date } = await legacy(centerId);
+  if (date !== c.date) throw new Error('The live day changed since I checked. Ask me again.');
+  const pin = await sessionService.createMapPin(c.label, c.lat, c.lng, c.manager, c.visibility, c.target_manager || null, c.target_worker || null);
+  if (!pin) throw new Error('The pin didn’t save. Drop it on the map instead.');
+  return `“${c.label}” is on the map, ${c.at}.`;
+}
+
+/** A planned order becomes numbered pins, only the manager's own. An earlier order of the same kind goes first, so the
+ *  numbers on the map are this order's alone. */
+export async function stopsFromBenny(p: Extract<BennyProposal, { kind: 'stops' }>, centerId: string): Promise<string> {
+  const c = p.check;
+  const { sessionService, date } = await legacy(centerId);
+  if (date !== c.date) throw new Error('The live day changed since I checked. Ask me again.');
+  const mine = stopPin(c.kind);
+  const old = (await sessionService.getMapPins([c.manager])).filter(x => x.createdBy === c.manager && x.visibility === 'private' && mine.test(x.label));
+  for (const o of old) await sessionService.deleteMapPin(o.id);
+  let made = 0;
+  for (const s of c.stops) { if (await sessionService.createMapPin(s.label, s.lat, s.lng, c.manager, 'private')) made++; }
+  if (made !== c.stops.length) throw new Error(`Only ${made} of ${c.stops.length} pins saved. Ask me again to redo them.`);
+  return `${made} ${c.kind} pin${made === 1 ? ' is' : 's are'} on your map, numbered in order. Tap one, then Navigate.`;
+}
+
 export async function doProposal(p: BennyProposal, center: CenterLite): Promise<string> {
   if (p.kind === 'start_day') return startDayFromBenny(p, center);
   if (p.kind === 'give_route') return giveRouteFromBenny(p, center.id);
   if (p.kind === 'booking') return bookingFromBenny(p, center.id);
+  if (p.kind === 'pin') return pinFromBenny(p, center.id);
+  if (p.kind === 'stops') return stopsFromBenny(p, center.id);
   // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)
   if (p.kind === 'booking_emails') throw new Error('Open Bookings › Send booking emails to read and send these.');
   return moveFromBenny(p, center.id);

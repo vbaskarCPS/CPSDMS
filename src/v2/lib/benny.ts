@@ -3,7 +3,8 @@
 import { db } from './client';
 import type { BennyProposal } from './bennyActions';
 
-export interface BennyMap { maps: string[]; highlight: string[]; pins: { lat: number; lng: number; label: string; route: string | null }[]; title?: string }
+/** pins with n are stops in an order: drawn numbered, joined by a line in that order, from start (where the manager is) when given */
+export interface BennyMap { maps: string[]; highlight: string[]; pins: { lat: number; lng: number; label: string; route: string | null; n?: number }[]; start?: { lat: number; lng: number } | null; title?: string }
 export interface BennyMsg {
   role: 'user' | 'assistant'; text: string; spoken?: boolean; map?: BennyMap | null; error?: boolean;
   proposal?: BennyProposal | null;
@@ -27,7 +28,7 @@ export function forServer(messages: BennyMsg[]) {
 
 /** The change cards this build of the app can show. Sent with every question, so the server never sends a card that an
  *  older open tab can't draw (it says "refresh" instead). Add a kind here when describe() and doProposal() handle it. */
-export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails'];
+export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops'];
 
 export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null }> {
   const lastAsk = [...messages].reverse().find(m => m.role === 'user');
