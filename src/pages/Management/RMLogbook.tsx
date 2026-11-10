@@ -501,10 +501,14 @@ const RMLogbook: React.FC = () => {
     const unsubscribe = subscribeAsRouteManager(refreshData);
 
     const intervalId = setInterval(refreshData, 30000);
+    // a change made through the Benny (give a route, partner up) shows straight away
+    const onBenny = () => { void refreshData(); };
+    window.addEventListener('benny:changed', onBenny);
 
     return () => {
       unsubscribe();
       clearInterval(intervalId);
+      window.removeEventListener('benny:changed', onBenny);
     };
   }, [dailyData?.date, currentUser?.userId, (currentUser?.floatingFor || []).join('|'), myTeamIds]);
 

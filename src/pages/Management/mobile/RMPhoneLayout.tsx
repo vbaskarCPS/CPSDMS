@@ -583,6 +583,9 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
         .rm-phone .mapboxgl-ctrl-bottom-left, .rm-phone .mapboxgl-ctrl-bottom-right { display: none; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { scrollbar-width: none; }
+        /* The Benny's round button (src/v2/features/benny) sits just above the Menu button, and hides when it does */
+        :root { --benny-fab-bottom: ${fabBottom + 66}px; --benny-fab-right: 12px; }
+        ${!navigating && !inRoute && !ctx.pinMode && !ctx.pin && !ctx.mapPin && mapSnap !== 'full' ? '' : '.benny-fab { display: none !important; }'}
       `}</style>
 
       {/* MAP — full screen under everything */}

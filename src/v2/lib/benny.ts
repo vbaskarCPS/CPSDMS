@@ -1,13 +1,30 @@
 // src/v2/lib/benny.ts — The Benny, the in-app assistant: the call to its server (benny-assist) and the
 // browser's own speech: speech to text for the mic, and text to speech for spoken answers.
 import { db } from './client';
+import type { BennyProposal } from './bennyActions';
 
 export interface BennyMap { maps: string[]; highlight: string[]; pins: { lat: number; lng: number; label: string; route: string | null }[]; title?: string }
-export interface BennyMsg { role: 'user' | 'assistant'; text: string; spoken?: boolean; map?: BennyMap | null; error?: boolean }
-export interface BennyContext { center_id?: string; center_name?: string; today: string; path: string; screen?: string }
+export interface BennyMsg {
+  role: 'user' | 'assistant'; text: string; spoken?: boolean; map?: BennyMap | null; error?: boolean;
+  proposal?: BennyProposal | null;
+  /** the card's state: done (with what happened), dismissed, or failed */
+  outcome?: { state: 'done' | 'dismissed' | 'failed'; text: string } | null;
+}
+export interface BennyContext {
+  center_id?: string; center_name?: string; today: string; path: string; screen?: string;
+  /** on the RM map: the old-app id of the manager whose map is open */
+  rm_manager?: string; user_name?: string;
+  diag?: { ua?: string; viewport?: string; build?: string; errors?: string[] };
+}
 
-export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null }> {
-  const body = { messages: messages.filter(m => !m.error).map(m => ({ role: m.role, content: m.text })), context };
+/** What the Benny is told about each message: its words, plus what happened to a card. */
+export function forServer(messages: BennyMsg[]) {
+  return messages.filter(m => !m.error).map(m => ({ role: m.role,
+    content: m.outcome ? `${m.text}\n\n[The card: ${m.outcome.state === 'done' ? 'confirmed, done' : m.outcome.state}: ${m.outcome.text}]` : m.text }));
+}
+
+export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null }> {
+  const body = { messages: forServer(messages), context: { ...context, diag: diag() } };
   const { data, error } = await db.functions.invoke('benny-assist', { body });
   if (error) {
     // the function's own message (e.g. "for super admins") rides in the response body
@@ -16,7 +33,7 @@ export async function askBenny(messages: BennyMsg[], context: BennyContext): Pro
     throw new Error(msg || error.message || 'The Benny didn’t answer');
   }
   if (data?.error) throw new Error(data.error);
-  return { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null };
+  return { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: (data?.proposal as BennyProposal) || null };
 }
 
 /** What to say out loud: the reply without markdown, lists or long numbers of lines (the screen has the rest). */
@@ -74,3 +91,19 @@ export function speak(text: string): void {
   window.speechSynthesis.speak(u);
 }
 export const stopSpeaking = () => { try { window.speechSynthesis?.cancel(); } catch { /* none */ } };
+
+// ── for bug reports: the last errors on the page, the browser and the app build ──
+const errors: string[] = [];
+let listening = false;
+export function watchErrors(): void {
+  if (listening || typeof window === 'undefined') return;
+  listening = true;
+  const keep = (s: string) => { errors.push(`${new Date().toISOString().slice(11, 19)} ${s}`.slice(0, 400)); if (errors.length > 12) errors.shift(); };
+  window.addEventListener('error', e => keep(`${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`));
+  window.addEventListener('unhandledrejection', e => keep(`Unhandled: ${e.reason instanceof Error ? e.reason.message : String(e.reason)}`));
+}
+export function diag(): BennyContext['diag'] {
+  if (typeof window === 'undefined') return undefined;
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env || {};
+  return { ua: navigator.userAgent, viewport: `${window.innerWidth}×${window.innerHeight}`, build: env.VITE_COMMIT_SHA || env.VITE_VERCEL_GIT_COMMIT_SHA || env.MODE, errors: [...errors] };
+}

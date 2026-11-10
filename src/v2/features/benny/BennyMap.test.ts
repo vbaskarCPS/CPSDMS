@@ -13,9 +13,12 @@ describe('bennyFeatures', () => {
   it('colours the asked-for routes, greys the rest, numbers only the coloured ones', () => {
     const f = bennyFeatures({ maps: ['Surrey #1', 'Nowhere'], highlight: ['sry12'], pins: [{ lat: 49, lng: -122, label: '12 Oak St', route: 'SRY12' }, { lat: NaN, lng: 0, label: 'x', route: null }] },
       shapes, { 'Surrey #1': { type: 'Polygon', coordinates: [] } });
+    const named = bennyFeatures({ maps: ['A'], highlight: [], pins: [] }, [], { A: { type: 'Polygon', coordinates: [[[0, 0], [2, 0], [1, 3], [0, 0]]] } });
+    expect((named.names.features[0].geometry as GeoJSON.Point).coordinates).toEqual([1, 3]);
     expect(f.routes.features.map(x => x.properties!.on)).toEqual([1, 0]);
     expect(f.nums.features.map(x => x.properties!.label)).toEqual(['SRY12']);
     expect(f.outlines.features).toHaveLength(1);
+    expect(f.names.features).toHaveLength(0);   // an outline with no points has nowhere to put its name
     expect(f.pins.features).toHaveLength(1);
   });
 });
