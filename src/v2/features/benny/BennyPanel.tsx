@@ -10,7 +10,7 @@ import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Check, Mic, Send, Sparkles, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
-import { askBenny, canListen, listen, speak, stopSpeaking, watchErrors, type BennyMsg } from '../../lib/benny';
+import { askBenny, canListen, listen, primeVoice, speak, stopSpeaking, watchErrors, type BennyMsg } from '../../lib/benny';
 import { describe, doProposal, type BennyProposal } from '../../lib/bennyActions';
 import { BennyMapCard } from './BennyMap';
 import './benny.css';
@@ -75,6 +75,16 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
   }, [open]);
   useEffect(() => () => { rec.current?.cancel(); stopSpeaking(); }, []);
 
+  // The Benny speaks with Google's voice. If that can't be had it stays quiet (never the phone's own voice) and says why, once.
+  const voiceTold = useRef(false);
+  const say = useCallback((line: string) => {
+    speak(line).catch(e => {
+      if (voiceTold.current) return;
+      voiceTold.current = true;
+      setMsgs(m => [...m, { role: 'assistant', text: `I can’t speak right now: ${e instanceof Error ? e.message : 'the voice didn’t answer'}`, error: true }]);
+    });
+  }, []);
+
   const send = useCallback(async (q: string, spoken: boolean) => {
     const ask = q.trim(); if (!ask || busy) return;
     const next: BennyMsg[] = [...msgs, { role: 'user', text: ask, spoken }];
@@ -85,11 +95,11 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
         screen: variant === 'fab' ? 'rm' : undefined, rm_manager: rmManager || undefined, user_name: profile?.full_name,
       });
       setMsgs(m => [...m, { role: 'assistant', text: r.reply || 'Done.', map: r.map, proposal: r.proposal }]);
-      if (spoken && !mute) speak(r.reply);
+      if (spoken && !mute) say(r.reply);
     } catch (e) {
       setMsgs(m => [...m, { role: 'assistant', text: e instanceof Error ? e.message : 'Something went wrong', error: true }]);
     } finally { setBusy(false); }
-  }, [msgs, busy, cid, centerName, loc.pathname, mute, variant, rmManager, profile?.full_name]);
+  }, [msgs, busy, cid, centerName, loc.pathname, mute, variant, rmManager, profile?.full_name, say]);
 
   // the mic's "done talking" arrives later: it must send with the chat as it is then, not as it was when listening began
   const sendRef = useRef(send);
@@ -103,7 +113,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
       const done = await doProposal(p, { id: cid, region: center?.id === cid ? center.region : null, services: center?.id === cid ? center.services : null });
       settle(i, { state: 'done', text: done });
       const spoke = [...msgs.slice(0, i)].reverse().find(m => m.role === 'user')?.spoken;
-      if (spoke && !mute) speak(done);
+      if (spoke && !mute) say(done);
       window.dispatchEvent(new CustomEvent('benny:changed', { detail: p.kind }));
     } catch (e) {
       settle(i, { state: 'failed', text: e instanceof Error ? e.message : 'That didn’t work' });
@@ -121,6 +131,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
   const micDown = (e: React.PointerEvent) => {
     if (!mic || busy) return;
     e.preventDefault();
+    if (!mute) primeVoice();                                // this tap is what lets the answer be heard later
     if (hearing) { rec.current?.stop(); return; }           // tap again = done talking
     if (!open) setOpen(true);
     startHearing('tap');
@@ -134,6 +145,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
   // the map's round button: tap = open to type, hold = talk (let go to send)
   const fabDown = (e: React.PointerEvent) => {
     e.preventDefault();
+    if (!mute) primeVoice();
     let talking = false;
     const t = window.setTimeout(() => { if (!mic) return; talking = true; setOpen(true); startHearing('hold'); }, HOLD_MS);
     const up = () => {
@@ -179,7 +191,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
             {(variant === 'fab' ? <span className="v2-small benny-mut">{rmName ? `${rmName}’s team` : 'Your team'}</span>
               : centerName && <span className="v2-small benny-mut">{centerName}</span>)}
             <span className="v2-spacer" />
-            {mic && <button type="button" className="benny-icon" onClick={() => setMute(m => !m)} aria-pressed={!mute} aria-label={mute ? 'Turn spoken answers on' : 'Turn spoken answers off'} title={mute ? 'Speaker off' : 'Speaker on (spoken questions get spoken answers)'}>
+            {mic && <button type="button" className="benny-icon" onClick={() => { if (mute) { primeVoice(); voiceTold.current = false; say('Voice on.'); } setMute(m => !m); }} aria-pressed={!mute} aria-label={mute ? 'Turn spoken answers on' : 'Turn spoken answers off'} title={mute ? 'Voice off' : 'Voice on (spoken questions get spoken answers)'}>
               {mute ? <VolumeX size={16} /> : <Volume2 size={16} />}</button>}
             {msgs.length > 0 && <button type="button" className="benny-link" onClick={() => { setMsgs([]); stopSpeaking(); }}>Clear</button>}
             <button type="button" className="benny-icon" onClick={() => { setOpen(false); rec.current?.cancel(); stopSpeaking(); }} aria-label="Close the Benny"><X size={18} /></button>
