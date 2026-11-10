@@ -3,7 +3,7 @@
 //   Small, everyday changes are done straight away with an Undo: shopping items, to-dos, a meal, a habit mark, body weight.
 //   Bigger ones wait for a Confirm card: calendar events, removing anything, money.
 // The same functions and doc shapes as the screens; after a change, screens holding a copy reload (lib/docs docsChanged).
-import { dayKey, docsChanged, getDoc, getDocs, putDocs } from '../../lib/docs';
+import { calendarKey, dayKey, docsChanged, getDoc, getDocs, putDocs } from '../../lib/docs';
 import { estimateFoodText } from '../../lib/ai';
 import { getPass } from '../../lib/auth';
 import { uid } from '../../ui/primitives';
@@ -11,13 +11,16 @@ import { loadList, addLines } from '../shop/store';
 import type { ShopItem } from '../shop/types';
 import { normalizeDay, syncPriorities, type Day } from '../plan';
 import type { Todo } from '../plan/types';
-import { mealKey, nowTime, round, sum, type Meal } from '../food/model';
-import type { Habit, HabitLog } from '../habits/types';
+import { DEFAULT_TARGETS, mealKey, nowTime, round, sum, type FavMeal, type Meal, type Targets } from '../food/model';
+import { ALL_DAYS, DAY_SHORT, emptyHabit, type Habit, type HabitLog } from '../habits/types';
+import type { CyclePrefs, DayLog, Period } from '../cycle/types';
+import { FLOWS, MOODS, SYMPTOMS } from '../cycle/types';
 import { eventKey, occursOn, type CalEvent, type Repeat, type Who } from '../calendar/types';
 import { loadEvents } from '../calendar/store';
 import { addCashRow, removeCashRow } from '../money/receipts';
 import { loadAccounts, loadMonths, monthKey, recategorize, visibleMonths } from '../money/lib';
 import { CATEGORIES } from '../money/categories';
+import type { Budget } from '../money/types';
 
 type AnyIn = Record<string, unknown>;
 /** A change Arvy worked out. `lines` say exactly what will happen (shown under the reply). */
@@ -302,6 +305,163 @@ async function recategorizeTxns(input: AnyIn): Promise<Change> {
   };
 }
 
+
+// ───────────── phase 3: the rest of the planner ─────────────
+const today = (d: string) => (d === dayKey() ? 'today' : pretty(d));
+const plusDays = (d: string, n: number) => { const t = new Date(`${d}T12:00:00`); t.setDate(t.getDate() + n); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; };
+
+// must-dos (the day's priorities are the starred to-dos)
+async function setMust(input: AnyIn): Promise<Change> {
+  const date = isDate(input.date) ? input.date : dayKey();
+  const d = await dayDoc(date);
+  const hits = list(input.todos).map(n => one(d.todos, t => t.text, n, 'to-do'));
+  if (!hits.length) throw new Refuse('Which to-dos?');
+  const must = input.must !== false;
+  return {
+    kinds: ['day'], confirm: false,
+    lines: hits.map(h => `To-do ${today(date)}: “${h.text}” ${must ? '★ a must-do' : 'no longer a must-do'}`),
+    apply: async () => {
+      const undo = await snapshot('day', [date]);
+      const fresh = await dayDoc(date); const ids = new Set(hits.map(h => h.id));
+      await putDocs([{ kind: 'day', key: date, data: syncPriorities({ ...fresh, todos: fresh.todos.map(t => (ids.has(t.id) ? { ...t, must } : t)) }) }]);
+      return undo;
+    },
+  };
+}
+
+// food: favourites and targets
+async function favourites(): Promise<FavMeal[]> { return (await getDocs<FavMeal>('favmeal')).map(d => d.data).filter(f => f && f.id && f.name); }
+async function logFavourite(input: AnyIn): Promise<Change> {
+  const f = one(await favourites(), x => x.name, str(input.favourite, 80), 'favourite meal');
+  const date = isDate(input.date) ? input.date : dayKey();
+  const time = isTime(input.time) ? input.time : nowTime();
+  const meal: Meal = { id: uid(), date, time, name: f.name, items: f.items, totals: f.totals, source: 'favourite' };
+  return {
+    kinds: ['meal', 'favmeal'], confirm: false,
+    lines: [`Food ${today(date)} ${time12(time)}: ${f.name} — ${Math.round(f.totals.kcal)} kcal, ${Math.round(f.totals.protein)} g protein`],
+    apply: async () => {
+      const key = mealKey(meal);
+      const u1 = await snapshot('meal', [key]); const u2 = await snapshot('favmeal', [f.id]);
+      await putDocs([{ kind: 'meal', key, data: meal }, { kind: 'favmeal', key: f.id, data: { ...f, uses: (f.uses || 0) + 1, lastUsed: new Date().toISOString() } }]);
+      return async () => { await u1(); await u2(); };
+    },
+  };
+}
+async function saveFavourite(input: AnyIn): Promise<Change> {
+  const date = isDate(input.date) ? input.date : dayKey();
+  const meals = (await getDocs<Meal>('meal', `${date}~`, `${date}~￿`)).map(d => d.data).filter(m => m && m.id);
+  const m = one(meals, x => x.name, str(input.meal, 80), `meal logged ${today(date)}`);
+  const name = str(input.name, 60) || m.name;
+  const existing = (await favourites()).find(f => norm(f.name) === norm(name));
+  const fav: FavMeal = existing ? { ...existing, items: m.items, totals: round(sum(m.items)), lastUsed: new Date().toISOString() }
+    : { id: uid(), name, items: m.items, totals: round(sum(m.items)), thumb: m.thumb, uses: 1, lastUsed: new Date().toISOString() };
+  return {
+    kinds: ['favmeal'], confirm: false,
+    lines: [`Favourites: ${existing ? 'update' : 'save'} “${name}” (${fav.totals.kcal} kcal, ${fav.totals.protein} g protein)`],
+    apply: async () => { const undo = await snapshot('favmeal', [fav.id]); await putDocs([{ kind: 'favmeal', key: fav.id, data: fav }]); return undo; },
+  };
+}
+async function setTargets(input: AnyIn): Promise<Change> {
+  const cur: Targets = (await getDoc<Targets>('foodprefs', 'targets')) || DEFAULT_TARGETS;
+  const n = (v: unknown, lo: number, hi: number) => { const x = Math.round(Number(v)); return Number.isFinite(x) && x >= lo && x <= hi ? x : undefined; };
+  const next: Targets = { kcal: n(input.kcal, 800, 6000) ?? cur.kcal, protein: n(input.protein, 20, 400) ?? cur.protein, carbs: n(input.carbs, 0, 800) ?? cur.carbs, fat: n(input.fat, 0, 400) ?? cur.fat };
+  if (JSON.stringify(next) === JSON.stringify({ ...cur, carbs: cur.carbs, fat: cur.fat })) throw new Refuse('Those are already your targets (or the numbers look off).');
+  const t = (x: Targets) => `${x.kcal} kcal, ${x.protein} g protein${x.carbs ? `, ${x.carbs} g carbs` : ''}${x.fat ? `, ${x.fat} g fat` : ''}`;
+  return {
+    kinds: ['foodprefs'], confirm: true, lines: [`Food targets: ${t(cur)}`, `→ ${t(next)}`],
+    apply: async () => { const undo = await snapshot('foodprefs', ['targets']); await putDocs([{ kind: 'foodprefs', key: 'targets', data: next }]); return undo; },
+  };
+}
+
+// habits: make one, pause one
+const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+function days(v: unknown): number[] {
+  const out = new Set<number>();
+  for (const x of Array.isArray(v) ? v : []) {
+    if (typeof x === 'number' && x >= 0 && x <= 6) out.add(x);
+    const i = DAY_NAMES.indexOf(String(x).toLowerCase().slice(0, 3)); if (i >= 0) out.add(i);
+  }
+  return out.size ? [...out].sort() : [...ALL_DAYS];
+}
+async function createHabit(input: AnyIn): Promise<Change> {
+  const name = str(input.name, 80);
+  if (!name) throw new Refuse('What’s the habit?');
+  const all = (await getDocs<Habit>('habit')).map(d => d.data).filter(Boolean);
+  if (all.some(h => !h.archived && norm(h.name) === norm(name))) throw new Refuse(`You already have “${name}”.`);
+  const h: Habit = { ...emptyHabit(all.length), id: uid(), name, days: days(input.days), twoMinute: str(input.two_minute, 120), why: str(input.why, 200), stack: str(input.after, 120), identity: str(input.identity, 160) };
+  const when = h.days.length === 7 ? 'every day' : h.days.map(d => DAY_SHORT[d]).join(', ');
+  return {
+    kinds: ['habit'], confirm: true,
+    lines: [`New habit: ${name}, ${when}${h.stack ? `, after I ${h.stack}` : ''}${h.twoMinute ? ` (mini: ${h.twoMinute})` : ''}`],
+    apply: async () => { const undo = await snapshot('habit', [h.id]); await putDocs([{ kind: 'habit', key: h.id, data: h }]); return undo; },
+  };
+}
+async function pauseHabit(input: AnyIn): Promise<Change> {
+  const resume = input.resume === true;
+  const all = (await getDocs<Habit>('habit')).map(d => ({ ...d.data, id: d.data?.id || d.key })).filter(h => h && h.name && !!h.archived === resume);
+  const h = one(all, x => x.name, str(input.habit, 80), resume ? 'paused habit' : 'habit');
+  return {
+    kinds: ['habit'], confirm: true, lines: [`Habit: ${resume ? 'bring back' : 'pause (archive)'} “${h.name}”${resume ? '' : '. Its history is kept'}`],
+    apply: async () => { const undo = await snapshot('habit', [h.id]); await putDocs([{ kind: 'habit', key: h.id, data: { ...h, archived: !resume } }]); return undo; },
+  };
+}
+
+// money: a budget line
+async function setBudget(input: AnyIn): Promise<Change> {
+  const cat = category(input.category);
+  if (!SPEND.includes(cat)) throw new Refuse(`${cat} isn’t a spending category, so it has no budget.`);
+  const amount = Math.round(Number(input.amount) * 100) / 100;
+  if (!(amount >= 0 && amount < 100000)) throw new Refuse('How much a month?');
+  const b: Budget = (await getDoc<Budget>('budget', 'current')) || {};
+  const was = Number(b[cat]) || 0;
+  if (was === amount) throw new Refuse(`${cat} is already $${amount} a month.`);
+  const next: Budget = { ...b }; if (amount > 0) next[cat] = amount; else delete next[cat];
+  return {
+    kinds: ['budget'], confirm: true, lines: [`Budget: ${cat} ${was ? `$${was}` : 'no budget'} → ${amount ? `$${amount}` : 'no budget'} a month`],
+    apply: async () => { const undo = await snapshot('budget', ['current']); await putDocs([{ kind: 'budget', key: 'current', data: next }]); return undo; },
+  };
+}
+
+// cycle (Rosh): periods and daily logs. Cycle days are calendar days (midnight), like the Cycle screen.
+const pickFrom = <T extends string>(allowed: readonly T[], v: unknown): T[] => list(v).map(x => allowed.find(a => a === x.toLowerCase())).filter((x): x is T => !!x);
+async function logCycleDay(input: AnyIn): Promise<Change> {
+  const date = isDate(input.date) ? input.date : calendarKey();
+  const cur: DayLog = (await getDoc<DayLog>('cyclelog', date)) || {};
+  const next: DayLog = { ...cur };
+  const flow = FLOWS.find(f => f === String(input.flow || '').toLowerCase());
+  if (flow) next.flow = flow;
+  const sy = pickFrom(SYMPTOMS, input.symptoms); if (sy.length) next.symptoms = [...new Set([...(cur.symptoms || []), ...sy])];
+  const mo = pickFrom(MOODS, input.mood); if (mo.length) next.mood = [...new Set([...(cur.mood || []), ...mo])];
+  if (str(input.notes)) next.notes = [cur.notes, str(input.notes, 300)].filter(Boolean).join(' · ');
+  if (JSON.stringify(next) === JSON.stringify(cur)) throw new Refuse(`Nothing I can log there. Symptoms: ${SYMPTOMS.join(', ')}. Moods: ${MOODS.join(', ')}. Flow: ${FLOWS.join(', ')}.`);
+  const bits = [flow && `flow ${flow}`, sy.length && sy.join(', '), mo.length && `mood ${mo.join(', ')}`, str(input.notes) && `note “${str(input.notes, 80)}”`].filter(Boolean);
+  return {
+    kinds: ['cyclelog'], confirm: false, lines: [`Cycle ${date === calendarKey() ? 'today' : pretty(date)}: ${bits.join('; ')}`],
+    apply: async () => { const undo = await snapshot('cyclelog', [date]); await putDocs([{ kind: 'cyclelog', key: date, data: next }]); return undo; },
+  };
+}
+async function logPeriod(input: AnyIn): Promise<Change> {
+  const date = isDate(input.date) ? input.date : calendarKey();
+  const periods = (await getDocs<Period>('period')).map(d => d.data).filter(p => p && p.start && p.end).sort((a, b) => a.start.localeCompare(b.start));
+  if (input.action === 'ended') {
+    const p = [...periods].reverse().find(x => x.start <= date && date <= plusDays(x.end, 7));
+    if (!p) throw new Refuse('I can’t find a period that started before then.');
+    return {
+      kinds: ['period'], confirm: false, lines: [`Cycle: period that started ${pretty(p.start)} ended ${pretty(date)}`],
+      apply: async () => { const undo = await snapshot('period', [p.start]); await putDocs([{ kind: 'period', key: p.start, data: { ...p, end: date } }]); return undo; },
+    };
+  }
+  if (periods.some(p => p.start <= date && date <= p.end)) throw new Refuse(`There’s already a period logged covering ${pretty(date)}.`);
+  const prefs = await getDoc<Partial<CyclePrefs>>('cycleprefs', 'settings');
+  const recent = periods.slice(-6).map(p => (new Date(`${p.end}T12:00:00`).getTime() - new Date(`${p.start}T12:00:00`).getTime()) / 864e5 + 1);
+  const len = prefs?.periodLength || (recent.length ? Math.round(recent.reduce((a, b) => a + b, 0) / recent.length) : 5);
+  const p: Period = { start: date, end: plusDays(date, len - 1), source: 'app' };
+  return {
+    kinds: ['period'], confirm: false, lines: [`Cycle: period started ${pretty(date)} (expected to ${pretty(p.end)}; say when it ends)`],
+    apply: async () => { const undo = await snapshot('period', [p.start]); await putDocs([{ kind: 'period', key: p.start, data: p }]); return undo; },
+  };
+}
+
 /** Work out a change. Throws Refuse with a reason when it can't be done as asked. null = not a change tool. */
 export async function prepare(name: string, input: AnyIn): Promise<Change | null> {
   switch (name) {
@@ -319,6 +479,15 @@ export async function prepare(name: string, input: AnyIn): Promise<Change | null
     case 'delete_event': return deleteEvent(input);
     case 'add_cash_expense': return cashExpense(input);
     case 'recategorize': return recategorizeTxns(input);
+    case 'set_must': return setMust(input);
+    case 'log_favourite_meal': return logFavourite(input);
+    case 'save_favourite': return saveFavourite(input);
+    case 'set_food_targets': return setTargets(input);
+    case 'create_habit': return createHabit(input);
+    case 'pause_habit': return pauseHabit(input);
+    case 'set_budget': return setBudget(input);
+    case 'log_cycle_day': return logCycleDay(input);
+    case 'log_period': return logPeriod(input);
     default: return null;
   }
 }

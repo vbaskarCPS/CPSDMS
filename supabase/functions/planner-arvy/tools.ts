@@ -6,7 +6,7 @@
 // run in the app (the same functions the screens use); the server only talks to Claude.
 // Arvy looks things up, answers, remembers and opens screens, and makes changes (`change` tools, run by
 // src/planner/features/arvy/act.ts): small everyday ones straight away with an Undo, bigger ones (calendar, removing
-// anything, money) only after a Confirm tap. Anything else it's asked to do is noted (cant_do_yet) for later.
+// anything, money, new habits, targets) only after a Confirm tap. Anything else it's asked to do is noted (cant_do_yet) for later.
 
 export type Profile = 'night' | 'morning';
 export interface ArvyCtx {
@@ -60,7 +60,7 @@ export const TOOLS: ArvyTool[] = [
     input_schema: { type: 'object', properties: { note: { type: 'string', description: 'one sentence, in the third person, e.g. "Prefers to train in the evening."' } }, required: ['note'] } },
   { name: 'open_screen', description: 'Open a screen of the planner for them (e.g. "show me my budget"). The chat stays open.',
     input_schema: { type: 'object', properties: { path: { type: 'string', enum: Object.keys(SCREENS) } }, required: ['path'] } },
-  { name: 'cant_do_yet', description: 'Note something they asked you to DO that none of your tools can do (for example: create a habit or workout, change a budget, log a period, edit a recipe), so it gets built. Call it, then tell them it’s noted and, when there is one, open the screen where they can do it themselves.',
+  { name: 'cant_do_yet', description: 'Note something they asked you to DO that none of your tools can do (for example: start or edit a workout, edit a recipe, change settings), so it gets built. Call it, then tell them it’s noted and, when there is one, open the screen where they can do it themselves.',
     input_schema: { type: 'object', properties: { request: { type: 'string', description: 'what they asked for, in a few words' }, area: { type: 'string', enum: ['plan', 'calendar', 'shopping', 'food', 'habits', 'workout', 'money', 'cycle', 'other'] } }, required: ['request', 'area'] } },
 
   // ── changes: done straight away, with an Undo ──
@@ -76,10 +76,28 @@ export const TOOLS: ArvyTool[] = [
     input_schema: { type: 'object', properties: { description: { type: 'string', description: 'what and how much, in their words, e.g. "2 eggs on toast and a latte"' }, name: { type: 'string', description: 'short meal name, e.g. "Breakfast"' }, time: { type: 'string', description: 'HH:MM 24-hour; default now' }, date: date('default today') }, required: ['description'] } },
   { name: 'mark_habit', change: 'now', description: 'Mark a habit for a day: done, mini (a smaller version), skip (a planned rest day) or clear (unmark).',
     input_schema: { type: 'object', properties: { habit: { type: 'string', description: 'the habit’s name' }, mark: { type: 'string', enum: ['done', 'mini', 'skip', 'clear'] }, date: date('default today') }, required: ['habit'] } },
+  { name: 'set_must', change: 'now', description: 'Star to-dos as must-dos for the day (must true, the default), or unstar them (must false). The first three must-dos are the day’s priorities.',
+    input_schema: { type: 'object', properties: { todos: strs('to-do texts'), must: { type: 'boolean' }, date: date('the day; default today') }, required: ['todos'] } },
+  { name: 'log_favourite_meal', change: 'now', description: 'Log one of their saved favourite meals ("my usual breakfast", "the protein shake"). Look at food_log first if unsure of the names.',
+    input_schema: { type: 'object', properties: { favourite: { type: 'string', description: 'the favourite’s name' }, time: { type: 'string', description: 'HH:MM 24-hour; default now' }, date: date('default today') }, required: ['favourite'] } },
+  { name: 'save_favourite', change: 'now', description: 'Save a meal they logged as a favourite, so it can be logged again in one go.',
+    input_schema: { type: 'object', properties: { meal: { type: 'string', description: 'the logged meal’s name' }, name: { type: 'string', description: 'the favourite’s name, if different' }, date: date('the day it was logged; default today') }, required: ['meal'] } },
+  { name: 'log_cycle_day', change: 'now', morningOnly: true, description: 'Log how a day of the cycle went: flow (spotting, light, medium, heavy), symptoms (cramps, headache, bloating, tender breasts, backache, acne, fatigue, nausea, cravings), mood (calm, happy, energetic, irritable, anxious, sad, mood swings), and a note. Adds to what’s logged.',
+    input_schema: { type: 'object', properties: { date: date('default today'), flow: { type: 'string', enum: ['spotting', 'light', 'medium', 'heavy'] }, symptoms: strs('symptoms'), mood: strs('moods'), notes: { type: 'string' } } } },
+  { name: 'log_period', change: 'now', morningOnly: true, description: 'Her period started (the end is estimated from her usual length) or ended, on a day.',
+    input_schema: { type: 'object', properties: { action: { type: 'string', enum: ['started', 'ended'] }, date: date('default today') }, required: ['action'] } },
   { name: 'log_body_weight', change: 'now', description: 'Log their body weight for a day, in their units.',
     input_schema: { type: 'object', properties: { weight: { type: 'number' }, date: date('default today') }, required: ['weight'] } },
 
   // ── changes that wait for a Confirm tap ──
+  { name: 'create_habit', change: 'confirm', description: 'Make a new habit. Days default to every day. Keep the name short; add the tiny two-minute version and what it’s stacked after when they said.',
+    input_schema: { type: 'object', properties: { name: { type: 'string' }, days: strs('weekdays it’s due, e.g. ["mon","wed","fri"]; leave out for every day'), two_minute: { type: 'string', description: 'the tiny version, e.g. "read one page"' }, after: { type: 'string', description: 'stacked after, e.g. "pour my morning coffee"' }, why: { type: 'string' }, identity: { type: 'string', description: '"I’m the kind of person who…"' } }, required: ['name'] } },
+  { name: 'pause_habit', change: 'confirm', description: 'Pause (archive) a habit, keeping its history; or bring a paused one back (resume true).',
+    input_schema: { type: 'object', properties: { habit: { type: 'string' }, resume: { type: 'boolean' } }, required: ['habit'] } },
+  { name: 'set_food_targets', change: 'confirm', description: 'Change their daily food targets. Give only the numbers that change.',
+    input_schema: { type: 'object', properties: { kcal: { type: 'number' }, protein: { type: 'number', description: 'grams' }, carbs: { type: 'number', description: 'grams' }, fat: { type: 'number', description: 'grams' } } } },
+  { name: 'set_budget', change: 'confirm', description: 'Set the monthly budget for one spending category (0 removes it). Shared with the household.',
+    input_schema: { type: 'object', properties: { category: { type: 'string' }, amount: { type: 'number', description: 'dollars a month' } }, required: ['category', 'amount'] } },
   { name: 'remove_shopping_items', change: 'confirm', description: 'Remove items from the shopping list altogether (not ticking them off).',
     input_schema: { type: 'object', properties: { items: strs('item names') }, required: ['items'] } },
   { name: 'remove_todos', change: 'confirm', description: 'Remove to-dos from a day’s plan altogether (not marking them done).',
@@ -113,7 +131,7 @@ export function system(ctx: ArvyCtx): string {
     '- Use your tools to look things up: never guess or make up their data. Call several at once when a question needs them.',
     '- Keep it short: lead with what matters most, then two or three sentences (about 60 words) unless they ask for detail or a full list. No headings. A short list only when they asked for a list (like the shopping list). Numbers rounded, dates said naturally ("Saturday at 6").',
     '- Sound like a friend who knows their planner inside out: a quick nod to what they’ve done well, then what’s next. End with a short offer (open a screen, look at something else) only when it’s useful.',
-    '- You can make changes for them: shopping list, to-dos, meals, habit marks and body weight happen straight away (they get an Undo button). Calendar events, removing anything, and money wait for them to tap Confirm: when a tool says waiting_for_confirm, say what you set up in a few words and ask them to tap Confirm. Never say it’s done until it is.',
+    `- You can make changes for them: shopping list, to-dos and must-dos, meals and favourites, habit marks, body weight${ctx.profile === 'morning' ? ' and the cycle log' : ''} happen straight away (they get an Undo button). Calendar events, new or paused habits, food targets, removing anything, and money (cash, categories, budgets) wait for them to tap Confirm: when a tool says waiting_for_confirm, say what you set up in a few words and ask them to tap Confirm. Never say it’s done until it is.`,
     '- Do what they ask without double-checking first, unless something important is missing (like the day for an event): then ask one short question. If a tool says not_done, explain why in a sentence (and ask which one, if several match).',
     '- Anything to add, change or delete that no tool covers: call cant_do_yet, say it’s on the way, and open the screen where they can do it.',
     '- After a change, confirm it in one short sentence ("Added milk and eggs to the list!"). Don’t repeat the details shown under your reply.',
