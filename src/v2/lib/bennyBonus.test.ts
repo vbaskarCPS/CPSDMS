@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { asBonus, bonusName, bonusesSaid, liveBonusPatch, withBonuses, type BonusItem } from './bennyBonus';
+import { asBonus, bonusName, bonusReplaced, bonusesSaid, liveBonusPatch, withBonuses, type BonusItem } from './bennyBonus';
 import type { PayoutCart } from './payoutCarts';
 
 const item = (over: Partial<BonusItem> = {}): BonusItem => ({
@@ -62,6 +62,23 @@ describe('a saved day: the bonuses go on the carts', () => {
     expect(() => withBonuses(day(), [item({ cns: ['I9999'], workers: ['Zed Q'] })], 1)).toThrow('Zed Q’s cart isn’t on that day the way it was when I checked. Ask me again.');
     expect(() => withBonuses(day(), [item({ cns: ['I1002'], workers: ['Nathan Clark'] })], 1)).toThrow(/isn’t on that day the way it was/);   // he is on a cart of two now
     expect(() => withBonuses([cart(['I1013'], { finalized: false })], [item()], 1)).toThrow('Michael Asiegbunam’s cart isn’t paid out any more. Finish its payout first.');
+  });
+});
+
+describe('a newer bonus card for the same place replaces the older one', () => {
+  const card = (date: string, ...list: BonusItem[]) => ({ kind: 'bonus', check: { ok: true, date, source: 'live', bonuses: list, ask: [], total: 0, stamp: 's' } });
+  const second = (who: string) => item({ cns: [who], workers: [who], placing: 2, label: 'Performance EQ - 2nd Place' });
+  it('"actually give Mugove second": the first card is no longer the one to tap', () => {
+    const cards = [card('2026-11-10', item(), second('Kyle')), null, card('2026-11-10', item(), second('Mugove'))];
+    expect(bonusReplaced(cards, 0)).toBe(true);
+    expect(bonusReplaced(cards, 2)).toBe(false);                             // the newest stands
+    expect(bonusReplaced(cards, 1)).toBe(false);                             // a message with no card
+  });
+  it('another day, another place, or another kind of card leaves it alone', () => {
+    expect(bonusReplaced([card('2026-11-09', item()), card('2026-11-10', item())], 0)).toBe(false);
+    expect(bonusReplaced([card('2026-11-10', item()), card('2026-11-10', second('Kyle'))], 0)).toBe(false);   // 1st place, then 2nd place: both stand
+    expect(bonusReplaced([card('2026-11-10', item()), { kind: 'job', check: {} }], 0)).toBe(false);
+    expect(bonusReplaced([{ kind: 'job', check: {} }, card('2026-11-10', item())], 0)).toBe(false);
   });
 });
 
