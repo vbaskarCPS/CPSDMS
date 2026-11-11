@@ -125,7 +125,14 @@ export const Benny: React.FC<{
     const t = window.setTimeout(() => void check(), 2500);
     const back = () => { if (document.visibilityState === 'visible') void check(); };
     document.addEventListener('visibilitychange', back);
-    return () => { gone = true; window.clearTimeout(t); document.removeEventListener('visibilitychange', back); };
+    // the app is open when the notification lands: the notice shows right away (the service worker says a push arrived)
+    const pushed = (e: MessageEvent) => {
+      const d = e.data as { type?: string; tag?: string } | null;
+      if (d?.type === 'push-arrived' && String(d.tag || '').startsWith('benny-live-')) { newsAt = 0; void check(); }
+    };
+    const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+    sw?.addEventListener('message', pushed);
+    return () => { gone = true; window.clearTimeout(t); document.removeEventListener('visibilitychange', back); sw?.removeEventListener('message', pushed); };
   }, [allowed, userId]);
 
   // The Benny speaks with Google's voice. If that can't be had it stays quiet (never the phone's own voice) and says why, once.
