@@ -90,7 +90,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     const ex = next.exercises[ei];
     if (ex.mode === 'time') { setTip(null); return; }
     const seq = ++tipSeq.current;
-    setTip({ ei, si, text: 'Coach Claude is looking at that set…', ai: false });
+    setTip({ ei, si, text: 'Arvy is looking at that set…', ai: false });
     const s = ex.sets[si];
     const last = exerciseHistory(history, ex.exerciseId, 1)[0];
     const assisted = isAssisted(ex) || isAssisted(findExercise(ex.exerciseId, custom));
@@ -245,7 +245,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
         title={w.name} right={!readOnly && <Button small primary onClick={finish} disabled={setsDone(w) === 0}>Finish</Button>} />
 
       {readOnly && w.prs && w.prs.length > 0 && <Card accent><div className="pl-row"><Trophy /><div><b>{w.prs.length} personal record{w.prs.length > 1 ? 's' : ''}</b><p className="pl-muted" style={{ fontSize: 13 }}>{w.prs.join(' · ')}</p></div></div></Card>}
-      {readOnly && w.review && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>Coach Claude's review</b><p>{w.review}</p></div></div>}
+      {readOnly && w.review && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>Arvy's review</b><p>{w.review}</p></div></div>}
       {lastReview && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>From your last session ({new Date(lastReview.startedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })})</b><p>{lastReview.review}</p></div></div>}
 
       {w.exercises.map((ex, ei) => {
@@ -315,7 +315,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       </Card>
 
       {!readOnly && <Button block primary onClick={finish} disabled={setsDone(w) === 0}><Sparkles size={18} /> Complete workout</Button>}
-      {!readOnly && <p className="pl-muted" style={{ fontSize: 13, textAlign: 'center', margin: '-6px 0 0' }}>Coach Claude reads every set and note and writes your plan for next time.</p>}
+      {!readOnly && <p className="pl-muted" style={{ fontSize: 13, textAlign: 'center', margin: '-6px 0 0' }}>Arvy reads every set and note and writes your plan for next time.</p>}
       {!readOnly && <Button block ghost danger onClick={discard}>Discard session</Button>}
       {rest && <div style={{ height: 64 }} />}
 
@@ -335,7 +335,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
               <Card accent><div className="pl-row"><Trophy /><div><b>New PR{summary.prs.length > 1 ? 's' : ''}!</b>{summary.prs.map(p => <p key={p} style={{ fontSize: 14 }}>{p}</p>)}</div></div></Card>
             ) : <p className="pl-muted">Good work. Consistency is the PR.</p>}
             {(reviewing || summary.review) && (
-              <div className={`wo-review ${reviewing && !summary.review ? 'is-waiting' : ''}`}><Sparkles size={16} aria-hidden /><div><b>Coach Claude's review</b><p>{summary.review || 'Reading your sets and notes…'}</p></div></div>
+              <div className={`wo-review ${reviewing && !summary.review ? 'is-waiting' : ''}`}><Sparkles size={16} aria-hidden /><div><b>Arvy's review</b><p>{summary.review || 'Reading your sets and notes…'}</p></div></div>
             )}
             {summary.next && Object.keys(summary.next).length > 0 && <p className="pl-muted" style={{ fontSize: 13 }}>Next session is set up from this: {Object.keys(summary.next).length} exercise{Object.keys(summary.next).length > 1 ? 's' : ''} prefilled with the coach's numbers.</p>}
             {night

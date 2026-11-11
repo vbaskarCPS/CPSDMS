@@ -167,7 +167,7 @@ export function emptyWorkout(name = 'Workout'): Workout {
   return { id: uid(), date: dayKey(now), startedAt: now.toISOString(), name, exercises: [] };
 }
 
-/** Which template is up today: one Coach Claude planned for this date, else one for this weekday, else the one not done for longest. */
+/** Which template is up today: one Arvy planned for this date, else one for this weekday, else the one not done for longest. */
 export function todaysTemplate(templates: Template[], workouts: Workout[], date = new Date()): Template | null {
   // one-off sessions planned for another date stay out of the way
   const live = templates.filter(t => !t.archived && (!t.plannedFor || t.plannedFor === dayKey(date)));

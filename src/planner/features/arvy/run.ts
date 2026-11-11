@@ -3,6 +3,9 @@
 // The tool list itself (names, descriptions) is in supabase/functions/planner-arvy/tools.ts, shared with the server.
 import { dayKey, getDoc, getDocs } from '../../lib/docs';
 import { addMemory } from '../../lib/memory';
+import { getPass } from '../../lib/auth';
+import { lifeContext } from '../../lib/lifeContext';
+import { logArvy } from './log';
 import { loadRoutine, blocks } from '../../lib/routine';
 import { loadEvents } from '../calendar/store';
 import { eventsOn, WHO_LABEL, type CalEvent } from '../calendar/types';
@@ -204,7 +207,7 @@ async function cycle() {
 }
 
 /** Run one tool. Never throws: an error comes back as the result, for Arvy to explain. */
-export async function runTool(name: string, input: Record<string, unknown>): Promise<ToolOut> {
+export async function runTool(name: string, input: Record<string, unknown>, about?: { question?: string; path?: string }): Promise<ToolOut> {
   try {
     switch (name) {
       case 'today_overview': return { result: await todayOverview(input) };
@@ -227,10 +230,21 @@ export async function runTool(name: string, input: Record<string, unknown>): Pro
         return { result: { opened: SCREENS[path] }, navigate: path };
       }
       case 'cant_do_yet': {
-        const at = new Date().toISOString();
-        const { putDoc } = await import('../../lib/docs');
-        await putDoc('arvyask', `${at}~${Math.random().toString(36).slice(2, 6)}`, { at, request: String(input.request || '').slice(0, 200), area: String(input.area || 'other') });
+        await logArvy({ type: 'request', title: String(input.request || 'Something Arvy can’t do yet'), area: String(input.area || 'other'), question: about?.question, path: about?.path });
         return { result: { noted: true } };
+      }
+      case 'log_feedback': {
+        const type = input.type === 'idea' ? 'idea' : 'bug';
+        const title = String(input.title || '').trim();
+        if (!title) return { result: { error: 'What should I note?' }, error: true };
+        await logArvy({ type, title, detail: typeof input.detail === 'string' ? input.detail : undefined, area: String(input.area || 'other'), question: about?.question, path: about?.path });
+        return { result: { logged: true, where: 'Settings › Arvy’s log' } };
+      }
+      case 'coaching_context': {
+        // everything the coach reads, the worked-out training numbers and their own notes first (long contexts are cut from the end)
+        const units = (getPass()?.user.settings?.units as string) === 'kg' ? 'kg' : 'lb';
+        const { training_state, about_me_notes_oldest_first, workout_templates, workout_in_progress, workouts_recent_full_then_condensed, ...rest } = await lifeContext(units);
+        return { result: { training_state, about_me_notes_oldest_first, workout_templates, workout_in_progress, workouts_recent_full_then_condensed, ...rest } };
       }
       default: return { result: { error: `unknown tool ${name}` }, error: true };
     }

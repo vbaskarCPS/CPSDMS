@@ -17,6 +17,7 @@ import { moneyRoutes } from './features/money';
 import { cycleRoutes } from './features/cycle';
 import { Calendar } from './features/calendar/Calendar';
 import { Shopping } from './features/shop/Shopping';
+import { ArvyLog } from './features/arvy/ArvyLog';
 import './features/shop/shop.css';
 import './features/calendar/calendar.css';
 
@@ -50,6 +51,7 @@ export function PlannerApp() {
         <Route path="/calendar" element={<Calendar pass={pass} />} />
         <Route path="/shop" element={<Shopping pass={pass} />} />
         <Route path="/settings" element={<Settings pass={pass} />} />
+        <Route path="/settings/arvy-log" element={<ArvyLog />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

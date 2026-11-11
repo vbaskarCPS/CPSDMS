@@ -1,6 +1,7 @@
-// src/planner/lib/memory.ts — the coach's memory: dated notes about you that every AI call sees
-// (workout coach, set-by-set coaching, the session review, the day's reflection). Kept in doc kind
-// 'memo', key 'coach'. You add notes in Settings → "Tell the coach"; the app adds milestones itself.
+// src/planner/lib/memory.ts — Arvy's memory: dated notes about you that every AI call sees (every Arvy answer,
+// set-by-set coaching, the session review, the day's reflection). Kept in doc kind 'memo', key 'coach' (the name
+// from when the coach was a separate chat). You add notes in Settings → "Tell Arvy" or by asking Arvy to remember
+// something; the app adds milestones itself.
 import { dayKey, getDoc, putDoc } from './docs';
 
 export interface MemoryNote { date: string; text: string; by?: 'you' | 'app' }

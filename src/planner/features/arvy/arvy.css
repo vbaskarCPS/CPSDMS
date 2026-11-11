@@ -67,3 +67,26 @@
 .arvy-undo svg { width: 14px; height: 14px; }
 .arvy-confirm:disabled, .arvy-cancel:disabled, .arvy-undo:disabled { opacity: .5; cursor: default; }
 .arvy-change-note { margin-top: 5px; font-size: 12px; font-weight: 700; color: var(--ink-2); }
+
+/* thumbs-down under a reply (goes in Arvy's improvements log) */
+.arvy-down { display: block; margin: 6px 0 -4px auto; width: 28px; height: 24px; border: 0; background: transparent; color: var(--ink-2); opacity: .45; cursor: pointer; padding: 0; }
+.arvy-down svg { width: 14px; height: 14px; }
+.arvy-down:hover, .arvy-down:focus-visible { opacity: 1; }
+.arvy-down-note { margin-top: 6px; font-size: 12px; color: var(--ink-2); }
+
+/* Settings > Arvy's log */
+.arvy-log-entry { cursor: pointer; }
+.arvy-log-top { display: flex; gap: 10px; align-items: flex-start; }
+.arvy-log-top > svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--accent); }
+.arvy-log-top b { display: block; font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.arvy-log-top small { font-size: 12.5px; }
+.arvy-log-stage { flex: none; font: 700 11.5px var(--sans); padding: 3px 8px; border-radius: 10px; background: var(--bg); color: var(--ink-2); border: 1px solid var(--line); white-space: nowrap; }
+.arvy-log-stage.ready { background: var(--amber); color: #1b1b1b; border-color: transparent; }
+.arvy-log-stage.done { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.arvy-log-sum { margin: 8px 0 0; font-size: 14px; line-height: 1.45; }
+.arvy-log-more { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 8px; }
+.arvy-log-more p { margin: 0; font-size: 13.5px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+.arvy-log-more span { display: block; font: 700 11px var(--sans); text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); margin-bottom: 1px; }
+
+/* the note above lines carried over from the old Coach chat */
+.arvy-carried { align-self: center; font-size: 12px; color: var(--ink-2); padding: 2px 10px; border: 1px solid var(--line); border-radius: 10px; }

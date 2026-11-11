@@ -1,0 +1,57 @@
+// Arvy's chat is kept between visits, and the first load brings the old Coach chat over (once, leaving it untouched).
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const store = new Map<string, unknown>();
+vi.mock('../../lib/docs', () => ({
+  getDoc: async (kind: string, key: string) => structuredClone(store.get(`${kind}|${key}`) ?? null),
+  putDoc: async (kind: string, key: string, data: unknown) => { store.set(`${kind}|${key}`, structuredClone(data)); },
+}));
+const { fromCoach, loadChat, newer, saveChat, flushChat, KEEP } = await import('./chat');
+
+const coach = { messages: [
+  { role: 'user', content: 'Plan my next session', at: '2026-11-09T22:00:00.000Z' },
+  { role: 'assistant', content: 'Upper pull:\nLat pulldown: 3 x 8-10', at: '2026-11-09T22:00:20.000Z' },
+  { role: 'system', content: 'ignored' }, { role: 'user', content: '   ' }, null,
+] };
+beforeEach(() => { store.clear(); });
+
+describe('Arvy’s chat history', () => {
+  it('turns Coach messages into chat lines, skipping anything that isn’t one', () => {
+    const lines = fromCoach(coach.messages);
+    expect(lines).toEqual([
+      { role: 'user', text: 'Plan my next session', at: '2026-11-09T22:00:00.000Z', old: true },
+      { role: 'assistant', text: 'Upper pull:\nLat pulldown: 3 x 8-10', at: '2026-11-09T22:00:20.000Z', old: true },
+    ]);
+    expect(fromCoach(undefined)).toEqual([]);
+    expect(fromCoach(Array.from({ length: 90 }, (_, i) => ({ role: 'user', content: `m${i}` })))).toHaveLength(KEEP);
+  });
+
+  it('carries the Coach chat over on the first load only, and leaves the old chat as it was', async () => {
+    store.set('coachchat|current', coach);
+    const first = await loadChat();
+    expect(first.carried).toBe(true);
+    expect(first.lines.map(l => l.text)).toEqual(['Plan my next session', 'Upper pull:\nLat pulldown: 3 x 8-10']);
+    expect(store.get('coachchat|current')).toEqual(coach);
+    expect((store.get('arvychat|current') as { from_coach: number }).from_coach).toBe(2);
+    // "Start over" saves an empty chat: the old one doesn't come back
+    saveChat([]); await flushChat();
+    const again = await loadChat();
+    expect(again).toEqual({ lines: [], carried: false });
+  });
+
+  it('with no Coach chat, starts empty and remembers what’s said', async () => {
+    expect(await loadChat()).toEqual({ lines: [], carried: false });
+    const said = [{ role: 'user' as const, text: 'hi', at: '2026-11-10T20:00:00.000Z' }, { role: 'assistant' as const, text: 'Hi Vijay!', at: '2026-11-10T20:00:02.000Z', used: ['today_overview'] }];
+    saveChat(said); await flushChat();
+    expect((await loadChat()).lines).toEqual(said);
+  });
+
+  it('between this tab’s copy and the saved one, keeps the one talked in last', () => {
+    const a = [{ role: 'user' as const, text: 'a', at: '2026-11-10T20:00:00.000Z' }];
+    const b = [{ role: 'user' as const, text: 'b', at: '2026-11-10T21:00:00.000Z' }];
+    expect(newer(a, b)).toBe(b);
+    expect(newer(b, a)).toBe(b);
+    expect(newer([], a)).toBe(a);
+    expect(newer(a, [])).toBe(a);
+  });
+});

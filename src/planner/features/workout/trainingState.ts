@@ -1,5 +1,5 @@
 // src/planner/features/workout/trainingState.ts — the numbers a strength coach works out before prescribing anything,
-// computed from the planner so Coach Claude reasons from facts instead of guessing: how recovered you are (sleep,
+// computed from the planner so Arvy reasons from facts instead of guessing: how recovered you are (sleep,
 // food, how hard the last sessions were), how much each muscle has been trained this week and how long ago, whether
 // lifts are progressing or stalling, pain mentioned in notes, and how long since an easier week. Pure, so it's tested.
 import { e1rm, isAssisted, type Exercise, type Muscle, type Workout } from './types';

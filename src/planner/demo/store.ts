@@ -1,5 +1,5 @@
 // src/planner/demo/store.ts — the demo's stand-in for Supabase: planner docs in memory, a fake pass,
-// and Coach Claude's canned replies. Active only at /demo (lib/app.ts isDemo). Nothing persists.
+// and Arvy's canned replies. Active only at /demo (lib/app.ts isDemo). Nothing persists.
 import { demoSeed } from './seed';
 import type { PlannerPass } from '../lib/auth';
 
@@ -57,7 +57,7 @@ const COACH_REPLIES = [
 let coachIdx = 0;
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-/** Coach Claude, scripted. The demo never calls the real model. */
+/** Arvy, scripted. The demo never calls the real model. */
 export async function demoInvoke(body: Record<string, unknown>): Promise<unknown> {
   await delay(700 + Math.random() * 500);
   switch (body.action) {

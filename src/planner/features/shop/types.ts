@@ -8,7 +8,7 @@ export interface ShopItem {
   deals?: Deal[];              // this week's flyer offers for it, best first
   dealsAt?: string;            // when the deals were last looked up
   store?: string;              // the store you've decided to get it at (defaults to the best deal's)
-  suggestedStore?: string;     // a no-flyer store Coach Claude thinks is the best place for it
+  suggestedStore?: string;     // a no-flyer store Arvy thinks is the best place for it
   reason?: string;
   pick?: Deal;                 // the exact product you built it out to (type, size, store, price)
   count?: number;              // how many of it

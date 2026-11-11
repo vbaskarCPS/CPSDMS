@@ -42,7 +42,7 @@ export function DayPage() {
     try {
       const reply = await reflect({ date: key, brief: day.brief, priorities: day.priorities, ticks: day.ticks, night: day.night, scores: day.scores, projects: day.projects, people: day.people });
       set(d => ({ ...d, reflection: reply }));
-    } catch (e) { showToast(e instanceof Error ? e.message : "Couldn't reach Coach Claude", 'bad'); }
+    } catch (e) { showToast(e instanceof Error ? e.message : "Couldn't reach Arvy", 'bad'); }
     finally { setThinking(false); }
   };
 
@@ -89,7 +89,7 @@ export function DayPage() {
 
           {/* ── Today's list ── */}
           <Section title="The list" meta={day.todos.length ? `${day.todos.filter(t => t.done).length}/${day.todos.length}` : 'from the Brief'} done={day.todos.length > 0 && day.todos.every(t => t.done)}>
-            <p className="pl-muted" style={{ fontSize: 13 }}>Brief to dinner, in the order you'll tackle it — move items with the arrows; a time beside one is a reminder. Coach Claude drafts it at the end of the Brief; ★ marks a must-do.</p>
+            <p className="pl-muted" style={{ fontSize: 13 }}>Brief to dinner, in the order you'll tackle it — move items with the arrows; a time beside one is a reminder. Arvy drafts it at the end of the Brief; ★ marks a must-do.</p>
             <TodoList day={day} set={set} suggestions={frequent} />
           </Section>
 
@@ -112,7 +112,7 @@ export function DayPage() {
             {avg !== null && <div className="plan-avg"><b>{avg}</b><small>/ 5</small></div>}
             {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
             <div className="pl-row" style={{ flexWrap: 'wrap' }}>
-              <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Coach Claude" : "Coach Claude on this day"}</Button>
+              <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Arvy" : "Arvy on this day"}</Button>
               {isToday && morningP && <Link to="/plan/night" className="pl-btn pl-btn--primary">Open the evening wind-down</Link>}
             </div>
           </Section>

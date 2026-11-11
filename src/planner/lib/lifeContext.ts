@@ -1,4 +1,4 @@
-// src/planner/lib/lifeContext.ts — everything Coach Claude can see: the routine, the coach's memory notes,
+// src/planner/lib/lifeContext.ts — everything Arvy can see: the routine, the coach's memory notes,
 // recent days (brief, priorities, ticks, review, scores), habits and their marks, meals, workouts with every
 // set and note, body weight, and (morning profile) the cycle. Read straight from the docs so any feature's
 // AI box can ask for it. Trimmed to stay well inside the function's context cap.

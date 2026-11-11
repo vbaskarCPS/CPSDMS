@@ -62,7 +62,7 @@ export function Night() {
     try {
       const reply = await reflect({ date: today, brief: day.brief, priorities: day.priorities, ticks: day.ticks, night: day.night, scores: day.scores, routine });
       set(d => ({ ...d, reflection: reply }));
-    } catch (e) { say(e instanceof Error ? e.message : "Couldn't reach Coach Claude", 'bad'); }
+    } catch (e) { say(e instanceof Error ? e.message : "Couldn't reach Arvy", 'bad'); }
     finally { setThinking(false); }
   };
 
@@ -134,7 +134,7 @@ export function Night() {
             ))}
             {avg !== null && <div className="plan-avg"><b>{avg}</b><small>/ 5 today</small></div>}
             {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
-            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Coach Claude" : "Coach Claude on today"}</Button>
+            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Arvy" : "Arvy on today"}</Button>
           </Card>
 
           <Card className="pl-stack">
@@ -178,7 +178,7 @@ export function Night() {
             ))}
             {avg !== null && <div className="plan-avg"><b>{avg}</b><small>/ 5 today</small></div>}
             {day.reflection && <blockquote className="plan-quote">{day.reflection}</blockquote>}
-            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Coach Claude" : "Coach Claude on today"}</Button>
+            <Button onClick={coachNote} disabled={thinking}><Sparkles /> {thinking ? 'Thinking…' : day.reflection ? "Another note from Arvy" : "Arvy on today"}</Button>
           </Card>
 
           <Card className="pl-stack">

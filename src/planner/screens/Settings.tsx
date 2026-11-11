@@ -2,7 +2,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { loadRoutine, routineNow, saveRoutine, type Routine } from '../lib/routine';
 import { Link } from 'react-router-dom';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListChecks } from 'lucide-react';
 import { changePin, saveSettings, signOut, type PlannerPass } from '../lib/auth';
 import { PushCard } from '../ui/PushCard';
 import { MemoryCard } from '../ui/MemoryCard';
@@ -89,6 +89,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
       </form>
 
       <MemoryCard />
+
+      <Link className="pl-tile" to="/settings/arvy-log"><ListChecks aria-hidden /><div className="pl-grow"><b>Arvy’s log</b><small>What Arvy couldn’t do or got wrong, and the fixes on the way</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
 
       <PushCard />
 

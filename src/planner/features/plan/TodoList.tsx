@@ -39,7 +39,7 @@ export function TodoList({ day, set, edit = true, compact = false, suggestions =
       ))}
       {edit && offer.length > 0 && (
         <div className="todo__suggest">
-          <small className="pl-muted">Tap to add{offer.some(s => s.must) ? ' · ★ = Coach Claude thinks it\'s a must' : ' — often on your list'}</small>
+          <small className="pl-muted">Tap to add{offer.some(s => s.must) ? ' · ★ = Arvy thinks it\'s a must' : ' — often on your list'}</small>
           <div className="todo__chips">{offer.map(s => <button key={s.text} type="button" className={s.must ? 'is-must' : ''} onClick={() => add(s.text, s.time, !!s.must)}>{s.must ? '★ ' : ''}{s.text}{s.time ? <em> {clock(s.time)}</em> : null}</button>)}</div>
         </div>
       )}

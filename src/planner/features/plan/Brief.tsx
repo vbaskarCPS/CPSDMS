@@ -18,7 +18,7 @@ import { uid } from '../../ui/primitives';
 import { getDoc, getDocs, putDoc } from '../../lib/docs';
 import { Sparkles } from 'lucide-react';
 
-/** Coach Claude starts suggesting once it has seen a few finished days. */
+/** Arvy starts suggesting once it has seen a few finished days. */
 const KNOWS_YOU_AFTER = 3;
 
 type Hints = BriefHints | null;
@@ -66,7 +66,7 @@ export function Brief() {
   const focus = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
   const started = useRef(false);
   const frequent = useFrequentTodos();
-  // Coach Claude's suggestions: fetched once per day in the background, only once it knows a few of your days
+  // Arvy's suggestions: fetched once per day in the background, only once it knows a few of your days
   const [hints, setHints] = useState<Hints>(null);
   const [knows, setKnows] = useState<boolean | null>(null);
   useEffect(() => {
@@ -116,7 +116,7 @@ export function Brief() {
         return syncPriorities({ ...d, todos: [...keep, ...fresh] });
       });
     } catch (e) {
-      say(e instanceof Error ? e.message : "Couldn't reach Coach Claude — build the list by hand", 'bad');
+      say(e instanceof Error ? e.message : "Couldn't reach Arvy — build the list by hand", 'bad');
     } finally { setDrafting(false); }
   };
   useEffect(() => { if (last && !loading && day.todos.length === 0) void draft(); }, [last, loading]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -148,17 +148,17 @@ export function Brief() {
         {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
         {loading ? <p className="pl-muted">Loading…</p> : STEPS[step].render(day, set, focus, { frequent, coachMust: hints?.priorities || [] })}
         {last && !loading && (drafting
-          ? <p className="pl-muted" style={{ fontSize: 13, marginTop: 8, fontStyle: 'italic' }}><Sparkles size={12} aria-hidden /> Coach Claude is drafting the list from your answers…</p>
-          : <button type="button" className="pl-btn pl-btn--small pl-btn--ghost" style={{ marginTop: 8 }} onClick={() => void draft(true)}><Sparkles size={14} /> Redraft with Coach Claude</button>)}
+          ? <p className="pl-muted" style={{ fontSize: 13, marginTop: 8, fontStyle: 'italic' }}><Sparkles size={12} aria-hidden /> Arvy is drafting the list from your answers…</p>
+          : <button type="button" className="pl-btn pl-btn--small pl-btn--ghost" style={{ marginTop: 8 }} onClick={() => void draft(true)}><Sparkles size={14} /> Redraft with Arvy</button>)}
         {!loading && STEPS[step].hints && (
           hints
             ? (() => { const hs = STEPS[step].hints!(hints, day, set); return hs.length ? (
                 <div className="brief__hints">
-                  <p className="pl-muted" style={{ fontSize: 12, margin: '0 0 4px' }}><Sparkles size={12} aria-hidden /> Coach Claude suggests — tap to use{step === 0 && hints.noticed ? ` · ${hints.noticed}` : ''}</p>
+                  <p className="pl-muted" style={{ fontSize: 12, margin: '0 0 4px' }}><Sparkles size={12} aria-hidden /> Arvy suggests — tap to use{step === 0 && hints.noticed ? ` · ${hints.noticed}` : ''}</p>
                   <div className="brief__chips">{hs.map(x => <button key={x.label} type="button" onClick={x.apply}>{x.label}</button>)}</div>
                 </div>) : null; })()
             : knows === false && step === 0
-              ? <p className="pl-muted" style={{ fontSize: 12, marginTop: 10 }}><Sparkles size={12} aria-hidden /> Coach Claude will start suggesting here once it's seen a few of your days.</p>
+              ? <p className="pl-muted" style={{ fontSize: 12, marginTop: 10 }}><Sparkles size={12} aria-hidden /> Arvy will start suggesting here once it's seen a few of your days.</p>
               : null
         )}
       </section>

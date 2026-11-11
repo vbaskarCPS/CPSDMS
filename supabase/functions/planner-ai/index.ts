@@ -4,7 +4,7 @@
 //   POST { token, action: 'food_photo', image: { media_type, data(base64) } | images: [up to 4 of the same meal], note? }
 //        → { items: [{ name, portion, grams?, kcal, protein, carbs, fat, confidence }], tips?: string }
 //   POST { token, action: 'food_text', text }                     → same shape
-//   POST { token, action: 'coach', messages: [{ role, content }], context }   → { reply }
+//   POST { token, action: 'coach', messages: [{ role, content }], context }   → { reply }   (in-workout coaching; the chat is planner-arvy)
 //   POST { token, action: 'habit', text, blocks: [{id,label,at,until?}], existing: [string] }  → a designed habit (implementation intention + stack)
 //   POST { token, action: 'dayplan', context, answers?, library, units }  → { review, questions, tomorrow }  (after a session: review + tomorrow's plan)
 //   POST { token, action: 'briefhints', context }   → suggestions for each Bed/Morning Brief question (once there is history)
@@ -83,7 +83,7 @@ async function claudeRaw(system: string, messages: Msg[], maxTokens: number, mod
   if (!res || !res.ok) {
     const why = data?.error?.message || `Anthropic ${res?.status}`;
     console.error('planner-ai: Anthropic failed:', why);
-    throw new Error(res?.status === 429 ? `Coach Claude is rate-limited right now — try again in a minute. (${why})` : res?.status === 529 ? 'Coach Claude is overloaded right now — try again in a minute.' : why);
+    throw new Error(res?.status === 429 ? `Arvy is rate-limited right now — try again in a minute. (${why})` : res?.status === 529 ? 'Arvy is overloaded right now — try again in a minute.' : why);
   }
   const text = ((data.content || []) as { type: string; text?: string }[]).filter(c => c.type === 'text').map(c => c.text || '').join('');
   if (!text.trim()) console.error('planner-ai: empty answer from Anthropic:', JSON.stringify({ stop: data.stop_reason, content: data.content, model }).slice(0, 800));
@@ -97,7 +97,7 @@ async function claude(system: string, messages: Msg[], maxTokens = 1500, model =
   let r = await claudeRaw(system, clean, maxTokens, model);
   // an empty answer that ran out of tokens (thinking used them up) is asked again with a much bigger budget
   if (!r.text.trim()) r = await claudeRaw(system, clean, r.stop === 'max_tokens' ? Math.max(maxTokens * 4, 4000) : maxTokens, model);
-  if (!r.text.trim()) throw new Error('Coach Claude didn’t answer — try again');
+  if (!r.text.trim()) throw new Error('Arvy didn’t answer — try again');
   if (r.stop === 'max_tokens') {
     const more = await claudeRaw(system, [...clean, { role: 'assistant', content: r.text }, { role: 'user', content: 'Continue exactly where you left off — no recap, no repeating what you already wrote.' }], maxTokens, model);
     r = { text: r.text + more.text, stop: more.stop };
@@ -140,7 +140,7 @@ macros in grams; kcal consistent with macros. Count cooking oil, butter, dressin
 when they are likely present even if not visible (and say so in "tips"). Photo estimates run low, so lean a little
 generous on portions. Keep "tips" to one short sentence or empty. No text outside the JSON.`;
 
-// How Coach Claude reasons about training: current exercise science, applied to the numbers in training_state.
+// How Arvy reasons about training: current exercise science, applied to the numbers in training_state.
 const SCIENCE = `
 HOW TO COACH (evidence-based; apply it, don't lecture):
 Read training_state first: readiness (sleep, food), load (sessions, hard sets per muscle per week, RPE trend, weeks since an
@@ -170,20 +170,17 @@ easier week), progress (e1RM per lift: up / flat / stalled / down), pain_or_nigg
 - Every plan says in one line why it fits today (e.g. "6 h sleep, chest trained 2 days ago → upper pull + legs, RPE 7").
   Quote the real numbers. Never invent data that isn't in the context.`;
 
-const COACH_SYSTEM = `You are Coach Claude, the personal coach inside this planner app — strength and conditioning first, but also the
+const COACH_SYSTEM = `You are Arvy, the personal coach inside this planner app — strength and conditioning first, but also the
 person's whole day: routine, habits, food, sleep, priorities and reviews. The context JSON is the planner's actual data:
 every logged set (weight x reps, @RPE, L/R for one-arm moves), the person's own notes per exercise and per session,
 earlier reviews and prescriptions, habits and their marks, meals, recent days and the about_me notes. Read it before
 answering and quote the real numbers and notes; never say you lack data that is in the context. Be concise (phone
 screen): short paragraphs, specific numbers, no fluff. A session plan is one line per exercise (name: sets x reps, weight, one cue) and no long preamble, so even a 70-minute session fits. Weights in the user's units. If something sounds like an
-injury, say to see a professional and keep the advice conservative. You are Coach Claude; don't describe yourself
-as an AI model. Sessions you plan only reach the person's planner when they tap a button under your message, so when
-they ask to change or plan a session (workout_templates with planned_for_date shows what's planned; today's session is
-still ahead unless workouts_recent has one dated today), reply with the COMPLETE session written out as a plan — every
-exercise with sets x reps or minutes, rest and a cue — and end with: Tap "Make this today's" (or tomorrow's, if today's
-is already done) to swap it in.` + SCIENCE;
+injury, say to see a professional and keep the advice conservative. You are Arvy; don't describe yourself
+as an AI model. This call is the coaching inside a workout (a line after a set, the review when a session is finished);
+whole-session plans and changes are made in the Arvy chat (the Arvy button on every screen), so point there if asked.` + SCIENCE;
 
-const REFLECT_SYSTEM = `You are Coach Claude, a warm, direct high-performance coach reviewing one day of a personal planner (morning
+const REFLECT_SYSTEM = `You are Arvy, a warm, direct high-performance coach reviewing one day of a personal planner (morning
 intentions, priorities, habits, evening answers, scores, meals, the workout) with the person's recent days and about_me notes for context. Reply in 2–3 short sentences, second person: one thing
 to appreciate, one honest observation, one small adjustment for tomorrow. No lists, no headings, no emojis.`;
 
@@ -241,7 +238,7 @@ const PLAN_SCHEMA = {
   }, required: ['name', 'exercises'],
 };
 
-const HABIT_SYSTEM = `You are Coach Claude, a habit coach who designs habits the Atomic Habits way for a busy dad with a fixed daily routine.
+const HABIT_SYSTEM = `You are Arvy, a habit coach who designs habits the Atomic Habits way for a busy dad with a fixed daily routine.
 Given what the person wants to do, their day's blocks (in order, with times) and their existing habits, return ONE habit:
 - name: the action, not the outcome, small and concrete ("Read 10 pages", not "read more")
 - implementation intention: "I will [action] at [time] in [place]" — pick the time from the block you anchor to
@@ -259,7 +256,7 @@ const HABIT_SCHEMA = {
   }, required: ['name', 'identity', 'why', 'twoMinute', 'anchor', 'stack', 'cue'],
 };
 
-const DAYPLAN_SYSTEM = `You are Coach Claude. The person just completed today's workout (it is in the context with every set and note,
+const DAYPLAN_SYSTEM = `You are Arvy. The person just completed today's workout (it is in the context with every set and note,
 along with recent sessions, habits, meals, days and the about_me notes — read the about_me notes first: they hold the
 training goals, health limits and session length). Produce:
 1. review: one or two short paragraphs (120-200 words total, no lists/headings) reviewing today's session using the real
@@ -290,7 +287,7 @@ const DAYPLAN_SCHEMA = {
   }, required: ['review', 'questions', 'tomorrow'],
 };
 
-const BRIEFHINTS_SYSTEM = `You are Coach Claude. It is morning; the person is about to do their Bed Brief (from bed, under ten minutes): one
+const BRIEFHINTS_SYSTEM = `You are Arvy. It is morning; the person is about to do their Bed Brief (from bed, under ten minutes): one
 word for the day, three things that must get done, who needs them on their A-game, what might stress them and how their
 best self responds, one thing to look forward to. The context is their planner: the about_me notes, recent days (yesterday's
 review, scores, priorities done or not, "one change for tomorrow", tomorrow's #1 they wrote last night), habits, workouts
@@ -305,7 +302,7 @@ const BRIEFHINTS_SCHEMA = {
   }, required: ['words', 'priorities', 'aGame', 'stress', 'stressResponse', 'excited'],
 };
 
-const TODOS_SYSTEM = `You are Coach Claude. The person just finished their Bed Brief from bed; turn it into today's to-do list — the list
+const TODOS_SYSTEM = `You are Arvy. The person just finished their Bed Brief from bed; turn it into today's to-do list — the list
 they will work through from now until dinner. Rules:
 - Start with their three priorities exactly as written (keep the wording), in order. Skip empty ones.
 - Then the concrete actions the other answers imply: who needs their A-game (the specific thing to do for that person),
@@ -324,7 +321,7 @@ they will work through from now until dinner. Rules:
   app marks priorities itself.`;
 const TODOS_SCHEMA = { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, time: { type: 'string' }, note: { type: 'string' }, priority: { type: 'integer', description: '0-2 when the item is one of the three priorities, verbatim' } }, required: ['text'] } } }, required: ['items'] };
 
-const EXINFO_SYSTEM = `You are Coach Claude. Explain one exercise or stretch to a near-40 beginner-intermediate lifter with light hip and knee
+const EXINFO_SYSTEM = `You are Arvy. Explain one exercise or stretch to a near-40 beginner-intermediate lifter with light hip and knee
 pain, for a phone screen. description: 2-3 sentences on what it is and what it works. setup: 3-5 short steps to perform it
 (positions, the movement, breathing). tip: ONE mind-muscle cue — what to feel and where, in one sentence. mistakes: 2-3 short
 common mistakes to avoid (knee/hip-friendly where relevant). Plain words, no headings.
@@ -532,7 +529,7 @@ Deno.serve(async req => {
       const found = await Promise.all(items.map(async it => {
         const list = await flippSearch(it.text.trim(), pc);
         const prefer = (m: string) => stores.some(s => m.toLowerCase().includes(s.toLowerCase())) ? 0 : 1;
-        // nearby/preferred stores first, then cheapest; cap the candidates Coach Claude has to read
+        // nearby/preferred stores first, then cheapest; cap the candidates Arvy has to read
         const flyer = list.filter(i => i.kind === 'flyer' && typeof i.current_price === 'number').sort((a, b) => prefer(a.merchant_name) - prefer(b.merchant_name) || (a.current_price! - b.current_price!)).slice(0, 20);
         const regular = list.filter(i => i.kind === 'regular').sort((a, b) => prefer(a.merchant_name) - prefer(b.merchant_name) || (a.current_price! - b.current_price!)).slice(0, 14);
         const cands = [...flyer, ...regular];

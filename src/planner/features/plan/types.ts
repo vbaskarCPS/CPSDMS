@@ -5,10 +5,10 @@ export interface Victory { wokeAt?: string; move: boolean; reflect: boolean; gro
 export interface Morning { excited: string; word: string; aGame: string; stress: string; stressResponse: string; appreciate: string; progress: string }
 export interface Project { name: string; steps: [string, string, string] }
 export interface Priority { text: string; done: boolean }
-/** The day's to-do list, built from the Brief (the three priorities first, pi = their index) plus what Coach Claude
+/** The day's to-do list, built from the Brief (the three priorities first, pi = their index) plus what Arvy
  *  and you add. time = optional HH:MM slot: that's the day plan. */
 export interface Todo { id: string; text: string; done: boolean; time?: string; from?: 'priority' | 'coach' | 'me'; pi?: number; note?: string; must?: boolean }
-// must = highlighted as a must-do. day.priorities (used by streaks, reviews, Coach Claude) is derived from the must items: syncPriorities()
+// must = highlighted as a must-do. day.priorities (used by streaks, reviews, Arvy) is derived from the must items: syncPriorities()
 export interface Slot { time: string; text: string }
 export interface Evening { appreciated: string; handledWell: string; learned: string; better: string; connected: string; coachNote: string }
 export type ScoreKey = 'clarity' | 'energy' | 'necessity' | 'productivity' | 'influence' | 'courage';

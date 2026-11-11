@@ -97,7 +97,7 @@
 
 .wo-lastnote--coach { color: var(--accent); font-style: normal; display: flex; gap: 6px; align-items: center; }
 
-/* the done panel: Coach Claude's two questions and tomorrow's session */
+/* the done panel: Arvy's two questions and tomorrow's session */
 .wo-qa { display: grid; gap: 10px; margin: 4px 0 12px; }
 .wo-qa__q b { display: block; font-size: 14px; margin-bottom: 6px; }
 .wo-qa__choices { display: flex; flex-wrap: wrap; gap: 6px; }

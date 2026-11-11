@@ -9,13 +9,16 @@
 // The planner token (planner_sign_in) is checked with planner_me; nothing runs without it. Deployed without JWT
 // verification because planner users have no Supabase account. Whose voice and which tools come from the account
 // (planner_me), not from what the app says.
-// Model: ARVY_MODEL secret, else a Sonnet-class model. Claude key: ANTHROPIC_API_KEY. Voice: GOOGLE_TTS_KEY
+// Arvy is the coach too: once a conversation has pulled the coaching context it gets the coaching rules, a longer
+// answer and the COACH_MODEL secret's model if set. Model otherwise: ARVY_MODEL secret, else a Sonnet-class model. Claude key: ANTHROPIC_API_KEY. Voice: GOOGLE_TTS_KEY
 // (else GOOGLE_API_KEY), voices ARVY_VOICE_MORNING / ARVY_VOICE_NIGHT.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { cleanMessages, speakable, system, toolsFor, voiceFor, type ArvyCtx, type Profile } from './tools.ts';
+import { cleanMessages, isCoaching, speakable, system, toolsFor, voiceFor, type ArvyCtx, type Profile } from './tools.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
 const FALLBACK = 'claude-sonnet-5-5';
+// coaching answers (the conversation has pulled the coaching context): the coach's model if one is set, and room for a session plan
+const COACH_MODEL = Deno.env.get('COACH_MODEL') || MODEL;
 const WORKSPACE = Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '';
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -27,16 +30,16 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 interface Me { id: string; username: string; display_name: string; settings?: Record<string, unknown> }
 const profileOf = (me: Me): Profile => (me.settings?.profile === 'morning' || (!me.settings?.profile && me.username === 'rosh') ? 'morning' : 'night');
 
-async function claude(sys: string, messages: unknown[], tools: unknown[]): Promise<{ content: unknown[]; stop_reason: string }> {
+async function claude(sys: string, messages: unknown[], tools: unknown[], coaching = false): Promise<{ content: unknown[]; stop_reason: string }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
-  let model = MODEL; let res: Response | null = null; let data: Record<string, unknown> = {};
+  let model = coaching ? COACH_MODEL : MODEL; let res: Response | null = null; let data: Record<string, unknown> = {};
   for (let attempt = 0; attempt < 3; attempt++) {
     res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-      body: JSON.stringify({ model, max_tokens: 1200, system: sys, messages, tools }),
-      signal: AbortSignal.timeout(60000),
+      body: JSON.stringify({ model, max_tokens: coaching ? 3000 : 1200, system: sys, messages, tools }),
+      signal: AbortSignal.timeout(coaching ? 110000 : 60000),
     });
     data = await res.json().catch(() => ({}));
     if (res.ok) break;
@@ -95,8 +98,10 @@ Deno.serve(async req => {
       name: (user.display_name || user.username).split(/\s+/)[0], username: user.username, profile,
       today: /^\d{4}-\d{2}-\d{2}$/.test(String(c.today)) ? c.today : undefined, weekday: String(c.weekday || '').slice(0, 12),
       now: String(c.now || '').slice(0, 12), path: String(c.path || '/').slice(0, 60), spoken: !!c.spoken, units: c.units === 'kg' ? 'kg' : 'lb',
+      about: Array.isArray(c.about) ? c.about.slice(-25).map(n => String(n).replace(/\s+/g, ' ').slice(0, 300)).filter(Boolean) : undefined,
     };
-    const out = await claude(system(ctx), messages, toolsFor(profile));
+    const coaching = isCoaching(messages);
+    const out = await claude(system(ctx, coaching), messages, toolsFor(profile), coaching);
     return json(out);
   } catch (e) {
     console.error('planner-arvy:', action, e instanceof Error ? e.message : String(e));
