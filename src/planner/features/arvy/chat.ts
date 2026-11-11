@@ -7,6 +7,21 @@ import { isDemo } from '../../lib/app';
 import type { ChatLine } from './arvy';
 
 export const KEEP = 60;
+/** How many of the latest questions with pictures keep their small previews when the chat is saved. */
+export const KEEP_THUMBS = 6;
+/** The chat as it's saved: the previews of pictures are kept for the latest few questions that had any; older ones
+ *  keep only how many pictures there were. */
+export function lean(lines: ChatLine[], keep = KEEP_THUMBS): ChatLine[] {
+  let left = keep;
+  const out = lines.slice();
+  for (let i = out.length - 1; i >= 0; i--) {
+    const p = out[i].pics;
+    if (!p?.thumbs?.length) continue;
+    if (left > 0) { left--; continue; }
+    out[i] = { ...out[i], pics: { n: p.n } };
+  }
+  return out;
+}
 interface ChatDoc { lines: ChatLine[]; from_coach?: number; updatedAt: string }
 
 /** The Coach chat's messages as Arvy chat lines (marked `old`: carried over, not said to Arvy). */
@@ -55,5 +70,5 @@ export async function flushChat(): Promise<void> {
   if (timer) { clearTimeout(timer); timer = null; }
   const lines = waiting; waiting = null;
   if (!lines) return;
-  try { await putDoc('arvychat', 'current', { lines: lines.slice(-KEEP), updatedAt: new Date().toISOString() } satisfies ChatDoc); } catch { /* next change tries again */ }
+  try { await putDoc('arvychat', 'current', { lines: lean(lines.slice(-KEEP)), updatedAt: new Date().toISOString() } satisfies ChatDoc); } catch { /* next change tries again */ }
 }
