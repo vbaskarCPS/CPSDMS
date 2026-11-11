@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-11-pictures", "date": "2026-11-11", "title": "Send Arvy a screenshot of an appointment",
+    "lines": ["Paste a screenshot into Arvy’s chat, or tap the picture button beside the message box, and send it. No words needed.", "Arvy reads the appointment off it and sets it up for the calendar: tap Confirm and it’s on.", "Works for a text, an email, a booking page, a flyer or a school letter, several appointments at once, and long scrolling screenshots.", "In your chat with each other you can paste pictures now too."] },
   { "id": "2026-11-11-stickers", "date": "2026-11-11", "title": "Stickers in your chat",
     "lines": ["Tap the smiley beside the message box: our own little moving stickers for Halloween, Diwali, Christmas, New Year, Valentine’s Day, Easter and birthdays.", "The occasion coming up next is always first, with a countdown.", "Put your birthdays on the calendar as yearly events and they count down there too."] },
   { "id": "2026-11-11-icon", "date": "2026-11-11", "title": "A new small notification icon",

@@ -3,6 +3,8 @@
 // go back, until Claude answers. Past questions are sent as plain text (tools are looked up fresh each time).
 // Once a question has read something from outside the planner (the web, GoodLife's class timetable), every change it
 // sets up waits for a Confirm tap, and where it read is linked under the reply.
+// A question can come with pictures (a screenshot of an appointment: pics.ts). They count as outside the planner too:
+// what Arvy sets up from one always waits for Confirm.
 import { invoke } from '../../lib/ai';
 import { dayKey } from '../../lib/docs';
 import { isDemo, profileOf } from '../../lib/app';
@@ -15,6 +17,7 @@ import { logArvy } from './log';
 import { memoryContext } from '../../lib/memory';
 import { changeOf, speakable, TOOLS_VERSION, type Block, type Msg, type Source } from '../../../../supabase/functions/planner-arvy/tools';
 import { gymPageUrl } from '../../../../supabase/functions/planner-arvy/gym';
+import type { Pic } from './pics';
 
 /** A change shown under Arvy's reply. done: made (Undo while this visit lasts); waiting: Confirm/Cancel. */
 export type ChangeState = 'done' | 'waiting' | 'cancelled' | 'undone' | 'failed' | 'expired';
@@ -22,6 +25,7 @@ export interface ChangeView { id: string; lines: string[]; state: ChangeState; e
 /** A button under a reply: tapping it sends `send` (or the label) as their next message. */
 export interface Choice { label: string; send?: string }
 export interface ChatLine { role: 'user' | 'assistant'; text: string; at: string; used?: string[]; changes?: ChangeView[]; down?: boolean /* thumbs-down given */;
+  pics?: { n: number; thumbs?: string[] } /* pictures sent with it: how many, and small previews (kept for the latest few: chat.ts lean) */;
   old?: boolean /* carried over from the Coach chat (chat.ts) */;
   sources?: Source[] /* the web pages the reply cites */; choices?: Choice[] /* buttons to pick from */ }
 export interface Turn { reply: string; navigate?: string; used: string[]; changes: ChangeView[]; sources?: Source[]; choices?: Choice[] }
@@ -190,13 +194,29 @@ async function aboutMe(): Promise<string[]> {
   try { return (await memoryContext(25)).map(n => `${n.date}: ${n.note}`.slice(0, 300)); } catch { return []; }
 }
 
+// ── pictures sent with a question ──
+/** What a question says when it's a picture and nothing else. */
+export const PIC_ONLY = '(no words: just the picture)';
+const withPics = (pics: Pic[], text: string): Block[] => [...pics.map(p => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: p.media_type, data: p.data } })), { type: 'text' as const, text }];
+const picNote = (n: number) => `\n[${n === 1 ? 'A picture' : `${n} pictures`} came with this. You can’t see ${n === 1 ? 'it' : 'them'} any more: if you need to look again, ask them to send ${n === 1 ? 'it' : 'them'} again.]`;
+// The pictures of the last question that had any, for this visit only (they aren't saved with the chat): the very
+// next question still sees them ("look again, it says the 14th").
+let lastPics: { at: string; pics: Pic[] } | null = null;
+const picsOf = (l: ChatLine): Pic[] | undefined => (lastPics && l.role === 'user' && l.at === lastPics.at ? lastPics.pics : undefined);
+
 /** The earlier conversation as Claude messages: text only, last 12 lines, starting with a question. What they asked
  *  carries when it was sent (so "tomorrow" in an old exchange isn't read as tomorrow from now), and each change Arvy
- *  set up carries what became of it, the outcome first. */
-export function history(lines: ChatLine[]): Msg[] {
-  const out: Msg[] = lines.slice(-12).filter(l => l.text.trim()).map(l => ({ role: l.role,
-    content: ((l.role === 'user' && sentAt(l.at) ? `[${sentAt(l.at)}] ` : '') + l.text
-      + (l.changes?.length ? l.changes.map(c => `\n[Change: ${stateWords[c.state]}. ${c.lines.join(' ')}]`).join('') : '')).slice(0, 3000) }));
+ *  set up carries what became of it, the outcome first. A question that came with pictures says so; the pictures
+ *  themselves go again only for the question just before this one, and only while `pics` still has them. */
+export function history(lines: ChatLine[], pics: (l: ChatLine) => Pic[] | undefined = () => undefined): Msg[] {
+  const recent = lines.slice(-12).filter(l => l.text.trim() || (l.role === 'user' && l.pics?.n));
+  const out: Msg[] = recent.map((l, i) => {
+    const text = ((l.role === 'user' && sentAt(l.at) ? `[${sentAt(l.at)}] ` : '') + (l.text.trim() ? l.text : PIC_ONLY)
+      + (l.changes?.length ? l.changes.map(c => `\n[Change: ${stateWords[c.state]}. ${c.lines.join(' ')}]`).join('') : '')).slice(0, 3000);
+    if (l.role !== 'user' || !l.pics?.n) return { role: l.role, content: text };
+    const again = i >= recent.length - 2 ? pics(l) : undefined;
+    return { role: l.role, content: again?.length ? withPics(again, text) : text + picNote(l.pics.n) };
+  });
   while (out.length && out[0].role !== 'user') out.shift();
   // two in a row from the same side (an error left a question unanswered): keep the later one
   return out.filter((m, i) => !(out[i + 1] && out[i + 1].role === m.role));
@@ -216,13 +236,17 @@ export function choicesFrom(input: unknown): Choice[] {
   return out.length >= 2 ? out : [];
 }
 
-/** Ask Arvy. `onStep` says which tools are running, for the "looking at…" line. */
-export async function ask(lines: ChatLine[], question: string, path: string, spoken: boolean, onStep?: (tools: string[]) => void): Promise<Turn> {
+/** Ask Arvy. `onStep` says which tools are running, for the "looking at…" line. `sent` = the pictures that came with
+ *  the question (and when it was asked, as its line in the chat has it). */
+export async function ask(lines: ChatLine[], question: string, path: string, spoken: boolean, onStep?: (tools: string[]) => void, sent?: { pics: Pic[]; at: string }): Promise<Turn> {
   const changes: ChangeView[] = [];
-  if (isDemo()) return demoTurn(question, changes);
+  const pics = sent?.pics || [];
+  if (isDemo()) return pics.length ? { reply: 'Pictures aren’t read in the demo. In your own planner, send me a screenshot of an appointment and I’ll set it up on the calendar.', used: [], changes } : demoTurn(question, changes);
   // "what's new?": the planner's release notes ride along with the question (they aren't shown in the chat)
   const profile = profileOf(getPass()?.user.settings);
-  const msgs: Msg[] = [...history(lines), { role: 'user', content: asksWhatsNew(question) ? `${question}\n\n${newsNote(profile)}` : question }];
+  const words = !question.trim() ? PIC_ONLY : asksWhatsNew(question) ? `${question}\n\n${newsNote(profile)}` : question;
+  const msgs: Msg[] = [...history(lines, picsOf), { role: 'user', content: pics.length ? withPics(pics, words) : words }];
+  if (sent && pics.length) lastPics = { at: sent.at, pics };
   const ctx = { ...context(path, spoken), about: await aboutMe() };
   const used: string[] = [];
   let navigate: string | undefined;
@@ -230,7 +254,8 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   const found: Source[] = [];     // the pages the searches turned up: shown when the answer cites none
   let choices: Choice[] = [];     // buttons to pick from (offer_choices)
   let searched = false;           // the web was searched in this question…
-  let outside = false;            // …or something else outside the planner was read: from then on every change waits for Confirm
+  // …or something else outside the planner was read (a picture they sent counts from the start): from then on every change waits for Confirm
+  let outside = msgs.some(m => Array.isArray(m.content) && m.content.some(b => b.type === 'image'));
   const keep = (to: Source[], from?: Source[]) => { for (const s of from || []) if (/^https?:\/\//i.test(s?.url || '') && !to.some(x => x.url === s.url) && to.length < 6) to.push({ url: s.url, title: String(s.title || '') }); };
   // one link a site (two pages of the same site would show as the same name twice); found pages only when none is cited
   const site = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };

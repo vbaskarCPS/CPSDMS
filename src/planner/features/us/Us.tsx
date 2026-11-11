@@ -11,6 +11,7 @@ import { STICKERS, Sticker, stickerOf, stickerText, type StickerDef } from './st
 import { getPass } from '../../lib/auth';
 import { enablePush, pushState, type PushState } from '../../lib/push';
 import { setArvyOpen } from '../arvy/arvy';
+import { imagesFrom } from '../arvy/pics';
 import { canConfirm, type ChatMsg, type Proposal } from '../../../../supabase/functions/planner-chat/chat';
 import { answer, filesProblem, mediaUrl, onUs, otherName, say, setUsOpen, usIsOpen, usLoaded, usRows, usVersion, type Row } from './us';
 import '../arvy/arvy.css';
@@ -110,6 +111,14 @@ export function Us() {
   const occasions = useMemo(() => upcoming(calendarKey(), birthdays || []), [birthdays, tray]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (open) void pushState().then(setPush); }, [open]);
+  // a picture pasted while the chat is open (a screenshot on the clipboard) is added like one chosen with the button
+  const pasted = useRef<(list: File[]) => void>(() => undefined);
+  useEffect(() => {
+    if (!open) return;
+    const onPaste = (e: ClipboardEvent) => { const list = imagesFrom(e.clipboardData); if (!list.length) return; e.preventDefault(); pasted.current(list); };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [open]);
   // the newest message stays in view: when one arrives, and when Arvy's offer lands under the last one
   const last = rows[rows.length - 1]?.msg;
   const tail = `${rows.length}:${last?.arvy?.state || ''}:${last?.arvy?.proposals?.length || 0}`;
@@ -137,6 +146,7 @@ export function Us() {
     if (problem) { setError(problem); return; }
     setError(null); setFiles(all);
   };
+  pasted.current = pick;
   const turnOn = async () => {
     try { await enablePush(); } catch (e) { setError(e instanceof Error ? e.message : 'That didn’t work.'); }
     void pushState().then(setPush);

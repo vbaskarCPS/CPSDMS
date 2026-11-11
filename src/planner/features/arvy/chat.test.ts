@@ -6,7 +6,7 @@ vi.mock('../../lib/docs', () => ({
   getDoc: async (kind: string, key: string) => structuredClone(store.get(`${kind}|${key}`) ?? null),
   putDoc: async (kind: string, key: string, data: unknown) => { store.set(`${kind}|${key}`, structuredClone(data)); },
 }));
-const { fromCoach, loadChat, newer, saveChat, flushChat, KEEP } = await import('./chat');
+const { fromCoach, lean, loadChat, newer, saveChat, flushChat, KEEP, KEEP_THUMBS } = await import('./chat');
 
 const coach = { messages: [
   { role: 'user', content: 'Plan my next session', at: '2026-11-09T22:00:00.000Z' },
@@ -53,5 +53,24 @@ describe('Arvy’s chat history', () => {
     expect(newer(b, a)).toBe(b);
     expect(newer([], a)).toBe(a);
     expect(newer(a, [])).toBe(a);
+  });
+});
+
+describe('pictures in the saved chat', () => {
+  const line = (i: number, thumbs?: string[]) => ({ role: 'user' as const, text: `q${i}`, at: `2026-11-11T20:${String(i).padStart(2, '0')}:00.000Z`, ...(thumbs ? { pics: { n: thumbs.length, thumbs } } : {}) });
+  it('keeps the small previews for the latest few questions with pictures; older ones keep only the count', () => {
+    const lines = Array.from({ length: 10 }, (_, i) => line(i, i % 2 ? undefined : ['data:image/jpeg;base64,AA', 'data:image/jpeg;base64,BB']));
+    const out = lean(lines, 3);
+    expect(out.map(l => (l.pics ? (l.pics.thumbs ? 'thumbs' : `count ${l.pics.n}`) : '-'))).toEqual(['count 2', '-', 'count 2', '-', 'thumbs', '-', 'thumbs', '-', 'thumbs', '-']);
+    expect(lines[0].pics?.thumbs).toHaveLength(2);   // the chat on screen isn't touched
+    expect(KEEP_THUMBS).toBeGreaterThan(0);
+  });
+  it('is what gets saved', async () => {
+    store.set('arvychat|current', { lines: [], updatedAt: 'x' });
+    saveChat(Array.from({ length: KEEP_THUMBS + 2 }, (_, i) => line(i, ['data:image/jpeg;base64,AA'])));
+    await flushChat();
+    const saved = (store.get('arvychat|current') as { lines: { pics?: { n: number; thumbs?: string[] } }[] }).lines;
+    expect(saved.filter(l => l.pics?.thumbs).length).toBe(KEEP_THUMBS);
+    expect(saved.slice(0, 2).map(l => l.pics)).toEqual([{ n: 1 }, { n: 1 }]);
   });
 });

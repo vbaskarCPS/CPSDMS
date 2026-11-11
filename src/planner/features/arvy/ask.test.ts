@@ -16,7 +16,7 @@ vi.mock('./act', () => ({
   Refuse: class extends Error {},
   prepare: vi.fn(async (_name: string, input: { items?: { text: string }[] }) => ({ lines: [`Shopping list: add ${input.items?.map(i => i.text).join(', ')}`], kinds: ['shop'], apply })),
 }));
-const { ask, choicesFrom, NO_CONNECTION, RETRY_WAIT } = await import('./arvy');
+const { ask, choicesFrom, NO_CONNECTION, PIC_ONLY, RETRY_WAIT } = await import('./arvy');
 RETRY_WAIT.ms = 0;
 
 const SEARCH = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'banana bread recipe' } };
@@ -110,6 +110,50 @@ describe('asking Arvy', () => {
     expect(t.used).toEqual(['add_shopping_items']);
     expect(t.sources).toBeUndefined();
     expect(t.choices).toBeUndefined();
+  });
+});
+
+describe('a question with a picture', () => {
+  const PIC = { media_type: 'image/jpeg', data: 'QUJD' };
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'QUJD' } };
+  const last = (call: number) => { const m = invoke.mock.calls[call][0].messages; return m[m.length - 1]; };
+  it('the picture goes first, then the words; with no words it says so', async () => {
+    invoke.mockResolvedValue({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'It’s a dentist appointment.' }] });
+    await ask([], 'what’s this?', '/', false, undefined, { pics: [PIC, PIC], at: '2026-11-11T21:00:00.000Z' });
+    expect(last(0)).toEqual({ role: 'user', content: [image, image, { type: 'text', text: 'what’s this?' }] });
+    await ask([], '', '/', false, undefined, { pics: [PIC], at: '2026-11-11T21:01:00.000Z' });
+    expect(last(1)).toEqual({ role: 'user', content: [image, { type: 'text', text: PIC_ONLY }] });
+    await ask([], 'no picture this time', '/', false);
+    expect(last(2)).toEqual({ role: 'user', content: 'no picture this time' });
+  });
+  it('a change set up from a picture waits for Confirm, even one that would normally just happen', async () => {
+    invoke.mockResolvedValueOnce({ stop_reason: 'tool_use', content: [{ type: 'text', text: 'That’s a shopping list.' }, add('t1')] })
+      .mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Tap Confirm to add them.' }] });
+    const t = await ask([], 'add these', '/shop', false, undefined, { pics: [PIC], at: '2026-11-11T21:02:00.000Z' });
+    expect(t.changes).toMatchObject([{ state: 'waiting', lines: ['Shopping list: add Bananas'] }]);
+    expect(apply).not.toHaveBeenCalled();
+    // the picture is still there on the second step of the same question
+    expect(invoke.mock.calls[1][0].messages[0].content[0]).toEqual(image);
+  });
+  it('the very next question still sees the picture and still waits for Confirm; the one after that is told there was one', async () => {
+    const at = '2026-11-11T21:03:00.000Z';
+    invoke.mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Dentist, Thursday at 3.' }] });
+    await ask([], '', '/', false, undefined, { pics: [PIC], at });
+    const lines = [{ role: 'user' as const, text: '', at, pics: { n: 1 } }, { role: 'assistant' as const, text: 'Dentist, Thursday at 3.', at: '2026-11-11T21:03:10.000Z' }];
+    invoke.mockResolvedValueOnce({ stop_reason: 'tool_use', content: [add('t1')] }).mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Tap Confirm.' }] });
+    const t = await ask(lines, 'add floss to the list too', '/', false);
+    const first = invoke.mock.calls[1][0].messages[0];
+    expect(first.content[0]).toEqual(image);
+    expect(first.content[1].text).toMatch(/\(no words: just the picture\)$/);
+    expect(t.changes[0].state).toBe('waiting');
+    // two exchanges later the picture is no longer sent: a note stands in for it, and changes go back to normal
+    const later = [...lines, { role: 'user' as const, text: 'add floss to the list too', at: '2026-11-11T21:04:00.000Z' }, { role: 'assistant' as const, text: 'Tap Confirm.', at: '2026-11-11T21:04:10.000Z' }];
+    invoke.mockResolvedValueOnce({ stop_reason: 'tool_use', content: [add('t2')] }).mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Added!' }] });
+    const t2 = await ask(later, 'and bananas', '/', false);
+    const again = invoke.mock.calls[3][0].messages[0];
+    expect(typeof again.content).toBe('string');
+    expect(again.content).toMatch(/\[A picture came with this\. You can’t see it any more/);
+    expect(t2.changes[0].state).toBe('done');
   });
 });
 

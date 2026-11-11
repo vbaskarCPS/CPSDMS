@@ -4,6 +4,8 @@
 //        → { content: [text | tool_use blocks], stop_reason, web?: { searches, sources, found }, raw? }
 //        One step of the conversation. When Claude wants a tool, the app runs it (the planner's data and the code that
 //        reads it live in the app), sends the results back as the next turn, and so on until there's an answer.
+//        A question can come with pictures (a screenshot of an appointment): image blocks in what they sent, read by
+//        Claude and kept nowhere. Arvy is then told how to read one, and the app holds every change for Confirm.
 //        The web is the one tool that runs here (Anthropic searches, inside the same call): `web` says what was
 //        searched, which pages the answer cites and which the search found, and `raw` is the step as Claude wrote it, for the app to send back
 //        when the question isn't finished (tools.ts webOut).
@@ -22,7 +24,7 @@
 // (else GOOGLE_API_KEY), voices ARVY_VOICE_MORNING / ARVY_VOICE_NIGHT.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { gymClassesFrom, gymClubsFor, gymFeedUrl, type GymClass, type GymClubClasses } from './gym.ts';
-import { canWeb, cleanMessages, contextText, DAYPLAN_SCHEMA, dayplanSystem, isCoaching, speakable, system, toolsFor, voiceFor, webOut, webRaw, WEB_SEARCH, type ArvyCtx, type Profile } from './tools.ts';
+import { canWeb, cleanMessages, contextText, DAYPLAN_SCHEMA, dayplanSystem, hasPictures, isCoaching, speakable, system, toolsFor, voiceFor, webOut, webRaw, WEB_SEARCH, type ArvyCtx, type Profile } from './tools.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
 const FALLBACK = 'claude-sonnet-5-5';
@@ -45,8 +47,9 @@ class WebOff extends Error { constructor(msg: string, readonly off: boolean) { s
 let webOff = false;   // found switched off once: not offered again until this function restarts
 
 /** `web` = the web search tool is in `tools`: searching and reading take longer, and a long search can come back
- *  paused (stop_reason pause_turn), which is carried on here until there's an answer or a tool for the app. */
-async function claude(sys: string, messages: unknown[], tools: unknown[], coaching = false, web = false): Promise<{ content: unknown[]; stop_reason: string }> {
+ *  paused (stop_reason pause_turn), which is carried on here until there's an answer or a tool for the app.
+ *  `pictures` = the question came with pictures: reading them takes longer, and a page of appointments is several events. */
+async function claude(sys: string, messages: unknown[], tools: unknown[], coaching = false, web = false, pictures = false): Promise<{ content: unknown[]; stop_reason: string }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
   let model = coaching ? COACH_MODEL : MODEL;
@@ -57,8 +60,8 @@ async function claude(sys: string, messages: unknown[], tools: unknown[], coachi
       res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-        body: JSON.stringify({ model, max_tokens: coaching ? 3000 : web ? 1800 : 1200, system: sys, messages: said.length ? [...messages, { role: 'assistant', content: said }] : messages, tools }),
-        signal: AbortSignal.timeout(coaching || web ? 110000 : 60000),
+        body: JSON.stringify({ model, max_tokens: coaching ? 3000 : pictures ? 2400 : web ? 1800 : 1200, system: sys, messages: said.length ? [...messages, { role: 'assistant', content: said }] : messages, tools }),
+        signal: AbortSignal.timeout(coaching || web || pictures ? 110000 : 60000),
       });
       data = await res.json().catch(() => ({}));
       if (res.ok) break;
@@ -215,16 +218,17 @@ Deno.serve(async req => {
     let messages = cleanMessages(b.messages, profile, web);
     if (!messages) return json({ error: 'Nothing to answer' }, 400);
     const coaching = isCoaching(messages);
+    const pictures = hasPictures(messages);
     let out: { content: unknown[]; stop_reason: string };
     try {
-      out = await claude(system(ctx, coaching, web), messages, web ? [...toolsFor(profile, ctx.v), WEB_SEARCH] : toolsFor(profile, ctx.v), coaching, web);
+      out = await claude(system(ctx, coaching, web, pictures), messages, web ? [...toolsFor(profile, ctx.v), WEB_SEARCH] : toolsFor(profile, ctx.v), coaching, web, pictures);
     } catch (e) {
       if (!(e instanceof WebOff)) throw e;
       console.error(`planner-arvy: answering without the web (${e.off ? 'switched off for this Anthropic account' : 'this request was refused'}):`, e.message);
       if (e.off) webOff = true;
       web = false;
       messages = cleanMessages(b.messages, profile, false) || messages;
-      out = await claude(system(ctx, coaching, false), messages, toolsFor(profile, ctx.v), coaching);
+      out = await claude(system(ctx, coaching, false, pictures), messages, toolsFor(profile, ctx.v), coaching, false, pictures);
     }
     if (!web) return json(out);
     const shown = webOut(out.content);
