@@ -1,4 +1,7 @@
 [
+  { "id": "2026-11-11-notifications", "date": "2026-11-11", "title": "Tidier notifications, and a check for them",
+    "lines": ["Several chat messages in a row now show as one notification that lists them, not just the last one.", "The planner has its own small icon in the status bar.",
+              "Settings › Reminders › Check notifications says where they stop if none arrive, and what to change on the phone."] },
   { "id": "2026-11-11-chat", "date": "2026-11-11", "title": "A chat for the two of you, with Arvy reading along",
     "lines": ["Drag RV up and let go to the right for your chat with each other. Up and to the left is Arvy, as before. There’s also a chat button at the top of Arvy’s panel.",
               "Send words, photos and short videos. A red dot on RV means there’s something new.",

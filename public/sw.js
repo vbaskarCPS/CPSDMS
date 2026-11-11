@@ -44,6 +44,8 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('message', e => {
   if (e.data === 'skipWaiting') self.skipWaiting();
+  // the planner's "Check notifications" asks whether this worker tells the page when a push arrives (older ones don't)
+  if (e.data && e.data.type === 'push-check' && e.source) e.source.postMessage({ type: 'push-check', ok: true });
 });
 
 async function currentCacheName() {
@@ -114,17 +116,41 @@ self.addEventListener('fetch', e => {
 });
 
 // ── push notifications ──
+// The planner's notifications (its pushes carry the planner's own icon) get a proper small icon for the status
+// bar, and its chat messages stack: several from the same person while the phone wasn't looked at become one
+// notification that lists them (newest last, the last five), not one that keeps replacing itself.
+const PLANNER_ICON = /^\/(vijayplanner|roshplanner)\//;
+async function showPush(d) {
+  const planner = PLANNER_ICON.test(d.icon || '');
+  let title = d.title || 'Property Stars', body = d.body || '';
+  const data = { url: d.url || '/app' };
+  if (planner && d.tag === 'chat') {
+    const before = (await self.registration.getNotifications({ tag: 'chat' }).catch(() => []))[0];
+    const same = before && before.data && before.data.from === title;
+    data.from = title;
+    data.lines = [...(same ? before.data.lines || [] : []), body].slice(-5);
+    data.count = (same ? before.data.count || 1 : 0) + 1;
+    if (data.count > 1) { body = data.lines.join('\n'); title = `${title} · ${data.count} messages`; }
+  }
+  return self.registration.showNotification(title, {
+    body,
+    icon: d.icon || '/icon-192.png',     // the planner sends its own icon
+    badge: d.badge || (planner ? '/planner-badge.png' : d.icon || '/icon-192.png'),
+    tag: d.tag || undefined,
+    renotify: !!d.tag,
+    ...(planner ? { timestamp: Date.now(), vibrate: [70, 50, 70] } : {}),
+    data,
+  });
+}
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = { title: 'Property Stars', body: e.data ? e.data.text() : '' }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'Property Stars', {
-    body: d.body || '',
-    icon: d.icon || '/icon-192.png',     // the planner sends its own icon
-    badge: d.badge || d.icon || '/icon-192.png',
-    tag: d.tag || undefined,
-    renotify: !!d.tag,
-    data: { url: d.url || '/app' },
-  }));
+  // any open page hears that a push arrived: the planner's "Check notifications" waits for this to tell a push that
+  // never reached the phone from one that arrived and wasn't shown
+  const told = self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    .then(cs => { for (const c of cs) c.postMessage({ type: 'push-arrived', tag: d.tag || '' }); })
+    .catch(() => {});
+  e.waitUntil(Promise.all([showPush(d), told]));
 });
 
 self.addEventListener('notificationclick', e => {
