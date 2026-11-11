@@ -4,7 +4,8 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { getPass, onPassChange, refreshMe, type PlannerPass } from './lib/auth';
-import { isDemo, profileOf } from './lib/app';
+import { appBase, isDemo, profileOf } from './lib/app';
+import { movePush } from './lib/push';
 import { Tour } from './demo/Tour';
 import { setProfile } from './lib/routine';
 import { Shell } from './ui/Shell';
@@ -53,6 +54,19 @@ export function PlannerApp() {
   }, [pass?.user.id, profile]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => onPassChange(setPass), []);
+  // notifications: a phone that turned them on before the planner had its own notification worker is moved over to
+  // it (so they come from the Planner app, not from Chrome), and a tapped notification says where to go
+  useEffect(() => { if (pass) void movePush(); }, [pass?.token]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const on = (e: MessageEvent) => {
+      if (e.data?.type !== 'planner-open' || typeof e.data.url !== 'string') return;
+      const path = e.data.url.startsWith(appBase()) ? e.data.url.slice(appBase().length) || '/' : '/';
+      nav(path);
+    };
+    navigator.serviceWorker.addEventListener('message', on);
+    return () => navigator.serviceWorker.removeEventListener('message', on);
+  }, [nav]);
   // the routine's defaults follow the signed-in person's profile (night: Vijay, morning: Rosh)
   useEffect(() => { setProfile(profileOf(pass?.user.settings)); }, [pass?.user.settings?.profile]); // eslint-disable-line react-hooks/exhaustive-deps
   // once per open: make sure the server still knows this pass, and pick up settings changed elsewhere
