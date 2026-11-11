@@ -1,5 +1,5 @@
 // One question to Arvy, start to finish (arvy.ts ask): answers that searched the web, buttons to pick from, and
-// changes that wait for Confirm once the web has been read.
+// changes that wait for Confirm once the web (or the gym's timetable) has been read.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const invoke = vi.fn();
@@ -10,7 +10,8 @@ vi.mock('../../lib/auth', () => ({ getPass: () => ({ user: { username: 'vijay', 
 vi.mock('../../lib/docs', () => ({ dayKey: () => '2026-11-11', docsChanged: vi.fn() }));
 vi.mock('../../lib/memory', () => ({ memoryContext: async () => [] }));
 vi.mock('./log', () => ({ logArvy: vi.fn(async () => undefined) }));
-vi.mock('./run', () => ({ runTool: vi.fn(async () => ({ result: { shown: true } })) }));
+const GYM = { title: 'GoodLife class schedule: Hamilton Queenston Place', url: 'https://www.goodlifefitness.com/class-schedule.html?club=201' };
+vi.mock('./run', () => ({ runTool: vi.fn(async (name: string) => (name === 'gym_classes' ? { result: { clubs: [] }, sources: [GYM] } : { result: { shown: true } })) }));
 vi.mock('./act', () => ({
   Refuse: class extends Error {},
   prepare: vi.fn(async (_name: string, input: { items?: { text: string }[] }) => ({ lines: [`Shopping list: add ${input.items?.map(i => i.text).join(', ')}`], kinds: ['shop'], apply })),
@@ -35,7 +36,7 @@ describe('asking Arvy', () => {
     expect(t.sources).toEqual([{ title: 'Banana bread', url: 'https://bake.example/banana' }]);
     expect(t.choices).toEqual([{ label: '1. Gentle', send: 'Build option 1' }, { label: '2. Core' }]);
     expect(t.used).toEqual(['web_search']);
-    expect(invoke.mock.calls[0][0].context.v).toBe(4);
+    expect(invoke.mock.calls[0][0].context.v).toBe(5);
   });
   it('a reply that cites nothing still shows the pages the search found; cited pages win when there are any', async () => {
     const FOUND = [1, 2, 3, 4, 5].map(i => ({ title: `Page ${i}`, url: `https://site${i}.example/` }));
@@ -83,6 +84,21 @@ describe('asking Arvy', () => {
     const t = await ask([], 'find a recipe, check my list, add what’s missing', '/shop', false);
     expect(t.changes[0].state).toBe('waiting');
     expect(apply).not.toHaveBeenCalled();
+  });
+  it('class times read from GoodLife: the timetable is linked under the reply, and a change set up after it waits for Confirm', async () => {
+    const steps: string[][] = [];
+    invoke.mockResolvedValueOnce({ stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'g1', name: 'gym_classes', input: { search: 'yoga' } }] })
+      .mockResolvedValueOnce({ stop_reason: 'tool_use', content: [{ type: 'text', text: 'Yoga is at 7:45.' }, add('t1')] })
+      .mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Tap Confirm.' }] });
+    const t = await ask([], 'when is yoga at Queenston? add a mat to the list', '/health', false, s => steps.push(s));
+    expect(steps).toEqual([['gym_classes'], ['add_shopping_items']]);
+    expect(t.used).toEqual(['gym_classes', 'add_shopping_items']);
+    expect(t.sources).toEqual([GYM]);
+    expect(t.changes).toMatchObject([{ state: 'waiting' }]);
+    expect(apply).not.toHaveBeenCalled();
+    // what the timetable said went back to Arvy as that tool's answer
+    const sent = (invoke.mock.calls[2][0].messages as { content: unknown }[]).flatMap(m => (Array.isArray(m.content) ? m.content : []));
+    expect(sent).toContainEqual({ type: 'tool_result', tool_use_id: 'g1', content: '{"clubs":[]}' });
   });
   it('with no search, the same change is made straight away, as before', async () => {
     invoke.mockResolvedValueOnce({ stop_reason: 'tool_use', content: [add('t1')] })

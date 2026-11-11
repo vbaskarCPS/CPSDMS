@@ -1,9 +1,12 @@
 // src/planner/features/arvy/run.ts — Arvy's tools, run in the app with the same functions the screens use.
 // Each returns a compact summary (what Claude reads); open_screen also asks the panel to navigate.
 // The tool list itself (names, descriptions) is in supabase/functions/planner-arvy/tools.ts, shared with the server.
+// One tool reads something outside the planner: gym_classes asks the server for GoodLife's class timetable (a browser
+// can't read GoodLife's site) and makes the answer here (supabase/functions/planner-arvy/gym.ts).
 import { dayKey, getDoc, getDocs } from '../../lib/docs';
 import { addMemory } from '../../lib/memory';
 import { getPass } from '../../lib/auth';
+import { invoke } from '../../lib/ai';
 import { lifeContext } from '../../lib/lifeContext';
 import { logArvy } from './log';
 import { adjustWords, blocks, cleanAdjust, clock, loadRoutine } from '../../lib/routine';
@@ -20,10 +23,12 @@ import type { Period, CyclePrefs, DayLog } from '../cycle/types';
 import { DEFAULT_PREFS as CYCLE_DEFAULTS } from '../cycle/types';
 import { today as cycleToday } from '../cycle/predict';
 import type { Template, Workout } from '../workout/types';
-import { SCREENS } from '../../../../supabase/functions/planner-arvy/tools';
+import { SCREENS, type Source } from '../../../../supabase/functions/planner-arvy/tools';
+import { GYM_CLUBS, gymAnswer, gymClubsFor, gymPageUrl, type GymClubClasses } from '../../../../supabase/functions/planner-arvy/gym';
 
 type AnyDoc = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-export interface ToolOut { result: unknown; navigate?: string; error?: boolean }
+/** `sources` = where an answer from outside the planner came from: a link shown under Arvy's reply. */
+export interface ToolOut { result: unknown; navigate?: string; error?: boolean; sources?: Source[] }
 
 const isDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 const shift = (key: string, n: number) => { const [y, m, d] = key.split('-').map(Number); const dt = new Date(y, m - 1, d + n); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`; };
@@ -212,6 +217,23 @@ async function cycle() {
   };
 }
 
+/** Class times at their GoodLife clubs. The server fetches each club's week; which days, which classes and the ones
+ *  already started are worked out here, on their clock. A timetable that can't be read at any club is an error (it
+ *  goes in the improvements log); a day GoodLife hasn't published yet isn't. */
+async function gymClasses(input: AnyDoc): Promise<ToolOut> {
+  const today = dayKey();
+  const from = isDate(input.from) && input.from > today ? input.from : today;
+  const r = await invoke<{ clubs?: GymClubClasses[] }>({ action: 'classes', clubs: gymClubsFor(input.clubs).map(c => c.key), from }, 'planner-arvy');
+  const clubs = Array.isArray(r?.clubs) ? r.clubs : [];
+  if (!clubs.length) return { result: { error: 'GoodLife’s timetable didn’t answer.' }, error: true };
+  const n = new Date(), two = (x: number) => String(x).padStart(2, '0');
+  const now = `${n.getFullYear()}-${two(n.getMonth() + 1)}-${two(n.getDate())}T${two(n.getHours())}:${two(n.getMinutes())}`;
+  const result = gymAnswer(clubs, { from, days: clampN(input.days, 3, 7), search: typeof input.search === 'string' ? input.search : undefined, now });
+  const read = GYM_CLUBS.find(c => c.key === clubs.find(x => x.classes)?.key);   // the first club that answered: its timetable page is the link
+  return { result, ...(clubs.every(c => c.broken) ? { error: true } : {}),
+    ...(read ? { sources: [{ title: `GoodLife class schedule: ${read.name}`, url: gymPageUrl(read.id) }] } : {}) };
+}
+
 /** Run one tool. Never throws: an error comes back as the result, for Arvy to explain. */
 export async function runTool(name: string, input: Record<string, unknown>, about?: { question?: string; path?: string }): Promise<ToolOut> {
   try {
@@ -224,6 +246,7 @@ export async function runTool(name: string, input: Record<string, unknown>, abou
       case 'habits': return { result: await habits(input) };
       case 'money': return { result: await money(input) };
       case 'cycle': return { result: await cycle() };
+      case 'gym_classes': return await gymClasses(input);
       case 'remember': {
         const note = String(input.note || '').trim().slice(0, 300);
         if (!note) return { result: { error: 'empty note' }, error: true };

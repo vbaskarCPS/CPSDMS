@@ -1,6 +1,8 @@
 // src/planner/features/arvy/arvy.ts — talking with Arvy: the conversation loop, listening, and Arvy's voice.
 // One question = a few steps: the server asks Claude; when Claude wants tools, they run here (run.ts) and the results
 // go back, until Claude answers. Past questions are sent as plain text (tools are looked up fresh each time).
+// Once a question has read something from outside the planner (the web, GoodLife's class timetable), every change it
+// sets up waits for a Confirm tap, and where it read is linked under the reply.
 import { invoke } from '../../lib/ai';
 import { dayKey } from '../../lib/docs';
 import { isDemo } from '../../lib/app';
@@ -11,6 +13,7 @@ import { prepare, Refuse, type Change, type Undo } from './act';
 import { logArvy } from './log';
 import { memoryContext } from '../../lib/memory';
 import { changeOf, speakable, TOOLS_VERSION, type Block, type Msg, type Source } from '../../../../supabase/functions/planner-arvy/tools';
+import { gymPageUrl } from '../../../../supabase/functions/planner-arvy/gym';
 
 /** A change shown under Arvy's reply. done: made (Undo while this visit lasts); waiting: Confirm/Cancel. */
 export type ChangeState = 'done' | 'waiting' | 'cancelled' | 'undone' | 'failed' | 'expired';
@@ -91,8 +94,8 @@ export async function undoChange(id: string, why?: { lines?: string[]; question?
 }
 
 /** Run a change tool: work it out, then make it now or hold it for Confirm. What Claude is told back.
- *  `hold` = make it wait for Confirm whatever the tool: the question searched the web, and nothing a web page says may
- *  change the planner without their tap. */
+ *  `hold` = make it wait for Confirm whatever the tool: the question read something from outside the planner (the web,
+ *  the gym's timetable), and nothing read out there may change the planner without their tap. */
 async function runChange(name: string, input: Record<string, unknown>, out: ChangeView[], about: { question?: string; path?: string } = {}, hold = false): Promise<{ result: unknown; error?: boolean }> {
   let c: Change | null;
   try { c = await prepare(name, input); } catch (e) {
@@ -139,8 +142,10 @@ export const TOOL_LABEL: Record<string, string> = {
   add_cash_expense: 'the cash wallet', recategorize: 'the transactions',
   set_must: 'your must-dos', log_favourite_meal: 'your favourites', save_favourite: 'your favourites', set_food_targets: 'your food targets',
   create_habit: 'your habits', pause_habit: 'your habits', set_budget: 'the budget', log_cycle_day: 'your cycle', log_period: 'your cycle',
-  adjust_day: 'your day', change_routine: 'your routine', offer_choices: 'your options', web_search: 'the web',
+  adjust_day: 'your day', change_routine: 'your routine', offer_choices: 'your options', web_search: 'the web', gym_classes: 'GoodLife’s class times',
 };
+/** Look-ups that read something outside the planner (the web search is the other one: it runs on the server). */
+const OUTSIDE = new Set(['gym_classes']);
 
 export function context(path: string, spoken: boolean) {
   const units = (getPass()?.user.settings?.units as string) === 'kg' ? 'kg' : 'lb';
@@ -190,10 +195,12 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   const ctx = { ...context(path, spoken), about: await aboutMe() };
   const used: string[] = [];
   let navigate: string | undefined;
-  const sources: Source[] = [];   // the web pages the answer cites, shown under it
+  const sources: Source[] = [];   // the web pages the answer cites (and the gym timetable it read), shown under it
   const found: Source[] = [];     // the pages the searches turned up: shown when the answer cites none
   let choices: Choice[] = [];     // buttons to pick from (offer_choices)
-  let searched = false;           // the web was searched in this question: from then on every change waits for Confirm
+  let searched = false;           // the web was searched in this question…
+  let outside = false;            // …or something else outside the planner was read: from then on every change waits for Confirm
+  const keep = (to: Source[], from?: Source[]) => { for (const s of from || []) if (/^https?:\/\//i.test(s?.url || '') && !to.some(x => x.url === s.url) && to.length < 6) to.push({ url: s.url, title: String(s.title || '') }); };
   // one link a site (two pages of the same site would show as the same name twice); found pages only when none is cited
   const site = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
   const pages = () => { const list = sources.length ? sources : found; return list.filter((s, i) => list.findIndex(x => site(x.url) === site(s.url)) === i).slice(0, sources.length ? 6 : 4); };
@@ -203,8 +210,7 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
     const content = Array.isArray(r.content) ? r.content : [];
     if (r.web) {
       if (!searched) used.push('web_search');
-      searched = true;
-      const keep = (to: Source[], from?: Source[]) => { for (const s of from || []) if (/^https?:\/\//i.test(s?.url || '') && !to.some(x => x.url === s.url) && to.length < 6) to.push({ url: s.url, title: String(s.title || '') }); };
+      searched = outside = true;
       keep(sources, r.web.sources); keep(found, r.web.found);
     }
     const calls = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
@@ -214,15 +220,17 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
     // the reply came with its buttons and nothing else to run: that's the answer, no need to go back to Claude
     if (text && choices.length && calls.every(c => c.name === 'offer_choices')) return { reply: text, navigate, used, changes, ...extras() };
     onStep?.([...(r.web ? ['web_search'] : []), ...calls.map(c => c.name).filter(n => n !== 'offer_choices')]);   // a search asked for alongside a look-up runs during the next step
-    const res = new Map<string, { result: unknown; error?: boolean; navigate?: string }>();
+    const res = new Map<string, { result: unknown; error?: boolean; navigate?: string; sources?: Source[] }>();
     const about = { question, path };
     // look-ups together; changes one at a time, in order (each one's Undo snapshot is taken just before it)
     await Promise.all(calls.filter(c => !changeOf(c.name)).map(async c => { res.set(c.id, await runTool(c.name, c.input || {}, about)); }));
-    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, await runChange(c.name, c.input || {}, changes, about, searched));
+    if (calls.some(c => OUTSIDE.has(c.name))) outside = true;
+    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, await runChange(c.name, c.input || {}, changes, about, outside));
     const results = calls.map(c => {
       used.push(c.name);
       const out = res.get(c.id)!;
       if (out.navigate) navigate = out.navigate;
+      keep(sources, out.sources);
       if (out.error) void logArvy({ type: 'error', title: `${c.name} didn’t work`, detail: JSON.stringify(out.result).slice(0, 600), tools: [c.name], ...about });
       return { type: 'tool_result' as const, tool_use_id: c.id, content: JSON.stringify(out.result).slice(0, RESULT_CAP[c.name] || 13000), ...(out.error ? { is_error: true } : {}) };
     });
@@ -252,6 +260,16 @@ async function demoTurn(q: string, changes: ChangeView[]): Promise<Turn> {
       { name: 'Child’s Pose', sets: 1, seconds: 45, no_weight: true, muscle: 'back', equipment: 'bodyweight' },
     ] }, changes);
     return { reply: 'Sorry you’re feeling rough. Today’s plan is changed: no gym, no sauna, up at 7, breakfast at 7:30. The stretch is set up as today’s session on Train: tap Confirm and the 7:00 block opens it. Your gym session waits for tomorrow.', used: ['adjust_day', 'plan_workout'], changes };
+  }
+  // class times at the gym (made up here; the real ones come from GoodLife's timetable): pick one, then it goes on the calendar
+  if (/\b(yoga|class|classes)\b/i.test(q) && /calendar/i.test(q)) {
+    await runChange('add_event', { title: 'Yoga · GoodLife Queenston', date: dayKey(), time: '19:45', end_time: '20:45' }, changes, {}, true);
+    return { reply: 'Yoga at 7:45 tonight is ready to go on the calendar: tap Confirm. Book your spot in the GoodLife app, there were 37 left.', used: ['add_event'], changes };
+  }
+  if (/\b(yoga|class|classes|goodlife)\b/i.test(q)) {
+    return { reply: 'Yoga at Queenston tonight is at 7:45 in the CoEd studio, 37 of 40 spots left. Tomorrow there’s Stretch and Relax at 10:00 am. At Burlington Centre the yoga is hot yoga, a paid add-on: Hot Yin at 6:00 pm, 17 of 25 left. Which one should go on the calendar? You’d still book it in the GoodLife app.',
+      used: ['gym_classes'], changes, sources: [{ title: 'GoodLife class schedule (demo)', url: gymPageUrl(201) }],
+      choices: [{ label: 'Yoga 7:45 pm, Queenston', send: 'Put tonight’s 7:45 pm Yoga at Queenston on my calendar' }, { label: 'Hot Yin 6:00 pm, Burlington', send: 'Put tonight’s 6:00 pm Hot Yin Yoga class at Burlington Centre on my calendar' }] };
   }
   // looked up on the web: options to pick from, with where they came from (the demo's are made up; nothing is searched)
   if (/look ?up|search|online|on the web|google/i.test(q)) {
