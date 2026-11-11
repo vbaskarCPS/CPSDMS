@@ -37,6 +37,8 @@ describe('the Benny’s tools', () => {
     expect(Object.keys((t.input_schema as { properties: { assign: { items: { properties: object } } } }).properties.assign.items.properties)).toEqual(['managers', 'maps', 'routes', 'workers']);
     expect(system(ctx, 'admin')).toContain('call crew_stats for that day first');
     expect(system(ctx, 'admin')).toContain('snake order');
+    expect(system(ctx, 'admin')).toContain('prebook-heavy maps');
+    expect(system(ctx, 'rm')).not.toContain('crew_stats');   // route managers don't have it, so they aren't told about it
   });
   it('a booking change sends only what was asked, and only super admins are told they can', () => {
     const c = toolCall('propose_booking', { booking: '3575 Latimer', status: 'done', field_note: 'gate code 1234', route: null, extra: 'x' }, ctx);
