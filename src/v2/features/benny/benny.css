@@ -95,7 +95,7 @@
 .benny-root button.benny-text-body{cursor:pointer;border-radius:4px}
 .benny-root button.benny-text-body:focus-visible,.benny-root .benny-text-again:focus-visible{outline:2px solid #fb923c;outline-offset:2px}
 .benny-root .benny-text-change{color:#c2410c;font-size:12px;white-space:nowrap}
-.benny-root .benny-text-change svg{vertical-align:-1px}
+.benny-root .benny-text-change svg{display:inline-block;vertical-align:-1px}
 .benny-root .benny-text-edit{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-family:inherit;font-size:16px;line-height:1.4;color:#0f172a;resize:vertical}
 .benny-root .benny-text-edit:focus{outline:2px solid #fb923c;outline-offset:0;border-color:#fb923c}
 .benny-root .benny-text-editb{display:flex;gap:6px;flex-wrap:wrap}
