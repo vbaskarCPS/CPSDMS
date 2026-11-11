@@ -13,6 +13,9 @@ const fakeSb = `
       if (fn === 'benny_ok_any') return s.role ? { data: s.role, error: null } : { data: null, error: { message: 'Not allowed' } };
       if (fn === 'benny_model_mode') return { data: s.mode || 'main', error: null };
       if (fn === 'benny_ai_log_save') { (s.logs = s.logs || []).push(args.p); return { data: null, error: null }; }
+      if (fn === 'benny_pace') return { data: { ok: true, day: '2026-11-11', live: true, as_of: '15:01', scope: args.p_worker ? 'worker' : args.p_manager ? 'team' : 'center',
+        this_day: { knocks: 176, sales: 2, steps: 3, gross: 467.5 }, earlier_days: { count: 11, usual: { at_this_time: { knocks: 204, steps: 15, gross: 3099 } } },
+        projection: { if_the_rest_goes_like_a_usual_day: { steps: 7, gross: 1781 }, if_the_day_keeps_this_pace: { steps: 3.8, gross: 623 } }, notes: ['Times are when a knock or a job was entered in the app.'] }, error: null };
       if (fn === 'benny_check_remove') {
         const known = { 'kevontae ragguette': ['I1479', 'Kevontae Ragguette'], i1479: ['I1479', 'Kevontae Ragguette'], 'kenan francis-bull': ['I1012', 'Kenan Francis-Bull'], i1012: ['I1012', 'Kenan Francis-Bull'], kenan: ['I1012', 'Kenan Francis-Bull'] };
         const hit = args.p_workers.map(w => known[w.toLowerCase()]);
@@ -111,7 +114,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 30); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 31); assert(!('roles' in state.lastAsk.tools[0]));
 // the Benny drew the maps itself and picked no routes out: the plan's routes are highlighted all the same
 state.script = [turn(use('show_map', { maps: ['NORTH VANCOUVER #1'], title: 'Tomorrow' })),
   turn(use('propose_start_day', { date: '2026-11-11', assign: [{ managers: ['me'], maps: ['NORTH VANCOUVER #1'] }] })), say('Tap Start the day to do it.')];
@@ -492,6 +495,25 @@ state.script = [turn(use('propose_remove', { workers: ['I1012'] })), say('Tap Re
 a = await ask('take Kenan off today', { screen: 'rm', rm_manager: 'rm_me' }); assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
 state.role = 'admin'; state.mode = 'main';
 console.log('5p remove: named workers only (a by-sound match is asked about), a card for the app to carry out, nothing removed by the server ✓');
+
+// 5q. pace and strategy: read from the pace lookup, always on the main model, for admins (the crew) and route managers (their team)
+state.role = 'admin'; state.mode = 'fast_first';
+state.script = [turn(use('pace', {})), say('Today has 3 steps and 176 knocks by 15:01; the earlier 11 days usually had 15 steps and 204 knocks by then. What do you count as a good start: doors, sales or dollars?')];
+a = await ask('compared to other days is this a good start or bad start', { path: '/app/workerbook/days/2026-11-11' });
+assert.deepEqual(state.models, [MAINM, MAINM], 'a view on pace is never tried on the small model'); assert.equal(used().why, 'compare');
+assert.deepEqual(calls()[1], ['benny_pace', { p_center: 'c1', p_manager: null, p_worker: null, p_date: null, p_at: null }]);
+assert(a.body.reply.includes('What do you count as a good start')); assert.equal(a.body.proposal, null);
+for (const q of ['are we behind today', 'should I move Kyle to another route', 'how do I get the slow carts going', 'how many knocks does Mugove have', 'where will we finish', 'what would you do with the rookies']) {
+  state.script = [say('ok')]; await ask(q); assert.deepEqual(state.models, [MAINM], q); assert(['judge', 'compare', 'change'].includes(used().why), q);
+}
+state.script = [turn(use('pace', { worker: ' Kyle ', at: '12:00', date: '2026-11-05' })), say('ok')]; await ask('how was Kyle doing at noon on the 5th against his usual pace');
+assert.deepEqual(calls()[1][1], { p_center: 'c1', p_manager: null, p_worker: 'Kyle', p_date: '2026-11-05', p_at: '12:00' });
+state.script = [turn(use('pace', { at: 'noonish', date: 'yesterday', worker: '' })), say('ok')]; await ask('pace at noon');
+assert.deepEqual(calls()[1][1], { p_center: 'c1', p_manager: null, p_worker: null, p_date: null, p_at: null }, 'a time or a date it can’t read is left out, not passed on');
+state.role = 'rm'; state.script = [turn(use('pace', {})), say('ok')]; await ask('is my team behind', { screen: 'rm', rm_manager: 'rm_me' });
+assert.equal(calls().find(c => c[0] === 'benny_pace')[1].p_manager, 'rm_me'); assert(state.lastAsk.tools.some(t => t.name === 'pace'), 'route managers have it for their own team');
+state.role = 'admin'; state.mode = 'main';
+console.log('5q pace: from the pace lookup, on the main model, for the crew, a team or a worker ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

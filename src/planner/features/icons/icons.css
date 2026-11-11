@@ -1,0 +1,50 @@
+/* src/planner/features/icons/icons.css — the icon packs: a picture of their own standing in for an icon (on the bar
+   and on the menu tiles), and the screen where the icons are chosen (IconsScreen.tsx). Colours come from the
+   planner's variables only, so every look and both people's colours work. The packs' drawings need nothing here:
+   they take the colour and the size of the icon they replace (planner.css sets both). */
+
+/* ── a picture of their own in place of an icon: in its own colours, never tinted ── */
+.pi-own { display: block; flex: none; object-fit: cover; border-radius: 28%; pointer-events: none; -webkit-user-drag: none; -webkit-touch-callout: none; user-select: none; }
+/* on the bar: a touch bigger than a drawn icon (the margins keep the word under it where it was). A drawn icon shows
+   it's the page you're on by its colour; a picture can't, so it is a little faded at rest and ringed when it's on */
+.pl-nav .pi-own { width: 26px; height: 26px; margin: -4px 0 0; opacity: .68; }
+.pl-nav a.active .pi-own { opacity: 1; box-shadow: 0 0 0 2px var(--accent); }
+/* on a menu tile: it fills most of the tinted square */
+.hub-tile__icon .pi-own { width: 40px; height: 40px; border-radius: 11px; }
+
+/* ── the screen ── */
+.ic-packs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.ic-pack { display: flex; flex-direction: column; gap: 10px; width: 100%; min-height: 44px; padding: 12px 14px; border-radius: var(--radius); border: 1.5px solid var(--line); background: var(--bg-2); color: var(--ink); font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.ic-pack.is-on { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.ic-pack__head { display: flex; align-items: center; gap: 10px; }
+.ic-pack__head > span { flex: 1; min-width: 0; }
+.ic-pack__head b { display: block; font-family: var(--serif); font-size: 17px; line-height: 1.2; }
+.ic-pack__head small { display: block; margin-top: 2px; font-size: 13px; line-height: 1.3; color: var(--ink-2); }
+/* the mark that says which one is chosen: an empty ring, filled with a tick on the chosen one */
+.ic-pack__mark { flex: none; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; }
+.ic-pack.is-on .ic-pack__mark { border-color: transparent; background: var(--accent); color: var(--accent-ink); }
+.ic-pack__mark svg { width: 15px; height: 15px; stroke-width: 3; }
+/* every drawing of the pack, in the colour icons have on the page */
+.ic-pack__icons { display: grid; grid-template-columns: repeat(auto-fit, minmax(28px, 1fr)); gap: 6px 0; color: var(--accent); }   /* one row on a phone; a very narrow one wraps */
+.ic-pack__icons > span { display: grid; place-items: center; height: 30px; }
+.ic-pack__icons svg { width: 24px; height: 24px; }
+
+/* "Your own icons": one row for each place */
+.ic-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.ic-row b { display: block; font-size: 15px; }
+.ic-row small { color: var(--ink-2); font-size: 13px; }
+.ic-row .pl-btn { flex: none; min-height: 44px; }
+.ic-row__icon { flex: none; width: 46px; height: 46px; padding: 0; border: 0; border-radius: 14px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); cursor: pointer; }
+.ic-row__icon svg { width: 24px; height: 24px; }
+.ic-row__icon .pi-own { width: 38px; height: 38px; border-radius: 10px; }
+
+/* fitting a picked picture into the square. Its sheet sits over everything, the demo's tour card included */
+.pl-sheet:has(.ic-fit) { z-index: 30; }
+.ic-fit { position: relative; flex: none; align-self: center; overflow: hidden; border-radius: 28%; background: color-mix(in srgb, var(--ink) 8%, var(--bg-2)); box-shadow: 0 0 0 2px var(--line); touch-action: none; cursor: grab; -webkit-user-select: none; user-select: none; }
+.ic-fit:active { cursor: grabbing; }
+.ic-fit img, .ic-sizes img { position: absolute; max-width: none; pointer-events: none; -webkit-user-drag: none; }
+.ic-zoom { width: 100%; min-height: 44px; accent-color: var(--accent); }
+/* how it will look at the two sizes it is shown at */
+.ic-sizes { display: flex; justify-content: center; gap: 28px; font-size: 12.5px; color: var(--ink-2); }
+.ic-sizes span { display: flex; align-items: center; gap: 8px; }
+.ic-sizes i { position: relative; display: block; overflow: hidden; border-radius: 28%; background: color-mix(in srgb, var(--ink) 8%, var(--bg-2)); }

@@ -29,6 +29,8 @@ import { Shopping } from './features/shop/Shopping';
 import { ArvyLog } from './features/arvy/ArvyLog';
 import { DecorLayer } from './features/decor/Layer';
 import { Stickers } from './features/decor/Stickers';
+import { IconsScreen } from './features/icons';
+import { ArrangeToday } from './features/widgets';
 import './features/shop/shop.css';
 import './features/calendar/calendar.css';
 
@@ -109,8 +111,10 @@ export function PlannerApp() {
         <Route path="/calendar" element={<Calendar pass={pass} />} />
         <Route path="/shop" element={<Shopping pass={pass} />} />
         <Route path="/settings" element={<Settings pass={pass} />} />
+        <Route path="/settings/widgets" element={<ArrangeToday pass={pass} />} />
         <Route path="/settings/arvy-log" element={<ArvyLog />} />
         <Route path="/settings/stickers" element={<Stickers pass={pass} />} />
+        <Route path="/settings/icons" element={<IconsScreen pass={pass} />} />
         <Route path="/us" element={<OpenUs />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

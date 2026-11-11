@@ -7,6 +7,8 @@ import { changePin, saveSettings, signOut, type PlannerPass } from '../lib/auth'
 import { PushCard } from '../ui/PushCard';
 import { MemoryCard } from '../ui/MemoryCard';
 import { Sticker } from 'lucide-react';
+import { IconsTile } from '../features/icons';
+import { ArrangeTile } from '../features/widgets';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
@@ -92,12 +94,15 @@ export function Settings({ pass }: { pass: PlannerPass }) {
       {morningP && <Link className="pl-tile" to="/setup"><Sparkles aria-hidden /><div className="pl-grow"><b>Set up my day again</b><small>The four short steps: your times, habits, last period, reminders</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>}
 
       <Link className="pl-tile" to="/settings/stickers"><Sticker aria-hidden /><div className="pl-grow"><b>Stickers</b><small>Decorate your pages like a scrapbook</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
+      <ArrangeTile />
 
       <MemoryCard />
 
       <Link className="pl-tile" to="/settings/arvy-log"><ListChecks aria-hidden /><div className="pl-grow"><b>Arvy’s log</b><small>What Arvy couldn’t do or got wrong, and the fixes on the way</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
 
       <PushCard />
+
+      <IconsTile />
 
       <form className="pl-card pl-stack" onSubmit={save}>
         <label className="pl-field">
