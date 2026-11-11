@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-11-emoji-packs", "date": "2026-11-11", "title": "Emoji packs for every occasion",
+    "lines": ["The smiley beside the message box in your chat now opens packs of our own emoji: themed smileys and drawings for Christmas, New Year, Valentine’s Day, Easter, Diwali, Halloween and birthdays.", "Tap them into a message along with your words. A message that is only emoji shows them big.", "The box shows an ordinary look-alike while you type; the preview just above it shows how the message will look."] },
   { "id": "2026-11-11-rv-bevel", "date": "2026-11-11", "title": "A gold bevelled edge on the RV button",
     "lines": ["The big button now has an embossed gold rim, like the edge of a coin."] },
   { "id": "2026-11-11-rv-button", "date": "2026-11-11", "title": "The big button wears the RV logo",

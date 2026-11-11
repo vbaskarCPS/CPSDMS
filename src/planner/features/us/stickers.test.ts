@@ -1,7 +1,8 @@
-// The chat's stickers: which occasion is coming up (occasions.ts) and which messages are stickers (stickers.tsx).
+// Which occasion is coming up (occasions.ts), and the drawings of things that stand for an ordinary emoji
+// (stickers.tsx). The packs they belong to, with the smileys, are tested in emoji.test.ts.
 import { describe, expect, it } from 'vitest';
 import { birthdaysFrom, countdown, easter, upcoming } from './occasions';
-import { STICKERS, stickerOf, stickerText } from './stickers';
+import { STICKERS, stickerOf } from './stickers';
 
 const names = (today: string, b = [] as { name: string; day: string }[]) => upcoming(today, b).map(o => `${o.name} ${o.date || '?'}`);
 
@@ -49,13 +50,13 @@ describe('stickers', () => {
     expect(new Set(STICKERS.map(s => s.id)).size).toBe(STICKERS.length);
     expect(upcoming('2026-11-11').every(o => STICKERS.some(s => s.occasion === o.id))).toBe(true);
   });
-  it('a message that is only that emoji is the sticker, typed or sent from the tray', () => {
+  it('a message that is only that emoji is the sticker, however the keyboard typed it', () => {
     expect(stickerOf('🎄')?.id).toBe('tree');
     expect(stickerOf(' 🎃 ')?.id).toBe('pumpkin');
     expect(stickerOf('❤️')?.id).toBe('heart');   // with the "show as a picture" mark a keyboard adds
     expect(stickerOf('❤')?.id).toBe('heart');
-    expect(stickerOf(stickerText(STICKERS.find(s => s.id === 'snowflake')!))?.id).toBe('snowflake');
-    expect(STICKERS.every(s => stickerOf(stickerText(s)) === s)).toBe(true);
+    expect(stickerOf('❄\uFE0F')?.id).toBe('snowflake');
+    expect(STICKERS.every(s => stickerOf(s.emoji) === s && stickerOf(`${s.emoji}\uFE0F`) === s)).toBe(true);
   });
   it('words, two emoji, or an emoji we have no drawing for stay ordinary messages', () => {
     expect(stickerOf('🎄 see you at 6')).toBeNull();
@@ -63,8 +64,5 @@ describe('stickers', () => {
     expect(stickerOf('😀')).toBeNull();
     expect(stickerOf('')).toBeNull();
     expect(stickerOf(undefined)).toBeNull();
-  });
-  it('what is sent has no words, so Arvy doesn’t read it', () => {
-    for (const s of STICKERS) expect(/\p{L}{2,}/u.test(stickerText(s))).toBe(false);
   });
 });
