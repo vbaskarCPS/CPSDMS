@@ -158,7 +158,7 @@ export async function checkPush(name: string, icon: string, patience = 20000): P
   if (!reg) throw new Error('Notifications aren’t set up on this phone. Turn them off and on again.');
   let here: PushCheck['here'] = 'blocked';
   try {
-    await reg.showNotification(name, { body: 'Check 1 of 2: this phone can show the planner’s notifications.', tag: 'check-here', icon, badge: '/planner-badge.png' });
+    await reg.showNotification(name, { body: 'Check 1 of 2: this phone can show the planner’s notifications.', tag: 'check-here', icon, badge: '/planner-badge.png?v=2' });
     await new Promise(r => setTimeout(r, 800));
     here = (await reg.getNotifications({ tag: 'check-here' })).length ? 'shown' : 'blocked';
   } catch { here = 'blocked'; }

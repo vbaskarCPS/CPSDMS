@@ -135,7 +135,7 @@ async function showPush(d) {
   return self.registration.showNotification(title, {
     body,
     icon: d.icon || '/icon-192.png',     // the planner sends its own icon
-    badge: d.badge || (planner ? '/planner-badge.png' : d.icon || '/icon-192.png'),
+    badge: d.badge || (planner ? '/planner-badge.png?v=2' : d.icon || '/icon-192.png'),
     tag: d.tag || undefined,
     renotify: !!d.tag,
     ...(planner ? { timestamp: Date.now(), vibrate: [70, 50, 70] } : {}),
