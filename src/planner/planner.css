@@ -163,6 +163,9 @@ button.pl-tile { font: inherit; color: inherit; text-align: left; cursor: pointe
 .pl-empty { text-align: center; padding: 32px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .pl-empty svg { width: 36px; height: 36px; color: var(--ink-2); }
 .pl-toast { position: fixed; left: 50%; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 16px); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; z-index: 30; animation: plFade 0.2s ease-out; }
+/* a newer version has downloaded (ui/UpdateReady): a pill at the top, over everything but never in the way of the nav */
+.pl-update { position: fixed; top: calc(env(safe-area-inset-top) + 8px); left: 0; right: 0; width: max-content; margin: 0 auto; z-index: 50; display: flex; align-items: center; gap: 10px; white-space: nowrap; background: var(--ink); color: var(--bg); padding: 6px 6px 6px 14px; border-radius: 999px; font-size: 13.5px; font-weight: 600; border: 1px solid color-mix(in srgb, var(--bg) 40%, transparent); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28); animation: plFade 0.2s ease-out; }
+.pl-update button { border: 0; border-radius: 999px; padding: 6px 12px; background: var(--bg); color: var(--ink); font: 700 13px var(--sans); cursor: pointer; }
 .pl-toast--good { background: var(--good); color: #fff; } .pl-toast--bad { background: var(--bad); color: #fff; }
 
 .pl-bars__bar { fill: var(--accent); } .pl-bars__bar.is-good { fill: var(--good); } .pl-bars__bar.is-amber { fill: var(--amber); }
