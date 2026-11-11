@@ -99,11 +99,11 @@ export function jobUpdates(patch: JobPatch): { price: number; displayPrice: stri
   return { price: patch.price, displayPrice: patch.display_price, paymentMethod: patch.payment_method, paymentBreakdown: patch.payment_breakdown, ...(patch.items ? { items: patch.items } : {}) };
 }
 
-/** The open payouts with nothing to count by hand (no cash, no cheque), in the order to go through them. */
+/** The open payouts with nothing to count by hand (no cash, no cheque: a cart with no jobs is one of them), in the order to go through them. */
 export interface PayoutsCheck {
   ok: boolean; problems?: string[]; date: string;
   carts: { cart_id: string; cn: string; workers: string[]; jobs: number; gross: number; upsell_gross?: number; collected: Record<string, number> }[];
-  to_count?: { workers: string[]; cash: number; cheque: number }[]; no_jobs?: string[][]; paid_out?: number;
+  to_count?: { workers: string[]; cash: number; cheque: number }[]; paid_out?: number;
 }
 const firsts = (names: string[]) => names.map(n => n.split(' ')[0]).join(' + ');
 const PAID_AS: [string, string][] = [['card', 'card'], ['e_transfer', 'e-transfer'], ['prepaid', 'prepaid'], ['billed', 'billed'], ['cash', 'cash'], ['cheque', 'cheque']];
@@ -239,10 +239,10 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
       return {
         title: `Go through ${n} payout${n === 1 ? '' : 's'} with no cash or cheque`,
         lines: [
-          ...c.carts.slice(0, 10).map(x => `${firsts(x.workers)} · ${x.jobs} job${x.jobs === 1 ? '' : 's'} · ${PAID_AS.filter(([k]) => (x.collected?.[k] || 0) > 0).map(([k, w]) => `${dollars(x.collected[k])} ${w}`).join(', ') || dollars(x.gross + (x.upsell_gross || 0))}`),
+          ...c.carts.slice(0, 10).map(x => !x.jobs ? `${firsts(x.workers)} · no jobs`
+            : `${firsts(x.workers)} · ${x.jobs} job${x.jobs === 1 ? '' : 's'} · ${PAID_AS.filter(([k]) => (x.collected?.[k] || 0) > 0).map(([k, w]) => `${dollars(x.collected[k])} ${w}`).join(', ') || dollars(x.gross + (x.upsell_gross || 0))}`),
           ...(n > 10 ? [`+ ${n - 10} more`] : []),
           ...(c.to_count?.length ? [`Left for a hand count: ${c.to_count.map(t => `${firsts(t.workers)} (${[t.cash > 0 ? `${dollars(t.cash)} cash` : '', t.cheque > 0 ? `${dollars(t.cheque)} in cheques` : ''].filter(Boolean).join(', ')})`).join('; ')}`] : []),
-          ...(c.no_jobs?.length ? [`No jobs, left open: ${c.no_jobs.map(firsts).join(', ')}`] : []),
           'Nothing is paid out from here: each one opens on the payout screen and you press Finalize. It then moves to the next.',
         ],
         action: 'Open',

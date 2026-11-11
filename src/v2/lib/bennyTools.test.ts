@@ -63,6 +63,7 @@ describe('the Benny’s tools', () => {
     expect(toolCall('propose_payouts', { pay: 100, worker: 'x' }, ctx)).toEqual({ fn: 'benny_check_payouts', args: { p_center: 'c1' }, card: { kind: 'payouts' } });   // nothing to pass: no amount, no worker
     expect(system(ctx, 'admin')).toContain('You never pay anyone out and never mark a logsheet paid');
     expect(system(ctx, 'admin')).toContain('lining up payouts to finalize');
+    expect(TOOLS.find(t => t.name === 'propose_payouts')!.description).toContain('A cart with no jobs has nothing to count either, so it is lined up too');
     expect(system(ctx, 'rm')).not.toContain('propose_payouts');
   });
   it('pins and orders belong to the map that is open, and a pin has exactly one place', () => {
