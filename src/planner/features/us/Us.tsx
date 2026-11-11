@@ -3,8 +3,11 @@
 // short videos. Arvy reads along: under a message it may offer to add something to the shopping list, the calendar
 // or a to-do, and waits for a Confirm tap (either of them for the shared things; a to-do only the person it's for).
 // The list, sending and confirming are in us.ts; a message and a proposal are defined in planner-chat/chat.ts.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Check, ImagePlus, Play, Send, Sparkles, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Check, ImagePlus, Play, Send, Smile, Sparkles, X } from 'lucide-react';
+import { calendarKey, getDocs } from '../../lib/docs';
+import { birthdaysFrom, countdown, upcoming, type Birthday } from './occasions';
+import { STICKERS, Sticker, stickerOf, stickerText, type StickerDef } from './stickers';
 import { getPass } from '../../lib/auth';
 import { enablePush, pushState, type PushState } from '../../lib/push';
 import { setArvyOpen } from '../arvy/arvy';
@@ -51,6 +54,7 @@ function ProposalCard({ row, p, user }: { row: Row; p: Proposal; user: string })
 function Message({ row, user }: { row: Row; user: string }) {
   const m: ChatMsg = row.msg;
   const mine = m.by === user;
+  const sticker = !m.media?.length ? stickerOf(m.text) : null;   // a message that is only one of our emoji: drawn as the sticker
   const [playing, setPlaying] = useState<number | null>(null);
   return (
     <div className={`us-msg ${mine ? 'mine' : 'theirs'}`}>
@@ -71,7 +75,7 @@ function Message({ row, user }: { row: Row; user: string }) {
               : x.thumb ? <img key={i} src={x.thumb} alt="Photo" className="is-thumb" /> : <span key={i} className="us-blank" />;
           })}
         </div>)}
-      {m.text && <div className="us-bubble">{m.text}</div>}
+      {sticker ? <div className="us-sticker"><Sticker s={sticker} size={112} /></div> : m.text && <div className="us-bubble">{m.text}</div>}
       <div className="us-meta">{row.sending ? 'Sending…' : sentAt(m.at)}</div>
       {m.arvy && m.arvy.state !== 'none' && !row.sending && (
         <div className="us-arvy">
@@ -96,6 +100,14 @@ export function Us() {
   const [push, setPush] = useState<PushState | null>(null);
   const pickRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // the sticker tray: the occasion coming up next first. Birthdays are read off the calendar the first time it opens
+  const [tray, setTray] = useState(false);
+  const [birthdays, setBirthdays] = useState<Birthday[] | null>(null);
+  useEffect(() => {
+    if (!tray || birthdays) return;
+    getDocs<{ title?: string; date?: string; repeat?: string }>('event').then(d => setBirthdays(birthdaysFrom(d.map(x => x.data).filter(Boolean)))).catch(() => setBirthdays([]));
+  }, [tray, birthdays]);
+  const occasions = useMemo(() => upcoming(calendarKey(), birthdays || []), [birthdays, tray]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (open) void pushState().then(setPush); }, [open]);
   // the newest message stays in view: when one arrives, and when Arvy's offer lands under the last one
@@ -110,6 +122,13 @@ export function Us() {
     setSending(true); setError(null); setText(''); setFiles([]);
     try { await say(t, f); }
     catch (e) { setError(e instanceof Error ? e.message : 'That didn’t send.'); setText(t); setFiles(f); }
+    finally { setSending(false); }
+  };
+  const sendSticker = async (s: StickerDef) => {
+    if (sending) return;
+    setTray(false); setSending(true); setError(null);
+    try { await say(stickerText(s), []); }
+    catch (e) { setError(e instanceof Error ? e.message : 'That didn’t send.'); }
     finally { setSending(false); }
   };
   const pick = (list: File[]) => {
@@ -148,9 +167,21 @@ export function Us() {
         <div className="us-picked">
           {files.map((f, i) => <span key={i}>{f.type.startsWith('video/') ? 'Video' : 'Photo'} {i + 1}<button type="button" onClick={() => setFiles(files.filter((_, j) => j !== i))} aria-label="Take it off"><X /></button></span>)}
         </div>)}
+      {tray && (
+        <div className="us-tray">
+          {occasions.map((o, i) => (
+            <section key={`${o.id}:${o.name}`} className={i === 0 ? 'is-next' : ''}>
+              <h4>{i === 0 && Number.isFinite(o.days) ? 'Coming up: ' : ''}{o.name}{countdown(o) && <em>{countdown(o)}</em>}</h4>
+              <div className="us-tray-row">
+                {STICKERS.filter(s => s.occasion === o.id).map(s => <button key={s.id} type="button" disabled={sending} onClick={() => void sendSticker(s)} aria-label={`Send the ${s.name} sticker`}><Sticker s={s} size={56} /></button>)}
+              </div>
+            </section>))}
+          {birthdays && !birthdays.length && <p className="us-meta">Put your birthdays on the calendar as yearly events (“Rosh’s birthday”) and they count down here too.</p>}
+        </div>)}
       <form className="arvy-input" onSubmit={e => { e.preventDefault(); void send(); }}>
         <input ref={pickRef} type="file" accept="image/*,video/*" multiple hidden onChange={e => { const list = Array.from(e.target.files || []); e.target.value = ''; pick(list); }} />
         <button type="button" className="arvy-mic" onClick={() => pickRef.current?.click()} disabled={sending} aria-label="Add a photo or a video"><ImagePlus /></button>
+        <button type="button" className={`arvy-mic${tray ? ' us-on' : ''}`} onClick={() => setTray(t => !t)} aria-label="Stickers" aria-expanded={tray}><Smile /></button>
         <textarea rows={1} value={text} onChange={e => setText(e.target.value)} placeholder={`Message ${other}…`} aria-label={`Message ${other}`} enterKeyHint="send"
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
         <button type="submit" className="arvy-send" disabled={sending || (!text.trim() && !files.length)} aria-label="Send"><Send /></button>
