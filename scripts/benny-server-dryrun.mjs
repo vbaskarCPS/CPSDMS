@@ -11,6 +11,7 @@ const fakeSb = `
     auth: { getUser: async () => ({ data: { user: s.user ? { id: 'u1' } : null } }) },
     rpc: async (fn, args) => { s.rpc.push([fn, args]);
       if (fn === 'benny_ok_any') return s.role ? { data: s.role, error: null } : { data: null, error: { message: 'Not allowed' } };
+      if (fn === 'benny_model_mode') return { data: s.mode || 'main', error: null };
       if (fn === 'benny_my_rm_ids') return { data: s.role === 'rm' ? ['rm_me', 'rm_buddy'] : null, error: null };
       if (fn === 'benny_side') return { data: { codes: ['NVN19', 'NVN24'], of: 19 }, error: null };
       if (fn === 'benny_bonus_rank') return { data: { ok: true, date: args.p_date || '2026-11-10', kept_as: 'the live day',
@@ -71,7 +72,8 @@ let handler;
 globalThis.Deno = { env: { get: k => ({ ANTHROPIC_API_KEY: 'test', SUPABASE_URL: 'http://x', SUPABASE_ANON_KEY: 'k', ...state.env }[k]) }, serve: h => { handler = h; } };
 globalThis.fetch = async (url, init) => {
   const u = String(url); const body = init?.body ? JSON.parse(init.body) : null; state.http.push([u, body]);
-  if (u.includes('api.anthropic.com')) { const next = state.script.shift(); assert(next, 'the model was asked more times than scripted'); state.lastAsk = body; return new Response(JSON.stringify(next), { status: 200 }); }
+  if (u.includes('api.anthropic.com') && state.fastDown && body.model === 'claude-haiku-5-5') { (state.models = state.models || []).push(body.model); return new Response(JSON.stringify({ error: { message: 'model: claude-haiku-5-5 not found' } }), { status: 404 }); }
+  if (u.includes('api.anthropic.com')) { const next = state.script.shift(); assert(next, 'the model was asked more times than scripted'); state.lastAsk = body; (state.models = state.models || []).push(body.model); return new Response(JSON.stringify(next), { status: 200 }); }
   throw new Error('unexpected fetch ' + u);
 };
 await import('data:text/javascript;base64,' + Buffer.from(r.outputFiles[0].text).toString('base64'));
@@ -79,11 +81,12 @@ const use = (name, input, id = 't' + Math.random()) => ({ type: 'tool_use', id, 
 const turn = (...content) => ({ content, stop_reason: content.some(c => c.type === 'tool_use') ? 'tool_use' : 'end_turn' });
 const say = text => turn({ type: 'text', text });
 const ask = async (text, context = {}, opts = {}) => {
-  state.rpc = []; state.http = [];
+  state.rpc = []; state.http = []; state.models = [];
   const res = await handler(new Request('http://x', { method: 'POST', headers: { Authorization: 'Bearer t' }, body: JSON.stringify({ messages: opts.messages || [{ role: 'user', content: text }], context: { center_id: 'c1', today: '2026-11-10', ...context } }) }));
   return { status: res.status, body: await res.json() };
 };
-const fns = () => state.rpc.map(x => x[0]);
+const calls = () => state.rpc.filter(x => x[0] !== 'benny_model_mode');   // the mode is read with every question
+const fns = () => calls().map(x => x[0]);
 // the server logs one line of token counts per question: kept here (and off the screen) to be checked in 5n
 const print = console.log; state.usage = [];
 console.log = (...a) => { if (typeof a[0] === 'string' && a[0].startsWith('benny-assist usage ')) state.usage.push(a[0]); else print(...a); };
@@ -119,7 +122,7 @@ state.role = 'rm';
 state.script = [turn(use('find_people', { q: 'chris' }), use('live_team', {})), say('I can only help with your team.')];
 a = await ask('whats chris number', { screen: 'rm', rm_manager: 'rm_someone_else' });
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_my_rm_ids', 'benny_live']);
-assert.equal(state.rpc[2][1].p_manager, 'rm_me');
+assert.equal(calls()[2][1].p_manager, 'rm_me');
 assert(!state.lastAsk.tools.some(t => ['find_people', 'day', 'maps', 'propose_start_day'].includes(t.name)));
 const results = state.lastAsk.messages.at(-1).content; assert(String(results[0].content).includes("isn't available"));
 console.log('3 route manager limits ✓');
@@ -136,7 +139,7 @@ console.log('4 map pins ✓');
 state.script = [turn(use('report_bug', { title: 'Houses don’t load on RMD143', what_happened: 'No houses drawn', steps: ['Open RM map', 'Tap RMD143'], severity: 'blocking' })), say('I’ll let Vijay know — it’s in the bug log.')];
 a = await ask('houses arent loading on rmd143', { path: '/app/rm', screen: 'rm', user_name: 'Franklyn Mitchell', center_name: 'BC Fall RJ', diag: { ua: 'UA', viewport: '390×844', errors: ['12:00:01 TypeError: x'] } });
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_log_save']);
-const saved = state.rpc[1][1];
+const saved = calls()[1][1];
 assert.equal(saved.p_kind, 'bug');
 assert.equal(saved.p_title, 'Houses don’t load on RMD143'); assert.equal(saved.p_path, '/app/rm'); assert.equal(saved.p_center, 'c1');
 assert.equal(saved.p_report.user, 'Franklyn Mitchell'); assert.deepEqual(saved.p_report.steps, ['Open RM map', 'Tap RMD143']); assert.deepEqual(saved.p_report.diag.errors, ['12:00:01 TypeError: x']);
@@ -149,7 +152,7 @@ state.role = 'rm';
 state.script = [turn(use('propose_partner', { a: 'Jahswill', b: 'Kevontae' })), say('I heard Jaz will and Kevin Tay: Kevontae joins Jahswill’s cart. Tap Partner up to do it.')];
 a = await ask('partner up jaz will with kevin tay', { screen: 'rm', rm_manager: 'rm_me', spoken: true });
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_my_rm_ids', 'benny_vocab', 'benny_check_move']);
-assert.deepEqual(state.rpc[2][1], { p_center: 'c1', p_date: '2026-11-10', p_manager: 'rm_me' });
+assert.deepEqual(calls()[2][1], { p_center: 'c1', p_date: '2026-11-10', p_manager: 'rm_me' });
 assert(sysText().includes('SPOKEN') && sysText().includes('Workers today: Jahswill Nuetey, Kevontae Ragguette'));
 assert.equal(a.body.proposal.kind, 'partner'); assert.equal(a.body.proposal.check.a.name, 'Jahswill Nuetey');
 state.script = [say('ok')];
@@ -163,11 +166,11 @@ state.role = 'admin';
 state.script = [turn(use('log_request', { title: 'Move a prebook to another route', asked: 'move the oak st prebook to ndel33', why_not: 'no tool changes a booking’s route' })), say('I can’t do that yet. It’s logged for Vijay.')];
 a = await ask('move the oak st prebook to ndel33');
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_log_save']);
-assert.equal(state.rpc[1][1].p_kind, 'request'); assert.equal(state.rpc[1][1].p_report.asked, 'move the oak st prebook to ndel33'); assert.equal(state.rpc[1][1].p_report.diag, null);
+assert.equal(calls()[1][1].p_kind, 'request'); assert.equal(calls()[1][1].p_report.asked, 'move the oak st prebook to ndel33'); assert.equal(calls()[1][1].p_report.diag, null);
 state.script = [say('I can’t change a worker’s rate from here.')];           // forgot to log it
 a = await ask('bump kyles alumni rate to 2 dollars');
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_log_save']);
-assert.equal(state.rpc[1][1].p_kind, 'request'); assert.equal(state.rpc[1][1].p_report.auto, true); assert.equal(state.rpc[1][1].p_title, 'bump kyles alumni rate to 2 dollars');
+assert.equal(calls()[1][1].p_kind, 'request'); assert.equal(calls()[1][1].p_report.auto, true); assert.equal(calls()[1][1].p_title, 'bump kyles alumni rate to 2 dollars');
 state.script = [say('I can only help with the DMS.')];                        // off topic: not logged
 a = await ask('whats the weather'); assert.deepEqual(fns(), ['benny_ok_any']);
 state.script = [turn(use('propose_give_route', { route: 'NDEL33', worker: 'Zorro' })), say('I can’t find a worker called Zorro.')];   // a not-found is not a missing tool
@@ -242,7 +245,7 @@ assert(sysText().includes('on the floater map, following Franklyn Mitchell, Jova
 state.script = [turn(use('live_team', {})), say('8 carts out.')];
 a = await ask('who is out', { ...floater, spoken: true });
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_vocab', 'benny_live']);
-assert.equal(state.rpc[1][1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung'); assert.equal(state.rpc[2][1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');
+assert.equal(calls()[1][1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung'); assert.equal(calls()[2][1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');
 state.role = 'admin';
 console.log('5g the floater map: "my team" is the managers followed, checked by the database ✓');
 
@@ -383,9 +386,68 @@ state.script = [{ ...turn(use('maps', { q: 'Surrey' })), usage: { input_tokens: 
   { ...say('Southeast Surrey #3.'), usage: { input_tokens: 900, cache_creation_input_tokens: 0, cache_read_input_tokens: 11000, output_tokens: 40 } }];
 await ask('which surrey map has the most rejuv past clients', { user_name: 'Vijay Baskaran' });
 assert.equal(state.usage.length, 1);
-assert.equal(state.usage[0], 'benny-assist usage {"role":"admin","model":"claude-sonnet-5-5","steps":2,"input":1300,"cache_write":11000,"cache_read":11000,"output":100}');
+assert.equal(state.usage[0], 'benny-assist usage {"role":"admin","mode":"main","by":"main","why":null,"fast_model":"claude-haiku-5-5","main_model":"claude-sonnet-5-5","fast":{"steps":0,"input":0,"cache_write":0,"cache_read":0,"output":0},"main":{"steps":2,"input":1300,"cache_write":11000,"cache_read":11000,"output":100}}');
 state.role = 'admin';
 console.log('5n prompt cache: tools + rules identical per role and marked to be kept; who, day and screen come after, never kept ✓');
+
+// 5o. two models. fast_first: the small model takes plain lookups first, and the server shows its answer only when it is
+// safe to; anything else is done again on the main model. Off (mode main) nothing changes: every scenario above ran that way.
+const FASTM = 'claude-haiku-5-5', MAINM = 'claude-sonnet-5-5';
+const used = () => JSON.parse(state.usage.pop().slice('benny-assist usage '.length));
+state.role = 'admin'; state.mode = 'fast_first'; state.usage = [];
+// a plain lookup, every number in the answer from the lookup: the small model's answer is the one shown
+state.script = [turn(use('text_people', {})), say('2 workers on the list for 2026-11-10 aren’t marked as showed: Steven Doherty (I1169), 3 of 10 days, and Tim Chan (B1003), 7 of 10.')];
+a = await ask('who didnt show today');
+assert.deepEqual(state.models, [FASTM, FASTM]); assert(a.body.reply.startsWith('2 workers')); assert(!('route' in a.body), 'which model answered is only told to a super admin trying it out');
+let u = used(); assert.equal(u.by, 'fast'); assert.equal(u.why, null); assert.equal(u.mode, 'fast_first'); assert.equal(u.main.steps, 0); assert.equal(u.fast.steps, 2);
+// a number the lookup didn't return (worked out, or made up): done again on the main model, and only that answer is shown
+state.script = [turn(use('text_people', {})), say('2 didn’t show, so 12 of the 14 did.'), turn(use('text_people', {})), say('Steven Doherty and Tim Chan aren’t marked as showed.')];
+a = await ask('who didnt show today', { model: 'fast' });
+assert.deepEqual(state.models, [FASTM, FASTM, MAINM, MAINM]); assert.equal(a.body.reply, 'Steven Doherty and Tim Chan aren’t marked as showed.');
+assert.deepEqual(a.body.route, { by: 'main', why: 'ungrounded', tokens: ['12'] }); assert.equal(used().why, 'ungrounded');
+// a code the lookup didn't return
+state.script = [turn(use('text_people', {})), say('Steven Doherty (I1170) didn’t show.'), turn(use('text_people', {})), say('Steven Doherty (I1169) didn’t show.')];
+a = await ask('did steven show', { model: 'fast' }); assert.deepEqual(a.body.route, { by: 'main', why: 'ungrounded', tokens: ['I1170'] });
+// anything that makes a card: the small model's call is not run (the check runs once, for the main model), and the card is the main model's
+state.script = [turn(use('propose_payouts', {})), turn(use('propose_payouts', {})), say('Tap Open to go through them.')];
+a = await ask('line up the payouts with nothing to count', { cards: ['payouts'] });
+assert.deepEqual(state.models, [FASTM, MAINM, MAINM]); assert.equal(fns().filter(f => f === 'benny_check_payouts').length, 1); assert.equal(a.body.proposal.kind, 'payouts'); assert.equal(used().why, 'tool:propose_payouts');
+// a ranking tool, and the log: also not run by the small model
+state.script = [turn(use('crew_stats', {})), turn(use('crew_stats', {})), say('Tim Hale and Kyle Pitt.')];
+a = await ask('who is on the crew list'); assert.equal(fns().filter(f => f === 'benny_crew_stats').length, 1); assert.equal(used().why, 'tool:crew_stats');
+state.script = [turn(use('log_request', { title: 'x', asked: 'x' })), turn(use('log_request', { title: 'Weather', asked: 'is it raining' })), say('I can’t do that yet; it’s logged for Vijay.')];
+a = await ask('is it raining in surrey'); assert.equal(fns().filter(f => f === 'benny_log_save').length, 1, 'the small model never writes to the log'); assert.equal(used().why, 'tool:log_request');
+// no lookup at all, "I can't", "Tap …", a lookup that failed, a name it had to guess: none of these is shown
+for (const [first, why] of [[[say('15 workers are booked today.')], 'no_lookup'], [[turn(use('text_people', {})), say('I can’t see that.')], 'cant'],
+  [[turn(use('text_people', {})), say('Tap Text on each one.')], 'says_tap'], [[turn(use('nope_lookup', {}))], 'tool:nope_lookup']]) {
+  state.script = [...first, say('From the main model.')];
+  a = await ask('who is booked', { model: 'fast' }); assert.equal(a.body.reply, 'From the main model.', why); assert.equal(a.body.route.why, why); assert.equal(state.models.at(-1), MAINM);
+}
+state.script = [turn(use('find_people', { q: 'x' })), say('From the main model.')];   // benny_find_people isn't in the stand-in database: an error
+a = await ask('whats kyles number', { model: 'fast' }); assert.equal(a.body.route.why, 'tool_error');
+// three rounds of lookups is one too many for the small model
+state.script = [turn(use('text_people', {})), turn(use('text_people', {})), turn(use('text_people', {})), say('From the main model.')];
+a = await ask('who is booked', { model: 'fast' }); assert.equal(a.body.route.why, 'steps'); assert.deepEqual(state.models, [FASTM, FASTM, FASTM, MAINM]);
+// questions the small model isn't tried on: comparing or picking out, changing something, and anything spoken
+for (const [q, ctx2, why] of [['which surrey map has the most rejuv past clients', {}, 'compare'], ['start tomorrow with me solo', {}, 'change'], ['who didnt show today', { spoken: true }, 'spoken']]) {
+  state.script = [say('From the main model.')];
+  a = await ask(q, { ...ctx2, model: 'fast' }); assert.deepEqual(state.models, [MAINM], q); assert.deepEqual(a.body.route, { by: 'main', why });
+}
+// the small model is down or unknown: the person still gets their answer, from the main model
+state.fastDown = true; state.script = [turn(use('text_people', {})), say('From the main model.')];
+a = await ask('who didnt show today', { model: 'fast' }); assert.equal(a.status, 200); assert.equal(a.body.reply, 'From the main model.'); assert.deepEqual(a.body.route, { by: 'main', why: 'fast_failed' }); assert.deepEqual(state.models, [FASTM, MAINM, MAINM]);
+state.fastDown = false;
+// the switch: off in the database, a super admin's own app can still try it; a route manager's can't; 'main' turns it off for a tester
+state.mode = 'main';
+state.script = [turn(use('text_people', {})), say('Steven Doherty (I1169) and Tim Chan (B1003).')];
+a = await ask('who didnt show today', { model: 'fast' }); assert.deepEqual(state.models, [FASTM, FASTM]); assert.deepEqual(a.body.route, { by: 'fast', why: null });
+state.script = [say('ok')]; a = await ask('who didnt show today'); assert.deepEqual(state.models, [MAINM]); assert.equal(used().mode, 'main');
+state.role = 'rm'; state.script = [say('ok')]; a = await ask('who is on my team', { model: 'fast', screen: 'rm', rm_manager: 'rm_me' }); assert.deepEqual(state.models, [MAINM]); assert(!('route' in a.body));
+state.role = 'admin'; state.mode = 'fast_first'; state.script = [say('ok')]; a = await ask('who didnt show today', { model: 'main' }); assert.deepEqual(state.models, [MAINM]);
+// a route manager gets it from the setting like anyone else
+state.role = 'rm'; state.script = [turn(use('live_team', {})), say('Your team is live.')]; a = await ask('who is on my team', { screen: 'rm', rm_manager: 'rm_me' }); assert.deepEqual(state.models, [FASTM, FASTM]);
+state.role = 'admin'; state.mode = 'main'; state.usage = [];
+console.log('5o two models: plain lookups on the small one, checked by the server; cards, rankings, the log and anything unchecked on the main one ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

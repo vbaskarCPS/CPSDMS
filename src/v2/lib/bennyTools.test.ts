@@ -1,6 +1,6 @@
 // The Benny's tools (supabase/functions/benny-assist/tools.ts): who gets which, and that each one goes somewhere.
 import { describe, it, expect } from 'vitest';
-import { TOOLS, dayOpen, forModel, heardRight, now, openMap, rules, system, systemBlocks, toolCall, toolsFor } from '../../../supabase/functions/benny-assist/tools';
+import { FAST_TOOLS, TOOLS, arrayLengths, dayOpen, fastAnswerStop, forModel, heardRight, needsMain, now, openMap, rules, system, systemBlocks, toolCall, toolsFor, ungrounded } from '../../../supabase/functions/benny-assist/tools';
 
 const ctx = { center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-10', rm_manager: 'rm_x' };
 
@@ -29,6 +29,61 @@ describe('the Benny’s tools', () => {
     expect(rules('admin')).toContain('come after these rules, under "Right now"');
     expect(system(vijay, 'admin')).toBe(rules('admin') + now(vijay, 'admin'));   // the one-text form used by the checks below is the two parts, nothing else
     expect(rules('admin').length).toBeGreaterThan(20 * now(vijay, 'admin').length);
+  });
+  describe('two models: what the small one may answer', () => {
+    const lookup = JSON.stringify({ ok: true, date: '2026-11-11', on_list: 15, people: [
+      { cn: 'I1002', name: 'Nathan Clark', days_worked: 9, days_on_list: 11, last_worked: '2026-11-10', has_cell: true },
+      { cn: 'I1169', name: 'Steven Doherty', days_worked: 3, days_on_list: 10, last_worked: '2026-11-04', has_cell: true }] });
+    const lengths = arrayLengths(JSON.parse(lookup));
+    it('only plain lookups: nothing that makes a card, ranks, splits, works out routes or writes to the log', () => {
+      for (const name of FAST_TOOLS) {
+        const call = toolCall(name, {}, ctx);
+        expect(call && 'fn' in call && !call.card, name).toBe(true);
+        expect(name).not.toMatch(/^propose_|crew_stats|bonus_ranking|map_side|connected_routes|report_bug|log_request/);
+      }
+      expect(TOOLS.map(x => x.name)).toEqual(expect.arrayContaining(FAST_TOOLS));
+    });
+    it('a question that compares, picks out or changes something isn’t tried on it', () => {
+      for (const q of ['Which Surrey map has the most rejuv past clients?', 'who are my best workers', 'highest rejuv PCL density in Richmond', 'who has more than 10 steps', 'top two carts', 'Kyle vs Michael today'])
+        expect(needsMain(q), q).toBe('compare');
+      for (const q of ['Start tomorrow with me, solo', 'give Wilson route 35', 'text the guys that didn’t show', 'drop a pin at Wilson', 'plan my pickup order', 'close the ticket at 3575 Latimer', 'add a $50 bonus for Kyle', 'partner up Nathan with Michael A'])
+        expect(needsMain(q), q).toBe('change');
+      for (const q of ['Who’s booked today?', 'who didn’t show today', 'How many open prebooks in Surrey?', 'what has Kyle logged', 'who’s on my team', 'what’s Kyle’s phone number', 'which payouts are open',
+        'how much cash should Nathan have', 'what’s on route PCQ64', 'is 3575 Latimer done', 'Show me where the prebooks in Surrey are', 'is the day closed', 'any updates on Tim'])
+        expect(needsMain(q), q).toBeNull();
+    });
+    it('every number in its answer has to be in what the lookups returned', () => {
+      const ok = '2 workers on today’s list aren’t marked as showed:\n- Nathan Clark (I1002): worked 9 of 11 days, last on 11-10.\n- Steven Doherty (I1169): worked 3 of 10 days, last on 2026-11-04.\n15 are on the list.';
+      expect(ungrounded(ok, [lookup], lengths)).toEqual([]);
+      expect(ungrounded('Two didn’t show.', [lookup], lengths)).toEqual([]);                    // a count in words, against the list of 2
+      expect(ungrounded('2 didn’t show, so 13 of the 15 did.', [lookup], lengths)).toEqual(['13']);   // worked out: not in the data
+      expect(ungrounded('Thirteen showed.', [lookup], lengths)).toEqual(['13']);
+      expect(ungrounded('Nathan worked 9 of 11 days (82%).', [lookup], lengths)).toEqual(['82']);
+      expect(ungrounded('Steven Doherty (I1196) worked 3 of 10 days.', [lookup], lengths)).toEqual(['I1196']);   // a code with two digits swapped
+      expect(ungrounded('He is on NVN19.', [lookup], lengths)).toEqual(['NVN19']);
+      expect(ungrounded('1. Nathan Clark\n2. Steven Doherty\n3) nobody else', [JSON.stringify({ people: ['a'] })], [])).toEqual([]);   // list numbering isn't a figure
+      expect(ungrounded('Without the list of 2, "2 didn’t show" is a count taken on trust.', [lookup.replace(/\d/g, 'x')], [])).toEqual(['2']);
+    });
+    it('figures compare as the data has them: dollars with commas, phone numbers, decimals, and digits inside codes are not figures', () => {
+      const data = JSON.stringify({ gross: 3582, pay: 149.57, per_route: 6.2, phone: '(604) 555-0101', route: 'NVN19', first_route: 'SES47', last_route: 'SES57', routes: 11 });
+      expect(ungrounded('Gross is $3,582 and pay is $149.57; 6.2 per route over 11 routes (SES47–SES57). Call 604-555-0101.', [data])).toEqual([]);
+      expect(ungrounded('Gross is $3,852.', [data])).toEqual(['3852']);
+      expect(ungrounded('6.3 per route.', [data])).toEqual(['6.3']);
+      expect(ungrounded('Call 604-555-0110.', [data])).toEqual(['6045550110']);
+      expect(ungrounded('There are 19 prebooks on NVN19.', [data])).toEqual(['19']);   // the 19 of NVN19 doesn't make "19 prebooks" true
+      expect(ungrounded('Route 35 has none.', [data, 'give Wilson route 35'])).toEqual([]);   // a number they said themselves
+    });
+    it('and its answer isn’t shown without a lookup, when it says to tap a card, or when a name had to be guessed', () => {
+      const chat = ['who didn’t show today', now(ctx, 'admin')];
+      expect(fastAnswerStop('Nathan Clark (I1002) and Steven Doherty (I1169) aren’t marked as showed.', [lookup], chat, lengths)).toBeNull();
+      expect(fastAnswerStop('  ', [lookup], chat, lengths)).toEqual({ why: 'empty' });
+      expect(fastAnswerStop('15 workers are booked.', [], [...chat, lookup], lengths)).toEqual({ why: 'no_lookup' });   // no lookup for THIS question, whatever the chat holds
+      expect(fastAnswerStop('Tap Text on each one; you press send.', [lookup], chat, lengths)).toEqual({ why: 'says_tap' });
+      expect(fastAnswerStop('Kevontae Ragguette is on NDEL33.', [JSON.stringify({ name: 'Kevontae Ragguette', heard_as: 'Kevin Tay', route: 'NDEL33' })], chat)).toEqual({ why: 'names' });
+      expect(fastAnswerStop('Which Michael?', [JSON.stringify({ which: ['Michael A', 'Michael B'] })], chat)).toEqual({ why: 'names' });
+      expect(fastAnswerStop('12 showed.', [lookup], chat, lengths)).toEqual({ why: 'ungrounded', tokens: ['12'] });
+      expect(fastAnswerStop('Today is 2026-11-10 and 2 didn’t show.', [lookup], chat, lengths)).toBeNull();   // today's date is known without a lookup
+    });
   });
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);

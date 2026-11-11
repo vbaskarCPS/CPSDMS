@@ -41,9 +41,15 @@ export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partn
  *  manager (an older tab would start the day and ignore the crews, so the server holds that card back from it). */
 export const CAN = ['crews'];
 
+/** A super admin trying the models out: localStorage benny.model = 'fast' (the small model first) or 'main' (the main model only).
+ *  The server ignores it from anyone else, and without it uses its own setting. */
+function tryModel(): { model?: 'fast' | 'main' } {
+  try { const m = localStorage.getItem('benny.model'); return m === 'fast' || m === 'main' ? { model: m } : {}; } catch { return {}; }
+}
+
 export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null }> {
   const lastAsk = [...messages].reverse().find(m => m.role === 'user');
-  const body = { messages: forServer(messages), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag(), cards: [...CARDS, ...CAN] } };
+  const body = { messages: forServer(messages), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag(), cards: [...CARDS, ...CAN], ...tryModel() } };
   const { data, error } = await db.functions.invoke('benny-assist', { body });
   if (error) {
     // the function's own message (e.g. "for super admins") rides in the response body
@@ -52,6 +58,7 @@ export async function askBenny(messages: BennyMsg[], context: BennyContext): Pro
     throw new Error(msg || error.message || 'The Benny didn’t answer');
   }
   if (data?.error) throw new Error(data.error);
+  if (data?.route) console.info('[benny route]', JSON.stringify(data.route));   // only sent to a super admin trying the models out
   const got = (data?.proposal as BennyProposal) || null;
   const answer = { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: got && CARDS.includes(got.kind) ? got : null };
   // an order comes planned in straight lines: here it is put in driving order by the road's own times, when they can be read
