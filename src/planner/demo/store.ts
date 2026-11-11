@@ -82,6 +82,9 @@ export async function demoInvoke(body: Record<string, unknown>): Promise<unknown
     ], videos: [{ id: 'dQw4w9WgXcQ', title: 'Mobility flow for tight hips — 3 min', seconds: 185 }] };
     case 'deals': return { items: [], specialty: [] };
     case 'receipt': {
+      // a screenshot for a wish list (features/shop/wishPics.ts asks the receipt reader, and says so in its note)
+      if (/product page/i.test(String(body.note || ''))) return { kind: 'other', merchant: 'Simons', date: '', time: '', total: 128, subtotal: 0, tax: 0, tip: 0, payment: 'unknown', card_last4: '',
+        items: [{ name: 'Merino wool throw blanket, oat', amount: 128, category: 'Shopping' }], category: 'Shopping', confidence: 'medium', confidence_note: '' };
       const d = new Date(`${String(body.today || '').slice(0, 10) || new Date().toISOString().slice(0, 10)}T12:00:00`); d.setDate(d.getDate() - 1);
       return { kind: 'receipt', merchant: 'Costco Wholesale', date: d.toISOString().slice(0, 10), time: '14:12', total: 182.37, subtotal: 171.9, tax: 10.47, tip: 0, payment: 'card', card_last4: '4421',
         items: [{ name: 'KS Organic Eggs 24ct', amount: 9.99, category: 'Groceries' }, { name: 'Chicken Thighs 2.4 kg', amount: 24.89, category: 'Groceries' }, { name: 'Basmati Rice 10 kg', amount: 21.99, category: 'Groceries' },
