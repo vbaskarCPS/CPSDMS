@@ -22,6 +22,7 @@ import { outlineFeatures, type OutlineInfo, type Outlines } from '../../lib/mapO
 import { autoBuild, outlineBox } from './autoBuild';
 import type { LngLat } from '../../lib/autoRoutes';
 import { tidyGaps } from '../../lib/tidyGaps';
+import { leftOut, sharedLabel, sharedWays, trimsLabel, withoutTrimmed, type SavedSeg, type Trim } from '../../lib/routeOverlap';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -1458,6 +1459,12 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
     if (!currentArea) return;
     // Until the saved routes are back on the map, this tab doesn't hold the whole map: saving would drop them.
     if (restoredFor !== currentArea.area_name) { setError('The saved routes haven’t finished loading — wait a moment, then save again.'); return; }
+    // one street, one route: a road on two of this map's routes would split its past clients, bookings and houses
+    const shared = sharedWays(routes.filter(r => r.selectedWayIds.size > 0), effectiveWays);
+    if (shared.length) {
+      setError(`A street is on two routes: ${sharedLabel(shared, n => formatRouteCode(currentArea.prefix, n))}. Take it off one of them, then save.`);
+      return;
+    }
     setSaving(true); setError(null);
     try {
       const approved = routes.filter(r => r.status === 'approved' && r.selectedWayIds.size > 0);
@@ -1473,10 +1480,11 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
         const { error: delErr } = await supabase.from('route_maps').delete().eq('area_name', currentArea.area_name).in('route_number', dropped);
         if (delErr) throw delErr;
       }
+      const left: Trim[] = [];
       for (const route of approved) {
         const segments = effectiveWays.filter(w => route.selectedWayIds.has(w.id)).map(w => ({ osmId: w.rootId ?? w.id, name: w.name, coordinates: w.geometry }));
         const routeCode = formatRouteCode(currentArea.prefix, route.num);
-        const { error: upErr } = await supabase.from('route_maps').upsert({
+        const { data: savedRow, error: upErr } = await supabase.from('route_maps').upsert({
           area_name: currentArea.area_name,
           route_number: route.num,
           route_code: routeCode,
@@ -1487,8 +1495,16 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
           ai_notes: route.aiNotes,
           approved_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-        }, { onConflict: 'area_name,route_number' });
+        }, { onConflict: 'area_name,route_number' }).select('segments').single();
         if (upErr) throw upErr;
+        // a street piece another map's route already has is left out by the database (route_maps_no_overlap)
+        left.push(...leftOut(routeCode, route.num, segments, (savedRow as { segments?: SavedSeg[] } | null)?.segments));
+      }
+      if (left.length) {
+        const { data: who } = await supabase.rpc('route_overlap_who', { p_area: currentArea.area_name, p_keys: left.map(t => t.seg_key) });
+        const byKey = new Map(((who || []) as Trim[]).map(t => [`${t.route_number}|${t.seg_key}`, t]));
+        for (const t of left) t.kept_by = byKey.get(`${t.route_number}|${t.seg_key}`)?.kept_by ?? null;
+        setRoutes(prev => withoutTrimmed(prev, effectiveWays, left));
       }
       // The map's span is its first unbroken run of numbers (a route added past another map's
       // numbers — LNG74 after LNG28 — is kept by being drawn, not by stretching the span over that map).
@@ -1499,7 +1515,7 @@ const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void; otherMaps?
       await supabase.from('area_prefixes').update({ route_count: newRouteCount }).eq('area_name', currentArea.area_name);
       // Update local state so card reflects new range immediately on return
       setAreas(prev => prev.map(a => a.area_name === currentArea.area_name ? { ...a, route_count: newRouteCount } : a));
-      alert(`Saved ${approved.length} approved routes for ${currentArea.area_name}`);
+      alert(`Saved ${approved.length} approved routes for ${currentArea.area_name}${left.length ? `\n\n${trimsLabel(left)}` : ''}`);
     } catch { setError('Failed to save.'); }
     finally { setSaving(false); }
   };
