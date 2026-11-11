@@ -12,6 +12,7 @@ import { Check, Mic, Send, Sparkles, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { askBenny, canListen, demoDue, listen, primeVoice, readDemo, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
 import { describe, doProposal, emailsPreset, payoutsStart, type BennyProposal } from '../../lib/bennyActions';
+import { bonusReplaced } from '../../lib/bennyBonus';
 import { BennyMapCard } from './BennyMap';
 import './benny.css';
 
@@ -255,7 +256,9 @@ export const Benny: React.FC<{
               <div key={i} className={`benny-msg ${m.role}${m.error ? ' err' : ''}`}>
                 <div className="benny-bubble"><Rich text={m.text} /></div>
                 {m.map && <BennyMapCard spec={m.map} centerId={cid} />}
-                {m.proposal && <ProposalCard p={m.proposal} outcome={m.outcome} busy={doing === i} onDo={() => void confirm(i)}
+                {m.proposal && <ProposalCard p={m.proposal} busy={doing === i} onDo={() => void confirm(i)}
+                  // a bonus card overtaken by a newer one for the same place is shown, but no longer the one to tap
+                  outcome={m.outcome || (bonusReplaced(msgs.map(x => x.proposal), i) ? { state: 'dismissed', text: 'Replaced by the newer card below.' } : undefined)}
                   onNo={() => settle(i, { state: 'dismissed', text: 'Not done.' })}
                   onChange={m.proposal.kind === 'start_day' ? () => { const d = (m.proposal as Extract<BennyProposal, { kind: 'start_day' }>).check.date; settle(i, { state: 'dismissed', text: 'Opened Start session to change it.' }); nav(`/app/workerbook/days/${d}/start`); }
                     : m.proposal.kind === 'booking' ? () => { settle(i, { state: 'dismissed', text: 'Opened Bookings › List to change it there.' }); nav('/app/bookings/list'); } : undefined} />}

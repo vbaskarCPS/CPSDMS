@@ -65,6 +65,18 @@ export function withBonuses(carts: PayoutCart[], bonuses: BonusItem[], firstId: 
   return next;
 }
 
+/**
+ * An untapped bonus card is replaced once a later card gives one of the same places on the same day ("actually give
+ * Mugove second"): a place goes to one cart only, so the older card is no longer the one to tap.
+ */
+export function bonusReplaced(cards: ({ kind: string; check: unknown } | null | undefined)[], i: number): boolean {
+  const mine = cards[i];
+  if (!mine || mine.kind !== 'bonus') return false;
+  const a = mine.check as BonusCheck;
+  return cards.slice(i + 1).some(c => !!c && c.kind === 'bonus' && (c.check as BonusCheck).date === a.date
+    && (c.check as BonusCheck).bonuses.some(x => a.bonuses.some(y => y.label === x.label)));
+}
+
 /** What was saved, for the answer: "1st place to Michael ($50.00), 2nd place to Kyle ($50.00)". */
 export function bonusesSaid(list: { workers: string; label: string; amount: number }[], dollars: (n: number) => string): string {
   const place = (label: string) => /- (\d+\w\w) Place$/.exec(label)?.[1];
