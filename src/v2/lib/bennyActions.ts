@@ -9,8 +9,10 @@
 //   stops      → RM map › Pins: one numbered pin per cart, in the planned order; an earlier order of the same kind is replaced
 //   job        → RM map › a worker's jobs › edit a job: its amount and how it was paid (the edit screen's own save, which
 //                works the cart's equiv and totals out again). The database keeps a record of each one (benny_job_changes).
-// One card changes nothing: booking_emails opens Bookings › Send booking emails with the day and routes picked. The person
-// reads the emails there and sends them; the Benny never sends.
+// Two cards change nothing. booking_emails opens Bookings › Send booking emails with the day and routes picked: the person
+// reads the emails there and sends them; the Benny never sends. payouts opens the payout screen at the first open payout
+// with no cash or cheque to count: the person presses Finalize on each and the screen moves to the next; the Benny never
+// pays anyone out.
 import { getDay, listRoster, type RosterRow } from './workerbook';
 import { availableManagers, getSession, nextTeamName, planProblems, startSession, type Plan, type PlanManager, type PlanRoute, type PlanTeam } from './startSession';
 import { db, must } from './client';
@@ -22,6 +24,7 @@ import { fullName } from './workerbook';
 import { saveBooking, type BookingPatch, type BookingStatus } from './bookings';
 import type { BookingEmailKind, EmailPreset } from './bookingEmails';
 import { STOP_WORD } from './bennyDrive';
+import { queueHref } from './payoutQueue';
 
 export type TeamMode = 'roster' | 'solo' | 'pairs';
 export interface StartDayCheck {
@@ -96,7 +99,19 @@ export function jobUpdates(patch: JobPatch): { price: number; displayPrice: stri
   return { price: patch.price, displayPrice: patch.display_price, paymentMethod: patch.payment_method, paymentBreakdown: patch.payment_breakdown, ...(patch.items ? { items: patch.items } : {}) };
 }
 
+/** The open payouts with nothing to count by hand (no cash, no cheque), in the order to go through them. */
+export interface PayoutsCheck {
+  ok: boolean; problems?: string[]; date: string;
+  carts: { cart_id: string; cn: string; workers: string[]; jobs: number; gross: number; upsell_gross?: number; collected: Record<string, number> }[];
+  to_count?: { workers: string[]; cash: number; cheque: number }[]; no_jobs?: string[][]; paid_out?: number;
+}
+const firsts = (names: string[]) => names.map(n => n.split(' ')[0]).join(' + ');
+const PAID_AS: [string, string][] = [['card', 'card'], ['e_transfer', 'e-transfer'], ['prepaid', 'prepaid'], ['billed', 'billed'], ['cash', 'cash'], ['cheque', 'cheque']];
+/** Where the payouts card goes: the payout screen at the first payout, with the rest lined up behind it. */
+export const payoutsStart = (c: PayoutsCheck): string | null => queueHref(c.date, c.carts.map(x => x.cn));
+
 export type BennyProposal =
+  | { kind: 'payouts'; check: PayoutsCheck }
   | { kind: 'job'; check: JobCheck }
   | { kind: 'pin'; check: PinCheck }
   | { kind: 'stops'; check: StopsCheck }
@@ -218,6 +233,20 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         lines.push(`${cap(NOTE[k])}: ${n.mode === 'clear' ? `cleared (was “${n.was}”)` : n.mode === 'replace' ? `“${n.was}” becomes “${n.text}”` : n.mode === 'add' ? `adds “${n.text}”` : `“${n.text}”`}`);
       }
       return { title, lines: [...lines, ...(c.notes || [])], action: 'Save' };
+    }
+    case 'payouts': {
+      const c = p.check; const n = c.carts.length;
+      return {
+        title: `Go through ${n} payout${n === 1 ? '' : 's'} with no cash or cheque`,
+        lines: [
+          ...c.carts.slice(0, 10).map(x => `${firsts(x.workers)} · ${x.jobs} job${x.jobs === 1 ? '' : 's'} · ${PAID_AS.filter(([k]) => (x.collected?.[k] || 0) > 0).map(([k, w]) => `${dollars(x.collected[k])} ${w}`).join(', ') || dollars(x.gross + (x.upsell_gross || 0))}`),
+          ...(n > 10 ? [`+ ${n - 10} more`] : []),
+          ...(c.to_count?.length ? [`Left for a hand count: ${c.to_count.map(t => `${firsts(t.workers)} (${[t.cash > 0 ? `${dollars(t.cash)} cash` : '', t.cheque > 0 ? `${dollars(t.cheque)} in cheques` : ''].filter(Boolean).join(', ')})`).join('; ')}`] : []),
+          ...(c.no_jobs?.length ? [`No jobs, left open: ${c.no_jobs.map(firsts).join(', ')}`] : []),
+          'Nothing is paid out from here: each one opens on the payout screen and you press Finalize. It then moves to the next.',
+        ],
+        action: 'Open',
+      };
     }
     case 'job': {
       const c = p.check; const j = c.job; const ch = c.change; const first = c.worker.name.split(' ')[0];
@@ -428,5 +457,6 @@ export async function doProposal(p: BennyProposal, center: CenterLite): Promise<
   if (p.kind === 'stops') return stopsFromBenny(p, center.id);
   // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)
   if (p.kind === 'booking_emails') throw new Error('Open Bookings › Send booking emails to read and send these.');
+  if (p.kind === 'payouts') throw new Error('Open the payouts on the day page to finalize these.');
   return moveFromBenny(p, center.id);
 }

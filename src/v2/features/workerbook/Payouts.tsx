@@ -1,8 +1,8 @@
 // src/v2/features/workerbook/Payouts.tsx — the live day's payouts (shown on the day page). The screen itself is the old
 // app's payout screen (same numbers, same saves), shown in the new app's colours.
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Navigate, useParams } from 'react-router-dom';
-import { Search } from 'lucide-react';
+import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
+import { Search, Sparkles } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import { legacyLiveSession, pointLegacyAt } from '../../lib/legacy';
@@ -10,6 +10,7 @@ import { ErrorBox, Loading } from '../../ui';
 import { cartContext, cartStats, dayLines, saveDay, type PayoutCart } from '../../lib/payoutCarts';
 import { cartSessionId, fromBonus, savedDayView } from '../../lib/savedPayouts';
 import type { PayoutLine } from '../../lib/payslips';
+import { afterHref, dayHref, readQueue } from '../../lib/payoutQueue';
 import type { LogsheetSession, SeasonType, SortOption } from '../../../types';
 import type { PayoutTodaySource } from '../../../pages/Management/PayoutToday';
 import '../../ui/legacy.css';
@@ -148,19 +149,35 @@ export const Payouts: React.FC = () => {
   return <Navigate to={`/app/workerbook/days/${date}`} replace />;
 };
 
-/** /app/workerbook/days/:date/payouts/:contractorId — one worker's payout (the old app's screen). */
+/** /app/workerbook/days/:date/payouts/:contractorId — one worker's payout (the old app's screen).
+ *  Opened from a line-up (the Benny's "payouts with no cash or cheque": ?queue=…&at=1&of=3), saving a payout moves to
+ *  the next one instead of back to the day. The line-up pays nobody: every payout is finalized here, by hand. */
 export const PayoutWorker: React.FC = () => {
-  const { date = todayISO() } = useParams();
+  const { date = todayISO(), contractorId = '' } = useParams();
   const { center } = useAuth();
+  const queue = readQueue(useLocation().search);
+  const next = afterHref(date, queue);
   const ready = useLoad(() => center ? pointLegacyAt(center.id).then(() => true) : Promise.resolve(false), [center?.id]);
   if (!center) return <div className="v2-main v2-narrow"><div className="v2-card">Pick a command center first.</div></div>;
   if (ready.error) return <div className="v2-main v2-narrow"><ErrorBox error={ready.error} /></div>;
   if (!ready.data) return <div className="v2-main"><Loading /></div>;
   return (
-    <div className="v2-legacy v2-legacy-full">
-      <Suspense fallback={<Loading />}>
-        <PayoutContractor doneHref={`/app/workerbook/days/${date}`} />
-      </Suspense>
-    </div>
+    <>
+      {queue && (
+        <div className="v2-queue" role="status">
+          <Sparkles size={15} aria-hidden="true" />
+          <span><b>Payout {queue.at} of {queue.of}</b> with no cash or cheque, lined up by the Benny. {queue.rest.length ? 'Finalize takes you to the next one.' : 'This is the last one.'}</span>
+          <span className="v2-spacer" />
+          {queue.rest.length > 0 && <Link className="v2-link" to={next}>Skip this one</Link>}
+          <Link className="v2-link" to={dayHref(date)}>Stop</Link>
+        </div>
+      )}
+      <div className={`v2-legacy v2-legacy-full${queue ? ' queued' : ''}`}>
+        <Suspense fallback={<Loading />}>
+          {/* keyed by worker: moving along the line-up starts the next payout's screen fresh (cash, cheque, deductions) */}
+          <PayoutContractor key={contractorId} doneHref={next} />
+        </Suspense>
+      </div>
+    </>
   );
 };
