@@ -1,6 +1,6 @@
 // The Benny's tools (supabase/functions/benny-assist/tools.ts): who gets which, and that each one goes somewhere.
 import { describe, it, expect } from 'vitest';
-import { TOOLS, dayOpen, forModel, heardRight, openMap, system, toolCall, toolsFor } from '../../../supabase/functions/benny-assist/tools';
+import { TOOLS, dayOpen, forModel, heardRight, now, openMap, rules, system, systemBlocks, toolCall, toolsFor } from '../../../supabase/functions/benny-assist/tools';
 
 const ctx = { center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-10', rm_manager: 'rm_x' };
 
@@ -12,6 +12,23 @@ describe('the Benny’s tools', () => {
       if (call && 'fn' in call) { expect(call.fn).toMatch(/^benny_/); expect(call.args.p_center).toBe('c1'); }
     }
     expect(toolCall('nope', {}, ctx)).toBeNull();
+  });
+  it('what it is told comes in two parts: the rules (kept by the prompt cache) and what is true right now (never kept)', () => {
+    const vijay = { ...ctx, user_name: 'Vijay Baskaran', path: '/app/workerbook/days/2026-11-09' };
+    const other = { center_id: 'c2', center_name: 'ON Fall RJ', today: '2026-11-12', user_name: 'Someone Else', screen: 'rm', rm_manager: 'rm_y', spoken: true };
+    const [kept, live] = systemBlocks(vijay, 'admin');
+    expect(kept).toEqual({ type: 'text', text: rules('admin'), cache_control: { type: 'ephemeral' } });
+    expect(live).toEqual({ type: 'text', text: now(vijay, 'admin') });   // no mark: it changes with every person, day and screen
+    // the kept part is the same bytes whoever asks, wherever, whenever: one changed character and it is billed in full again
+    expect(systemBlocks(other, 'admin', { workers: ['Tim Chan'] })[0]).toEqual(kept);
+    expect(rules('rm')).not.toBe(rules('admin'));
+    for (const role of ['admin', 'rm'] as const) for (const personal of ['Vijay Baskaran', 'Someone Else', 'ON Fall RJ', '2026-11-10', '2026-11-12', 'rm_y', 'They have the workerbook day', 'SPOKEN', 'Right now:\n']) expect(rules(role), personal).not.toContain(personal);
+    expect(live.text).toBe('\n\nRight now:\nYou are helping a super admin (Vijay Baskaran). Today is 2026-11-10. The center is "BC Fall RJ". They have the workerbook day 2026-11-09 open: "the payouts", "the bonuses", "the top carts" mean that day unless they name another.');
+    expect(now(other, 'rm', { workers: ['Tim Chan'] })).toContain('You are helping a route manager (Someone Else). Today is 2026-11-12. The center is "ON Fall RJ". They are on the route manager map, open for rm_y');
+    expect(now(other, 'rm', { workers: ['Tim Chan'] })).toContain('Workers today: Tim Chan');
+    expect(rules('admin')).toContain('come after these rules, under "Right now"');
+    expect(system(vijay, 'admin')).toBe(rules('admin') + now(vijay, 'admin'));   // the one-text form used by the checks below is the two parts, nothing else
+    expect(rules('admin').length).toBeGreaterThan(20 * now(vijay, 'admin').length);
   });
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);

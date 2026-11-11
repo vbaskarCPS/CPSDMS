@@ -84,6 +84,11 @@ const ask = async (text, context = {}, opts = {}) => {
   return { status: res.status, body: await res.json() };
 };
 const fns = () => state.rpc.map(x => x[0]);
+// the server logs one line of token counts per question: kept here (and off the screen) to be checked in 5n
+const print = console.log; state.usage = [];
+console.log = (...a) => { if (typeof a[0] === 'string' && a[0].startsWith('benny-assist usage ')) state.usage.push(a[0]); else print(...a); };
+/** what the model was told, as one text (it is sent in two parts: the rules, kept by the prompt cache, then what is true right now) */
+const sysText = () => state.lastAsk.system.map(b => b.text).join('');
 
 // 1. start the day: side of a map → plan → a card, with its map even though the model drew none
 state.role = 'admin';
@@ -145,11 +150,11 @@ state.script = [turn(use('propose_partner', { a: 'Jahswill', b: 'Kevontae' })), 
 a = await ask('partner up jaz will with kevin tay', { screen: 'rm', rm_manager: 'rm_me', spoken: true });
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_my_rm_ids', 'benny_vocab', 'benny_check_move']);
 assert.deepEqual(state.rpc[2][1], { p_center: 'c1', p_date: '2026-11-10', p_manager: 'rm_me' });
-assert(state.lastAsk.system.includes('SPOKEN') && state.lastAsk.system.includes('Workers today: Jahswill Nuetey, Kevontae Ragguette'));
+assert(sysText().includes('SPOKEN') && sysText().includes('Workers today: Jahswill Nuetey, Kevontae Ragguette'));
 assert.equal(a.body.proposal.kind, 'partner'); assert.equal(a.body.proposal.check.a.name, 'Jahswill Nuetey');
 state.script = [say('ok')];
 a = await ask('who is on my team', { screen: 'rm', rm_manager: 'rm_me' });
-assert(!fns().includes('benny_vocab')); assert(!state.lastAsk.system.includes('SPOKEN'));
+assert(!fns().includes('benny_vocab')); assert(!sysText().includes('SPOKEN'));
 state.role = 'admin';
 console.log('5b spoken → real names sent along ✓');
 
@@ -233,7 +238,7 @@ a = await ask('plan my check order', floater);
 assert(!fns().includes('benny_my_rm_ids'), 'the floater map is not swapped for the person’s own manager map');
 assert.equal(state.rpc.at(-1)[1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');
 assert.equal(a.body.proposal.check.manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');   // the stand-in echoes it; the real check answers with the floater's id
-assert(state.lastAsk.system.includes('on the floater map, following Franklyn Mitchell, Jovan Chung'));
+assert(sysText().includes('on the floater map, following Franklyn Mitchell, Jovan Chung'));
 state.script = [turn(use('live_team', {})), say('8 carts out.')];
 a = await ask('who is out', { ...floater, spoken: true });
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_vocab', 'benny_live']);
@@ -308,7 +313,7 @@ assert.deepEqual(fns().filter(f => /bonus/.test(f)), ['benny_bonus_rank', 'benny
 assert.deepEqual(state.rpc.find(x => x[0] === 'benny_bonus_rank')[1], { p_center: 'c1', p_date: '2026-11-10' }, 'the day on the screen');
 assert.deepEqual(state.rpc.find(x => x[0] === 'benny_check_bonus')[1], { p_center: 'c1', p_date: '2026-11-10', p_bonuses: two.bonuses });
 assert.equal(a.body.proposal.kind, 'bonus'); assert.equal(a.body.proposal.check.bonuses.length, 2); assert.equal(a.body.map, null);
-assert(/They have the workerbook day 2026-11-10 open/.test(state.lastAsk.system));
+assert(/They have the workerbook day 2026-11-10 open/.test(sysText()));
 state.script = [turn(use('bonus_ranking', {})), turn(use('propose_bonuses', two)), say('Tap Add the bonuses to do it.')];
 a = await ask('give the top two bonus equiv carts 50 each', {});   // a tab opened before bonuses were a card
 assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
@@ -357,6 +362,30 @@ a = await ask('which surrey map has the highest rejuv pcl density');
 assert.deepEqual(state.rpc.find(x => x[0] === 'benny_maps_pcl')[1], { p_center: 'c1', p_q: 'Surrey', p_service: 'lawn_rejuv' });
 assert.equal(a.body.proposal, null); assert(/per_route/.test(toolResults()[0]));
 console.log('5m maps: past clients by service, ranked for the one asked ✓');
+
+// 5n. the prompt cache: the tools and the rules are the same bytes for every question from the same kind of person, and
+// are the only part marked to be kept; who is asking, the day and the screen come after and are never kept
+const told = async (role, context, text = 'hi') => { state.role = role; state.script = [say('ok')]; await ask(text, context); return { sys: state.lastAsk.system, tools: JSON.stringify(state.lastAsk.tools) }; };
+const a1 = await told('admin', { user_name: 'Vijay Baskaran', center_name: 'BC Fall RJ', today: '2026-11-10', path: '/app/workerbook/days/2026-11-10' });
+const a2 = await told('admin', { user_name: 'Someone Else', center_name: 'ON Fall RJ', today: '2026-11-12', path: '/app/bookings/list', spoken: true, screen: 'rm', rm_manager: 'rm_x' }, 'another question');
+const r1 = await told('rm', { user_name: 'Franklyn Mitchell', screen: 'rm', rm_manager: 'rm_me' });
+assert.equal(a1.sys.length, 2); assert.deepEqual(a1.sys[0].cache_control, { type: 'ephemeral' }); assert(!('cache_control' in a1.sys[1]));
+assert.equal(a1.sys[0].text, a2.sys[0].text, 'the kept part is the same for every super admin, whatever the day, center or screen');
+assert.equal(a1.tools, a2.tools); assert.notEqual(a1.sys[0].text, r1.sys[0].text, 'route managers have their own rules'); assert.notEqual(a1.tools, r1.tools);
+for (const personal of ['Vijay Baskaran', 'Someone Else', 'ON Fall RJ', '2026-11-10', '2026-11-12', 'They have the workerbook day', 'SPOKEN', 'rm_x']) assert(!a1.sys[0].text.includes(personal) && !a2.sys[0].text.includes(personal), personal + ' must not be in the kept part');
+assert(a1.sys[1].text.includes('Vijay Baskaran') && a1.sys[1].text.includes('Today is 2026-11-10') && a1.sys[1].text.includes('They have the workerbook day 2026-11-10 open'));
+assert(a2.sys[1].text.includes('SPOKEN') && a2.sys[1].text.includes('open for rm_x'));
+assert(a1.sys[0].text.length > 8 * a1.sys[1].text.length, 'nearly all of it is the kept part');
+assert(!state.lastAsk.tools.some(t => 'cache_control' in t) && !JSON.stringify(state.lastAsk.messages).includes('cache_control'));
+// one line of token counts per question goes to the function log: the steps added up, and nothing of what was said
+state.role = 'admin'; state.usage = [];
+state.script = [{ ...turn(use('maps', { q: 'Surrey' })), usage: { input_tokens: 400, cache_creation_input_tokens: 11000, cache_read_input_tokens: 0, output_tokens: 60 } },
+  { ...say('Southeast Surrey #3.'), usage: { input_tokens: 900, cache_creation_input_tokens: 0, cache_read_input_tokens: 11000, output_tokens: 40 } }];
+await ask('which surrey map has the most rejuv past clients', { user_name: 'Vijay Baskaran' });
+assert.equal(state.usage.length, 1);
+assert.equal(state.usage[0], 'benny-assist usage {"role":"admin","model":"claude-sonnet-5-5","steps":2,"input":1300,"cache_write":11000,"cache_read":11000,"output":100}');
+state.role = 'admin';
+console.log('5n prompt cache: tools + rules identical per role and marked to be kept; who, day and screen come after, never kept ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

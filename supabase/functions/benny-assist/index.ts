@@ -16,8 +16,12 @@
 // Bug reports, and requests it couldn't do (no tool for it), are saved in the app's own log (benny_bugs, shown in
 // Super Admin › Bug log): no GitHub issue, no email.
 // Model: BENNY_MODEL secret, else a Sonnet-class model. The Claude key lives only in ANTHROPIC_API_KEY.
+// Cost: the tools and the rules (the long, unchanging part of every request) are marked for the model's prompt cache, so
+// they are billed in full once and at a fraction on every step and question that follows within a few minutes. What is
+// true right now (who, the day, the screen) comes after them and is never kept. One line per question goes to the
+// function log with the token counts (no names, no text): "benny-assist usage {…}".
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { TOOLS, forModel, openMap, system, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
+import { TOOLS, forModel, openMap, systemBlocks, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
 const WORKSPACE = Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '';
@@ -30,6 +34,8 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 type Msg = { role: 'user' | 'assistant'; content: unknown };
 type Proposal = { kind: ProposalKind; check: Record<string, unknown>; team_mode?: string };
+/** What one call to the model was billed for: input in full, input written to the cache, input read from it, and output. */
+type Usage = { input_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number; output_tokens?: number };
 
 /** A bug, or a request the Benny couldn't do, goes into the app's own log (Super Admin › Bug log), with what the page knew. */
 async function logEntry(sb: SupabaseClient, ctx: Ctx, kind: 'bug' | 'request', input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -61,7 +67,7 @@ async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, i
   return { out: data };
 }
 
-async function claude(sys: string, messages: Msg[], tools: unknown[]): Promise<{ content: { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[]; stop_reason: string }> {
+async function claude(sys: unknown[], messages: Msg[], tools: unknown[]): Promise<{ content: { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[]; stop_reason: string; usage?: Usage }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
   let res: Response | null = null; let data: Record<string, unknown> = {};
@@ -113,11 +119,12 @@ Deno.serve(async req => {
       const { data } = await sb.rpc('benny_vocab', { p_center: ctx.center_id || null, p_date: /^\d{4}-\d{2}-\d{2}$/.test(ctx.today || '') ? ctx.today : null, p_manager: openMap(ctx) });
       vocab = (data as Vocab) || null;
     }
-    const sys = system(ctx, role as Role, vocab);
+    const sys = systemBlocks(ctx, role as Role, vocab);
     const tools = toolsFor(role as Role);
     const msgs: Msg[] = [...history];
     let map: unknown = null; let mapTitle = ''; let proposal: Proposal | null = null;
     let usedTools = 0; let logged = false;
+    const used = { steps: 0, input: 0, cache_write: 0, cache_read: 0, output: 0 };
     // a change that is about routes always comes with its map, even when the Benny didn't draw one
     const mapOf = (p: Proposal | null): unknown => {
       if (!p) return null;
@@ -141,6 +148,7 @@ Deno.serve(async req => {
     };
     const shows = new Set<string>([...FIRST_CARDS, ...(Array.isArray(ctx.cards) ? ctx.cards.map(String) : [])]);
     const done = (reply: string) => {
+      console.log('benny-assist usage ' + JSON.stringify({ role, model: MODEL, ...used }));
       // a tab opened before this kind of card existed can't draw it: say so, rather than send a card it would choke on
       // (the same for a start-day card that splits the crew between managers: an older tab would start the day without the crews)
       const old = proposal && (!shows.has(proposal.kind) || (proposal.kind === 'start_day' && (proposal.check as { crews?: boolean })?.crews === true && !shows.has('crews')));
@@ -152,6 +160,8 @@ Deno.serve(async req => {
     };
     for (let round = 0; round < 8; round++) {
       const r = await claude(sys, msgs, tools);
+      used.steps++; used.input += r.usage?.input_tokens || 0; used.cache_write += r.usage?.cache_creation_input_tokens || 0;
+      used.cache_read += r.usage?.cache_read_input_tokens || 0; used.output += r.usage?.output_tokens || 0;
       const uses = r.content.filter(c => c.type === 'tool_use');
       if (!uses.length || r.stop_reason !== 'tool_use') {
         const reply = r.content.filter(c => c.type === 'text').map(c => c.text || '').join('').trim();

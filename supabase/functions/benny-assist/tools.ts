@@ -204,19 +204,20 @@ export function openMap(ctx: Ctx): string | null {
 const followedNames = (ctx: Ctx): string[] => (Array.isArray(ctx.following_names) ? ctx.following_names : [])
   .filter(x => typeof x === 'string').map(x => x.replace(/[^\p{L}\p{N} .'’-]/gu, '').trim().slice(0, 60)).filter(Boolean).slice(0, 12);
 
-export function system(ctx: Ctx, role: Role, vocab?: Vocab | null): string {
+/**
+ * What the Benny is told, in two parts, so the long part can be kept by the model's prompt cache and billed at a fraction
+ * on every step after the first:
+ *   rules(role): everything that is the same for every question from that kind of person (the rules, how CPS talks).
+ *                Nothing about who is asking, the day or the screen may go in here: one changed character and it is
+ *                billed in full again.
+ *   now(ctx):    who is asking, the date, the center, the screen that is open, and for a spoken message the names to
+ *                listen for. Short, and sent in full every time.
+ * The tools come before both and are kept with the rules (toolsFor(role) is the same list every time).
+ */
+export function rules(role: Role): string {
   const who = role === 'admin' ? 'a super admin' : 'a route manager';
-  const onRm = ctx.screen === 'rm';
-  const floating = onRm && isFloaterId(ctx.rm_manager);
-  const names = followedNames(ctx);
-  const where = !onRm ? '' : floating
-    ? ` They are on the floater map, following ${names.length ? names.join(', ') : 'the managers they picked'}: "my team", "my carts", "my routes", "me" mean those managers' teams together. A pin or an order they make is their own, for those managers' carts.`
-    : ` They are on the route manager map${ctx.rm_manager ? `, open for ${ctx.rm_manager}` : ''}: "my team", "my routes", "me" mean that map's team.`;
-  const open = dayOpen(ctx);
-  const looking = open ? ` They have the workerbook day ${open} open: "the payouts", "the bonuses", "the top carts" mean that day unless they name another.` : '';
   return `You are The Benny, the assistant inside the Property Stars DMS app (lawn and property services: aeration, lawn rejuv, sealing).
-You help ${who}${ctx.user_name ? ` (${ctx.user_name})` : ''} with the app's own data and work.
-Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown'}".${where}${looking}
+You help ${who} with the app's own data and work. Who is asking, today's date, the center and the screen they have open come after these rules, under "Right now".
 
 Rules:
 - Answer from the tools, never from memory or guesses. If the tools can't answer it, say so and name the screen that can.
@@ -245,7 +246,30 @@ ${role === 'admin' ? `- Crews ("give Franklyn the worst half and me the good guy
 - Can't do it: when they ask for something in the DMS that you have no tool for (a change you can't prepare, numbers no tool returns), call log_request with what they wanted, then say plainly that you can't do that yet and that it's logged for Vijay. Never pretend, and never leave it unlogged.
 - A tool result with heard_as matched the name by sound: say which name you used. A result with which or closest lists near matches: ask which one, or use it when only one fits.
 - Never reveal passwords, card numbers or ID numbers; the tools don't return them.
-` + CPS_WORDS + (ctx.spoken ? heardRight(vocab) : '');
+` + CPS_WORDS;
+}
+export function now(ctx: Ctx, role: Role, vocab?: Vocab | null): string {
+  const who = role === 'admin' ? 'a super admin' : 'a route manager';
+  const onRm = ctx.screen === 'rm';
+  const floating = onRm && isFloaterId(ctx.rm_manager);
+  const names = followedNames(ctx);
+  const where = !onRm ? '' : floating
+    ? ` They are on the floater map, following ${names.length ? names.join(', ') : 'the managers they picked'}: "my team", "my carts", "my routes", "me" mean those managers' teams together. A pin or an order they make is their own, for those managers' carts.`
+    : ` They are on the route manager map${ctx.rm_manager ? `, open for ${ctx.rm_manager}` : ''}: "my team", "my routes", "me" mean that map's team.`;
+  const open = dayOpen(ctx);
+  const looking = open ? ` They have the workerbook day ${open} open: "the payouts", "the bonuses", "the top carts" mean that day unless they name another.` : '';
+  return `
+
+Right now:
+You are helping ${who}${ctx.user_name ? ` (${ctx.user_name})` : ''}. Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown'}".${where}${looking}` + (ctx.spoken ? heardRight(vocab) : '');
+}
+/** The two parts as the model's API takes them: the rules marked to be kept (with the tools before them), then what is true right now. */
+export function systemBlocks(ctx: Ctx, role: Role, vocab?: Vocab | null): { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }[] {
+  return [{ type: 'text', text: rules(role), cache_control: { type: 'ephemeral' } }, { type: 'text', text: now(ctx, role, vocab) }];
+}
+/** Everything the Benny is told, as one text (what the two parts add up to). */
+export function system(ctx: Ctx, role: Role, vocab?: Vocab | null): string {
+  return rules(role) + now(ctx, role, vocab);
 }
 
 export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus' | 'texts';
