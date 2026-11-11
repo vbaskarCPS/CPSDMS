@@ -1,16 +1,16 @@
-// src/planner/features/arvy/Arvy.tsx — Arvy's floating button (every signed-in screen, above the tabs) and chat panel.
-// Tap the button to open the chat; type, or tap the mic and talk (it sends when you pause). Spoken questions get a
+// src/planner/features/arvy/Arvy.tsx — Arvy's chat panel, on every signed-in screen. The RV button in the bottom bar
+// (ui/Shell.tsx) opens and closes it; type, or tap the mic and talk (it sends when you pause). Spoken questions get a
 // spoken answer (a woman's voice for Rosh, a man's for Vijay) unless the speaker is off. Arvy can open screens for you;
 // the chat stays open over them. The conversation is kept between visits and on every device (chat.ts), and starts
 // with what was in the old Coach chat; "Start over" clears it.
 // Changes Arvy makes show under its reply: small ones are already done (Undo), bigger ones wait for Confirm.
 // Arvy is the coach too: screens open it with openArvy() (Train's "Ask Arvy"), and on the Train screens it offers
 // coaching questions. A thumbs-down under a reply, an Undo, or an error goes in Arvy's improvements log (log.ts).
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Check, Mic, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { getPass } from '../../lib/auth';
-import { ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onOpenArvy, primeVoice, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
+import { arvyIsOpen, ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onArvyOpenChange, onOpenArvy, primeVoice, setArvyOpen, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
 import { logArvy } from './log';
 import { flushChat, loadChat, newer, saveChat } from './chat';
 import './arvy.css';
@@ -61,7 +61,7 @@ export function Arvy() {
   const first = (pass?.user.display_name || user).split(/\s+/)[0];
   const nav = useNavigate();
   const loc = useLocation();
-  const [open, setOpen] = useState(false);
+  const open = useSyncExternalStore(onArvyOpenChange, arvyIsOpen);   // the bar's RV button opens and closes it
   const [lines, setLines] = useState<ChatLine[]>(() => load(keyFor(user)));
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -94,7 +94,13 @@ export function Arvy() {
   useEffect(() => { save(keyFor(user), lines); if (ready) saveChat(lines); }, [lines, user, ready]);
   useEffect(() => () => { void flushChat(); }, []);
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [lines, busy, step, open]);
-  useEffect(() => () => { rec.current?.cancel(); stopSpeaking(); }, []);
+  useEffect(() => () => { rec.current?.cancel(); stopSpeaking(); setArvyOpen(false); }, []);
+  // closed (its X, or the RV button again): stop listening and talking, and save the chat
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !open) { rec.current?.cancel(); stopSpeaking(); setOffer(null); void flushChat(); }
+    wasOpen.current = open;
+  }, [open]);
 
   const send = useCallback(async (q: string, spoken: boolean) => {
     const question = q.trim();
@@ -116,7 +122,7 @@ export function Arvy() {
   }, [busy, lines, loc.pathname, muted, nav]);
 
   // a screen's own button opened the chat (Train's "Ask Arvy"): offer its questions, or send one straight away
-  useEffect(() => onOpenArvy(o => { primeVoice(); setOpen(true); setOffer(o.suggest?.length ? o.suggest : null); if (o.ask) setPending(o.ask); }), []);
+  useEffect(() => onOpenArvy(o => { primeVoice(); setArvyOpen(true); setOffer(o.suggest?.length ? o.suggest : null); if (o.ask) setPending(o.ask); }), []);
   useEffect(() => { if (pending && open && !busy) { const q = pending; setPending(null); void send(q, false); } }, [pending, open, busy, send]);
 
   const mic = () => {
@@ -164,10 +170,6 @@ export function Arvy() {
   if (!pass) return null;
   return (
     <>
-      {!open && (
-        <button type="button" className="arvy-fab" aria-label="Ask Arvy" onClick={() => { primeVoice(); setOpen(true); }}>
-          <Sparkles aria-hidden /><span>Arvy</span>
-        </button>)}
       {open && (
         <div className="arvy-sheet" role="dialog" aria-label="Arvy">
           <header className="arvy-head">
@@ -176,7 +178,7 @@ export function Arvy() {
             <button type="button" className="arvy-icon" onClick={toggleMute} aria-label={muted ? 'Turn Arvy’s voice on' : 'Turn Arvy’s voice off'} title={muted ? 'Voice off' : 'Voice on'}>
               {muted ? <VolumeX /> : <Volume2 />}
             </button>
-            <button type="button" className="arvy-icon" onClick={() => { rec.current?.cancel(); stopSpeaking(); setOpen(false); setOffer(null); void flushChat(); }} aria-label="Close"><X /></button>
+            <button type="button" className="arvy-icon" onClick={() => setArvyOpen(false)} aria-label="Close"><X /></button>
           </header>
           <div className="arvy-body">
             {!lines.length && (

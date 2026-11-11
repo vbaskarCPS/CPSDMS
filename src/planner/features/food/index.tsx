@@ -1,6 +1,6 @@
 // src/planner/features/food/index.ts — the photo calorie tracker: routes and the Today card.
 import './food.css';
-import { FoodToday, FoodTodayCard } from './FoodToday';
+import { FoodToday, FoodTodayCard, useFoodLine } from './FoodToday';
 import { AddMeal, EditMeal } from './AddMeal';
 import { History } from './History';
 import { TargetsScreen } from './Targets';
@@ -9,7 +9,7 @@ import { SwayGuide } from './sway/SwayGuide';
 import { Recipes } from './Recipes';
 import { RecipePage } from './RecipePage';
 
-export { FoodTodayCard };
+export { FoodTodayCard, useFoodLine };
 export { ProteinRoad } from './ProteinRoad';
 export { slotMeal, afterKitchen } from './protein';
 export { alreadyLoggedFor, fromRoad } from './dupes';

@@ -1,35 +1,39 @@
-// src/planner/ui/Shell.tsx — bottom navigation around every signed-in screen, and Arvy's button above it.
-import type { ReactNode } from 'react';
-import { NavLink } from 'react-router-dom';
-import { Sunrise, BookOpen, Repeat, Dumbbell, Utensils, Wallet, Heart } from 'lucide-react';
-import { getPass } from '../lib/auth';
-import { profileOf } from '../lib/app';
+// src/planner/ui/Shell.tsx — the bottom bar around every signed-in screen: Today · RV · Health · Wealth · Lifestyle
+// (ui/nav.ts says which screens sit under which button). RV is Arvy: the one button that stands out, it opens the
+// chat panel and closes it again. Health and Lifestyle open their menu pages (screens/Hub.tsx).
+import { useSyncExternalStore, type ReactNode } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { Compass, HeartPulse, Sparkles, Sunrise, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Arvy } from '../features/arvy/Arvy';
+import { arvyIsOpen, onArvyOpenChange, toggleArvy } from '../features/arvy/arvy';
+import { groupOf, NAV_TO, type NavGroup } from './nav';
 
-const base = [
-  { to: '/', label: 'Today', Icon: Sunrise, end: true },
-  { to: '/plan', label: 'Plan', Icon: BookOpen },
-  { to: '/habits', label: 'Habits', Icon: Repeat },
-  { to: '/workout', label: 'Train', Icon: Dumbbell },
-  { to: '/food', label: 'Food', Icon: Utensils },
-  { to: '/money', label: 'Money', Icon: Wallet },
+const TABS: { group: NavGroup; label: string; Icon: LucideIcon }[] = [
+  { group: 'today', label: 'Today', Icon: Sunrise },
+  { group: 'health', label: 'Health', Icon: HeartPulse },
+  { group: 'wealth', label: 'Wealth', Icon: Wallet },
+  { group: 'lifestyle', label: 'Lifestyle', Icon: Compass },
 ];
-// the morning profile (Rosh) also has the cycle tracker
-const morning = [base[0], base[1], { to: '/cycle', label: 'Cycle', Icon: Heart }, ...base.slice(2)];
 
 export function Shell({ children }: { children: ReactNode }) {
-  const tabs = profileOf(getPass()?.user.settings as { profile?: string } | undefined) === 'morning' ? morning : base;
-  const seven = tabs.length === 7;
+  const here = groupOf(useLocation().pathname);
+  const chatOpen = useSyncExternalStore(onArvyOpenChange, arvyIsOpen);
+  const tab = (t: typeof TABS[number]) => (
+    <Link key={t.group} to={NAV_TO[t.group]} className={here === t.group ? 'active' : ''} aria-current={here === t.group ? 'page' : undefined}>
+      <t.Icon aria-hidden /> {t.label}
+    </Link>
+  );
   return (
     <>
       {children}
       <Arvy />
-      <nav className={`pl-nav ${seven ? 'pl-nav--7' : ''}`} aria-label="Planner">
-        {tabs.map(t => (
-          <NavLink key={t.to} to={t.to} end={t.end} className={({ isActive }) => (isActive ? 'active' : '')}>
-            <t.Icon aria-hidden /> {t.label}
-          </NavLink>
-        ))}
+      <nav className="pl-nav" aria-label="Planner">
+        {tab(TABS[0])}
+        <button type="button" className={`pl-nav__rv ${chatOpen ? 'is-open' : ''}`} onClick={toggleArvy} aria-expanded={chatOpen} aria-label={chatOpen ? 'Close Arvy' : 'Ask Arvy'}>
+          <i aria-hidden>{chatOpen ? <X /> : <Sparkles />}</i>
+          <span>RV</span>
+        </button>
+        {TABS.slice(1).map(tab)}
       </nav>
     </>
   );

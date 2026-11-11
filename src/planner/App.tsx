@@ -10,6 +10,7 @@ import { UpdateReady } from './ui/UpdateReady';
 import { Login } from './screens/Login';
 import { Today } from './screens/Today';
 import { Settings } from './screens/Settings';
+import { HealthHub, LifestyleHub } from './screens/Hub';
 import { planRoutes } from './features/plan';
 import { habitsRoutes } from './features/habits';
 import { workoutRoutes } from './features/workout';
@@ -52,6 +53,8 @@ export function PlannerApp() {
       <Routes>
         <Route path="/" element={<Today pass={pass} />} />
         {featureRoutes.map(r => <Route key={r.path} path={r.path} element={r.element} />)}
+        <Route path="/health" element={<HealthHub pass={pass} />} />
+        <Route path="/lifestyle" element={<LifestyleHub pass={pass} />} />
         <Route path="/calendar" element={<Calendar pass={pass} />} />
         <Route path="/shop" element={<Shopping pass={pass} />} />
         <Route path="/settings" element={<Settings pass={pass} />} />

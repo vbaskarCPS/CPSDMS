@@ -60,7 +60,7 @@
 .plan-areas { display: flex; flex-direction: column; gap: 12px; }
 
 /* ── Bed Brief ── */
-.pl-page.brief { min-height: 100dvh; display: flex; flex-direction: column; padding-bottom: calc(var(--nav-h) + 16px + env(safe-area-inset-bottom)); }   /* .pl-page.brief: outranks .pl-page--bare's padding */
+.pl-page.brief { min-height: 100dvh; display: flex; flex-direction: column; padding-bottom: calc(var(--nav-h) + var(--rv-rise) + 8px + env(safe-area-inset-bottom)); }   /* .pl-page.brief: outranks .pl-page--bare's padding */
 .brief__top { display: flex; align-items: center; gap: 12px; }
 .brief__dots { flex: 1; display: flex; gap: 6px; }
 .brief__dots span { flex: 1; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 12%, transparent); }
@@ -74,7 +74,7 @@
 .brief-word { font-family: var(--serif); font-size: 28px; font-weight: 700; min-height: 64px; }
 .brief .pl-input { font-size: 17px; }
 .brief .pl-textarea { min-height: 84px; }
-.brief__foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; position: sticky; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 10px); background: var(--bg); padding: 10px 0; z-index: 5; }   /* always above the tab bar, whatever the step's height */
+.brief__foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; position: sticky; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--rv-rise) + 4px); background: var(--bg); padding: 10px 0; z-index: 5; }   /* always above the bar and its RV button, whatever the step's height */
 .brief__foot .pl-btn--primary { min-width: 140px; }
 
 /* ── day page bits ── */

@@ -1,14 +1,32 @@
 // src/planner/features/plan/TodayCard.tsx — a thin "today's brief" card (the Today screen draws the
 // timeline itself; this stays for anything that still wants a compact summary).
 import { toggleTodo } from './types';
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, ChevronRight, Sunrise } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
-import { dayKey } from '../../lib/docs';
+import { dayKey, getDoc } from '../../lib/docs';
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { useDoc } from '../../lib/useDoc';
 import { Card } from '../../ui/primitives';
 import { emptyDay, normalizeDay, type Day } from './types';
+
+/** Today's plan in one line, for the Lifestyle menu: "2 of 5 done on today's list". Pure. */
+export function planLine(day: Day): string {
+  const prios = day.priorities.filter(p => p.text.trim());
+  if (day.todos.length) return `${day.todos.filter(t => t.done).length} of ${day.todos.length} done on today’s list`;
+  if (prios.length) return `${prios.filter(p => p.done).length} of ${prios.length} priorities done`;
+  return day.brief.finishedAt ? 'Brief done · no list yet' : 'Brief not done yet';
+}
+/** The same, loaded (read only: it never saves the day). null while it loads. */
+export function usePlanLine(): string | null {
+  const today = dayKey();
+  const [day, setDay] = useState<Day | null>(null);
+  const load = useCallback(() => { getDoc<Day>('day', today).then(d => setDay(normalizeDay(d || emptyDay()))).catch(() => undefined); }, [today]);
+  useEffect(load, [load]);
+  useDocsChanged(['day'], load);
+  return day ? planLine(day) : null;
+}
 
 export function PlanTodayCard(_: { pass: PlannerPass }) {
   const today = dayKey();

@@ -7,6 +7,15 @@ import { Strip } from './Calendar';
 import { addDays, diffDays, fmtDay } from './dates';
 import { PHASE_LABEL } from './predict';
 
+/** The cycle in one line, for the Health menu: "Day 12 · Follicular · next period in 16 days". null while it loads. */
+export function useCycleLine(): string | null {
+  const c = useCycle();
+  const v = c.view;
+  if (c.loading) return null;
+  if (!v.lastStart) return 'Log your first period';
+  return `Day ${v.day}${v.phase ? ` · ${PHASE_LABEL[v.phase]}` : ''}${v.late > 0 ? ` · ${v.late} day${v.late === 1 ? '' : 's'} late` : v.next ? ` · next period in ${diffDays(c.todayKey, v.next.start)} days` : ''}`;
+}
+
 export function CycleTodayCard(_: { pass: PlannerPass }) {
   const c = useCycle();
   const v = c.view;

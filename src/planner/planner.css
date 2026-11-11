@@ -15,6 +15,7 @@
   --bad: #c0392b;
   --radius: 16px;
   --nav-h: 64px;
+  --rv-rise: 16px;   /* how far the RV button stands above the bottom bar: things pinned just above the bar clear it */
   --sans: 'Inter', system-ui, -apple-system, sans-serif;
   --serif: 'Fraunces', Georgia, serif;
   color-scheme: light;
@@ -100,12 +101,31 @@ a.pl-btn { text-decoration: none; }   /* links styled as buttons */
 .pl-input--pin { letter-spacing: 0.4em; text-align: center; font-size: 22px; font-variant-numeric: tabular-nums; }
 .pl-error { color: var(--bad); font-size: 14px; }
 
-.pl-nav { position: fixed; left: 0; right: 0; bottom: 0; height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); background: var(--bg-2); border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(6, 1fr); z-index: 10; }
-.pl-nav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; text-decoration: none; font-size: 10px; font-weight: 600; color: var(--ink-2); }
+/* the bottom bar: Today · RV · Health · Wealth · Lifestyle (ui/Shell.tsx) */
+.pl-nav { position: fixed; left: 0; right: 0; bottom: 0; height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); background: var(--bg-2); border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(5, 1fr); z-index: 10; }
+.pl-nav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; text-decoration: none; font-size: 10.5px; line-height: 12px; font-weight: 600; color: var(--ink-2); }
 .pl-nav a.active { color: var(--accent); }
-.pl-nav--7 { grid-template-columns: repeat(7, 1fr); }
-.pl-nav--7 a { font-size: 9.5px; }
 .pl-nav svg { width: 22px; height: 22px; }
+/* RV, Arvy's button: the one that stands out. A filled circle twice the size of the other icons, standing proud of the bar */
+.pl-nav__rv { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding: 0 0 13px; border: 0; background: none; cursor: pointer; font: 800 11.5px/12px var(--sans); letter-spacing: .06em; color: var(--ink); -webkit-tap-highlight-color: transparent; }
+.pl-nav__rv i { position: absolute; left: 50%; top: calc(-1 * var(--rv-rise)); width: 50px; height: 50px; margin-left: -25px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 3px var(--amber), 0 8px 18px rgba(16, 28, 58, .3); transition: transform .12s ease; }
+.pl-nav__rv i svg { width: 24px; height: 24px; }
+.pl-nav__rv:active i { transform: scale(.93); }
+.pl-nav__rv.is-open { color: var(--accent); }
+/* the rest timer runs along the top of the bar in a live workout: RV sits inside the bar then, so it doesn't cover the countdown */
+body:has(.wo-rest) .pl-nav__rv i { top: 5px; width: 30px; height: 30px; margin-left: -15px; box-shadow: 0 0 0 2px var(--amber); }
+body:has(.wo-rest) .pl-nav__rv i svg { width: 17px; height: 17px; }
+
+/* the menu pages behind Health and Lifestyle (screens/Hub.tsx): one big tile per section, today's headline on it */
+.hub-tiles { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }   /* minmax(0, …): a long headline is cut with …, it doesn't widen the page */
+.hub-tile { display: flex; align-items: center; gap: 14px; min-height: 88px; padding: 18px 16px; border-radius: var(--radius); background: var(--bg-2); border: 1px solid var(--line); text-decoration: none; color: inherit; transition: transform .12s ease; }
+.hub-tile:active { transform: scale(.985); }
+.hub-tile__icon { flex: none; width: 50px; height: 50px; border-radius: 15px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.hub-tile__icon svg { width: 25px; height: 25px; }
+.hub-tile__text { flex: 1; min-width: 0; }
+.hub-tile__text b { display: block; font-family: var(--serif); font-size: 21px; line-height: 1.2; letter-spacing: -0.01em; }
+.hub-tile__text small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 3px; font-size: 14px; line-height: 1.35; color: var(--ink-2); }   /* a long headline takes a second line, then … */
+.hub-tile__go { flex: none; width: 20px; height: 20px; color: var(--ink-2); }
 
 .pl-login { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; padding: 24px; max-width: 420px; margin: 0 auto; gap: 24px; }
 .pl-logo { width: 72px; height: 72px; border-radius: 20px; }
@@ -162,7 +182,7 @@ button.pl-tile { font: inherit; color: inherit; text-align: left; cursor: pointe
 
 .pl-empty { text-align: center; padding: 32px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .pl-empty svg { width: 36px; height: 36px; color: var(--ink-2); }
-.pl-toast { position: fixed; left: 50%; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 16px); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; z-index: 30; animation: plFade 0.2s ease-out; }
+.pl-toast { position: fixed; left: 50%; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--rv-rise) + 10px); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; z-index: 30; animation: plFade 0.2s ease-out; }
 /* a newer version has downloaded (ui/UpdateReady): a pill at the top, over everything but never in the way of the nav */
 .pl-update { position: fixed; top: calc(env(safe-area-inset-top) + 8px); left: 0; right: 0; width: max-content; margin: 0 auto; z-index: 50; display: flex; align-items: center; gap: 10px; white-space: nowrap; background: var(--ink); color: var(--bg); padding: 6px 6px 6px 14px; border-radius: 999px; font-size: 13.5px; font-weight: 600; border: 1px solid color-mix(in srgb, var(--bg) 40%, transparent); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28); animation: plFade 0.2s ease-out; }
 .pl-update button { border: 0; border-radius: 999px; padding: 6px 12px; background: var(--bg); color: var(--ink); font: 700 13px var(--sans); cursor: pointer; }
@@ -233,7 +253,7 @@ button.pl-tile { font: inherit; color: inherit; text-align: left; cursor: pointe
 
 /* ── guided demo (/demo, demo/Tour.tsx): a card above the nav; pages get room for it */
 .pl-demo .pl-page { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 224px); }
-.pl-tour { position: fixed; left: 10px; right: 10px; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 10px); z-index: 20; max-width: 560px; margin: 0 auto; background: var(--accent); color: var(--accent-ink); border-radius: var(--radius); padding: 12px 14px 12px; box-shadow: 0 12px 32px rgba(16, 28, 58, 0.35); overflow: hidden; animation: pl-tour-in 0.35s ease; }
+.pl-tour { position: fixed; left: 10px; right: 10px; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--rv-rise) + 8px); z-index: 20; max-width: 560px; margin: 0 auto; background: var(--accent); color: var(--accent-ink); border-radius: var(--radius); padding: 12px 14px 12px; box-shadow: 0 12px 32px rgba(16, 28, 58, 0.35); overflow: hidden; animation: pl-tour-in 0.35s ease; }
 @keyframes pl-tour-in { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }
 .pl-tour__bar { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: rgba(255, 255, 255, 0.18); }
 .pl-tour__bar span { display: block; height: 100%; background: var(--amber); transition: width 1s linear; }

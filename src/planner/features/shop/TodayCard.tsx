@@ -6,6 +6,16 @@ import { loadList } from './store';
 import { useDocsChanged } from '../../lib/useDocsChanged';
 import { ANYWHERE, storeOf, type ShopItem } from './types';
 
+/** The shopping list in one line, for the Lifestyle menu: "6 on the list". null while it loads. */
+export function useShopLine(): string | null {
+  const [items, setItems] = useState<ShopItem[] | null>(null);
+  useEffect(() => { loadList().then(setItems).catch(() => setItems([])); }, []);
+  useDocsChanged(['shop'], () => { loadList().then(setItems).catch(() => undefined); });
+  if (!items) return null;
+  const n = items.filter(i => !i.done).length;
+  return n ? `${n} on the list` : 'Nothing on the list';
+}
+
 export function ShopTodayCard() {
   const [items, setItems] = useState<ShopItem[] | null>(null);
   useEffect(() => { loadList().then(setItems).catch(() => setItems([])); }, []);

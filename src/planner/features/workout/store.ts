@@ -4,7 +4,7 @@ import { planFromText, type PlanResult } from '../../lib/ai';
 import { uid } from '../../ui/primitives';
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
 import { suggest, type Suggestion } from './progression';
-import { e1rm, isAssisted, type BodyWeight, type Equipment, type Exercise, type Format, type Muscle, type NextRx, type SetLog, type Template, type TemplateExercise, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
+import { durationMin, e1rm, isAssisted, type BodyWeight, type Equipment, type Exercise, type Format, type Muscle, type NextRx, type SetLog, type Template, type TemplateExercise, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
 import { blocksOf, cleanFormat, hasSides, isNoLoad, settleGroups } from './format';
 
 const DEFAULT_TEMPLATES: Omit<Template, 'id' | 'order'>[] = [
@@ -265,6 +265,26 @@ export function detectPRs(w: Workout, history: Workout[]): string[] {
     if (prev > 0 && best > prev) { const top = done.reduce((a, b) => (e1rm(b.weight, b.reps) > e1rm(a.weight, a.reps) ? b : a)); prs.push(`${ex.name}: ${top.weight} × ${top.reps} (e1RM ${best})`); }
   }
   return prs;
+}
+
+/** Where today's training stands. The Today card and the Health menu both read it, so they say the same thing. Pure. */
+export interface TrainToday { unfinished?: Workout; doneToday?: Workout; last?: Workout; tpl: Template | null; planned: boolean; head: string }
+export function trainToday(templates: Template[], workouts: Workout[], noGym: boolean, now = new Date()): TrainToday {
+  const today = dayKey(now);
+  const unfinished = workouts.find(w => !w.endedAt);
+  const doneToday = workouts.find(w => w.endedAt && w.date === today);
+  const tpl = sessionToday(templates, workouts, noGym, now);
+  // a session set for today's date (Arvy plans them by date) or for this weekday
+  const planned = !!tpl && (tpl.plannedFor === today || !!tpl.days?.includes(now.getDay()));
+  const head = unfinished ? `${unfinished.name} in progress` : doneToday ? `Done: ${doneToday.name}` : planned && tpl ? tpl.name : 'Rest day';
+  return { unfinished, doneToday, last: workouts.find(w => w.endedAt), tpl, planned, head };
+}
+/** The same in one line, for the Health menu: "Home stretch (easy) · 7 exercises · at home". Pure. */
+export function trainLine(t: TrainToday): string {
+  if (t.unfinished) return t.head;
+  if (t.doneToday) { const m = durationMin(t.doneToday); return m ? `${t.head} · ${m} min` : t.head; }
+  if (t.planned && t.tpl) { const n = t.tpl.exercises.length; return `${t.tpl.name} · ${n} exercise${n === 1 ? '' : 's'}${t.tpl.home ? ' · at home' : ''}`; }
+  return t.last ? `Rest day · last: ${t.last.name}, ${fmtDate(t.last.date)}` : 'No sessions yet';
 }
 
 /** This week's sessions by weekday (Mon..Sun). */
