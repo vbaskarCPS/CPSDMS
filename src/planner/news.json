@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-11-stickers", "date": "2026-11-11", "title": "Stickers in your chat",
+    "lines": ["Tap the smiley beside the message box: our own little moving stickers for Halloween, Diwali, Christmas, New Year, Valentine’s Day, Easter and birthdays.", "The occasion coming up next is always first, with a countdown.", "Put your birthdays on the calendar as yearly events and they count down there too."] },
   { "id": "2026-11-11-icon", "date": "2026-11-11", "title": "A new small notification icon",
     "lines": ["The planner’s small icon in the status bar is now VR with a sparkle."] },
   { "id": "2026-11-11-notifications-app", "date": "2026-11-11", "title": "Notifications come from the Planner app",
