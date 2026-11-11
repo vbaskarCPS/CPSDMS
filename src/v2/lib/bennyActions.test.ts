@@ -280,6 +280,9 @@ d('describe', () => {
         change: { amount: { from: 10, to: 20 } }, ask: { amount: 20 }, patch: { price: 20, display_price: '20.00', payment_method: 'Cash', payment_breakdown: { Cash: 20 } }, stamp: 't' } },
     };
     samples.bonus = { kind: 'bonus', check: bonus() };
+    samples.texts = { kind: 'texts', check: { ok: true, date: '2026-11-11', who: 'no_shows', own_words: true, people: [{ hire_id: 'h1', cn: 'I1169', name: 'Steven Doherty', first: 'Steven', phone: '6045550101', text: 'Steven, call me.' }] } };
+    // the texts card's words carry the names and the texts, never a number
+    expect(describe(samples.texts)).toEqual({ title: 'Text 1 who didn’t show · Wed, Nov 11', lines: ['Steven Doherty: “Steven, call me.”'], action: 'Text' });
     for (const k of CARDS) { expect(samples[k], k).toBeTruthy(); expect(describe(samples[k]).title, k).toBeTruthy(); }
   });
   it('what a saved booking change says', () => {

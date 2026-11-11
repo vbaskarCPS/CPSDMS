@@ -16,7 +16,9 @@
 // Two cards change nothing. booking_emails opens Bookings › Send booking emails with the day and routes picked: the person
 // reads the emails there and sends them; the Benny never sends. payouts opens the payout screen at the first open payout
 // with no cash or cheque to count: the person presses Finalize on each and the screen moves to the next; the Benny never
-// pays anyone out.
+// pays anyone out. texts is its own card (BennyTexts.tsx): one Text button per worker, each an ordinary link that opens the
+// phone's Messages with the text written. The person presses send there; the Benny never sends. The app keeps each text
+// it opened (benny_texts), so a later one can refer to it.
 import { getDay, listRoster, type RosterRow } from './workerbook';
 import { availableManagers, getSession, nextTeamName, planProblems, startSession, type Plan, type PlanManager, type PlanRoute, type PlanTeam } from './startSession';
 import { db, must } from './client';
@@ -28,6 +30,7 @@ import { fullName } from './workerbook';
 import { saveBooking, type BookingPatch, type BookingStatus } from './bookings';
 import type { BookingEmailKind, EmailPreset } from './bookingEmails';
 import { STOP_WORD } from './bennyDrive';
+import { textOf, textsTitle, type TextPerson, type TextsCheck, type TextsState } from './bennyTexts';
 import { queueHref } from './payoutQueue';
 import { cartContext, dayLines, listCarts, saveDay } from './payoutCarts';
 import { bonusName, bonusesSaid, liveBonusPatch, withBonuses, type BonusCheck, type LiveNow } from './bennyBonus';
@@ -130,6 +133,7 @@ const PAID_AS: [string, string][] = [['card', 'card'], ['e_transfer', 'e-transfe
 export const payoutsStart = (c: PayoutsCheck): string | null => queueHref(c.date, c.carts.map(x => x.cn));
 
 export type BennyProposal =
+  | { kind: 'texts'; check: TextsCheck }
   | { kind: 'bonus'; check: BonusCheck }
   | { kind: 'payouts'; check: PayoutsCheck }
   | { kind: 'job'; check: JobCheck }
@@ -275,6 +279,9 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         action: 'Open',
       };
     }
+    case 'texts':
+      // drawn by its own card (a button per worker); these are its words for anything that reads a card as lines
+      return { title: textsTitle(p.check), lines: p.check.people.map(x => `${x.name}: “${x.text}”`), action: 'Text' };
     case 'bonus': {
       const c = p.check; const n = c.bonuses.length;
       const pretty = new Date(c.date + 'T12:00').toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
@@ -559,6 +566,36 @@ export async function stopsFromBenny(p: Extract<BennyProposal, { kind: 'stops' }
   return `${made} ${c.kind} pin${made === 1 ? ' is' : 's are'} on your map, numbered in order. Tap one, then Navigate.`;
 }
 
+/** Texts opened but not yet kept, by day + worker + text. */
+const unkept = new Map<string, { args: Record<string, unknown>; tries: number; busy: boolean }>();
+let watching = false;
+async function keepTexts(): Promise<void> {
+  for (const [k, t] of [...unkept]) {
+    if (t.busy) continue;
+    if (t.tries >= 3) { unkept.delete(k); continue; }
+    t.tries++; t.busy = true;
+    const ok = await Promise.resolve(db.rpc('benny_text_opened', t.args)).then(r => !r.error, () => false);
+    t.busy = false;
+    if (ok) unkept.delete(k);
+  }
+}
+/**
+ * A Text button was tapped: keep what was written for that worker (the text as it read then, after any change), so a
+ * later text can refer to it. Not awaited by the card: the link has already opened Messages. The phone may put the app
+ * to sleep as Messages opens, so a text not kept yet is tried again when the app is back in front; the database keeps
+ * the same text once (benny_text_opened), so trying again never doubles it.
+ */
+export function textOpened(centerId: string, check: Pick<TextsCheck, 'date' | 'tone' | 'who'>, person: Pick<TextPerson, 'cn' | 'text'>, state?: TextsState | null): void {
+  const body = textOf(person, state);
+  unkept.set(`${check.date}|${person.cn}|${body}`, { tries: 0, busy: false,
+    args: { p_center: centerId, p_date: check.date, p_cn: person.cn, p_body: body, p_tone: check.tone || null, p_about: check.who } });
+  if (!watching && typeof document !== 'undefined') {
+    watching = true;
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void keepTexts(); });
+  }
+  void keepTexts();
+}
+
 export async function doProposal(p: BennyProposal, center: CenterLite): Promise<string> {
   if (p.kind === 'start_day') return startDayFromBenny(p, center);
   if (p.kind === 'give_route') return giveRouteFromBenny(p, center.id);
@@ -570,5 +607,6 @@ export async function doProposal(p: BennyProposal, center: CenterLite): Promise<
   // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)
   if (p.kind === 'booking_emails') throw new Error('Open Bookings › Send booking emails to read and send these.');
   if (p.kind === 'payouts') throw new Error('Open the payouts on the day page to finalize these.');
+  if (p.kind === 'texts') throw new Error('Tap Text beside each name: it opens Messages with the text written.');
   return moveFromBenny(p, center.id);
 }

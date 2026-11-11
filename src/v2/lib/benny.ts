@@ -3,6 +3,7 @@
 import { db } from './client';
 import type { BennyProposal } from './bennyActions';
 import { byRoad, withOrder } from './bennyDrive';
+import { textsSaid, type TextsState } from './bennyTexts';
 
 /** pins with n are stops in an order: drawn numbered, joined in that order from start (where the manager is) when given:
  *  along path (the road, as [lng, lat] points) when the road is known, else in straight lines */
@@ -12,6 +13,8 @@ export interface BennyMsg {
   proposal?: BennyProposal | null;
   /** the card's state: done (with what happened), dismissed, or failed */
   outcome?: { state: 'done' | 'dismissed' | 'failed'; text: string } | null;
+  /** a texts card: which Text buttons were tapped, and the texts the person changed */
+  texts?: TextsState | null;
 }
 export interface BennyContext {
   center_id?: string; center_name?: string; today: string; path: string; screen?: string;
@@ -27,12 +30,12 @@ export interface BennyContext {
 /** What the Benny is told about each message: its words, plus what happened to a card. */
 export function forServer(messages: BennyMsg[]) {
   return messages.filter(m => !m.error).map(m => ({ role: m.role,
-    content: m.outcome ? `${m.text}\n\n[The card: ${m.outcome.state === 'done' ? 'confirmed, done' : m.outcome.state}: ${m.outcome.text}]` : m.text }));
+    content: m.outcome ? `${m.text}\n\n[The card: ${m.outcome.state === 'done' ? 'confirmed, done' : m.outcome.state}: ${m.outcome.text}]`
+      : m.proposal?.kind === 'texts' ? `${m.text}\n\n[The card: ${textsSaid(m.proposal.check.people, m.texts)}]` : m.text }));
 }
-
 /** The change cards this build of the app can show. Sent with every question, so the server never sends a card that an
  *  older open tab can't draw (it says "refresh" instead). Add a kind here when describe() and doProposal() handle it. */
-export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts', 'bonus'];
+export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts', 'bonus', 'texts'];
 
 /** What else this build can do with a card it already shows. 'crews' = a start-day card that says who goes with which
  *  manager (an older tab would start the day and ignore the crews, so the server holds that card back from it). */

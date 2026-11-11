@@ -3,10 +3,11 @@
 //   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, following, user_name, spoken, diag } }
 //     → { reply, map?, proposal? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
-//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | payouts | bonus.
+//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | payouts | bonus | texts.
 //              The Benny never makes the change itself: the app does, with the same code as its screens, after the person taps
 //              Confirm. booking_emails changes nothing at all: its card opens the Send booking emails screen, where the person sends.
 //              payouts changes nothing either: its card opens the payout screen, where the person finalizes each payout.
+//              texts sends nothing: its card has a link per worker that opens the phone's Messages, where the person presses send.
 //
 // Who: super admins (everything), route managers (their own team on the live map: carts, routes, connected routes),
 // floaters on the floater map (the teams of the managers they follow there).
@@ -16,7 +17,7 @@
 // Super Admin › Bug log): no GitHub issue, no email.
 // Model: BENNY_MODEL secret, else a Sonnet-class model. The Claude key lives only in ANTHROPIC_API_KEY.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { TOOLS, openMap, system, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
+import { TOOLS, forModel, openMap, system, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
 const WORKSPACE = Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '';
@@ -55,7 +56,7 @@ async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, i
   if (error) return { out: { error: error.message } };
   // a change that checks out becomes a card for the person to confirm
   if (call.card && data && (data as { ok?: boolean }).ok === true) {
-    return { out: { ...(data as object), card: 'shown: the person confirms it there' }, proposal: { ...call.card, check: data as Record<string, unknown> } };
+    return { out: { ...(forModel(call.card.kind, data) as object), card: 'shown: the person confirms it there' }, proposal: { ...call.card, check: data as Record<string, unknown> } };
   }
   return { out: data };
 }

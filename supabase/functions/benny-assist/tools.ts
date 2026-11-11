@@ -31,8 +31,10 @@ export const TOOLS: Tool[] = [
   { name: 'booking', roles: ['admin'], description: 'One Master Booking (people also say prebook, job or service ticket) by its address, house number first in digits ("3575 Latimer"), or by the client\'s name: '
       + 'status (open, done, cancelled), list, job code, route and map, prepaid, the people, field note (what the crew reads) and office note, tries so far, and whether it is loaded on today\'s live map. No phone numbers or emails.',
     input_schema: { type: 'object', properties: { q: { type: 'string', description: 'house number and street ("3575 Latimer"), a client name, or the id from an earlier result' } }, required: ['q'] } },
-  { name: 'maps', roles: ['admin'], description: "Master maps in the center's region matching a name or city: route range, number of routes, houses built, past clients.",
-    input_schema: { type: 'object', properties: { q: { type: 'string', description: 'map name or city; empty = all' } } } },
+  { name: 'maps', roles: ['admin'], description: "Master maps in the center's region matching a name or city: route range, number of routes, houses built, past clients (all, and by service: aeration, lawn_rejuv, sealing) and past clients per route. "
+      + 'With service, the maps come ranked by that service\'s past clients per route, highest first (40 at most): use it for "which map has the most rejuv past clients", "highest PCL density in Surrey".',
+    input_schema: { type: 'object', properties: { q: { type: 'string', description: 'map name or city; empty = all' },
+      service: { type: 'string', enum: ['aeration', 'lawn_rejuv', 'sealing'], description: 'rank by this service\'s past clients per route (rejuv = lawn_rejuv)' } } } },
   { name: 'route', roles: ['admin', 'rm'], description: 'One route: its map, streets, houses, past clients (by service), open prebooks, and who has it on a date.',
     input_schema: { type: 'object', properties: { route: { type: 'string', description: 'route code, e.g. PCQ64' }, date: { type: 'string', description: 'YYYY-MM-DD, optional' } }, required: ['route'] } },
   { name: 'connected_routes', roles: ['admin', 'rm'], description: 'Routes connected to other routes or maps, nearest first, each with distance, open prebooks and who has it on the live map today (workers = CNs; none = free). '
@@ -95,6 +97,17 @@ export const TOOLS: Tool[] = [
         amount: { type: 'number', description: 'dollars for the cart' },
         type: { type: 'string', enum: ['Performance EQ', 'Total Upsell', 'Rookie', 'Other'], description: 'default Performance EQ (the Bonus EQ ranking)' },
         note: { type: 'string', description: 'what it is for, when type is Other' } }, required: ['worker', 'amount'] } } }, required: ['bonuses'] } },
+  { name: 'text_people', roles: ['admin'], description: "The workers on a day's list that a text would go to: who didn't show (on the list and not marked as showed), who showed, everyone on the list, or the workers named. "
+      + 'For each: days worked against days on the list, the last day worked, whether they have a cell number, and the texts opened for them before. No phone numbers. Use it before propose_texts, and to answer "who didn\'t show today".',
+    input_schema: { type: 'object', properties: { who: { type: 'string', enum: ['no_shows', 'showed', 'booked'], description: 'default no_shows; booked = everyone on the list' },
+      workers: strs('or just these workers: names or CNs'), date: { type: 'string', description: 'YYYY-MM-DD; today when they don\'t say' } } } },
+  { name: 'propose_texts', roles: ['admin'], description: 'Set up texts to workers for the person to send from their own phone: a card with one Text button per worker, which opens Messages with the text written. You never send a text. '
+      + 'Give EITHER template (their own wording, with {name} where the first name goes: every worker gets it) OR texts (one written for each worker, by CN).',
+    input_schema: { type: 'object', properties: { who: { type: 'string', enum: ['no_shows', 'showed', 'booked'], description: 'default no_shows' },
+      workers: strs('or just these workers: names or CNs'), date: { type: 'string', description: 'YYYY-MM-DD; today when they don\'t say' },
+      template: { type: 'string', description: 'their own wording for everyone, e.g. "{name} the van leaves in 10"' },
+      texts: { type: 'array', items: { type: 'object', properties: { worker: { type: 'string', description: 'CN from text_people' }, text: { type: 'string', description: 'under 300 characters' } }, required: ['worker', 'text'] } },
+      tone: { type: 'string', description: 'the tone they asked for, in a few words, when you wrote the texts' } } } },
   { name: 'propose_booking', roles: ['admin'], description: 'Prepare a change to one Master Booking (prebook / job / service ticket) for the person to confirm on a card: mark it done, cancelled or open again; '
       + 'add to or replace its field note (what the crew reads at the door) or its office note; move it to another route. One booking per call; several changes to the same booking go in one call. '
       + 'It finds the booking by address itself, so call it directly; when it answers "Which one", ask, then call again with that booking\'s id.',
@@ -150,6 +163,7 @@ CPS words (use them the way the crew does, and answer in them):
 - Logsheet: a cart's list of the day's jobs. A logsheet job (an entry): one line on it. Paid out: the logsheet has been checked and the pay worked out; after that a job is changed in Payout, not here.
 - Cart: the workers sharing one logsheet (a team); a solo cart is one worker. Ramp crew (RC1, RC2): the asphalt crew in sealing. Equiv split / upsell split: how a cart shares its equiv and its upsell commission.
 - Booking emails (service notification emails): the emails to customers about their booking. Day before = the crew is coming tomorrow. Next try = we missed you, we're coming back.
+- PCL density (past client density): past clients per route on a master map, for one service (rejuv PCL = lawn_rejuv past clients) or all. Not per house: houses are only counted where a map's houses are built.
 - Prebook: an open Master Booking waiting to be done on a route. Service ticket, ticket, job (at an address): the same thing, a Master Booking; "close the ticket" = mark it done. Field note: what the crew reads at the door. Office note: for the office only. PCL: past client list, the past customers on a route. Flats (office flats): office-set jobs worth a fixed amount (SP, RJ, FSL, AFSL). Prepaid, billed, cash, cheque, e-transfer, card: how a job is paid.
 - Pin: a marker dropped on the route manager map (seen by just me, everyone, one manager, or a worker driver as a stop). Drop order: the order to take the carts to their routes. Pickup order: the order to collect them. Check order: the order to visit each cart during the day.
 - CN: contractor number (like I1225). WDR: withdrawn. Q: quit. NS: no-show. Roll call: who showed. Next day: who is booked for tomorrow. Shuttle: their ride in.
@@ -207,7 +221,7 @@ Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown
 Rules:
 - Answer from the tools, never from memory or guesses. If the tools can't answer it, say so and name the screen that can.
 - Only the app's data and work. Anything else: "I can only help with the DMS."
-- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, changing a job on a logsheet (amount, how it was paid), changing a booking (status, notes, route), setting up the booking emails to customers, lining up payouts to finalize, and adding bonuses to paid-out carts' : 'giving a route to a cart, partnering workers, solo carts and changing a job on a logsheet (amount, how it was paid)'} with the propose_ tools, and on the route manager map dropping a pin and planning a drop, pickup or check order. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
+- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, changing a job on a logsheet (amount, how it was paid), changing a booking (status, notes, route), setting up the booking emails to customers, lining up payouts to finalize, adding bonuses to paid-out carts, and setting up texts to workers' : 'giving a route to a cart, partnering workers, solo carts and changing a job on a logsheet (amount, how it was paid)'} with the propose_ tools, and on the route manager map dropping a pin and planning a drop, pickup or check order. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
 - One change per answer. If they ask for several, prepare the first and say you'll do the next after.
 - Names: if a tool says "Which one", ask which, listing the names. "Michael A" = Michael with a last name starting A.
 - Starting the day: work out each manager's maps and routes first (whole maps by name; map_side for "the side of 2 connected to 1"; bookings.by_route for "only the routes with prebooks in Surrey"), show them with show_map (routes = every route in the plan), then propose_start_day. If they don't say the date, it is today. If they don't say who, the manager is "me".
@@ -217,6 +231,7 @@ ${role === 'admin' ? `- Crews ("give Franklyn the worst half and me the good guy
 - Booking emails ("service notification emails", "day-before emails", "let the customers know we're coming"): use propose_booking_emails with the kind, the day and that day's routes or whole maps. If they don't say which routes or maps, ask; "the routes with prebooks in Surrey" = bookings.by_route first. After ok, say how many customers get one, how many have no email and how many already got it, then "Tap Open to read and send." Never say an email was sent: the person reads them and sends them on that screen.
 - Payouts: "which payouts are open", "who has cash to count", "what did Kyle get paid" = payouts. "Close / finalize / do the payouts with no cash or cheque" = propose_payouts. You never pay anyone out and never mark a logsheet paid: the card opens the payout screen and the person presses Finalize on each one. After ok, say how many are lined up (and which of them have no jobs), and who is left for a hand count and why, then "Tap Open to go through them." Never say a payout is closed.
 - Bonuses ("give the top two carts $50 each", "who gets the bonus", "who qualifies"): call bonus_ranking for the day first. The winners are the top carts by Bonus EQ AMONG THE CARTS THAT QUALIFY (bonus_ranking.winners): a higher cart that doesn't meet the bonus rule is skipped, and you say who was skipped and why (its why_not). "The top two" = winners place 1 and 2; a bonus with no type = Performance EQ. Then propose_bonuses with every bonus they asked for in ONE call (the cart's CN, the place, the amount): they go on one card. Never pick between tied carts: say who is tied and ask. If a place was already given, say who has it and prepare only what is left. If they name the cart themselves ("give Mugove second"), use it as they said and say the card's cautions. After ok: one short line per bonus (place, who, amount, pay now and after), the cautions in a few words, then "Tap Add the bonuses to do it." ("Add the bonus" for one). Never say a bonus was added. If nothing is ranked (no cart is paid out yet that day), say so and ask whether they mean another day, such as yesterday. Just asking who is on top or who qualifies is an answer from bonus_ranking, not a card.
+- Texts to workers ("text the guys that didn't show", "set up a text for the no-shows"): you never send a text. The card has a Text button per worker that opens the phone's Messages with the text written, and the person presses send. Call text_people first (who: no_shows = on the day's list and not marked as showed). If they gave the wording, pass it as template EXACTLY as they said it, with {name} where the name goes ("<name>" or "NAME" in what they said = {name}): don't soften, correct or rewrite their words. If they ask you to write them, or give only a tone, write one short text for each worker (under 300 characters, starting from their first name, plain words, no emoji unless asked) in that tone, from what text_people gives: days worked against days on the list, the last day worked, and the earlier texts (don't repeat one; a second warning can say it is the second). Firm is fine; no insults, and never a fact, a time, a rule or a consequence they didn't give you. Then propose_texts. After ok: say how many, name anyone with no cell number, then "Tap Text on each one; you press send." Never say a text was sent. "Who didn't show today" on its own is an answer from text_people, not a card.
 - Bookings: to change a booking (a "service ticket") use propose_booking with the address as they said it, house number first in digits ("thirty five seventy five Latimer" = "3575 Latimer"). "Close", "complete", "finish" = done; "reopen" = open. A note with no kind: field note when it is for the crew (gate code, dog, where to start), office note otherwise; ask if you can't tell. "Add a note" = add; "change the note to" = replace. Say the card's cautions in a few words. Then "Tap Save to do it." Address, people, phone, services and price change in Bookings › List, not here.
 ` : ''}- Pins and orders (the route manager map): "drop a pin at/on …" = propose_pin with one place (a route code, a worker, an address, or here = where they are) and the name they gave it, if any. Only they see it unless they say everyone, name a manager, or say it is a stop for a driver. "Plan my drop order / pickup order / check order" = propose_stops. After ok, say how many stops there are, anyone left out and why, and that it replaces their earlier pins of that kind when it says so. Do NOT list the order or give a distance: the app works the order out by driving time and adds it under your answer. Say nothing about where they are either, unless the result has start_far: then say their location is too far from the carts, so the order starts at its first stop. Then "Tap Drop the pins to do it." ("Drop the pin" for one). Never say a pin is on the map before they tap.
 - Logsheet jobs: "what has Kyle logged", "how much cash should Nathan have" = logsheet for that worker. To change a job ("change Ron's job on Mugove's cart to 250 prepaid") call logsheet first and find the job by client, address or service; if more than one fits, ask which, giving each one's client and amount. Then propose_job_change with that job's id and only what they asked to change. This changes what the worker is paid, so never guess: if the amount or the payment type wasn't clear, ask. After ok, say what it reads now and what it will read ("$180 cash becomes $250 prepaid") and any caution on the card, then "Tap Save to do it." If it says no (a logsheet already paid out, a card or split payment, an office flat), say why and where to change it instead; that is an answer, not something to log.
@@ -232,12 +247,30 @@ ${role === 'admin' ? `- Crews ("give Franklyn the worst half and me the good guy
 ` + CPS_WORDS + (ctx.spoken ? heardRight(vocab) : '');
 }
 
-export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus';
+export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus' | 'texts';
+
+/**
+ * What the Benny itself is shown of a checked change. A texts card carries each worker's cell number for its links;
+ * the Benny writes the texts and has no use for the numbers, so it doesn't get them.
+ */
+export function forModel(kind: ProposalKind | undefined, data: unknown): unknown {
+  if (kind !== 'texts' || !data || typeof data !== 'object') return data;
+  const d = data as { people?: unknown };
+  if (!Array.isArray(d.people)) return data;
+  return { ...d, people: d.people.map(p => { if (!p || typeof p !== 'object') return p; const { phone, ...rest } = p as Record<string, unknown>; return { ...rest, has_cell: !!phone }; }) };
+}
 /** What a tool does: a database function to call (as the signed-in person), and for a change the card it becomes. */
 export type ToolCall =
   | { fn: string; args: Record<string, unknown>; card?: { kind: ProposalKind; team_mode?: string } }
   | { log: 'bug' | 'request' }
   | null;
+
+/** Who a text is for: the workers named, else a group on the day's list (those who didn't show unless told otherwise). */
+function textWho(input: Record<string, unknown>): { group: string; workers?: string[] } {
+  const group = ['no_shows', 'showed', 'booked'].includes(String(input.who)) ? String(input.who) : 'no_shows';
+  const workers = (Array.isArray(input.workers) ? input.workers : []).filter((w): w is string => typeof w === 'string' && !!w.trim()).map(w => w.trim()).slice(0, 60);
+  return workers.length ? { group, workers } : { group };
+}
 
 export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx): ToolCall {
   const c = ctx.center_id || null;
@@ -246,7 +279,7 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     case 'day': return { fn: 'benny_day', args: { p_center: c, p_date: String(input.date || ctx.today) } };
     case 'bookings': return { fn: 'benny_bookings', args: { p_center: c, p_where: input.where ?? null, p_route: input.route ?? null, p_status: input.status ?? 'open' } };
     case 'booking': return { fn: 'benny_booking', args: { p_center: c, p_q: String(input.q || '') } };
-    case 'maps': return { fn: 'benny_maps', args: { p_center: c, p_q: input.q ?? null } };
+    case 'maps': return { fn: 'benny_maps_pcl', args: { p_center: c, p_q: input.q ?? null, p_service: typeof input.service === 'string' && input.service.trim() ? input.service.trim() : null } };
     case 'route': return { fn: 'benny_route', args: { p_center: c, p_route: String(input.route || ''), p_date: input.date ?? null } };
     case 'show_map': return { fn: 'benny_map', args: { p_center: c, p_maps: input.maps ?? [], p_routes: input.routes ?? null, p_prebooks: !!input.prebooks } };
     case 'connected_routes': return { fn: 'benny_connected', args: { p_center: c, p_from_routes: input.from_routes ?? null, p_from_maps: input.from_maps ?? null,
@@ -271,6 +304,17 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     }
     case 'payouts': return { fn: 'benny_payouts', args: { p_center: c } };
     case 'propose_payouts': return { fn: 'benny_check_payouts', args: { p_center: c }, card: { kind: 'payouts' } };
+    case 'text_people': return { fn: 'benny_text_people', args: { p_center: c, p_date: isoDay(input.date) || isoDay(ctx.today), p_who: textWho(input) } };
+    case 'propose_texts': {
+      const say = (k: string) => (typeof input[k] === 'string' && String(input[k]).trim() ? String(input[k]).trim() : null);
+      const texts = (Array.isArray(input.texts) ? input.texts : []).slice(0, 60).flatMap(raw => {
+        const t = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+        return typeof t.worker === 'string' && typeof t.text === 'string' && t.worker.trim() && t.text.trim() ? [{ worker: t.worker.trim(), text: t.text.trim() }] : [];
+      });
+      // their own wording wins: a template is used as it is, and nothing written is slipped in beside it
+      return { fn: 'benny_check_texts', args: { p_center: c, p_date: isoDay(input.date) || isoDay(ctx.today), p_who: textWho(input),
+        p_template: say('template'), p_texts: say('template') ? null : texts, p_tone: say('template') ? null : say('tone') }, card: { kind: 'texts' } };
+    }
     case 'bonus_ranking': return { fn: 'benny_bonus_rank', args: { p_center: c, p_date: isoDay(input.date) || dayOpen(ctx) } };
     case 'propose_bonuses': {
       // only what a bonus is made of: who, which place, how much, what kind (the database checks every part)
