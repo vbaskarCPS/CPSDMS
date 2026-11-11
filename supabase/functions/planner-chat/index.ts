@@ -1,9 +1,16 @@
 // supabase/functions/planner-chat/index.ts — the chat between the two of them (src/planner/features/us).
 //
-//   POST { token, action: 'say', text?, media?: [Media], looks?: [{ media_type, data }] } → { ok, key, msg }
+//   POST { token, action: 'say', text?, media?: [Media], looks?: [{ media_type, data }], reply?: { key, text?, media? } } → { ok, key, msg }
 //        Saves the message for the household, tells the other person's phone, then Arvy reads it (the words, and
 //        `looks`: the photos, or a few stills of a video) and hangs its proposals on the message: shopping items, a
 //        calendar event, a to-do. A proposal sends a push and waits for a Confirm tap; nothing is added by itself.
+//        `reply` makes it a reply to the message under that key: the original is looked up in this household's chat
+//        and the quote saved with the reply is taken from it (who wrote it, its first line), not from the app.
+//   POST { token, action: 'ask', keys: [key], what: 'shopping' | 'todo' | 'calendar' | 'words', for?, words? } → { ok, key, msg, added, note? }
+//        One of them picked messages out (12 at most, all from this household's chat) and asked Arvy to do something
+//        with them: put them on the shopping list, make a to-do for one of them (`for`), put them on the calendar,
+//        or what they typed (`words`). Arvy reads those messages and their pictures and its proposals are hung on
+//        the last one picked, to be confirmed like any other. `note` = why there was nothing to propose.
 //   POST { token, action: 'resolve', key, id, state: 'done' | 'dismissed' | 'waiting' } → { ok, msg }
 //        A proposal confirmed (the phone then makes the change), turned down, or put back after a failed change.
 //        The first one to answer wins: ok false = someone already had.
@@ -17,7 +24,7 @@
 // What a message is and how Arvy's reading becomes proposals: chat.ts (shared with the app).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { sendPush, type VapidKeys } from './webpush.ts';
-import { BUCKET, CHAT_KIND, MAX_IMAGE_BYTES, MAX_MEDIA, MAX_VIDEO_BYTES, MEDIA_TYPES, READ_SCHEMA, cleanMessage, proposalsFrom, pushLine, readSystem, resolveProposal, type ChatMsg } from './chat.ts';
+import { BUCKET, CHAT_KIND, MAX_IMAGE_BYTES, MAX_MEDIA, MAX_VIDEO_BYTES, MEDIA_TYPES, READ_SCHEMA, addProposals, askSystem, askText, askWords, cleanAsk, cleanMessage, onlyAsked, pickedFrom, proposalsFrom, pushLine, readSystem, readText, replyFrom, resolveProposal, settleReading, type ChatMsg } from './chat.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
 const FALLBACK = 'claude-sonnet-5-5';
@@ -61,7 +68,8 @@ async function push(svc: Svc, to: Person, payload: { title: string; body: string
 
 // ── Arvy reads a message: one forced tool call, as planner-arvy asks for structured answers ──
 const forcedMode = new Map<string, number>();   // model → 0 forced, thinking off · 1 forced · 2 asked to call it
-async function claudeRead(sys: string, content: unknown[]): Promise<unknown> {
+const READS = 'What this message means for their shopping list, calendar and to-dos. Leave everything out when it means nothing for them.';
+async function claudeRead(sys: string, content: unknown[], about = READS): Promise<unknown> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
   type Out = { stop_reason?: string; content?: { type: string; input?: unknown }[]; error?: { message?: string } };
@@ -74,7 +82,7 @@ async function claudeRead(sys: string, content: unknown[]): Promise<unknown> {
       body: JSON.stringify({ model, max_tokens: mode === 2 ? 3000 : 700,
         system: mode === 2 ? `${sys}\n\nGive your answer only by calling the "propose" tool, once. Write nothing else.` : sys,
         messages: [{ role: 'user', content }], ...(mode === 0 ? { thinking: { type: 'disabled' } } : {}),
-        tools: [{ name: 'propose', description: 'What this message means for their shopping list, calendar and to-dos. Leave everything out when it means nothing for them.', input_schema: READ_SCHEMA }],
+        tools: [{ name: 'propose', description: about, input_schema: READ_SCHEMA }],
         tool_choice: mode === 2 ? { type: 'auto' } : { type: 'tool', name: 'propose' } }),
       signal: AbortSignal.timeout(60000),
     });
@@ -100,16 +108,17 @@ function nowParts(): { today: string; weekday: string; now: string } {
 async function readAndPropose(svc: Svc, owner: string, members: Person[], key: string, msg: ChatMsg, looks: { media_type: string; data: string }[]): Promise<void> {
   const put = async (arvy: ChatMsg['arvy']) => {
     const { data: cur } = await svc.from('planner_docs').select('data').eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', key).maybeSingle();
-    if (cur?.data) await svc.from('planner_docs').update({ data: { ...(cur.data as ChatMsg), arvy }, updated_at: new Date().toISOString() }).eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', key);
+    // proposals asked for by hand while this was being read (action 'ask') stay on the message
+    if (cur?.data) await svc.from('planner_docs').update({ data: { ...(cur.data as ChatMsg), arvy: settleReading((cur.data as ChatMsg).arvy, arvy!) }, updated_at: new Date().toISOString() }).eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', key);
   };
   try {
     const { data: earlier } = await svc.from('planner_docs').select('key, data').eq('user_id', owner).eq('kind', CHAT_KIND).lt('key', key).order('key', { ascending: false }).limit(8);
-    const before = ((earlier || []) as { data: ChatMsg | null }[]).map(d => d.data).filter((m): m is ChatMsg => !!m && typeof m === 'object' && !!m.by).reverse()
-      .map(m => `${m.name}: ${m.text || `(${pushLine(m).toLowerCase()})`}${m.arvy?.proposals?.length ? ` [you proposed: ${m.arvy.proposals.map(p => p.lines.join(' ')).join('; ')}]` : ''}`.slice(0, 500));
+    const before = ((earlier || []) as { data: ChatMsg | null }[]).map(d => d.data).filter((m): m is ChatMsg => !!m && typeof m === 'object' && !!m.by).reverse();
     const video = msg.media?.some(m => m.kind === 'video');
     const t = nowParts();
+    // what it reads (chat.ts readText): a reply is read with what it answers, the chat's own emoji as ordinary ones
     const out = await claudeRead(readSystem({ ...t, members: members.map(m => ({ username: m.username, name: first(m) })), writer: msg.name }), [
-      { type: 'text', text: `${before.length ? `Earlier in the chat:\n${before.join('\n')}\n\n` : ''}The newest message, from ${msg.name}:\n${msg.text || '(no words)'}${looks.length ? `\n\n${video ? 'With it: stills from a video they sent, in order (no sound).' : 'With it: the photos they sent.'}` : ''}` },
+      { type: 'text', text: readText(before, msg, looks.length ? (video ? 'stills' : 'photos') : null) },
       ...looks.map(l => ({ type: 'image', source: { type: 'base64', media_type: l.media_type, data: l.data } })),
     ]);
     const { proposals, note } = proposalsFrom(out, { today: t.today, members: members.map(m => ({ username: m.username, name: first(m) })), id: () => rand(6) });
@@ -123,6 +132,29 @@ async function readAndPropose(svc: Svc, owner: string, members: Person[], key: s
     await put({ state: 'failed' }).catch(() => undefined);
   }
 }
+
+// ── picked messages (action 'ask'): their pictures, as Arvy can look at them ──
+const b64 = (bytes: Uint8Array) => { let out = ''; for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(out); };
+const LOOK_TYPES: Record<string, string> = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+/** The pictures in these messages, oldest first, six at most (the newest are kept): a photo out of the household's
+ *  folder; for a video, or a photo that can't be fetched, the small still saved with the message. */
+async function looksOf(svc: Svc, owner: string, msgs: ChatMsg[]): Promise<{ media_type: string; data: string }[]> {
+  const out: { media_type: string; data: string }[] = [];
+  for (const x of msgs.flatMap(m => m.media || []).slice(-6)) {
+    const still = x.thumb?.startsWith('data:image/jpeg;base64,') ? { media_type: 'image/jpeg', data: x.thumb.split(',')[1] } : null;
+    const type = LOOK_TYPES[x.path.split('.').pop() || ''];
+    try {
+      if (x.kind !== 'image' || !type || !x.path.startsWith(`${owner}/`) || x.path.includes('..')) throw new Error('not a photo of theirs');
+      const { data: file, error } = await svc.storage.from(BUCKET).download(x.path);
+      if (error || !file) throw new Error(error?.message || 'no file');
+      const bytes = new Uint8Array(await (file as Blob).arrayBuffer());
+      if (bytes.length > 3_600_000) throw new Error('too big to look at');   // Claude takes 5 MB a picture, as text
+      out.push({ media_type: type, data: b64(bytes) });
+    } catch { if (still) out.push(still); }
+  }
+  return out;
+}
+const sentWhen = (at: string) => { const d = new Date(at); return isNaN(d.getTime()) ? 'some time ago' : new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'long', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(d); };
 
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
@@ -174,9 +206,15 @@ Deno.serve(async req => {
       const at = new Date().toISOString(), id = rand(6), key = `${at}~${id}`;
       const looks = (Array.isArray(b.looks) ? b.looks : []).filter((l): l is { media_type: string; data: string } => !!l && typeof l === 'object'
         && ['image/jpeg', 'image/png', 'image/webp'].includes((l as { media_type?: string }).media_type || '') && typeof (l as { data?: unknown }).data === 'string' && (l as { data: string }).data.length <= 1_400_000).slice(0, 6);
-      // words (not just emoji) or something to look at: worth a read
-      const reads = (!!clean.text && /\p{L}{2,}/u.test(clean.text)) || looks.length > 0;
-      const msg: ChatMsg = { id, at, by: user.username, name: first(user), ...(clean.text ? { text: clean.text } : {}), ...(clean.media.length ? { media: clean.media } : {}), ...(reads ? { arvy: { state: 'reading' } } : {}) };
+      // a reply: the original is looked up in this household's chat, and the quote is taken from it (chat.ts replyFrom)
+      let reply = clean.reply;
+      if (reply) {
+        const { data: orig, error: oe } = await svc.from('planner_docs').select('data').eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', reply.key).maybeSingle();
+        reply = replyFrom(reply, oe ? undefined : ((orig?.data as ChatMsg | undefined) || null));
+      }
+      // words (not just emoji) or something to look at: worth a read. A reply can be shorter and still mean something ("2")
+      const reads = (!!clean.text && (/\p{L}{2,}/u.test(clean.text) || (!!reply && /[\p{L}\p{N}]/u.test(clean.text)))) || looks.length > 0;
+      const msg: ChatMsg = { id, at, by: user.username, name: first(user), ...(clean.text ? { text: clean.text } : {}), ...(clean.media.length ? { media: clean.media } : {}), ...(reply ? { reply } : {}), ...(reads ? { arvy: { state: 'reading' } } : {}) };
       const { error: e } = await svc.from('planner_docs').insert({ user_id: owner, kind: CHAT_KIND, key, data: msg });
       if (e) throw new Error(e.message);
       const after = (async () => {
@@ -186,6 +224,40 @@ Deno.serve(async req => {
       // the message is saved: the phone gets its answer now, the telling and the reading carry on behind it
       if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(after); else await after;
       return json({ ok: true, key, msg });
+    }
+
+    if (action === 'ask') {
+      const ask = cleanAsk(b, members);
+      if (typeof ask === 'string') return json({ error: ask }, 400);
+      // every key has to be a message in this household's chat: they are read from there and nowhere else
+      const { data: docs, error: de } = await svc.from('planner_docs').select('key, data').eq('user_id', owner).eq('kind', CHAT_KIND).in('key', ask.keys);
+      if (de) throw new Error(de.message);
+      const picked = pickedFrom(ask.keys, (docs || []) as { key: string; data: ChatMsg | null }[]);
+      if (!picked) return json({ error: 'One of those messages isn’t in your chat any more.' }, 404);
+      const who = members.map(m => ({ username: m.username, name: first(m) }));
+      const looks = await looksOf(svc, owner, picked.map(p => p.msg));
+      const t = nowParts();
+      const out = await claudeRead(askSystem({ ...t, members: who, asker: first(user) }), [
+        { type: 'text', text: askText(picked.map(p => ({ msg: p.msg, when: sentWhen(p.msg.at) })), askWords(ask, who), first(user), looks.length) },
+        ...looks.map(l => ({ type: 'image', source: { type: 'base64', media_type: l.media_type, data: l.data } })),
+      ], 'What to propose for their shopping list, calendar and to-do lists from the picked messages, as asked. Leave everything out when there is nothing to propose, and say why in note.');
+      const { proposals, note } = proposalsFrom(onlyAsked(out, ask), { today: t.today, members: who, id: () => rand(6) });
+      // hung on the last one picked, beside what is already there; only if nobody changed that message meanwhile
+      const last = picked[picked.length - 1].key;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const { data: cur } = await svc.from('planner_docs').select('data, updated_at').eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', last).maybeSingle();
+        if (!cur?.data) return json({ error: 'That message is gone' }, 404);
+        const next = addProposals(cur.data as ChatMsg, proposals, note);
+        const { data: done } = await svc.from('planner_docs').update({ data: next.msg, updated_at: new Date().toISOString() }).eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', last).eq('updated_at', cur.updated_at).select('key');
+        if (!done?.length) continue;
+        // the one who asked is looking at it; the other one hears about what they can confirm (a to-do: only the person it's for)
+        const tell = (async () => {
+          for (const p of next.added) await Promise.all(members.filter(m => m.id !== user.id && (!p.for || p.for === m.username)).map(m => push(svc, m, { title: 'Arvy', body: `${p.lines.join(' ')}? Tap to confirm.`, tag: `arvy-${p.id}` })));
+        })().catch(err => console.error('planner-chat after ask:', err instanceof Error ? err.message : String(err)));
+        if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(tell); else await tell;
+        return json({ ok: true, key: last, msg: next.msg, added: next.added.length, ...(next.note ? { note: next.note } : {}) });
+      }
+      return json({ error: 'Busy. Try again.' }, 409);
     }
 
     if (action === 'resolve') {
