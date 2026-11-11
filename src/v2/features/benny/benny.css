@@ -117,3 +117,14 @@
 .benny-root .benny-demo-step{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#9a3412}
 .benny-root .benny-demo .benny-chip{margin:0}
 .benny-root .benny-demo .benny-link{align-self:flex-start;padding-left:0}
+/* "it's live": a notice the Benny opens with, and the offer of a notification for when something they logged is live */
+.benny-root .benny-msg.news .benny-bubble{background:#fff;border:1px solid #e2e8f0;border-left:4px solid #f97316;border-radius:10px;padding:10px 12px}
+.benny-root .benny-notify{display:flex;flex-wrap:wrap;align-items:center;gap:8px;background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:10px 12px;font-size:13px;color:#7c2d12}
+.benny-root .benny-notify>svg{flex:none;color:#c2410c}
+.benny-root .benny-notify-t{flex:1 1 calc(100% - 30px);min-width:0;line-height:1.4}
+.benny-root .benny-notify-t svg{display:inline-block;vertical-align:-2px}
+.benny-root .benny-notify-err{display:block;color:#b91c1c;margin-top:2px}
+.benny-root .benny-notify .benny-go{flex:none;min-width:0;height:40px;padding:0 14px}
+.benny-root .benny-notify .benny-alt{height:40px}
+.benny-root .benny-notify.on{background:#f0fdf4;border-color:#bbf7d0;color:#14532d}
+.benny-root .benny-notify.on>svg{color:#15803d}

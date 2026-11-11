@@ -153,6 +153,7 @@ assert.equal(saved.p_title, 'Houses don’t load on RMD143'); assert.equal(saved
 assert.equal(saved.p_report.user, 'Franklyn Mitchell'); assert.deepEqual(saved.p_report.steps, ['Open RM map', 'Tap RMD143']); assert.deepEqual(saved.p_report.diag.errors, ['12:00:01 TypeError: x']);
 assert.deepEqual(state.http.map(h => new URL(h[0]).host), ['api.anthropic.com', 'api.anthropic.com']);   // the model, twice; nothing else
 assert(String(state.lastAsk.messages.at(-1).content[0].content).includes('"saved":true'));
+assert.equal(a.body.logged, true);   // the app then offers a notification for when it's fixed
 console.log('5 bug report → the app’s log only ✓');
 
 // 5b. a spoken message brings the day's real names; a typed one doesn't
@@ -175,17 +176,19 @@ state.script = [turn(use('log_request', { title: 'Move a prebook to another rout
 a = await ask('move the oak st prebook to ndel33');
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_log_save']);
 assert.equal(calls()[1][1].p_kind, 'request'); assert.equal(calls()[1][1].p_report.asked, 'move the oak st prebook to ndel33'); assert.equal(calls()[1][1].p_report.diag, null);
+assert.equal(a.body.logged, true);
 state.script = [say('I can’t change a worker’s rate from here.')];           // forgot to log it
 a = await ask('bump kyles alumni rate to 2 dollars');
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_log_save']);
 assert.equal(calls()[1][1].p_kind, 'request'); assert.equal(calls()[1][1].p_report.auto, true); assert.equal(calls()[1][1].p_title, 'bump kyles alumni rate to 2 dollars');
+assert.equal(a.body.logged, true);   // logged for it: the same offer
 state.script = [say('I can only help with the DMS.')];                        // off topic: not logged
-a = await ask('whats the weather'); assert.deepEqual(fns(), ['benny_ok_any']);
+a = await ask('whats the weather'); assert.deepEqual(fns(), ['benny_ok_any']); assert(!('logged' in a.body));
 state.script = [turn(use('propose_give_route', { route: 'NDEL33', worker: 'Zorro' })), say('I can’t find a worker called Zorro.')];   // a not-found is not a missing tool
 a = await ask('give zorro ndel33'); assert(!fns().includes('benny_log_save'));
 state.script = [say('8 workers on 8 carts today.')];                          // an answer: not logged
-a = await ask('who is on today'); assert.deepEqual(fns(), ['benny_ok_any']);
-console.log('5c couldn’t-do requests are logged ✓');
+a = await ask('who is on today'); assert.deepEqual(fns(), ['benny_ok_any']); assert(!('logged' in a.body));
+console.log('5c couldn’t-do requests are logged, and the app is told ✓');
 
 // 5d. changing a booking ("service ticket"): a card, never a save; a move comes with its map and the house; admins only
 state.script = [turn(use('propose_booking', { booking: '3575 Latimer', status: 'done' })), say('Tap Save to do it.')];

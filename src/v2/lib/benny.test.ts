@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { demoDue, speakable } from './benny';
+import { demoDue, forServer, speakable } from './benny';
 
 describe('speakable', () => {
   it('reads the first sentences without markdown or list marks', () => {
@@ -30,5 +30,17 @@ describe('the first-time demo', () => {
     expect(demoDue({ opens: 2, done: false })).toBe(true);
     expect(demoDue({ opens: 3, done: false })).toBe(false);
     expect(demoDue({ opens: 1, done: true })).toBe(false);
+  });
+});
+
+describe('what the server is sent of the chat', () => {
+  it('leaves out the app’s own “it’s live” notices and errors, and keeps the rest in order', () => {
+    const sent = forServer([
+      { role: 'assistant', text: '**It’s live: Remove workers from today**\n\nSay “take Kenan off today”.', news: 'e1' },
+      { role: 'user', text: 'take Kenan off today' },
+      { role: 'assistant', text: 'Something went wrong', error: true },
+      { role: 'assistant', text: 'I can’t do that yet. It’s logged for Vijay.', logged: true },
+    ]);
+    expect(sent).toEqual([{ role: 'user', content: 'take Kenan off today' }, { role: 'assistant', content: 'I can’t do that yet. It’s logged for Vijay.' }]);
   });
 });

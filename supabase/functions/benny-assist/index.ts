@@ -1,13 +1,15 @@
 // supabase/functions/benny-assist/index.ts — The Benny, the in-app assistant.
 //
 //   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, following, user_name, spoken, diag } }
-//     → { reply, map?, proposal? }
+//     → { reply, map?, proposal?, logged? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
 //   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | payouts | bonus | texts | remove.
 //              The Benny never makes the change itself: the app does, with the same code as its screens, after the person taps
 //              Confirm. booking_emails changes nothing at all: its card opens the Send booking emails screen, where the person sends.
 //              payouts changes nothing either: its card opens the payout screen, where the person finalizes each payout.
 //              texts sends nothing: its card has a link per worker that opens the phone's Messages, where the person presses send.
+//   logged   = true when this question was saved to the log (a bug, or a request the Benny couldn't do): the app then offers
+//              the person a notification for when it's live.
 //
 // Who: super admins (everything), route managers (their own team on the live map: carts, routes, connected routes),
 // floaters on the floater map (the teams of the managers they follow there).
@@ -45,7 +47,7 @@ type Proposal = { kind: ProposalKind; check: Record<string, unknown>; team_mode?
 /** What one call to the model was billed for: input in full, input written to the cache, input read from it, and output. */
 type Usage = { input_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number; output_tokens?: number };
 /** One go at a question on one model. stop = why the small model's go may not be shown (the main model then does the question). */
-type Run = { reply: string; map: unknown; mapTitle: string; proposal: Proposal | null; usedTools: number; logged: boolean; stop?: { why: string; tokens?: string[] } };
+type Run = { reply: string; map: unknown; mapTitle: string; proposal: Proposal | null; usedTools: number; logged: boolean; saved?: boolean; stop?: { why: string; tokens?: string[] } };
 
 /** A bug, or a request the Benny couldn't do, goes into the app's own log (Super Admin › Bug log), with what the page knew. */
 async function logEntry(sb: SupabaseClient, ctx: Ctx, kind: 'bug' | 'request', input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -194,7 +196,7 @@ Deno.serve(async req => {
       const plan = proposal?.kind === 'start_day' ? mapOf(proposal) as { maps: unknown; highlight: unknown[] } : null;
       if (map && plan?.highlight.length && !((map as { highlight?: unknown[] }).highlight || []).length) map = { ...(map as object), maps: plan.maps, highlight: plan.highlight };
       // a super admin trying the models out is also told which one answered, and why
-      return json({ reply, map: map ? { ...(map as object), title: res.mapTitle } : mapOf(proposal), proposal, ...(asked ? { route } : {}) });
+      return json({ reply, map: map ? { ...(map as object), title: res.mapTitle } : mapOf(proposal), proposal, ...(res.saved ? { logged: true } : {}), ...(asked ? { route } : {}) });
     };
     /** One go at the question on one model. The small model's go (fast) stops, with why, the moment its answer wouldn't be safe to show. */
     const run = async (model: string, fast: boolean): Promise<Run> => {
@@ -226,6 +228,7 @@ Deno.serve(async req => {
           const s0 = Date.now();
           const { out: got, proposal: p } = await runTool(sb, ctx, role as Role, u.name || '', u.input || {}, saidForNames(history));
           toolRuns.push({ name: u.name || '', model: fast ? 'fast' : 'main', ok: !(got && (got as { error?: string }).error), ms: Date.now() - s0 });
+          if ((u.name === 'log_request' || u.name === 'report_bug') && got && (got as { saved?: boolean }).saved === true) out.saved = true;
           if (fast && got && (got as { error?: string }).error) return { ...out, stop: { why: 'tool_error' } };
           if (p) out.proposal = p;
           if (u.name === 'show_map' && got && !(got as { error?: string }).error) { out.map = got; out.mapTitle = String(u.input?.title || ''); }
@@ -257,7 +260,8 @@ Deno.serve(async req => {
     if (!res || res.stop) res = await run(MODEL, false);
     // it said it couldn't, straight off, and logged nothing: log it for it
     if (!res.logged && res.usedTools === 0 && !res.proposal && CANT.test(res.reply) && !OFF_TOPIC.test(res.reply)) {
-      await logEntry(sb, ctx, 'request', { title: question.slice(0, 120), asked: question, reply: res.reply.slice(0, 600), auto: true });
+      const auto = await logEntry(sb, ctx, 'request', { title: question.slice(0, 120), asked: question, reply: res.reply.slice(0, 600), auto: true });
+      if (auto.saved === true) res.saved = true;
     }
     const by = fastOn && !why ? 'fast' : 'main';
     console.log('benny-assist usage ' + JSON.stringify({ role, mode: fastOn ? 'fast_first' : 'main', by, why, fast_model: FAST, main_model: MODEL, fast: used.fast, main: used.main }));
