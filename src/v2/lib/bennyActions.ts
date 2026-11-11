@@ -7,6 +7,8 @@
 //   booking    → Bookings › List › save (status, notes, route of one Master Booking)
 //   pin        → RM map › Pins › drop a pin (the map's own createMapPin)
 //   stops      → RM map › Pins: one numbered pin per cart, in the planned order; an earlier order of the same kind is replaced
+//   job        → RM map › a worker's jobs › edit a job: its amount and how it was paid (the edit screen's own save, which
+//                works the cart's equiv and totals out again). The database keeps a record of each one (benny_job_changes).
 // One card changes nothing: booking_emails opens Bookings › Send booking emails with the day and routes picked. The person
 // reads the emails there and sends them; the Benny never sends.
 import { getDay, listRoster, type RosterRow } from './workerbook';
@@ -76,7 +78,26 @@ export interface StopsCheck {
 /** The pins an order of this kind leaves on the map: "Drop 3 · Kyle". */
 export const stopPin = (kind: StopKind) => new RegExp(`^${STOP_WORD[kind]} \\d+ · `);
 
+/** One job on a cart's logsheet, as the Benny reads it: no phone, email or card detail. */
+export interface LogJob {
+  id: string; at?: string; client?: string; address?: string; route?: string; type: string; service?: string; does?: string[]; note?: string;
+  amount: number; paid_by: string;
+}
+/** What the edit screen's save takes for a change of amount or payment type (transactions columns). */
+export interface JobPatch { price: number; display_price: string; payment_method: string; payment_breakdown: Record<string, number>; items?: { name: string; price: number }[] }
+export interface JobCheck {
+  ok: boolean; problems?: string[]; date: string; worker: { cn: string; name: string }; cart: { id: string; workers: string[] };
+  job: LogJob; change: { amount?: { from: number; to: number }; paid_by?: { from: string; to: string } };
+  ask: { amount?: number; paid_by?: string }; patch: JobPatch; stamp: string; notes?: string[];
+}
+export const dollars = (n: number) => `$${Number(n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** The patch as the old app's updateTransaction takes it. Only these five fields are ever sent. */
+export function jobUpdates(patch: JobPatch): { price: number; displayPrice: string; paymentMethod: string; paymentBreakdown: Record<string, number>; items?: { name: string; price: number }[] } {
+  return { price: patch.price, displayPrice: patch.display_price, paymentMethod: patch.payment_method, paymentBreakdown: patch.payment_breakdown, ...(patch.items ? { items: patch.items } : {}) };
+}
+
 export type BennyProposal =
+  | { kind: 'job'; check: JobCheck }
   | { kind: 'pin'; check: PinCheck }
   | { kind: 'stops'; check: StopsCheck }
   | { kind: 'booking_emails'; check: EmailsCheck }
@@ -197,6 +218,23 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         lines.push(`${cap(NOTE[k])}: ${n.mode === 'clear' ? `cleared (was “${n.was}”)` : n.mode === 'replace' ? `“${n.was}” becomes “${n.text}”` : n.mode === 'add' ? `adds “${n.text}”` : `“${n.text}”`}`);
       }
       return { title, lines: [...lines, ...(c.notes || [])], action: 'Save' };
+    }
+    case 'job': {
+      const c = p.check; const j = c.job; const ch = c.change; const first = c.worker.name.split(' ')[0];
+      const what = [j.type === 'Production' ? 'Production' : j.type, j.service, j.does?.length ? `(${j.does.join(', ')})` : ''].filter(Boolean).join(' · ').replace(' · (', ' (');
+      const team = c.cart.workers.length > 1;
+      return {
+        title: `Change a job on ${first}’s logsheet`,
+        lines: [
+          [j.client, j.address].filter(Boolean).join(' · ') || 'A job with no client name',
+          what,
+          ch.amount ? `Amount: ${dollars(ch.amount.from)} → ${dollars(ch.amount.to)}` : `Amount: ${dollars(j.amount)} (stays)`,
+          ch.paid_by ? `Paid by: ${ch.paid_by.from || 'not set'} → ${ch.paid_by.to}` : `Paid by: ${j.paid_by} (stays)`,
+          ...(c.notes || []),
+          `${team ? `The cart’s (${c.cart.workers.map(n => n.split(' ')[0]).join(' + ')})` : `${first}’s`} equiv and totals are worked out again. The change is recorded under your name.`,
+        ],
+        action: 'Save',
+      };
     }
     case 'solo': {
       const c = p.check;
@@ -335,6 +373,27 @@ export async function bookingFromBenny(p: Extract<BennyProposal, { kind: 'bookin
   return `${c.booking.address}: ${bookingSaved(c.change)}.`;
 }
 
+/** A logsheet job's amount and payment type, saved by the old app's own edit save (it works the cart's equiv and totals
+ *  out again). The database checks it once more just before (nothing may have moved since the card was made), starts a
+ *  record of the change, and after the save reads the job back to close the record: only then is it called saved. */
+export async function jobFromBenny(p: Extract<BennyProposal, { kind: 'job' }>, centerId: string): Promise<string> {
+  const c = p.check; const first = c.worker.name.split(' ')[0];
+  const { sessionService, date } = await legacy(centerId);
+  if (date !== c.date) throw new Error('The live day changed since I checked. Ask me again.');
+  const begun = must(await db.rpc('benny_job_begin', { p_center: centerId, p_worker: c.worker.cn, p_job: c.job.id, p_change: c.ask, p_stamp: c.stamp })) as JobCheck & { change_id?: string };
+  if (!begun?.ok || !begun.change_id || !begun.patch) throw new Error(begun?.problems?.[0] || 'That job can’t be changed now. Ask me again.');
+  let failed = false;
+  try { await sessionService.updateTransaction(c.job.id, jobUpdates(begun.patch)); } catch { failed = true; }
+  // read it back whatever happened, so the record says what the job reads now
+  let state: string | undefined;
+  try { state = ((await db.rpc('benny_job_done', { p_id: begun.change_id })).data as { state?: string } | null)?.state; } catch { /* no signal: not confirmed */ }
+  const screen = 'the edit screen (RM map › the worker › tap the job)';
+  if (state === 'not_saved' || (failed && state !== 'done')) throw new Error(`The change didn’t save: ${first}’s job still reads ${dollars(c.job.amount)}, ${c.job.paid_by}. Try again, or change it on the edit screen.`);
+  if (state === 'differs') throw new Error(`It saved, but it doesn’t read the way you asked. Check the job on ${screen}.`);
+  if (state !== 'done') throw new Error(`I couldn’t read the job back to confirm it. Check it on ${screen} before trying again.`);
+  return `${c.job.client ? `${c.job.client.split(' ')[0]}’s job` : 'The job'} on ${first}’s logsheet now reads ${dollars(begun.patch.price)}, ${begun.patch.payment_method}. The totals are worked out again.`;
+}
+
 /** RM map › Pins › drop a pin: the map's own save, on the day and manager the check was made for. */
 export async function pinFromBenny(p: Extract<BennyProposal, { kind: 'pin' }>, centerId: string): Promise<string> {
   const c = p.check;
@@ -364,6 +423,7 @@ export async function doProposal(p: BennyProposal, center: CenterLite): Promise<
   if (p.kind === 'start_day') return startDayFromBenny(p, center);
   if (p.kind === 'give_route') return giveRouteFromBenny(p, center.id);
   if (p.kind === 'booking') return bookingFromBenny(p, center.id);
+  if (p.kind === 'job') return jobFromBenny(p, center.id);
   if (p.kind === 'pin') return pinFromBenny(p, center.id);
   if (p.kind === 'stops') return stopsFromBenny(p, center.id);
   // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)

@@ -32,7 +32,7 @@ export function forServer(messages: BennyMsg[]) {
 
 /** The change cards this build of the app can show. Sent with every question, so the server never sends a card that an
  *  older open tab can't draw (it says "refresh" instead). Add a kind here when describe() and doProposal() handle it. */
-export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops'];
+export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job'];
 
 export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null }> {
   const lastAsk = [...messages].reverse().find(m => m.role === 'user');

@@ -15,14 +15,14 @@ describe('the Benny’s tools', () => {
   });
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);
-    expect(rm).toEqual(expect.arrayContaining(['live_team', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'propose_pin', 'propose_stops', 'report_bug', 'log_request', 'show_map']));
+    expect(rm).toEqual(expect.arrayContaining(['live_team', 'logsheet', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'propose_job_change', 'propose_pin', 'propose_stops', 'report_bug', 'log_request', 'show_map']));
     for (const no of ['find_people', 'day', 'maps', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails']) expect(rm).not.toContain(no);
     expect(toolsFor('admin').map(t => t.name)).toEqual(TOOLS.map(t => t.name));
     expect(toolsFor('rm')[0]).not.toHaveProperty('roles');   // only what the model's API accepts is sent
   });
   it('changes become cards; lookups don’t', () => {
     const kinds = TOOLS.map(t => { const c = toolCall(t.name, {}, ctx); return c && 'fn' in c && c.card ? c.card.kind : null; }).filter(Boolean);
-    expect(kinds.sort()).toEqual(['booking', 'booking_emails', 'give_route', 'partner', 'pin', 'solo', 'start_day', 'stops']);
+    expect(kinds.sort()).toEqual(['booking', 'booking_emails', 'give_route', 'job', 'partner', 'pin', 'solo', 'start_day', 'stops']);
     const start = toolCall('propose_start_day', { assign: [], team_mode: 'whatever' }, ctx);
     expect(start && 'fn' in start && start.card?.team_mode).toBe('roster');
     expect(toolCall('propose_start_day', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
@@ -43,6 +43,20 @@ describe('the Benny’s tools', () => {
     expect(TOOLS.filter(t => /send|mail/i.test(t.name)).map(t => t.name)).toEqual(['propose_booking_emails']);   // no tool sends anything
     expect(system(ctx, 'admin')).toContain('Never say an email was sent');
     expect(system(ctx, 'rm')).not.toContain('propose_booking_emails');
+  });
+  it('a logsheet job: looked up by worker, changed by its id, and only the amount and payment type are sent', () => {
+    expect(toolCall('logsheet', { worker: 'Mugove' }, ctx)).toEqual({ fn: 'benny_live_jobs', args: { p_center: 'c1', p_worker: 'Mugove' } });
+    expect(toolCall('propose_job_change', { worker: 'Mugove', job: 't1', amount: 250, paid_by: 'prepaid', client: 'x', phone: '555', card: '4111' }, ctx))
+      .toEqual({ fn: 'benny_check_job', args: { p_center: 'c1', p_worker: 'Mugove', p_job: 't1', p_change: { amount: 250, paid_by: 'prepaid' } }, card: { kind: 'job' } });
+    expect(toolCall('propose_job_change', { worker: 'Mugove', job: 't1', paid_by: 'cash' }, ctx)).toMatchObject({ args: { p_change: { paid_by: 'cash' } } });
+    expect(toolCall('propose_job_change', { worker: 'Mugove', job: 't1', amount: 'two fifty' }, ctx)).toMatchObject({ args: { p_change: { amount: 'two fifty' } } });   // the database says it didn't get the amount
+    expect(toolCall('propose_job_change', { worker: 'Mugove', job: 't1', amount: NaN }, ctx)).toMatchObject({ args: { p_change: {} } });
+    for (const role of ['admin', 'rm'] as const) {
+      expect(system(ctx, role)).toContain('changing a job on a logsheet');
+      expect(system(ctx, role)).toContain('This changes what the worker is paid, so never guess');
+    }
+    const t = TOOLS.find(x => x.name === 'propose_job_change')!;
+    expect((t.input_schema as { properties: { paid_by: { enum: string[] } } }).properties.paid_by.enum).toEqual(['cash', 'cheque', 'e-transfer', 'prepaid', 'billed']);   // never a card or a split
   });
   it('pins and orders belong to the map that is open, and a pin has exactly one place', () => {
     expect(toolCall('propose_pin', { label: ' Lunch ', route: 'NDEL32', worker: 'Kyle', here: true }, ctx))

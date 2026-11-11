@@ -1,5 +1,5 @@
 import { describe as d, it, expect } from 'vitest';
-import { bookingSaved, buildBennyPlan, describe, emailsPreset, stopPin, type StartDayCheck } from './bennyActions';
+import { bookingSaved, buildBennyPlan, describe, dollars, emailsPreset, jobUpdates, stopPin, type JobCheck, type StartDayCheck } from './bennyActions';
 import { planProblems } from './startSession';
 import { defaultRateCard } from './rateCard';
 import type { RosterRow } from './workerbook';
@@ -119,6 +119,25 @@ d('describe', () => {
     expect(describe({ kind: 'pin', check: { ...pin, at: 'where David last knocked, 8 min ago', visibility: 'manager', seen_by: 'Sent to Jovan Chung' } }).lines)
       .toEqual(['Where David last knocked, 8 min ago', 'Seen by: sent to Jovan Chung']);
   });
+  it('a logsheet job card says what it reads now and what it will read, and only those fields are saved', () => {
+    const job: JobCheck = { ok: true, date: '2026-11-10', worker: { cn: 'I1479', name: 'Kevontae Ragguette' }, cart: { id: 's7', workers: ['Kevontae Ragguette'] },
+      job: { id: 't1', client: 'Ron Gee', address: '406 Cumberland St', route: 'NEWW26', type: 'Sale', service: 'Lawn Rejuvenation', does: ['dethatch'], note: 'New Sale', amount: 180, paid_by: 'Cash' },
+      change: { amount: { from: 180, to: 250 }, paid_by: { from: 'Cash', to: 'Prepaid' } }, ask: { amount: 250, paid_by: 'Prepaid' },
+      patch: { price: 250, display_price: 'RJ250.00', payment_method: 'Prepaid', payment_breakdown: { Prepaid: 250 }, items: [{ name: 'Lawn Rejuvenation', price: 250 }] }, stamp: 's', notes: [] };
+    expect(describe({ kind: 'job', check: job })).toEqual({ title: 'Change a job on Kevontae’s logsheet', action: 'Save', lines: [
+      'Ron Gee · 406 Cumberland St', 'Sale · Lawn Rejuvenation (dethatch)', 'Amount: $180.00 → $250.00', 'Paid by: Cash → Prepaid',
+      'Kevontae’s equiv and totals are worked out again. The change is recorded under your name.'] });
+    // only the payment type changes: the amount is shown as staying; a caution from the check is on the card; a team cart is named
+    const type = describe({ kind: 'job', check: { ...job, cart: { id: 's7', workers: ['Kevontae Ragguette', 'David Nsapu'] }, change: { paid_by: { from: 'Cash', to: 'Cheque' } }, notes: ['No cheque number is saved with it.'] } });
+    expect(type.lines.slice(2)).toEqual(['Amount: $180.00 (stays)', 'Paid by: Cash → Cheque', 'No cheque number is saved with it.',
+      'The cart’s (Kevontae + David) equiv and totals are worked out again. The change is recorded under your name.']);
+    expect(describe({ kind: 'job', check: { ...job, job: { ...job.job, client: undefined, address: undefined, does: undefined, type: 'Add-On' }, change: { amount: { from: 180, to: 1250.5 } } } }).lines.slice(0, 4))
+      .toEqual(['A job with no client name', 'Add-On · Lawn Rejuvenation', 'Amount: $180.00 → $1,250.50', 'Paid by: Cash (stays)']);
+    // the save gets the edit screen's five fields and nothing else: no client, contact or card field can ride along
+    expect(jobUpdates(job.patch)).toEqual({ price: 250, displayPrice: 'RJ250.00', paymentMethod: 'Prepaid', paymentBreakdown: { Prepaid: 250 }, items: [{ name: 'Lawn Rejuvenation', price: 250 }] });
+    expect(Object.keys(jobUpdates({ ...job.patch, items: undefined, ...({ cc_full_number: 'x', customer_phone: 'y' } as object) }))).toEqual(['price', 'displayPrice', 'paymentMethod', 'paymentBreakdown']);
+    expect(dollars(210)).toBe('$210.00');
+  });
   it('an order card lists the stops in order, with how each was found, and what it replaces', () => {
     const c = describe({ kind: 'stops', check: order });
     expect(c.title).toBe('Pickup order: 3 stops');
@@ -148,6 +167,8 @@ d('describe', () => {
       booking: { kind: 'booking', check: { ok: true, booking, change: { status: { from: 'open', to: 'done' } }, patch: { status: 'done' }, ask: { status: 'done' }, stamp: 't' } },
       booking_emails: { kind: 'booking_emails', check: emails },
       pin: { kind: 'pin', check: pin }, stops: { kind: 'stops', check: order },
+      job: { kind: 'job', check: { ok: true, date: '2026-11-10', worker: { cn: 'I1', name: 'A B' }, cart: { id: 's1', workers: ['A B'] }, job: { id: 't1', type: 'Sale', amount: 10, paid_by: 'Cash' },
+        change: { amount: { from: 10, to: 20 } }, ask: { amount: 20 }, patch: { price: 20, display_price: '20.00', payment_method: 'Cash', payment_breakdown: { Cash: 20 } }, stamp: 't' } },
     };
     for (const k of CARDS) { expect(samples[k], k).toBeTruthy(); expect(describe(samples[k]).title, k).toBeTruthy(); }
   });
