@@ -1,6 +1,8 @@
 [
   { "id": "2026-11-11-chat-reply-pick", "date": "2026-11-11", "title": "Reply to a message, and hand messages to Arvy",
     "lines": ["In your chat, swipe a message to the right to reply to it. The quote shows above your reply; tap it to go back to the original.", "Press and hold a message to pick it, tap others to add them, then choose Reply, Ask Arvy or Copy.", "Ask Arvy can put them on the shopping list, make a to-do for either of you, put them on the calendar, or log them as an idea for the planner. Nothing is added until you tap Confirm."] },
+  { "id": "2026-11-11-icon-packs", "date": "2026-11-11", "title": "Icon packs, and your own pictures as icons",
+    "lines": ["Settings › Icons: pick a pack for the bar and the Health and Lifestyle pages: Woodland, Cottage, Celestial, Festive, Academia, Coastal, Spooky, Retro or Blossom.", "“Match my look” will change the icons with your look by itself once the looks arrive.", "Or put your own picture on any button, and take it off any time."] },
   { "id": "2026-11-11-arrange-today", "date": "2026-11-11", "title": "Arrange your Today page",
     "lines": ["Settings › Arrange Today: put the blocks on Today in your own order, switch off the ones you don’t use, and make some smaller. The day’s plan always stays.", "Add widgets: a countdown to a day you pick, a sticky note, a mini calendar and a habit tracker for the week.", "“Put it back as it was” restores the original page."] },
   { "id": "2026-11-11-arvy-places-chat", "date": "2026-11-11", "title": "Arvy finds places, and reads your chat when you ask",
