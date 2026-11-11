@@ -1,16 +1,17 @@
 // src/planner/ui/Shell.tsx — the bottom bar around every signed-in screen: Today · RV · Health · Wealth · Lifestyle
-// (ui/nav.ts says which screens sit under which button). RV is Arvy: the one button that stands out, it opens the
-// chat panel and closes it again. Health and Lifestyle open their menu pages (screens/Hub.tsx).
+// (ui/nav.ts says which screens sit under which button). RV is Arvy: the one button that stands out. A tap opens
+// the chat panel and closes it again; held down, it opens the chat already listening, so you can just talk.
+// Health and Lifestyle open their menu pages (screens/Hub.tsx).
 // Health and Wealth also take a drag: press, drag up and let go, and the camera opens: for a meal (Health) or a
 // receipt (Wealth). The photo lands on Add a meal / Add a receipt as if its own "Take a photo" had been tapped
 // (lib/quickShot.ts). A tap still opens the page.
 import { useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Camera, ChevronsUp, Compass, HeartPulse, Sparkles, Sunrise, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Camera, ChevronsUp, Compass, HeartPulse, Mic, Sparkles, Sunrise, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Arvy } from '../features/arvy/Arvy';
-import { arvyIsOpen, onArvyOpenChange, toggleArvy } from '../features/arvy/arvy';
+import { arvyIsHearing, arvyIsOpen, onArvyChange, openArvy, primeVoice, toggleArvy } from '../features/arvy/arvy';
 import { giveShot, SHOT_TO, type ShotKind } from '../lib/quickShot';
-import { groupOf, NAV_TO, pull, PULL_SLOP, SHOTS, type NavGroup } from './nav';
+import { groupOf, NAV_TO, pull, PULL_SLOP, RV_HOLD_MS, RV_HOLD_SLOP, SHOTS, type NavGroup } from './nav';
 
 interface Tab { group: NavGroup; label: string; Icon: LucideIcon }
 const TABS: Tab[] = [
@@ -72,10 +73,43 @@ function ShotTab({ t, active, shot, onShoot }: { t: Tab; active: boolean; shot: 
   );
 }
 
+/** RV, Arvy's button. A tap opens the chat and closes it; held down (RV_HOLD_MS) it opens the chat listening.
+ *  While Arvy listens it shows a mic. */
+function RvButton() {
+  const open = useSyncExternalStore(onArvyChange, arvyIsOpen);
+  const hearing = useSyncExternalStore(onArvyChange, arvyIsHearing);
+  const down = useRef<{ x: number; y: number } | null>(null);
+  const timer = useRef(0);
+  const held = useRef(false);   // this press turned into a hold: the click that may follow is not a tap
+  const stop = () => { window.clearTimeout(timer.current); down.current = null; };
+  return (
+    <button type="button" className={`pl-nav__rv ${open ? 'is-open' : ''} ${hearing ? 'is-hearing' : ''}`} aria-expanded={open}
+      aria-label={hearing ? 'Arvy is listening. Close Arvy' : open ? 'Close Arvy' : 'Ask Arvy. Hold to talk'}
+      onPointerDown={e => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        held.current = false; down.current = { x: e.clientX, y: e.clientY };
+        window.clearTimeout(timer.current);
+        timer.current = window.setTimeout(() => {
+          held.current = true; down.current = null;
+          try { navigator.vibrate?.(12); } catch { /* no buzz on this phone */ }
+          openArvy({ mic: true });
+        }, RV_HOLD_MS);
+      }}
+      onPointerMove={e => { const s = down.current; if (s && Math.hypot(e.clientX - s.x, e.clientY - s.y) > RV_HOLD_SLOP) stop(); }}   // slid off: not a hold
+      onPointerUp={() => { stop(); if (held.current) primeVoice(); }}   // the finger lifting is what lets a phone play Arvy's spoken answer
+      onPointerCancel={stop}
+      onPointerLeave={stop}
+      onClick={() => { if (held.current) { held.current = false; return; } toggleArvy(); }}
+      onContextMenu={e => e.preventDefault()}>
+      <i aria-hidden>{hearing ? <Mic /> : open ? <X /> : <Sparkles />}</i>
+      <span>RV</span>
+    </button>
+  );
+}
+
 export function Shell({ children }: { children: ReactNode }) {
   const here = groupOf(useLocation().pathname);
   const nav = useNavigate();
-  const chatOpen = useSyncExternalStore(onArvyOpenChange, arvyIsOpen);
   // the bar's own camera: one hidden picker, opened by a drag; the screen it then goes to picks the photo up
   const camRef = useRef<HTMLInputElement>(null);
   const shooting = useRef<ShotKind>('meal');
@@ -101,10 +135,7 @@ export function Shell({ children }: { children: ReactNode }) {
         onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; giveShot(shooting.current, files); }} />
       <nav className="pl-nav" aria-label="Planner">
         {tab(TABS[0])}
-        <button type="button" className={`pl-nav__rv ${chatOpen ? 'is-open' : ''}`} onClick={toggleArvy} aria-expanded={chatOpen} aria-label={chatOpen ? 'Close Arvy' : 'Ask Arvy'}>
-          <i aria-hidden>{chatOpen ? <X /> : <Sparkles />}</i>
-          <span>RV</span>
-        </button>
+        <RvButton />
         {TABS.slice(1).map(tab)}
       </nav>
     </>
