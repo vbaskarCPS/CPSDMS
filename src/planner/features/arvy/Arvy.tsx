@@ -6,7 +6,7 @@
 // Changes Arvy makes show under its reply: small ones are already done (Undo), bigger ones wait for Confirm.
 // Arvy is the coach too: screens open it with openArvy() (Train's "Ask Arvy"), and on the Train screens it offers
 // coaching questions. A thumbs-down under a reply, an Undo, or an error goes in Arvy's improvements log (log.ts).
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Check, Mic, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { getPass } from '../../lib/auth';
@@ -73,6 +73,15 @@ export function Arvy() {
   const [pending, setPending] = useState<string | null>(null);  // a question to send as soon as the chat is open
   const rec = useRef<ReturnType<typeof listen> | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // the box you type in grows with what's in it and shrinks back once it's sent. How tall it may get is in arvy.css
+  // (about a third of the screen: less with the keyboard up, so the chat stays in view); past that it scrolls
+  const boxRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + 3}px`;   // + the border
+  }, [text, open, hearing]);
 
   // the saved chat (other visits, other devices); the first time, the Coach chat comes over and this visit's lines follow it
   const [ready, setReady] = useState(false);
@@ -195,7 +204,9 @@ export function Arvy() {
           <form className="arvy-input" onSubmit={e => { e.preventDefault(); void send(text, false); }}>
             {hearing !== null
               ? <div className="arvy-hearing" aria-live="polite">{hearing || 'Listening…'}</div>
-              : <input value={text} onChange={e => setText(e.target.value)} placeholder="Ask Arvy…" aria-label="Ask Arvy" disabled={busy} enterKeyHint="send" />}
+              : <textarea ref={boxRef} rows={1} value={text} onChange={e => setText(e.target.value)} placeholder="Ask Arvy…" aria-label="Ask Arvy" disabled={busy} enterKeyHint="send"
+                  // Enter (the keyboard's Send) sends; Shift+Enter starts a new line
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (text.trim()) void send(text, false); } }} />}
             {canListen() && (
               <button type="button" className={`arvy-mic${hearing !== null ? ' on' : ''}`} onClick={mic} disabled={busy} aria-label={hearing !== null ? 'Stop listening' : 'Talk to Arvy'}><Mic /></button>)}
             {hearing === null && <button type="submit" className="arvy-send" disabled={busy || !text.trim()} aria-label="Send"><Send /></button>}
