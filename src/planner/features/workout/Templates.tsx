@@ -6,6 +6,7 @@ import { Page, Header, Card, Button, Field, Input, Empty, useToast, uid } from '
 import { loadCustomExercises, loadTemplates, saveTemplate, WEEKDAYS } from './store';
 import { fmtSec, type Exercise, type Template, type TemplateExercise } from './types';
 import { ExercisePicker } from './parts';
+import { styleLabel } from './format';
 
 export function Templates() {
   const [list, setList] = useState<Template[]>([]);
@@ -97,6 +98,7 @@ export function TemplateEdit() {
                   : <label>Reps<input className="pl-input" value={e.targetReps} placeholder="8-12" onChange={x => updateEx(i, { targetReps: x.target.value })} /></label>}
                 <label>Rest (s)<input className="pl-input" inputMode="numeric" value={e.restSec} onChange={x => updateEx(i, { restSec: Math.max(0, parseInt(x.target.value) || 0) })} /></label>
               </div>
+              {(e.group || e.style || e.sides || e.noLoad) && <small className="pl-muted" style={{ display: 'block' }}>{[e.group ? `${e.groupKind || 'superset'} ${e.group}${e.groupSec ? ` (${Math.round(e.groupSec / 60)} min)` : ''}` : '', styleLabel(e), e.sides ? 'each side' : '', e.noLoad ? 'no weight' : ''].filter(Boolean).join(' · ')}</small>}
               {e.note && <small className="pl-muted">{e.note}</small>}
             </div>
             <div className="wo-tplex__btns">

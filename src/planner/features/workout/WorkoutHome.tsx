@@ -1,12 +1,14 @@
 // src/planner/features/workout/WorkoutHome.tsx — /workout: today's session, this week, recent sessions, links.
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Play, ClipboardList, MessageCircle, Scale, History, Dumbbell } from 'lucide-react';
+import { Play, ClipboardList, MessageCircle, Scale, History, Dumbbell, Shuffle } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
 import { clock, loadRoutine, routineMin, routineMinutes, routineNow, type Routine } from '../../lib/routine';
 import { Page, Header, Card, Button, Bars, Stat, Empty } from '../../ui/primitives';
 import { daysAgo, emptyWorkout, fmtDate, loadCustomExercises, loadTemplates, loadWorkouts, nextTarget, saveWorkout, startFromTemplate, todaysTemplate, weekSessions } from './store';
-import { durationMin, fmtNum, volumeOf, workoutKey, type Exercise, type Template, type Units, type Workout } from './types';
+import { durationMin, fmtNum, fmtSec, volumeOf, workoutKey, type Exercise, type Template, type Units, type Workout } from './types';
+import { blocksOf, blockTitle, isNoLoad, targetLine } from './format';
+import { findExercise } from './library';
 import { DonePanel } from './DonePanel';
 import { COACH_ASKS, openArvy } from '../arvy/arvy';
 import { useDocsChanged } from '../../lib/useDocsChanged';
@@ -71,12 +73,19 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
           <p className="pl-eyebrow">{doneToday ? 'Another one?' : gymLine}</p>
           <h2>{tpl.name}</h2>
           <div className="wo-hero__list">
-            {targets.map(({ e, s }) => (
-              <div className="wo-hero__row" key={e.exerciseId}><button type="button" className="wo-ex__howto" onClick={() => setHowTo({ id: e.exerciseId, name: e.name, note: e.note })}>{e.name}</button><span>{e.targetSets} × {e.targetReps}{s.weight > 0 ? ` @ ${s.weight} ${units}` : ''}</span></div>
+            {blocksOf(tpl.exercises).map((b, bi) => (
+              <div key={bi} style={{ display: 'contents' }}>
+                {b.kind !== 'single' && <div className="wo-hero__fmt">{blockTitle(b, tpl.exercises)}</div>}
+                {b.at.map(i => { const { e, s } = targets[i]; const lib = findExercise(e.exerciseId, custom); const shaped = !!e.style || e.mode === 'time' || isNoLoad(e, lib) || b.kind === 'emom' || b.kind === 'amrap';
+                  return <div className="wo-hero__row" key={`${e.exerciseId}-${i}`}><button type="button" className="wo-ex__howto" onClick={() => setHowTo({ id: e.exerciseId, name: e.name, note: e.note })}>{e.name}</button><span>{b.kind === 'emom' || b.kind === 'amrap' ? (e.mode === 'time' ? fmtSec(e.targetSec || 30) : `${e.targetReps} reps`) : targetLine(e, lib)}{!shaped && s.weight > 0 ? ` @ ${s.weight} ${units}` : ''}</span></div>; })}
+              </div>
             ))}
           </div>
           <Button block style={{ background: 'var(--accent-ink)', color: 'var(--accent)', border: 0 }} disabled={starting} onClick={() => void start(tpl)}><Play size={18} /> Start {tpl.name.toLowerCase()}</Button>
-          <Button block ghost style={{ marginTop: 8, color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} disabled={starting} onClick={() => void start()}>Blank session</Button>
+          <div className="pl-row" style={{ gap: 8, marginTop: 8 }}>
+            <Button ghost className="pl-grow" style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} disabled={starting} onClick={() => openArvy({ ask: `Shake up today's session (${tpl.name}): keep the focus, change the format.` })}><Shuffle size={16} /> Shake it up</Button>
+            <Button ghost className="pl-grow" style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} disabled={starting} onClick={() => void start()}>Blank session</Button>
+          </div>
         </Card>
       ) : !loading ? (
         <Card><Empty icon={<Dumbbell />} title="No templates yet" blurb="Make one and it'll show up here." action={<Link className="pl-btn pl-btn--primary" to="/workout/templates">Templates</Link>} /></Card>

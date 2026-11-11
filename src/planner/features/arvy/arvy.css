@@ -90,3 +90,6 @@
 
 /* the note above lines carried over from the old Coach chat */
 .arvy-carried { align-self: center; font-size: 12px; color: var(--ink-2); padding: 2px 10px; border: 1px solid var(--line); border-radius: 10px; }
+
+/* the rest timer runs along the bottom of a live workout: Arvy's button sits above it, not on its Skip button */
+body:has(.wo-rest) .arvy-fab { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px + 62px); }

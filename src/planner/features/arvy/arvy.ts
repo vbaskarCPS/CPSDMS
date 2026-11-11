@@ -52,7 +52,7 @@ export const onOpenArvy = (fn: (o: OpenAsk) => void) => { openers.add(fn); retur
 /** Open the chat; `suggest` = the chips to offer, `ask` = a question to send straight away. */
 export const openArvy = (o: OpenAsk = {}) => { for (const fn of [...openers]) fn(o); };
 /** What to offer when the chat is opened for coaching (what the Coach screen offered). */
-export const COACH_ASKS = ['Plan my next session', 'I’m sore — adjust my next session', 'Change my next session', 'Why am I stuck on bench?'];
+export const COACH_ASKS = ['Plan my next session', 'Shake up my next session', 'Build me a kettlebell circuit', 'I’m sore — adjust my next session', 'Why am I stuck on bench?'];
 export const cancelChange = (id: string) => { waiting.delete(id); };
 /** Undo a change. `why` = the lines it showed and what was asked: an undo usually means Arvy got it wrong, so it's logged. */
 export async function undoChange(id: string, why?: { lines?: string[]; question?: string }): Promise<void> {
@@ -171,13 +171,16 @@ async function demoTurn(q: string, changes: ChangeView[]): Promise<Turn> {
     return { reply: changes[0]?.state === 'done' ? 'Added to the list!' : 'Hmm, that didn’t work.', used: ['add_shopping_items'], changes };
   }
   if (/session|workout|sore|bench|train/i.test(q)) {
-    await runChange('plan_workout', { name: 'Upper pull + core', exercises: [
-      { name: 'Lat Pulldown', sets: 3, reps: '8-10', weight: 110, rest_seconds: 120, cue: 'chest up, pull to the collarbone' },
-      { name: 'One-Arm Dumbbell Row', sets: 3, reps: '10', weight: 50, rest_seconds: 90, cue: 'pause at the top' },
-      { name: 'Face Pull', sets: 2, reps: '12-15', rest_seconds: 60 },
-      { name: 'Plank', sets: 3, seconds: 45, rest_seconds: 45 },
+    await runChange('plan_workout', { name: 'Kettlebell shake-up', exercises: [
+      { name: 'Bike', sets: 6, seconds: 20, rest_seconds: 40, style: 'intervals', cue: 'hard but controllable' },
+      { name: 'Kettlebell Swing', sets: 3, reps: '12', weight: 35, group: 'A', rest_seconds: 0 },
+      { name: 'Kettlebell Goblet Squat', sets: 3, reps: '10', weight: 35, group: 'A', rest_seconds: 75 },
+      { name: 'Dumbbell Bench Press', sets: 4, reps_by_set: [12, 10, 8, 6], weight_by_set: [30, 35, 40, 45], style: 'pyramid', rest_seconds: 90 },
+      { name: 'Half-kneeling Kettlebell Chop', sets: 1, reps: '8', per_side: true, weight: 25, group: 'B', group_style: 'emom', group_minutes: 6, muscle: 'core', equipment: 'kettlebell' },
+      { name: 'Kettlebell Halo', sets: 1, reps: '5', per_side: true, weight: 25, group: 'B', group_style: 'emom', group_minutes: 6, muscle: 'shoulders', equipment: 'kettlebell' },
+      { name: 'Side Plank', sets: 2, seconds: 25, per_side: true, rest_seconds: 30 },
     ] }, changes);
-    return { reply: 'You slept 6 hours and chest was two days ago, so here’s an upper pull day at a steady effort:\n- Lat pulldown: 3 × 8-10 at 110 lb\n- One-arm row: 3 × 10 at 50 lb\n- Face pull: 2 × 12-15\n- Plank: 3 × 45 s\nTap Confirm and it’s on your Train page!', used: ['coaching_context', 'plan_workout'], changes };
+    return { reply: 'You slept 6 hours and chest was two days ago, so here’s a change of pace: same work, new shapes.\n- Bike intervals: 6 × 20 s on, 40 s easy\n- Superset A: swings 3 × 12 + goblet squats 3 × 10\n- Bench pyramid: 12-10-8-6, weight going up\n- EMOM 6 min: chops and halos, a minute each\n- Side plank: 2 × 25 s each side\nTap Confirm and it’s on your Train page!', used: ['coaching_context', 'plan_workout'], changes };
   }
   if (/dentist|book|schedule/i.test(q)) {
     const d = new Date(); d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7 || 7));
