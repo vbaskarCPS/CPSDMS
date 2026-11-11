@@ -187,5 +187,7 @@ describe('the Benny’s tools', () => {
     }
     expect(TOOLS.find(t => t.name === 'live_team')!.description).toMatch(/steps, equiv, gross, upsells/);
     expect(system(ctx, 'admin')).toMatch(/live map \(live_team\) is what is true NOW/);   // the session is the plan at the start, not a bug when it differs
+    // the chat carries its earlier answers without their lookups: it mustn't take them for guesses and go back over them
+    for (const role of ['admin', 'rm'] as const) { expect(system(ctx, role)).toContain("don't re-check an earlier answer"); expect(system(ctx, role)).toContain('[square brackets]'); }
   });
 });
