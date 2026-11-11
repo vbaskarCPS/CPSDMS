@@ -17,6 +17,8 @@ export interface BennyContext {
   center_id?: string; center_name?: string; today: string; path: string; screen?: string;
   /** on the RM map: the old-app id of the manager whose map is open */
   rm_manager?: string; user_name?: string;
+  /** on the floater map: the managers followed there (old-app ids) and their names */
+  following?: string[]; following_names?: string[];
   /** the last message was spoken: the server sends the day's real names along so misheard ones are put right */
   spoken?: boolean;
   diag?: { ua?: string; viewport?: string; build?: string; errors?: string[] };

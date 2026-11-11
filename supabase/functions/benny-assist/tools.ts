@@ -3,8 +3,10 @@
 export type Role = 'admin' | 'rm';
 export interface Ctx {
   center_id?: string; center_name?: string; today?: string; path?: string; screen?: string;
-  /** on the route manager map: the old-app id of the manager whose map is open (rm_…) */
+  /** on the route manager map: the old-app id of the manager whose map is open (rm_…); on the floater map, the floater's own (floater_…) */
   rm_manager?: string; user_name?: string;
+  /** on the floater map: the managers followed there (their old-app ids), and their names for the answer */
+  following?: string[]; following_names?: string[];
   /** the last message was spoken (speech-to-text): names and codes may be misheard */
   spoken?: boolean;
   /** for bug reports: browser, screen size, app build, recent errors on the page */
@@ -43,7 +45,7 @@ export const TOOLS: Tool[] = [
     input_schema: { type: 'object', properties: { of_maps: strs('the map being split'), near_maps: strs('maps this side is connected to'), near_routes: strs('or routes this side is connected to'),
       versus_maps: strs('the other side\'s maps'), versus_routes: strs('or the other side\'s routes') }, required: ['of_maps'] } },
   { name: 'live_team', roles: ['admin', 'rm'], description: "Today's live map (the old app's open day): the carts (cart_id, workers with CN and name, their routes, and the day's numbers so far: steps, equiv, gross, upsells), totals (steps, equiv, gross, upsells) and the routes (manager, workers, split) "
-      + 'for one manager (manager = old-app id like rm_franklynmitchell; default: the map that is open / your own team), plus the day\'s route managers.',
+      + 'for one manager (manager = old-app id like rm_franklynmitchell; default: the map that is open / your own team; on the floater map, the managers followed, together), plus the day\'s route managers.',
     input_schema: { type: 'object', properties: { manager: { type: 'string', description: 'rm_… id; omit for the open map' } } } },
   { name: 'show_map', roles: ['admin', 'rm'], description: 'Show a map in the chat: the named master maps (or every map in a city) outlined, the given routes highlighted and the rest grey, and optionally every open prebook in those maps as a pin with its route highlighted. Use whenever the answer is about where things are.',
     input_schema: { type: 'object', properties: { maps: strs('map names or a city, e.g. ["Surrey"] or ["NORTH VANCOUVER #1","NORTH VANCOUVER #2"]'),
@@ -134,12 +136,32 @@ The last message was SPOKEN and turned into text by the phone, which doesn't kno
 - A route code is a place's prefix + the number (two digits under 10: "NVN 7" = NVN07). A map is the place + #number.${list('Workers today', vocab?.workers)}${list('Route managers', vocab?.managers)}${list('Places (route prefix) and how many maps', vocab?.places)}`;
 }
 
+const isFloaterId = (id?: string | null) => /^floater_/.test((id || '').trim());
+const ID = /^[A-Za-z0-9_.-]{1,80}$/;
+/** The map that is open, as the database takes it (p_manager): a manager's id, or on the floater map the floater's id
+ *  then the managers followed, "floater_basvi,rm_a,rm_b". The database checks every part against who is asking. */
+export function openMap(ctx: Ctx): string | null {
+  const id = (ctx.rm_manager || '').split(',')[0].trim();
+  if (!id || !ID.test(id)) return null;
+  if (!isFloaterId(id)) return id;
+  const followed = Array.isArray(ctx.following) ? [...new Set(ctx.following.filter(x => typeof x === 'string' && ID.test(x) && !isFloaterId(x)))].slice(0, 30) : [];
+  return [id, ...followed].join(',');
+}
+/** The followed managers' names, safe to put in what the Benny is told. */
+const followedNames = (ctx: Ctx): string[] => (Array.isArray(ctx.following_names) ? ctx.following_names : [])
+  .filter(x => typeof x === 'string').map(x => x.replace(/[^\p{L}\p{N} .'’-]/gu, '').trim().slice(0, 60)).filter(Boolean).slice(0, 12);
+
 export function system(ctx: Ctx, role: Role, vocab?: Vocab | null): string {
   const who = role === 'admin' ? 'a super admin' : 'a route manager';
   const onRm = ctx.screen === 'rm';
+  const floating = onRm && isFloaterId(ctx.rm_manager);
+  const names = followedNames(ctx);
+  const where = !onRm ? '' : floating
+    ? ` They are on the floater map, following ${names.length ? names.join(', ') : 'the managers they picked'}: "my team", "my carts", "my routes", "me" mean those managers' teams together. A pin or an order they make is their own, for those managers' carts.`
+    : ` They are on the route manager map${ctx.rm_manager ? `, open for ${ctx.rm_manager}` : ''}: "my team", "my routes", "me" mean that map's team.`;
   return `You are The Benny, the assistant inside the Property Stars DMS app (lawn and property services: aeration, lawn rejuv, sealing).
 You help ${who}${ctx.user_name ? ` (${ctx.user_name})` : ''} with the app's own data and work.
-Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown'}".${onRm ? ` They are on the route manager map${ctx.rm_manager ? `, open for ${ctx.rm_manager}` : ''}: "my team", "my routes", "me" mean that map's team.` : ''}
+Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown'}".${where}
 
 Rules:
 - Answer from the tools, never from memory or guesses. If the tools can't answer it, say so and name the screen that can.
@@ -185,7 +207,7 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
       p_in_maps: input.in_maps ?? null, p_mode: input.mode === 'all' ? 'all' : 'touching' } };
     case 'map_side': return { fn: 'benny_side', args: { p_center: c, p_of_maps: input.of_maps ?? [], p_near_maps: input.near_maps ?? null, p_near_routes: input.near_routes ?? null,
       p_vs_maps: input.versus_maps ?? null, p_vs_routes: input.versus_routes ?? null } };
-    case 'live_team': return { fn: 'benny_live', args: { p_center: c, p_manager: input.manager ?? ctx.rm_manager ?? null } };
+    case 'live_team': return { fn: 'benny_live', args: { p_center: c, p_manager: input.manager ?? openMap(ctx) } };
     case 'propose_start_day': return { fn: 'benny_plan_day', args: { p_center: c, p_date: String(input.date || ctx.today), p_assign: input.assign ?? [], p_pair: !!input.pair_managers },
       card: { kind: 'start_day', team_mode: ['roster', 'solo', 'pairs'].includes(String(input.team_mode)) ? String(input.team_mode) : 'roster' } };
     case 'propose_give_route': return { fn: 'benny_check_give', args: { p_center: c, p_route: String(input.route || ''), p_worker: String(input.worker || '') }, card: { kind: 'give_route' } };
@@ -201,9 +223,9 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     case 'propose_pin': {
       const text = (k: string) => (typeof input[k] === 'string' && String(input[k]).trim() ? String(input[k]).trim() : null);
       const place: Record<string, unknown> = text('route') ? { route: text('route') } : text('worker') ? { worker: text('worker') } : text('address') ? { address: text('address') } : input.here === true ? { here: true } : {};
-      return { fn: 'benny_check_pin', args: { p_center: c, p_manager: ctx.rm_manager ?? null, p_place: place, p_label: text('label'), p_see: text('see') || 'me', p_to: text('to') }, card: { kind: 'pin' } };
+      return { fn: 'benny_check_pin', args: { p_center: c, p_manager: openMap(ctx), p_place: place, p_label: text('label'), p_see: text('see') || 'me', p_to: text('to') }, card: { kind: 'pin' } };
     }
-    case 'propose_stops': return { fn: 'benny_plan_stops', args: { p_center: c, p_manager: ctx.rm_manager ?? null, p_kind: String(input.kind || ''), p_only: Array.isArray(input.only) ? input.only : null }, card: { kind: 'stops' } };
+    case 'propose_stops': return { fn: 'benny_plan_stops', args: { p_center: c, p_manager: openMap(ctx), p_kind: String(input.kind || ''), p_only: Array.isArray(input.only) ? input.only : null }, card: { kind: 'stops' } };
     case 'report_bug': return { log: 'bug' };
     case 'log_request': return { log: 'request' };
     default: return null;
