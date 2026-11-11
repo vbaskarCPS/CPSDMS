@@ -1,5 +1,5 @@
 // src/planner/features/food/Recipes.tsx — /food/recipes: the recipe box, protein per serving first. Add from a link, pasted
-// text, a photo of a cookbook page or a meal you logged; or ask Coach Claude for a high-protein idea.
+// text, a photo of a cookbook page or a meal you logged; or ask Arvy for a high-protein idea.
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { BookOpen, Camera, ChevronRight, Plus, Sparkles } from 'lucide-react';
@@ -39,13 +39,13 @@ export function AddRecipeSheet({ open, onClose, onSaved, ideaFor, avoid = [] }: 
     <Sheet open={open} onClose={onClose} title="Add a recipe">
       <div className="pl-stack">
         <div className="rc-idea">
-          <p className="pl-label" style={{ margin: 0 }}><Sparkles size={14} aria-hidden /> Ask Coach Claude for an idea</p>
+          <p className="pl-label" style={{ margin: 0 }}><Sparkles size={14} aria-hidden /> Ask Arvy for an idea</p>
           <div className="pl-row" style={{ gap: 8 }}>
             <Input inputMode="numeric" value={idea} onChange={e => setIdea(e.target.value.replace(/\D/g, ''))} style={{ width: 70 }} aria-label="Grams of protein per serving" />
             <span className="pl-muted" style={{ fontSize: 13 }}>g protein a serving</span>
           </div>
           <Input value={ideaNote} onChange={e => setIdeaNote(e.target.value)} placeholder="Optional: chicken, Indian, 20 minutes, no oven…" />
-          <Button onClick={() => void run('Coach Claude is cooking something up…', async () => fromDraft(await recipeIdea(Number(idea) || 50, ideaNote.trim() || undefined, avoid)))} disabled={!!busy}><Sparkles size={15} /> Give me a recipe</Button>
+          <Button onClick={() => void run('Arvy is cooking something up…', async () => fromDraft(await recipeIdea(Number(idea) || 50, ideaNote.trim() || undefined, avoid)))} disabled={!!busy}><Sparkles size={15} /> Give me a recipe</Button>
         </div>
         <hr className="pl-divider" />
         <Segmented value={from} onChange={setFrom} options={[{ value: 'link', label: 'Link' }, { value: 'text', label: 'Text' }, { value: 'photo', label: 'Photo' }, { value: 'meal', label: 'A meal' }]} />
@@ -101,7 +101,7 @@ export function Recipes() {
       {list && list.length > 4 && <Input placeholder="Search recipes or ingredients" value={q} onChange={e => setQ(e.target.value)} />}
       <Card>
         {list === null ? <p className="pl-muted">Loading…</p> : list.length === 0 ? (
-          <Empty icon={<BookOpen />} title="No recipes yet" blurb="Paste a link, snap a cookbook page, save a meal you logged — or ask Coach Claude for a 50 g idea." action={<Button primary onClick={() => setAdding(true)}><Plus size={16} /> Add a recipe</Button>} />
+          <Empty icon={<BookOpen />} title="No recipes yet" blurb="Paste a link, snap a cookbook page, save a meal you logged — or ask Arvy for a 50 g idea." action={<Button primary onClick={() => setAdding(true)}><Plus size={16} /> Add a recipe</Button>} />
         ) : (
           <div className="pl-list">{shown.map(r => <RecipeRow key={r.id} r={r} />)}</div>
         )}

@@ -107,7 +107,7 @@ export function BuildSheet({ item, prefs, checking, onClose, onSave }: {
         <div className="shop__stores">
           {others.map(s => <button type="button" key={s} className={!item.pick && storeOf(item) === s ? 'is-on' : ''} onClick={() => save(undefined, s)}>{s}{item.suggestedStore === s ? ' ★' : ''}</button>)}
         </div>
-        {item.suggestedStore && item.reason && <small className="pl-muted">★ Coach Claude: {item.reason}</small>}
+        {item.suggestedStore && item.reason && <small className="pl-muted">★ Arvy: {item.reason}</small>}
         <Button ghost onClick={() => save(undefined, undefined)}>Just get it anywhere</Button>
       </div>
     </Sheet>

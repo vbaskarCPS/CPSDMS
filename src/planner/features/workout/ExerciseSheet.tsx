@@ -1,4 +1,4 @@
-// src/planner/features/workout/ExerciseSheet.tsx — tap an exercise: a YouTube video of it, Coach Claude's how-to,
+// src/planner/features/workout/ExerciseSheet.tsx — tap an exercise: a YouTube video of it, Arvy's how-to,
 // one mind-muscle cue and the mistakes to avoid. A flow ("Mobility flow", "Stretching") is broken into its moves,
 // each with its own video. Cached per exercise + plan note (doc kind 'exinfo') after the first look.
 import { useEffect, useState } from 'react';
@@ -41,7 +41,7 @@ export function ExerciseSheet({ exerciseId, name, note, custom = [], onClose }: 
       if (!force) { const c = await getDoc<ExerciseInfo>('exinfo', key); if (c?.fetchedAt && Array.isArray(c.parts)) { setInfo(c); return; } }
       const r = await exerciseInfo(name, kindOf(name, findExercise(exerciseId || '', custom)), note);
       setInfo(r); void putDoc('exinfo', key, r);
-    } catch (e) { setErr(e instanceof Error ? e.message : "Couldn't reach Coach Claude"); }
+    } catch (e) { setErr(e instanceof Error ? e.message : "Couldn't reach Arvy"); }
     finally { setBusy(false); }
   };
   useEffect(() => { if (name) { setInfo(null); setPart(0); void load(); } }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -50,7 +50,7 @@ export function ExerciseSheet({ exerciseId, name, note, custom = [], onClose }: 
   const cur = parts[part];
   return (
     <Sheet open={!!name} onClose={onClose} title={name}>
-      {busy && !info && <p className="pl-muted" style={{ fontStyle: 'italic' }}><Sparkles size={14} aria-hidden /> Finding videos and asking Coach Claude…</p>}
+      {busy && !info && <p className="pl-muted" style={{ fontStyle: 'italic' }}><Sparkles size={14} aria-hidden /> Finding videos and asking Arvy…</p>}
       {err && <p className="pl-error">{err} <button type="button" className="pl-link" onClick={() => void load(true)}>Try again</button></p>}
       {info && (
         <div className="pl-stack wo-exinfo">

@@ -1,11 +1,13 @@
-// src/planner/features/workout/index.ts — the workout tracker + coach: routes and the Today card.
-import { createElement, type JSX } from 'react';
+// src/planner/features/workout/index.ts — the workout tracker: routes and the Today card.
+// The coach is Arvy (features/arvy): /workout/coach, the old Coach chat, now opens Arvy on the Train screen.
+import { createElement, useEffect, type JSX } from 'react';
+import { Navigate } from 'react-router-dom';
 import { getPass, type PlannerPass } from '../../lib/auth';
 import { WorkoutHome, WorkoutTodayCard as TodayCard } from './WorkoutHome';
 import { LiveWorkout } from './LiveWorkout';
 import { Templates, TemplateEdit } from './Templates';
 import { History, ExerciseProgress } from './History';
-import { Coach } from './Coach';
+import { COACH_ASKS, openArvy } from '../arvy/arvy';
 import { Body } from './Body';
 import './workout.css';
 
@@ -15,6 +17,12 @@ function withPass(C: (p: { pass: PlannerPass }) => JSX.Element): JSX.Element {
   return createElement(Wrapped);
 }
 
+/** An old link to the Coach chat: go to Train and open Arvy with the coaching questions. */
+function AskArvy(): JSX.Element {
+  useEffect(() => { const t = setTimeout(() => openArvy({ suggest: COACH_ASKS }), 0); return () => clearTimeout(t); }, []);
+  return createElement(Navigate, { to: '/workout', replace: true });
+}
+
 export const workoutRoutes: { path: string; element: JSX.Element }[] = [
   { path: '/workout', element: withPass(WorkoutHome) },
   { path: '/workout/live/:id', element: withPass(LiveWorkout) },
@@ -22,7 +30,7 @@ export const workoutRoutes: { path: string; element: JSX.Element }[] = [
   { path: '/workout/templates/:id', element: createElement(TemplateEdit) },
   { path: '/workout/history', element: withPass(History) },
   { path: '/workout/exercise/:id', element: withPass(ExerciseProgress) },
-  { path: '/workout/coach', element: withPass(Coach) },
+  { path: '/workout/coach', element: createElement(AskArvy) },
   { path: '/workout/body', element: withPass(Body) },
 ];
 

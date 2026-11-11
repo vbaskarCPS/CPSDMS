@@ -8,12 +8,14 @@ import { getPass } from '../../lib/auth';
 import { docsChanged } from '../../lib/docs';
 import { runTool } from './run';
 import { prepare, Refuse, type Change, type Undo } from './act';
+import { logArvy } from './log';
+import { memoryContext } from '../../lib/memory';
 import { changeOf, speakable, type Block, type Msg } from '../../../../supabase/functions/planner-arvy/tools';
 
 /** A change shown under Arvy's reply. done: made (Undo while this visit lasts); waiting: Confirm/Cancel. */
 export type ChangeState = 'done' | 'waiting' | 'cancelled' | 'undone' | 'failed' | 'expired';
 export interface ChangeView { id: string; lines: string[]; state: ChangeState; error?: string }
-export interface ChatLine { role: 'user' | 'assistant'; text: string; at: string; used?: string[]; changes?: ChangeView[] }
+export interface ChatLine { role: 'user' | 'assistant'; text: string; at: string; used?: string[]; changes?: ChangeView[]; down?: boolean /* thumbs-down given */ }
 export interface Turn { reply: string; navigate?: string; used: string[]; changes: ChangeView[] }
 
 // What the panel can still do with a change: the Undo for a made one, or the worked-out change waiting for Confirm.
@@ -30,14 +32,30 @@ async function make(c: Change, id: string): Promise<void> {
   undos.set(id, undo);
   docsChanged(c.kinds);
 }
-export async function confirmChange(id: string): Promise<void> {
+/** Make a change that was waiting for Confirm. Returns a screen to open, when the change starts something (a workout). */
+export async function confirmChange(id: string): Promise<Change['go']> {
   const c = waiting.get(id);
   if (!c) throw new Error('That one has expired. Ask Arvy again.');
   waiting.delete(id);
-  await make(c, id);
+  try { await make(c, id); } catch (e) {
+    void logArvy({ type: 'error', title: `A confirmed change failed: ${c.lines[0] || ''}`.slice(0, 160), detail: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
+  return c.go;
 }
+
+// ── opening Arvy from a screen's own button ("Ask Arvy" on Train, after a workout…) ──
+export interface OpenAsk { suggest?: string[]; ask?: string }
+const openers = new Set<(o: OpenAsk) => void>();
+export const onOpenArvy = (fn: (o: OpenAsk) => void) => { openers.add(fn); return () => { openers.delete(fn); }; };
+/** Open the chat; `suggest` = the chips to offer, `ask` = a question to send straight away. */
+export const openArvy = (o: OpenAsk = {}) => { for (const fn of [...openers]) fn(o); };
+/** What to offer when the chat is opened for coaching (what the Coach screen offered). */
+export const COACH_ASKS = ['Plan my next session', 'I’m sore — adjust my next session', 'Change my next session', 'Why am I stuck on bench?'];
 export const cancelChange = (id: string) => { waiting.delete(id); };
-export async function undoChange(id: string): Promise<void> {
+/** Undo a change. `why` = the lines it showed and what was asked: an undo usually means Arvy got it wrong, so it's logged. */
+export async function undoChange(id: string, why?: { lines?: string[]; question?: string }): Promise<void> {
+  if (why) void logArvy({ type: 'undo', title: `Undone: ${why.lines?.[0] || 'a change'}`.slice(0, 160), detail: why.lines?.join('\n'), question: why.question });
   const u = undos.get(id);
   if (!u) throw new Error('That can’t be undone any more.');
   undos.delete(id);
@@ -45,10 +63,14 @@ export async function undoChange(id: string): Promise<void> {
 }
 
 /** Run a change tool: work it out, then make it now or hold it for Confirm. What Claude is told back. */
-async function runChange(name: string, input: Record<string, unknown>, out: ChangeView[]): Promise<{ result: unknown; error?: boolean }> {
+async function runChange(name: string, input: Record<string, unknown>, out: ChangeView[], about: { question?: string; path?: string } = {}): Promise<{ result: unknown; error?: boolean }> {
   let c: Change | null;
   try { c = await prepare(name, input); } catch (e) {
-    return e instanceof Refuse ? { result: { not_done: e.message } } : { result: { error: e instanceof Error ? e.message : String(e) }, error: true };
+    if (e instanceof Refuse) {
+      if (e.miss) void logArvy({ type: 'miss', title: e.message, tools: [name], ...about });
+      return { result: { not_done: e.message } };
+    }
+    return { result: { error: e instanceof Error ? e.message : String(e) }, error: true };
   }
   if (!c) return { result: { error: `unknown tool ${name}` }, error: true };
   const id = newId();
@@ -69,6 +91,8 @@ async function runChange(name: string, input: Record<string, unknown>, out: Chan
 const stateWords: Record<ChangeState, string> = { done: 'done', waiting: 'waiting for Confirm', cancelled: 'they cancelled it', undone: 'they undid it', failed: 'it failed', expired: 'never confirmed' };
 
 const MAX_STEPS = 8;
+/** How much of a tool's answer Claude gets (characters). The coaching context is the whole planner, so it gets more. */
+const RESULT_CAP: Record<string, number> = { coaching_context: 36000 };
 /** What each tool is called on screen while Arvy works ("Checking your calendar…"). */
 export const TOOL_LABEL: Record<string, string> = {
   today_overview: 'your day', calendar: 'the calendar', shopping_list: 'the shopping list', food_log: 'your food log',
@@ -76,7 +100,7 @@ export const TOOL_LABEL: Record<string, string> = {
   open_screen: 'the screen', cant_do_yet: 'that request',
   add_shopping_items: 'the shopping list', check_off_shopping: 'the shopping list', remove_shopping_items: 'the shopping list',
   add_todos: 'your to-dos', complete_todos: 'your to-dos', remove_todos: 'your to-dos', log_meal: 'that meal', mark_habit: 'your habits',
-  log_body_weight: 'your weight', add_event: 'the calendar', change_event: 'the calendar', delete_event: 'the calendar',
+  log_body_weight: 'your weight', coaching_context: 'your training, sleep and food', plan_workout: 'your session', log_feedback: 'the improvements log', add_event: 'the calendar', change_event: 'the calendar', delete_event: 'the calendar',
   add_cash_expense: 'the cash wallet', recategorize: 'the transactions',
   set_must: 'your must-dos', log_favourite_meal: 'your favourites', save_favourite: 'your favourites', set_food_targets: 'your food targets',
   create_habit: 'your habits', pause_habit: 'your habits', set_budget: 'the budget', log_cycle_day: 'your cycle', log_period: 'your cycle',
@@ -88,6 +112,11 @@ export function context(path: string, spoken: boolean) {
     today: dayKey(), weekday: new Date().toLocaleDateString('en-CA', { weekday: 'long' }),
     now: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), path, spoken, units,
   };
+}
+
+/** The notes they've told Arvy to keep (Settings › Tell Arvy, or "remember that…"): they ride along with every question. */
+async function aboutMe(): Promise<string[]> {
+  try { return (await memoryContext(25)).map(n => `${n.date}: ${n.note}`.slice(0, 300)); } catch { return []; }
 }
 
 /** The earlier conversation as Claude messages: text only, last 12 lines, starting with a question. */
@@ -104,27 +133,31 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   const changes: ChangeView[] = [];
   if (isDemo()) return demoTurn(question, changes);
   const msgs: Msg[] = [...history(lines), { role: 'user', content: question }];
+  const ctx = { ...context(path, spoken), about: await aboutMe() };
   const used: string[] = [];
   let navigate: string | undefined;
   for (let step = 0; step < MAX_STEPS; step++) {
-    const r = await invoke<{ content: Block[]; stop_reason: string }>({ action: 'turn', messages: msgs, context: context(path, spoken) }, 'planner-arvy');
+    const r = await invoke<{ content: Block[]; stop_reason: string }>({ action: 'turn', messages: msgs, context: ctx }, 'planner-arvy');
     const content = Array.isArray(r.content) ? r.content : [];
     const calls = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
     const text = content.filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text').map(b => b.text).join('\n').trim();
     if (r.stop_reason !== 'tool_use' || !calls.length) return { reply: text || (changes.length ? 'Done!' : 'Hmm, I lost my train of thought there. Try asking again?'), navigate, used, changes };
     onStep?.(calls.map(c => c.name));
     const res = new Map<string, { result: unknown; error?: boolean; navigate?: string }>();
+    const about = { question, path };
     // look-ups together; changes one at a time, in order (each one's Undo snapshot is taken just before it)
-    await Promise.all(calls.filter(c => !changeOf(c.name)).map(async c => { res.set(c.id, await runTool(c.name, c.input || {})); }));
-    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, await runChange(c.name, c.input || {}, changes));
+    await Promise.all(calls.filter(c => !changeOf(c.name)).map(async c => { res.set(c.id, await runTool(c.name, c.input || {}, about)); }));
+    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, await runChange(c.name, c.input || {}, changes, about));
     const results = calls.map(c => {
       used.push(c.name);
       const out = res.get(c.id)!;
       if (out.navigate) navigate = out.navigate;
-      return { type: 'tool_result' as const, tool_use_id: c.id, content: JSON.stringify(out.result).slice(0, 13000), ...(out.error ? { is_error: true } : {}) };
+      if (out.error) void logArvy({ type: 'error', title: `${c.name} didn’t work`, detail: JSON.stringify(out.result).slice(0, 600), tools: [c.name], ...about });
+      return { type: 'tool_result' as const, tool_use_id: c.id, content: JSON.stringify(out.result).slice(0, RESULT_CAP[c.name] || 13000), ...(out.error ? { is_error: true } : {}) };
     });
     msgs.push({ role: 'assistant', content }, { role: 'user', content: results });
   }
+  void logArvy({ type: 'error', title: 'Arvy ran out of steps on a question', question, path, tools: used });
   return { reply: 'That one took me too many steps. Could you ask it a simpler way?', navigate, used, changes };
 }
 
@@ -135,6 +168,15 @@ async function demoTurn(q: string, changes: ChangeView[]): Promise<Turn> {
   if (add) {
     await runChange('add_shopping_items', { items: add[1].split(/,\s*|\s+and\s+/).map(text => ({ text })) }, changes);
     return { reply: changes[0]?.state === 'done' ? 'Added to the list!' : 'Hmm, that didn’t work.', used: ['add_shopping_items'], changes };
+  }
+  if (/session|workout|sore|bench|train/i.test(q)) {
+    await runChange('plan_workout', { name: 'Upper pull + core', exercises: [
+      { name: 'Lat Pulldown', sets: 3, reps: '8-10', weight: 110, rest_seconds: 120, cue: 'chest up, pull to the collarbone' },
+      { name: 'One-Arm Dumbbell Row', sets: 3, reps: '10', weight: 50, rest_seconds: 90, cue: 'pause at the top' },
+      { name: 'Face Pull', sets: 2, reps: '12-15', rest_seconds: 60 },
+      { name: 'Plank', sets: 3, seconds: 45, rest_seconds: 45 },
+    ] }, changes);
+    return { reply: 'You slept 6 hours and chest was two days ago, so here’s an upper pull day at a steady effort:\n- Lat pulldown: 3 × 8-10 at 110 lb\n- One-arm row: 3 × 10 at 50 lb\n- Face pull: 2 × 12-15\n- Plank: 3 × 45 s\nTap Confirm and it’s on your Train page!', used: ['coaching_context', 'plan_workout'], changes };
   }
   if (/dentist|book|schedule/i.test(q)) {
     const d = new Date(); d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7 || 7));

@@ -1,5 +1,5 @@
 // src/planner/features/workout/DonePanel.tsx — the Train hero after today's session is completed, until the
-// day rolls over: Coach Claude's review (a paragraph or two), two questions with choices, and tomorrow's
+// day rolls over: Arvy's review (a paragraph or two), two questions with choices, and tomorrow's
 // session, which one tap saves as a one-off template planned for tomorrow. Cached in doc kind 'dayplan'.
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -7,6 +7,7 @@ import { Sparkles, CalendarCheck, Play } from 'lucide-react';
 import { dayPlan, type DayPlan } from '../../lib/ai';
 import { dayKey, getDoc, putDoc } from '../../lib/docs';
 import { Button, Card } from '../../ui/primitives';
+import { COACH_ASKS, openArvy } from '../arvy/arvy';
 import { LIBRARY } from './library';
 import { saveCustomExercise, saveTemplate, saveWorkout, startFromTemplate, templateFromPlan } from './store';
 import { durationMin, fmtSec, workoutKey, type Exercise, type Template, type Units, type Workout } from './types';
@@ -30,7 +31,7 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
       // keep the questions already answered so they stay visible with the answers
       const merged: DayPlan = a && plan ? { ...p, questions: plan.questions, answers: a } : p;
       setPlan(merged); await putDoc('dayplan', today, merged);
-    } catch (e) { setErr(e instanceof Error ? e.message : "Couldn't reach Coach Claude"); }
+    } catch (e) { setErr(e instanceof Error ? e.message : "Couldn't reach Arvy"); }
     finally { setBusy(null); }
   };
   useEffect(() => {
@@ -72,7 +73,7 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
   return (
     <Card accent>
       <p className="pl-eyebrow">Done for today · {done.name} · {durationMin(done)} min{done.prs?.length ? ` · ${done.prs.length} PR` : ''}</p>
-      <h2 style={{ marginBottom: 6 }}><Sparkles size={18} aria-hidden style={{ verticalAlign: -3 }} /> Coach Claude</h2>
+      <h2 style={{ marginBottom: 6 }}><Sparkles size={18} aria-hidden style={{ verticalAlign: -3 }} /> Arvy</h2>
       {busy === 'load' && !plan && <p style={{ opacity: .8, fontStyle: 'italic' }}>Reading today's sets and notes…</p>}
       {err && <p className="pl-error">{err} <button type="button" className="pl-link" onClick={() => void make(plan?.answers)}>Try again</button></p>}
       {plan && (
@@ -127,7 +128,7 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
           )}
           <div className="pl-row" style={{ gap: 8, marginTop: 10 }}>
             <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} onClick={() => nav(`/workout/live/${done.id}`, { state: { key: workoutKey(done) } })}>Today's session</Button>
-            <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} onClick={() => nav('/workout/coach')}>Ask Coach Claude</Button>
+            <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} onClick={() => openArvy({ suggest: COACH_ASKS })}>Ask Arvy</Button>
           </div>
         </>
       )}

@@ -3,11 +3,14 @@
 // spoken answer (a woman's voice for Rosh, a man's for Vijay) unless the speaker is off. Arvy can open screens for you;
 // the chat stays open over them. The conversation is kept for this visit (closing the app starts fresh).
 // Changes Arvy makes show under its reply: small ones are already done (Undo), bigger ones wait for Confirm.
+// Arvy is the coach too: screens open it with openArvy() (Train's "Ask Arvy"), and on the Train screens it offers
+// coaching questions. A thumbs-down under a reply, an Undo, or an error goes in Arvy's improvements log (log.ts).
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Check, Mic, Send, Sparkles, Undo2, Volume2, VolumeX, X } from 'lucide-react';
+import { Check, Mic, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { getPass } from '../../lib/auth';
-import { ask, canListen, canUndo, cancelChange, confirmChange, isWaiting, listen, primeVoice, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
+import { ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onOpenArvy, primeVoice, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
+import { logArvy } from './log';
 import './arvy.css';
 
 const MUTE = 'arvy.mute';
@@ -64,6 +67,8 @@ export function Arvy() {
   const [hearing, setHearing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(() => { try { return localStorage.getItem(MUTE) === '1'; } catch { return false; } });
+  const [offer, setOffer] = useState<string[] | null>(null);   // chips asked for by the screen that opened the chat
+  const [pending, setPending] = useState<string | null>(null);  // a question to send as soon as the chat is open
   const rec = useRef<ReturnType<typeof listen> | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -84,9 +89,15 @@ export function Arvy() {
       if (t.navigate && t.navigate !== loc.pathname) nav(t.navigate);
       if (spoken && !muted) speak(t.reply).catch(e => setError(`Couldn’t speak: ${e instanceof Error ? e.message : e}`));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong');
+      const msg = e instanceof Error ? e.message : 'Something went wrong';
+      setError(msg);
+      void logArvy({ type: 'error', title: `Arvy couldn’t answer: ${msg}`.slice(0, 160), question, path: loc.pathname });
     } finally { setBusy(false); setStep(null); }
   }, [busy, lines, loc.pathname, muted, nav]);
+
+  // a screen's own button opened the chat (Train's "Ask Arvy"): offer its questions, or send one straight away
+  useEffect(() => onOpenArvy(o => { primeVoice(); setOpen(true); setOffer(o.suggest?.length ? o.suggest : null); if (o.ask) setPending(o.ask); }), []);
+  useEffect(() => { if (pending && open && !busy) { const q = pending; setPending(null); void send(q, false); } }, [pending, open, busy, send]);
 
   const mic = () => {
     if (hearing !== null) { rec.current?.stop(); return; }
@@ -107,13 +118,28 @@ export function Arvy() {
   const onAct = async (id: string, what: 'confirm' | 'cancel' | 'undo') => {
     try {
       if (what === 'cancel') { cancelChange(id); setState(id, 'cancelled'); }
-      else if (what === 'confirm') { await confirmChange(id); setState(id, 'done'); }
-      else { await undoChange(id); setState(id, 'undone'); }
+      else if (what === 'confirm') { const go = await confirmChange(id); setState(id, 'done'); if (go) nav(go.to, { state: go.state }); }
+      else {
+        const at = lines.findIndex(l => l.changes?.some(c => c.id === id));
+        const question = at > 0 ? [...lines.slice(0, at)].reverse().find(l => l.role === 'user')?.text : undefined;
+        await undoChange(id, { lines: lines[at]?.changes?.find(c => c.id === id)?.lines, question });
+        setState(id, 'undone');
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (what === 'undo') setError(`Couldn’t undo: ${msg}`); else setState(id, 'failed', msg);
     }
   };
+
+  /** Thumbs down under a reply: the question, the reply and the tools used go in the improvements log. */
+  const thumbsDown = (i: number) => {
+    const l = lines[i]; if (!l || l.down) return;
+    const question = [...lines.slice(0, i)].reverse().find(x => x.role === 'user')?.text;
+    void logArvy({ type: 'feedback', title: `Not helpful: ${question || l.text}`.slice(0, 160), question, reply: l.text, tools: l.used, path: loc.pathname });
+    setLines(cur => cur.map((x, j) => (j === i ? { ...x, down: true } : x)));
+  };
+  const training = loc.pathname.startsWith('/workout');
+  const chips = offer || (training ? COACH_ASKS : SUGGEST);
 
   if (!pass) return null;
   return (
@@ -126,23 +152,29 @@ export function Arvy() {
         <div className="arvy-sheet" role="dialog" aria-label="Arvy">
           <header className="arvy-head">
             <div className="arvy-avatar" aria-hidden><Sparkles /></div>
-            <div className="arvy-title"><b>Arvy</b><span>{busy ? (step ? `Checking ${step}…` : 'Thinking…') : 'Your planner assistant'}</span></div>
+            <div className="arvy-title"><b>Arvy</b><span>{busy ? (step ? `Checking ${step}…` : 'Thinking…') : 'Your assistant and coach'}</span></div>
             <button type="button" className="arvy-icon" onClick={toggleMute} aria-label={muted ? 'Turn Arvy’s voice on' : 'Turn Arvy’s voice off'} title={muted ? 'Voice off' : 'Voice on'}>
               {muted ? <VolumeX /> : <Volume2 />}
             </button>
-            <button type="button" className="arvy-icon" onClick={() => { rec.current?.cancel(); stopSpeaking(); setOpen(false); }} aria-label="Close"><X /></button>
+            <button type="button" className="arvy-icon" onClick={() => { rec.current?.cancel(); stopSpeaking(); setOpen(false); setOffer(null); }} aria-label="Close"><X /></button>
           </header>
           <div className="arvy-body">
             {!lines.length && (
               <div className="arvy-hello">
-                <p><b>Hi {first}! I’m Arvy.</b> Ask me anything about your planner: your day, the calendar, food, training, habits, money{pass.user.settings?.profile === 'morning' ? ', your cycle' : ''} or the shopping list. I can add things too, like to-dos, meals, shopping and events. Tap the mic to just talk.</p>
-                <div className="arvy-chips">{SUGGEST.map(s => <button key={s} type="button" onClick={() => send(s, false)}>{s}</button>)}</div>
+                <p><b>Hi {first}! I’m Arvy.</b> {training
+                  ? 'I’m your coach too: I see every set and note, your sleep, food, habits and days. Ask for a session, a change, a fix for a stuck lift, or how today went.'
+                  : <>Ask me anything about your planner: your day, the calendar, food, training, habits, money{pass.user.settings?.profile === 'morning' ? ', your cycle' : ''} or the shopping list. I can add things too, like to-dos, meals, shopping and events, and I’m your coach for training.</>} Tap the mic to just talk.</p>
+                <div className="arvy-chips">{chips.map(s => <button key={s} type="button" onClick={() => send(s, false)}>{s}</button>)}</div>
               </div>)}
             {lines.map((l, i) => (
               <div key={i} className={`arvy-msg ${l.role}`}>
                 {l.role === 'assistant' ? <Rich text={l.text} /> : l.text}
                 {l.changes?.map(c => <ChangeCard key={c.id} c={c} onAct={onAct} />)}
+                {l.role === 'assistant' && (l.down
+                  ? <div className="arvy-down-note">Thanks, noted in my log.</div>
+                  : <button type="button" className="arvy-down" onClick={() => thumbsDown(i)} aria-label="This wasn’t helpful" title="Not helpful"><ThumbsDown aria-hidden /></button>)}
               </div>))}
+            {lines.length > 0 && offer && !busy && <div className="arvy-chips">{offer.slice(0, 2).map(s => <button key={s} type="button" onClick={() => send(s, false)}>{s}</button>)}</div>}
             {busy && <div className="arvy-msg assistant arvy-typing" aria-label="Arvy is thinking"><i /><i /><i /></div>}
             {error && <div className="arvy-error" role="alert">{error}</div>}
             {lines.length > 0 && !busy && <button type="button" className="arvy-clear" onClick={clear}>Start over</button>}

@@ -39,7 +39,7 @@ async function claudeJson<T>(system: string, content: unknown, schema: Record<st
     if (!use) throw new Error('No recipe in the answer — try again');
     return use.input as T;
   }
-  throw new Error('Coach Claude is busy right now — try again in a minute.');
+  throw new Error('Arvy is busy right now — try again in a minute.');
 }
 
 const SECTIONS = ['Produce', 'Bakery', 'Deli', 'Meat & Seafood', 'Dairy & Eggs', 'Frozen', 'Pantry', 'Snacks & Drinks', 'Baby', 'Health & Beauty', 'Household & Cleaning', 'Pet', 'Hardware & Auto', 'Other'];
@@ -64,7 +64,7 @@ const RECIPE_SCHEMA = {
     perServing: { type: 'object', properties: { kcal: { type: 'number' }, protein: { type: 'number' }, carbs: { type: 'number' }, fat: { type: 'number' } }, required: ['kcal', 'protein', 'carbs', 'fat'] },
   }, required: ['name', 'servings', 'ingredients', 'steps', 'perServing'],
 };
-const IDEA_SYSTEM = `You are Coach Claude. Invent one realistic, tasty, simple recipe (under 40 minutes, ordinary Canadian grocery-store
+const IDEA_SYSTEM = `You are Arvy. Invent one realistic, tasty, simple recipe (under 40 minutes, ordinary Canadian grocery-store
 ingredients) that hits the protein asked for per serving, for a dad who eats two meals and a couple of shakes a day, all before 2 pm.
 Mix it up across chicken, beef, fish, eggs, Greek yogurt, cottage cheese, lentils and tofu, and use South Asian, Caribbean,
 Mediterranean or plain grill flavours. Then return it in the structured format: ingredients with real amounts, short steps,

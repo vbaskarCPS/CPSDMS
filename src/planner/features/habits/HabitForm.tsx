@@ -59,7 +59,7 @@ export function HabitForm() {
       const auto = r.auto && (Object.keys(AUTO_LABELS) as string[]).includes(r.auto) ? (r.auto as Habit['auto']) : undefined;
       set({ name: r.name || h.name, identity: r.identity || '', why: r.why || '', twoMinute: r.twoMinute || '', stack: r.stack || '', cue: { time: r.cue?.time || '', place: r.cue?.place || '' }, days: Array.isArray(r.days) && r.days.length ? r.days.filter(d => d >= 0 && d <= 6) : h.days, anchor: valid, auto });
       setCoachNote(r.coach_note || null);
-    } catch (x) { say(x instanceof Error ? x.message : "Couldn't reach Coach Claude", 'bad'); }
+    } catch (x) { say(x instanceof Error ? x.message : "Couldn't reach Arvy", 'bad'); }
     finally { setPlanning(false); }
   };
   const toggleDay = (d: number) => set({ days: h.days.includes(d) ? h.days.filter(x => x !== d) : [...h.days, d].sort() });
@@ -90,8 +90,8 @@ export function HabitForm() {
       <form className="pl-stack" style={{ gap: 16 }} onSubmit={submit}>
         {!id && (
           <Card accent className="pl-stack" style={{ gap: 8 }}>
-            <b><Sparkles size={16} aria-hidden style={{ verticalAlign: -2 }} /> Plan it with Coach Claude</b>
-            <p style={{ fontSize: 13, margin: 0, opacity: .85 }}>Say what you want to do. Coach Claude writes the implementation intention, picks where it stacks in your day, and fills in the rest — edit anything below.</p>
+            <b><Sparkles size={16} aria-hidden style={{ verticalAlign: -2 }} /> Plan it with Arvy</b>
+            <p style={{ fontSize: 13, margin: 0, opacity: .85 }}>Say what you want to do. Arvy writes the implementation intention, picks where it stacks in your day, and fills in the rest — edit anything below.</p>
             <TextArea rows={2} value={idea} onChange={e => setIdea(e.target.value)} placeholder="e.g. read 10 pages a day · stretch my hips · call my mum weekly · 2 L of water" style={{ background: 'color-mix(in srgb, var(--accent-ink) 12%, transparent)', color: 'inherit' }} />
             <Button small type="button" disabled={planning || !idea.trim()} onClick={plan} style={{ background: 'var(--accent-ink)', color: 'var(--accent)', border: 0 }}>{planning ? 'Planning…' : 'Design this habit'}</Button>
             {coachNote && <p style={{ fontSize: 13, margin: 0 }}>{coachNote}</p>}

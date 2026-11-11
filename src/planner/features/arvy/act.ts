@@ -20,13 +20,18 @@ import { loadEvents } from '../calendar/store';
 import { addCashRow, removeCashRow } from '../money/receipts';
 import { loadAccounts, loadMonths, monthKey, recategorize, visibleMonths } from '../money/lib';
 import { CATEGORIES } from '../money/categories';
+import type { PlanExercise } from '../../lib/ai';
+import { daysAgo, loadCustomExercises, loadTemplates, loadWorkouts, startFromTemplate, templateFromPlan } from '../workout/store';
+import { fmtSec, workoutKey, type Template } from '../workout/types';
 import type { Budget } from '../money/types';
 
 type AnyIn = Record<string, unknown>;
 /** A change Arvy worked out. `lines` say exactly what will happen (shown under the reply). */
-export interface Change { kinds: string[]; lines: string[]; confirm: boolean; apply: () => Promise<Undo> }
+export interface Change { kinds: string[]; lines: string[]; confirm: boolean; apply: () => Promise<Undo>;
+  /** set by apply when the change opens a screen (a workout started now) */ go?: { to: string; state?: unknown } }
 export type Undo = () => Promise<void>;
-export class Refuse extends Error {}   // the request can't be done as asked: Arvy explains
+/** The request can't be done as asked: Arvy explains. `miss` = nothing matched the name given (worth a look in the log). */
+export class Refuse extends Error { constructor(message: string, public miss = false) { super(message); } }
 
 const me = () => getPass()?.user.username || 'me';
 const str = (v: unknown, n = 200) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
@@ -56,7 +61,7 @@ export function pick<T>(items: T[], name: (t: T) => string, phrase: string): T |
 const stem = (w: string) => (w.length > 5 ? w.replace(/(ing|ed|es)$/, '') : w);
 function one<T>(items: T[], name: (t: T) => string, phrase: string, what: string): T {
   const r = pick(items, name, phrase);
-  if (!r) throw new Refuse(`No ${what} matching “${phrase}”.`);
+  if (!r) throw new Refuse(`No ${what} matching “${phrase}”.`, true);
   if (Array.isArray(r)) throw new Refuse(`“${phrase}” matches more than one ${what}: ${r.slice(0, 6).map(name).join('; ')}. Which one?`);
   return r;
 }
@@ -462,6 +467,64 @@ async function logPeriod(input: AnyIn): Promise<Change> {
   };
 }
 
+// ───────────── training: a session Arvy planned (what the Coach chat's buttons did) ─────────────
+async function planWorkout(input: AnyIn): Promise<Change> {
+  const units = (getPass()?.user.settings?.units as string) === 'kg' ? 'kg' : 'lb';
+  const num = (v: unknown, lo: number, hi: number) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= lo ? Math.min(n, hi) : undefined; };
+  const exs: PlanExercise[] = (Array.isArray(input.exercises) ? input.exercises : []).map(x => x as AnyIn).map(e => {
+    const seconds = num(e.seconds, 5, 7200);
+    const reps = typeof e.reps === 'number' ? String(e.reps) : str(e.reps, 12);
+    const mode: PlanExercise['mode'] = seconds && !reps ? 'time' : 'reps';
+    const weight = Number(e.weight) > 0 ? Math.round(Number(e.weight) * 10) / 10 : undefined;
+    return { name: str(e.name, 80), mode, sets: num(e.sets, 1, 12) ?? 1, reps: reps || undefined, seconds, restSec: num(e.rest_seconds, 0, 600) ?? (mode === 'time' ? 0 : 90), note: str(e.cue, 140) || undefined, weight };
+  }).filter(e => e.name).slice(0, 24);
+  if (!exs.length) throw new Refuse('The session has no exercises.');
+  const [custom, templates, workouts] = await Promise.all([loadCustomExercises(), loadTemplates(), loadWorkouts(daysAgo(28))]);
+  const { template, created } = templateFromPlan({ name: str(input.name, 60) || 'Arvy’s plan', exercises: exs }, units, custom);
+  const todayKey = dayKey();
+  const doneToday = workouts.some(w => w.date === todayKey && (w.endedAt || !w.discarded));
+  const when = ['today', 'tomorrow', 'template', 'now'].includes(String(input.when)) ? String(input.when) : doneToday ? 'tomorrow' : 'today';
+  const shown = template.exercises.slice(0, 14).map(e => `  ${e.name}: ${e.targetSets} × ${e.mode === 'time' ? fmtSec(e.targetSec || 60) : e.targetReps}${e.note ? ` (${e.note})` : ''}`);
+  if (template.exercises.length > 14) shown.push(`  …and ${template.exercises.length - 14} more`);
+  if (created.length) shown.push(`  New exercises: ${created.map(e => e.name).join(', ')}`);
+  const newExercises = created.map(e => ({ kind: 'exercise', key: e.id, data: { ...e, custom: true } }));
+  const snap = async (kind: string, keys: string[]) => (keys.length ? snapshot(kind, keys) : (async () => undefined) as Undo);
+
+  if (when === 'now') {
+    const running = workouts.find(w => !w.endedAt && !w.discarded);
+    if (running) throw new Refuse(`“${running.name}” is still in progress. Finish or discard it on the Train screen first.`);
+    const c: Change = {
+      kinds: ['workout', 'exercise'], confirm: true, lines: [`Train: start “${template.name}” now (${template.exercises.length} exercises)`, ...shown],
+      apply: async () => {
+        const w = startFromTemplate({ ...template, id: '' }, workouts, units, [...custom, ...created]);
+        delete w.templateId;
+        const key = workoutKey(w);
+        const u1 = await snap('exercise', created.map(e => e.id)); const u2 = await snapshot('workout', [key]);
+        await putDocs([...newExercises, { kind: 'workout', key, data: w }]);
+        c.go = { to: `/workout/live/${w.id}`, state: { key } };
+        return async () => { await u2(); await u1(); };
+      },
+    };
+    return c;
+  }
+  if (when === 'template') {
+    const existing = str(input.replace) ? one(templates.filter(t => !t.archived), t => t.name, str(input.replace), 'workout template') : undefined;
+    const t: Template = existing ? { ...existing, name: str(input.name, 60) || existing.name, exercises: template.exercises } : { ...template, order: templates.length };
+    return {
+      kinds: ['template', 'exercise'], confirm: true, lines: [`Train: ${existing ? `replace the template “${existing.name}”` : `save the template “${t.name}”`} (${t.exercises.length} exercises)`, ...shown],
+      apply: async () => { const u1 = await snap('exercise', created.map(e => e.id)); const u2 = await snapshot('template', [t.id]); await putDocs([...newExercises, { kind: 'template', key: t.id, data: t }]); return async () => { await u2(); await u1(); }; },
+    };
+  }
+  const date = when === 'tomorrow' ? plusDays(todayKey, 1) : todayKey;
+  const existing = templates.find(t => t.plannedFor === date && !t.archived);
+  const t: Template = { ...template, id: existing?.id || template.id, plannedFor: date, order: -1 };
+  return {
+    kinds: ['template', 'exercise'], confirm: true,
+    lines: [`Train ${when}: “${t.name}” (${t.exercises.length} exercises)${existing ? `, instead of “${existing.name}”` : ''}`, ...shown],
+    apply: async () => { const u1 = await snap('exercise', created.map(e => e.id)); const u2 = await snapshot('template', [t.id]); await putDocs([...newExercises, { kind: 'template', key: t.id, data: t }]); return async () => { await u2(); await u1(); }; },
+  };
+}
+
 /** Work out a change. Throws Refuse with a reason when it can't be done as asked. null = not a change tool. */
 export async function prepare(name: string, input: AnyIn): Promise<Change | null> {
   switch (name) {
@@ -488,6 +551,7 @@ export async function prepare(name: string, input: AnyIn): Promise<Change | null
     case 'set_budget': return setBudget(input);
     case 'log_cycle_day': return logCycleDay(input);
     case 'log_period': return logPeriod(input);
+    case 'plan_workout': return planWorkout(input);
     default: return null;
   }
 }

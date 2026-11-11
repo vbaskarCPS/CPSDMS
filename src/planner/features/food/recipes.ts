@@ -1,5 +1,5 @@
 // src/planner/features/food/recipes.ts — recipes (doc kind 'recipe', one per recipe): ingredients with amounts, steps,
-// and the numbers per serving (protein first). Import from a link, text or a photo (planner-ai 'recipe'), ask Coach Claude
+// and the numbers per serving (protein first). Import from a link, text or a photo (planner-ai 'recipe'), ask Arvy
 // for a high-protein idea ('recipe_idea'), or build one from a logged meal. Pure helpers for scaling and the shopping list.
 import { getDocs, putDoc } from '../../lib/docs';
 import type { RecipeDraft } from '../../lib/ai';

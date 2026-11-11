@@ -8,6 +8,8 @@ import { Page, Header, Card, Button, Bars, Stat, Empty } from '../../ui/primitiv
 import { daysAgo, emptyWorkout, fmtDate, loadCustomExercises, loadTemplates, loadWorkouts, nextTarget, saveWorkout, startFromTemplate, todaysTemplate, weekSessions } from './store';
 import { durationMin, fmtNum, volumeOf, workoutKey, type Exercise, type Template, type Units, type Workout } from './types';
 import { DonePanel } from './DonePanel';
+import { COACH_ASKS, openArvy } from '../arvy/arvy';
+import { useDocsChanged } from '../../lib/useDocsChanged';
 import { ExerciseSheet } from './ExerciseSheet';
 
 export function useUnits(pass: PlannerPass): Units { return pass.user.settings.units === 'kg' ? 'kg' : 'lb'; }
@@ -17,13 +19,15 @@ export function useWorkoutData(days = 90) {
   const [workouts, setWorkouts] = useState<Workout[]>([]);
   const [custom, setCustom] = useState<Exercise[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tick, setTick] = useState(0);
+  useDocsChanged(['template', 'workout', 'exercise'], () => setTick(t => t + 1));   // Arvy planned or started a session
   useEffect(() => {
     let on = true;
     Promise.all([loadTemplates(), loadWorkouts(daysAgo(days)), loadCustomExercises()])
       .then(([t, w, c]) => { if (on) { setTemplates(t); setWorkouts(w); setCustom(c); } })
       .finally(() => { if (on) setLoading(false); });
     return () => { on = false; };
-  }, [days]);
+  }, [days, tick]);
   return { templates, workouts, custom, loading, setTemplates, setWorkouts, setCustom };
 }
 
@@ -90,7 +94,7 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
 
       <div className="pl-grid-2">
         <Link className="pl-tile" to="/workout/templates"><ClipboardList aria-hidden /><div><b>Templates</b><small>{templates.filter(t => !t.archived).length} plans</small></div></Link>
-        <Link className="pl-tile" to="/workout/coach"><MessageCircle aria-hidden /><div><b>Coach Claude</b><small>Ask anything</small></div></Link>
+        <button type="button" className="pl-tile" onClick={() => openArvy({ suggest: COACH_ASKS })}><MessageCircle aria-hidden /><div><b>Ask Arvy</b><small>Plan or change a session</small></div></button>
         <Link className="pl-tile" to="/workout/body"><Scale aria-hidden /><div><b>Body weight</b><small>Log &amp; trend</small></div></Link>
         <Link className="pl-tile" to="/workout/history"><History aria-hidden /><div><b>History</b><small>{finished.length} sessions</small></div></Link>
       </div>

@@ -11,7 +11,8 @@ vi.mock('../../lib/docs', () => ({
   docsChanged: vi.fn(),
   getDoc: async (kind: string, key: string) => structuredClone(store.get(k(kind, key)) ?? null),
   getDocs: async (kind: string, from?: string, to?: string) => [...store.entries()]
-    .filter(([id]) => id.startsWith(`${kind}|`)).map(([id, data]) => ({ key: id.slice(kind.length + 1), data: structuredClone(data) }))
+    .filter(([id, data]) => id.startsWith(`${kind}|`) && data !== null)   // like the server: a removed doc (null) isn't returned
+    .map(([id, data]) => ({ key: id.slice(kind.length + 1), data: structuredClone(data) }))
     .filter(d => (!from || d.key >= from) && (!to || d.key <= to)),
   putDoc: async (kind: string, key: string, data: unknown) => { store.set(k(kind, key), data); },
   putDocs: async (docs: { kind: string; key: string; data: unknown }[]) => { for (const d of docs) store.set(k(d.kind, d.key), d.data); },
@@ -38,7 +39,7 @@ beforeEach(() => {
 describe('Arvy changes', () => {
   it('every change tool can be worked out, and is marked now or confirm', async () => {
     const changes = TOOLS.filter(t => t.change);
-    expect(changes.length).toBe(23);
+    expect(changes.length).toBe(24);
     for (const t of changes) expect(['now', 'confirm']).toContain(changeOf(t.name));
     expect(changeOf('calendar')).toBeUndefined();
     expect(toolsFor('night').map(t => t.name)).toContain('add_event');
@@ -150,5 +151,52 @@ describe('Arvy changes', () => {
     expect((store.get('period|2026-11-10') as { end: string }).end).toBe('2026-11-12');
     await undo();
     expect(store.get('period|2026-11-10')).toBeNull();
+  });
+
+  const planned = () => [...store.entries()].filter(([k, v]) => k.startsWith('template|') && v && (v as { plannedFor?: string }).plannedFor).map(([, v]) => v as { name: string; plannedFor: string; exercises: { name: string; mode: string }[] });
+
+  it('the coach: a planned session goes on the Train page and replaces the one already planned for that day', async () => {
+    const plan = { name: 'Upper pull', exercises: [{ name: 'Lat Pulldown', sets: 3, reps: '8-10', weight: 110, rest_seconds: 120, cue: 'chest up' }, { name: 'Vijay’s odd carry', sets: 2, seconds: 40 }] };
+    const c = (await prepare('plan_workout', plan))!;
+    expect(c.confirm).toBe(true);
+    expect(c.lines[0]).toBe('Train today: “Upper pull” (2 exercises)');
+    expect(c.lines.join('\n')).toMatch(/Lat Pulldown: 3 × 8-10/);
+    expect(c.lines.join('\n')).toMatch(/New exercises: Vijay’s odd carry/);
+    await c.apply();
+    expect(planned()).toHaveLength(1);
+    expect(planned()[0]).toMatchObject({ name: 'Upper pull', plannedFor: '2026-11-10' });
+    expect(planned()[0].exercises[1].mode).toBe('time');
+    expect([...store.keys()].filter(k => k.startsWith('exercise|'))).toHaveLength(1);
+    // planning again for the same day replaces that one instead of adding a second
+    const again = (await prepare('plan_workout', { name: 'Legs', when: 'today', exercises: [{ name: 'Goblet Squat', sets: 3, reps: '10' }] }))!;
+    expect(again.lines[0]).toMatch(/instead of “Upper pull”/);
+    await again.apply();
+    expect(planned().map(t => t.name)).toEqual(['Legs']);
+    await expect(prepare('plan_workout', { name: 'Empty', exercises: [] })).rejects.toBeInstanceOf(Refuse);
+  });
+
+  it('the coach: undo takes a planned session and its new exercises away again; "now" starts it and opens it', async () => {
+    await prepare('plan_workout', { name: 'x', exercises: [{ name: 'Plank', sets: 1, seconds: 30 }] });   // the starter templates are in place
+    const before = snap();
+    const c = (await prepare('plan_workout', { name: 'Quick', when: 'tomorrow', exercises: [{ name: 'Brand new move', sets: 2, reps: '12' }] }))!;
+    expect(c.lines[0]).toMatch(/^Train tomorrow/);
+    const undo = await c.apply();
+    expect(planned()[0].plannedFor).toBe('2026-11-11');
+    await undo();
+    expect(snap()).toBe(before);
+    const now = (await prepare('plan_workout', { name: 'Quick', when: 'now', exercises: [{ name: 'Plank', sets: 2, seconds: 30 }] }))!;
+    expect(now.go).toBeUndefined();
+    await now.apply();
+    expect(now.go?.to).toMatch(/^\/workout\/live\//);
+    expect([...store.keys()].some(k => k.startsWith('workout|2026-11-10~'))).toBe(true);
+    await expect(prepare('plan_workout', { name: 'Another', when: 'now', exercises: [{ name: 'Plank', sets: 1, seconds: 30 }] })).rejects.toThrow(/in progress/);
+  });
+
+  it('a name that matches nothing is marked as a miss (it goes in the improvements log)', async () => {
+    const e = await prepare('mark_habit', { habit: 'juggling' }).catch(x => x);
+    expect(e).toBeInstanceOf(Refuse);
+    expect(e.miss).toBe(true);
+    const many = await prepare('complete_todos', { todos: ['bank'] }).catch(x => x);
+    expect(many.miss).toBe(false);
   });
 });

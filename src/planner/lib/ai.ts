@@ -44,7 +44,7 @@ export async function estimateFoodPhotos(photos: { base64: string; mediaType: st
 export async function estimateFoodText(text: string): Promise<FoodEstimate> {
   return clean(await invoke<FoodEstimate>({ action: 'food_text', text }));
 }
-/** Coach Claude's memory notes ride along with every call (lib/memory.ts); `full` adds the whole planner (lib/lifeContext.ts). */
+/** Arvy's memory notes ride along with every call (lib/memory.ts); `full` adds the whole planner (lib/lifeContext.ts). */
 async function withMemory(context: unknown, full = false): Promise<unknown> {
   const base = context && typeof context === 'object' ? context as Record<string, unknown> : { context };
   if (full) { try { return { ...(await lifeContext(String(base.units || 'lb'))), ...base }; } catch { /* fall through */ } }
@@ -142,7 +142,7 @@ export async function planHabit(text: string, blocks: { id: string; label: strin
 
 export interface DayPlanQuestion { id: string; text: string; choices: string[] }
 export interface DayPlan { review: string; questions: DayPlanQuestion[]; tomorrow: PlanResult & { focus: string; minutes: number; why: string }; answers?: Record<string, string>; madeAt?: string }
-/** After a session: Coach Claude's review, two questions, and tomorrow's session (with the whole planner as context). */
+/** After a session: Arvy's review, two questions, and tomorrow's session (with the whole planner as context). */
 export async function dayPlan(library: { id: string; name: string }[], units: string, answers?: Record<string, string>): Promise<DayPlan> {
   const context = await lifeContext(units);
   const r = await invoke<DayPlan>({ action: 'dayplan', context, library: library.slice(0, 200), units, answers });
@@ -150,7 +150,7 @@ export async function dayPlan(library: { id: string; name: string }[], units: st
 }
 
 export interface BriefHints { words: string[]; priorities: string[]; aGame: string; stress: string; stressResponse: string; excited: string; noticed?: string; madeAt?: string }
-/** Coach Claude's suggestions for each Brief question, from the whole planner. */
+/** Arvy's suggestions for each Brief question, from the whole planner. */
 export async function briefHints(units: string): Promise<BriefHints> {
   const context = await lifeContext(units, { daysBack: 10, fullSessions: 2 });
   const r = await invoke<BriefHints>({ action: 'briefhints', context });
@@ -159,7 +159,7 @@ export async function briefHints(units: string): Promise<BriefHints> {
 }
 
 export interface TodoSuggestion { text: string; time?: string; note?: string; priority?: number }
-/** The Bed Brief's answers → today's to-do list (Coach Claude, with the planner for context). */
+/** The Bed Brief's answers → today's to-do list (Arvy, with the planner for context). */
 export async function todosFromBrief(brief: Record<string, string>, priorities: string[], frequent: string[] = [], units = 'lb'): Promise<TodoSuggestion[]> {
   const context = await lifeContext(units, { daysBack: 3, fullSessions: 1, workoutsDays: 7 });
   const r = await invoke<{ items: TodoSuggestion[] }>({ action: 'todos', brief, priorities, frequent, context });
@@ -169,7 +169,7 @@ export async function todosFromBrief(brief: Record<string, string>, priorities: 
 export interface ExVideo { id: string; title: string; seconds?: number }
 export interface ExPart { name: string; dose: string; cue: string; videos: ExVideo[] }
 export interface ExerciseInfo { videos: ExVideo[]; description: string; setup: string[]; tip: string; mistakes: string[]; parts: ExPart[]; fetchedAt?: string }
-/** How to do an exercise or stretch: the top YouTube videos plus Coach Claude's how-to and mind-muscle cue. A flow
+/** How to do an exercise or stretch: the top YouTube videos plus Arvy's how-to and mind-muscle cue. A flow
  *  ("Mobility flow", "Stretching") comes back broken into its moves, each with its own videos. */
 export async function exerciseInfo(name: string, kind: 'exercise' | 'stretch' | 'cardio' = 'exercise', note?: string): Promise<ExerciseInfo> {
   const r = await invoke<ExerciseInfo>({ action: 'exinfo', name, kind, note });
@@ -180,12 +180,12 @@ export async function exerciseInfo(name: string, kind: 'exercise' | 'stretch' | 
 
 export interface Deal {
   merchant: string; name: string; price: number | null; saleStory?: string; validTo?: string; validFrom?: string; image?: string; kind?: 'flyer' | 'regular'; wasPrice?: number;
-  /** from Coach Claude: the kind ("Boneless skinless"), the size as said ("12 pack", "~1.5 kg"), the size as a number
+  /** from Arvy: the kind ("Boneless skinless"), the size as said ("12 pack", "~1.5 kg"), the size as a number
    *  (g, ml or each) and what the price is for (the package, or by weight for meat and produce) */
   variant?: string; size?: string; amount?: number; unit?: 'g' | 'ml' | 'each'; per?: 'each' | 'lb' | 'kg' | '100g';
 }
 export interface DealsResult { items: { id: string; section: string; deals: Deal[]; suggestedStore?: string; reason?: string }[]; stores_seen?: string[] }
-/** This week's flyer deals near the household for the shopping list (Flipp data, matched by Coach Claude), each item's
+/** This week's flyer deals near the household for the shopping list (Flipp data, matched by Arvy), each item's
  *  store section, and — for the stores with no flyers — which one is likely best for it. */
 export async function shoppingDeals(items: { id: string; text: string }[], postal: string, stores: string[], specialty: { name: string; note?: string }[] = []): Promise<DealsResult> {
   const r = await invoke<DealsResult>({ action: 'deals', items, postal, stores, specialty });
@@ -199,7 +199,7 @@ export interface RecipeDraft { name: string; servings: number; minutes?: number;
 export async function importRecipe(from: { url?: string; text?: string; image?: { media_type: string; data: string } }): Promise<RecipeDraft> {
   return invoke<RecipeDraft>({ action: 'recipe', ...from }, 'planner-recipes');
 }
-/** A high-protein recipe idea from Coach Claude, about `protein` g a serving. */
+/** A high-protein recipe idea from Arvy, about `protein` g a serving. */
 export async function recipeIdea(protein: number, note?: string, avoid: string[] = []): Promise<RecipeDraft> {
   return invoke<RecipeDraft>({ action: 'recipe_idea', protein, note, avoid }, 'planner-recipes');
 }
