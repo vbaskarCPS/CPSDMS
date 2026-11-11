@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-11-notifications-app", "date": "2026-11-11", "title": "Notifications come from the Planner app",
+    "lines": ["They now come through the Planner app itself, not through Chrome, so they carry Planner’s icon and follow the Planner app’s notification settings on your phone.", "Nothing to do: this phone moved over when you opened the planner after the update."] },
   { "id": "2026-11-11-notifications", "date": "2026-11-11", "title": "Tidier notifications, and a check for them",
     "lines": ["Several chat messages in a row now show as one notification that lists them, not just the last one.", "The planner has its own small icon in the status bar.",
               "Settings › Reminders › Check notifications says where they stop if none arrive, and what to change on the phone."] },

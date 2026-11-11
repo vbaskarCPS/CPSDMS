@@ -3,7 +3,8 @@
 // planner doc (planner_push_subscribe). Modelled on src/v2/lib/push.ts.
 import { supabase } from '../../lib/supabase';
 import { call, getPass, SignedOut } from './auth';
-import { isDemo } from './app';
+import { appBase, isDemo } from './app';
+import { getDocs } from './docs';
 
 export type PushState = 'unsupported' | 'ios-install' | 'denied' | 'off' | 'on';
 
@@ -21,8 +22,8 @@ export async function pushState(): Promise<PushState> {
   if (!pushSupported()) return 'unsupported';
   if (Notification.permission === 'denied') return 'denied';
   try {
-    const reg = await navigator.serviceWorker.getRegistration('/');
-    const sub = await reg?.pushManager.getSubscription();
+    // on the planner's own worker, or still on the site-wide one from before (movePush brings it over)
+    const sub = (await (await plannerReg())?.pushManager.getSubscription()) || (await (await siteReg())?.pushManager.getSubscription());
     return sub && Notification.permission === 'granted' ? 'on' : 'off';
   } catch { return 'off'; }
 }
@@ -32,19 +33,32 @@ const toKey = (b64: string): Uint8Array => {
   return Uint8Array.from(s, c => c.charCodeAt(0));
 };
 
-/** Register the app's service worker (scope '/', shared with the field app). */
+// The planner's notifications are shown by their own small worker (public/planner-push-sw.js), registered inside the
+// installed app's own address (/vijayplanner/push/). A phone decides whose notification it is by that address: shown
+// by the site-wide worker (sw.js at '/', outside the installed app) they count as Chrome's, with Chrome's icon and
+// Chrome's notification settings; shown by this one they are the Planner app's.
+const PUSH_WORKER = '/planner-push-sw.js';
+export const pushScope = (base = appBase()): string => `${base}/push/`;
+/** The planner's own worker, if this phone has it. (getRegistration falls back to the site-wide one: checked by scope.) */
+async function plannerReg(): Promise<ServiceWorkerRegistration | undefined> {
+  const r = await navigator.serviceWorker.getRegistration(pushScope());
+  return r && new URL(r.scope).pathname === pushScope() ? r : undefined;
+}
+/** The site-wide worker: where the planner's notifications were registered before it had its own. */
+const siteReg = () => navigator.serviceWorker.getRegistration('/');
+/** Register the planner's notification worker and wait until it is running (a subscription needs a running one). */
 export async function registerWorker(): Promise<ServiceWorkerRegistration> {
-  const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-  await navigator.serviceWorker.ready;
+  const reg = await navigator.serviceWorker.register(PUSH_WORKER, { scope: pushScope() });
+  const w = reg.installing || reg.waiting;
+  if (!reg.active && w) await new Promise<void>(done => {
+    const on = () => { if (w.state === 'activated' || w.state === 'redundant') { w.removeEventListener('statechange', on); done(); } };
+    w.addEventListener('statechange', on); on();
+  });
   return reg;
 }
 
-/** Ask, subscribe and save. Throws a readable message when it can't. */
-export async function enablePush(): Promise<void> {
-  if (!getPass()) throw new SignedOut();
-  if (!pushSupported()) throw new Error('This browser can’t show notifications.');
-  const perm = await Notification.requestPermission();
-  if (perm !== 'granted') throw new Error('Notifications were blocked. Allow them in this browser’s site settings.');
+/** Subscribe this phone on the planner's own worker and save it. */
+async function subscribeHere(): Promise<PushSubscription> {
   const reg = await registerWorker();
   const { data, error } = await supabase.functions.invoke('planner-push', { body: { action: 'key' } });
   const key = (data as { publicKey?: string } | null)?.publicKey;
@@ -59,12 +73,51 @@ export async function enablePush(): Promise<void> {
   const j = sub.toJSON() as { endpoint: string; keys?: { p256dh?: string; auth?: string } };
   const r = await call<{ ok: boolean; reason?: string }>('planner_push_subscribe', { p_endpoint: j.endpoint, p_p256dh: j.keys?.p256dh, p_auth: j.keys?.auth, p_agent: navigator.userAgent });
   if (!r.ok) throw new Error(r.reason === 'bad_subscription' ? 'The browser gave an unusable subscription.' : 'Could not save the subscription.');
+  return sub;
+}
+/** The registration this phone made on the site-wide worker, when it was the planner's (the field app can have one
+ *  there too, on a shared address). The planner stops using it; the browser keeps it, in case it isn't only ours. */
+async function dropOld(keep?: string): Promise<boolean> {
+  const old = await (await siteReg())?.pushManager.getSubscription();
+  if (!old || old.endpoint === keep) return false;
+  const mine = await getDocs<{ endpoint?: string }>('push');
+  if (!mine.some(d => d.data?.endpoint === old.endpoint)) return false;
+  await call('planner_push_unsubscribe', { p_endpoint: old.endpoint });
+  return true;
+}
+
+/** Ask, subscribe and save. Throws a readable message when it can't. */
+export async function enablePush(): Promise<void> {
+  if (!getPass()) throw new SignedOut();
+  if (!pushSupported()) throw new Error('This browser can’t show notifications.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('Notifications were blocked. Allow them in this browser’s site settings.');
+  const sub = await subscribeHere();
+  await dropOld(sub.endpoint).catch(() => false);
+}
+
+/** Notifications turned on before the planner had its own worker: move this phone over to it, so they come from the
+ *  Planner app and not from Chrome. Run when the planner opens; does nothing once moved. True when it moved. */
+export async function movePush(): Promise<boolean> {
+  try {
+    if (typeof window === 'undefined' || isDemo() || !pushSupported() || Notification.permission !== 'granted' || !getPass()) return false;
+    const here = await plannerReg();
+    if (here) void here.update().catch(() => undefined);                            // pick up a newer notification worker
+    if (await here?.pushManager.getSubscription()) return false;                    // already there
+    const old = await (await siteReg())?.pushManager.getSubscription();
+    if (!old) return false;                                                         // never on, on this phone
+    const mine = await getDocs<{ endpoint?: string }>('push');
+    if (!mine.some(d => d.data?.endpoint === old.endpoint)) return false;           // not the planner's
+    const sub = await subscribeHere();
+    await dropOld(sub.endpoint);
+    return true;
+  } catch { return false; }
 }
 
 /** Forget this device (server side too) and unsubscribe the browser. */
 export async function disablePush(): Promise<void> {
-  const reg = await navigator.serviceWorker.getRegistration('/');
-  const sub = await reg?.pushManager.getSubscription();
+  await dropOld().catch(() => false);
+  const sub = await (await plannerReg())?.pushManager.getSubscription();
   if (sub) {
     try { await call('planner_push_unsubscribe', { p_endpoint: sub.endpoint }); } catch { /* the server forgets it on the next 410 */ }
     await sub.unsubscribe();
@@ -100,7 +153,8 @@ const waitFor = (type: string, ms: number, also?: (d: { tag?: string }) => boole
 });
 /** Run the check. Takes up to `patience` ms when the pushed one doesn't arrive. */
 export async function checkPush(name: string, icon: string, patience = 20000): Promise<PushCheck> {
-  const reg = await navigator.serviceWorker.getRegistration('/');
+  await movePush();
+  const reg = await plannerReg();
   if (!reg) throw new Error('Notifications aren’t set up on this phone. Turn them off and on again.');
   let here: PushCheck['here'] = 'blocked';
   try {
