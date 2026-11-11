@@ -4,6 +4,7 @@ import { cacheMethods } from './offline/cache';
 import { cardColumnsForSave } from './cardSafety';
 import { USER_COLS } from './legacyColumns';
 import { upsertUsers } from './userWrites';
+import { mayReportPosition } from './managerPosition';
 import { 
   commandCenterService, 
   getSeasonConfig, 
@@ -1277,6 +1278,8 @@ class SessionService {
         console.warn('[ManagerLoc] upsert skipped — no RouteManager current_user to self-resolve.');
         return;
       }
+      // Someone else looking in on this manager's map: this device isn't where the manager is.
+      if (!mayReportPosition(currentUser)) return;
 
       const row = {
         manager_id: currentUser.userId,
@@ -1307,7 +1310,7 @@ class SessionService {
     try {
       const { getStorageItem } = await import('./localStorage');
       const currentUser = getStorageItem<ManagementUser | null>('current_user', null);
-      if (!currentUser || currentUser.role !== 'RouteManager' || !currentUser.userId) return;
+      if (!currentUser || !mayReportPosition(currentUser)) return;   // not a manager, or someone looking in: the row isn't theirs to remove
       const { error } = await supabase.from('manager_locations').delete().eq('manager_id', currentUser.userId);
       if (error) console.warn('[ManagerLoc] clearManagerLocation failed:', error);
     } catch (err) {

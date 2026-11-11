@@ -183,6 +183,9 @@ export interface ManagementUser {
   mapFilters?: ManagerMapFilters;
   /** Signed in without a row on today's session, to see only what other managers shared with them. */
   noSeat?: boolean;
+  /** Someone else opened this manager's map from their own device (the new app's "Open a manager's map"):
+   *  that device's GPS is not the manager's, so it never writes their position (src/lib/managerPosition.ts). */
+  lookingIn?: boolean;
 }
 
 /** An RM's layer switches on the RM map (absent = the defaults). */
