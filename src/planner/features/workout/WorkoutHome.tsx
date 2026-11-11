@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Play, ClipboardList, MessageCircle, Scale, History, Dumbbell, Shuffle } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
-import { clock, loadRoutine, routineMin, routineMinutes, routineNow, type Routine } from '../../lib/routine';
+import { clock, routineMin, routineMinutes } from '../../lib/routine';
+import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Page, Header, Card, Button, Bars, Stat, Empty } from '../../ui/primitives';
 import { daysAgo, emptyWorkout, fmtDate, loadCustomExercises, loadTemplates, loadWorkouts, nextTarget, saveWorkout, startFromTemplate, todaysTemplate, weekSessions } from './store';
 import { durationMin, fmtNum, fmtSec, volumeOf, workoutKey, type Exercise, type Template, type Units, type Workout } from './types';
@@ -125,11 +126,13 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
   );
 }
 
-/** "Gym · 5:15 am", or "Late start — still counts" once it's 30 min past and nothing's logged. */
+/** "Gym · 5:15 am", or "Late start — still counts" once it's 30 min past and nothing's logged. On a day whose plan
+ *  has no gym (sick, a rest day set with Arvy): "No gym today". A gym moved for the day shows its new time. */
 function useGymLine(doneToday: boolean, unfinished: boolean): string {
-  const [r, setR] = useState<Routine>(() => routineNow());
+  const { r, adjust } = useTodayRoutine();
   const [, tick] = useState(0);
-  useEffect(() => { void loadRoutine().then(setR); const id = window.setInterval(() => tick(n => n + 1), 60_000); return () => window.clearInterval(id); }, []);
+  useEffect(() => { const id = window.setInterval(() => tick(n => n + 1), 60_000); return () => window.clearInterval(id); }, []);
+  if (adjust?.skip?.includes('gym')) return `No gym today${adjust.why ? ` · ${adjust.why}` : ''}`;
   if (doneToday || unfinished) return `Gym · ${clock(r.gym)}`;
   return routineMinutes() > routineMin(r.gym) + 30 ? 'Late start — still counts' : `Gym · ${clock(r.gym)}`;
 }

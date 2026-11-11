@@ -12,6 +12,8 @@
 // sets: EXERCISE is the shape of one planned exercise (per side, no weight, superset / circuit / EMOM / AMRAP blocks,
 // pyramids, countdowns, drop sets, intervals) and FORMATS is when to use which. The plan written after each workout
 // (action 'dayplan': DAYPLAN_SCHEMA, dayplanSystem) uses the same shape.
+// The schedule follows the conversation too: adjust_day reshapes one day (skip the gym and sauna, up at 7, a stretch
+// at 7: kept on the day, src/planner/lib/routine.ts) and change_routine changes the standing routine.
 // What it can't do, gets wrong or is told about the app goes in its improvements log (src/planner/features/arvy/log.ts).
 
 export type Profile = 'night' | 'morning';
@@ -26,9 +28,15 @@ export interface ArvyCtx {
   spoken?: boolean;       // the message was spoken (speech-to-text): words may be misheard
   units?: string;         // lb | kg
   about?: string[];       // the notes they've asked Arvy to keep about them (dated, oldest first)
+  v?: number;             // which tools the app asking can run (TOOLS_VERSION as that app was built)
 }
+/** Goes up when a tool is added. The app sends the number it was built with along with every question (context.v):
+ *  a phone still running an older version of the app is offered only the tools it can run, so Arvy never sets up a
+ *  change that phone would drop. No number = an app from before this (1). */
+export const TOOLS_VERSION = 2;
 /** change: 'now' = done straight away with an Undo; 'confirm' = waits for them to tap Confirm. */
-export interface ArvyTool { name: string; description: string; input_schema: Record<string, unknown>; morningOnly?: boolean; change?: 'now' | 'confirm' }
+export interface ArvyTool { name: string; description: string; input_schema: Record<string, unknown>; morningOnly?: boolean; change?: 'now' | 'confirm';
+  /** the TOOLS_VERSION this tool arrived with (1 when left out) */ since?: number }
 
 const date = (d: string) => ({ type: 'string', description: `${d} (YYYY-MM-DD)` });
 const strs = (d: string) => ({ type: 'array', items: { type: 'string' }, description: d });
@@ -73,7 +81,7 @@ export const SCREENS: Record<string, string> = {
 };
 
 export const TOOLS: ArvyTool[] = [
-  { name: 'today_overview', description: 'One day at a glance: the plan page (priorities, to-dos with done/not done, schedule, routine ticks like wake/gym/lights-out, Brief answers), habits due and how they were marked, meals with totals against the food targets, calendar events, and the workout (planned, in progress or done). Use this first for "how’s my day", "what’s left", "what did I do yesterday".',
+  { name: 'today_overview', description: 'One day at a glance: routine_today (that day’s blocks with their times, and what was changed for the day), the plan page (priorities, to-dos with done/not done, schedule, routine ticks like wake/gym/lights-out, Brief answers), habits due and how they were marked, meals with totals against the food targets, calendar events, and the workout (planned, in progress or done). Use this first for "how’s my day", "what’s left", "what did I do yesterday".',
     input_schema: { type: 'object', properties: { date: date('the day; default today') } } },
   { name: 'calendar', description: 'Household calendar events between two dates (repeating events expanded), with time and who they’re for (Vijay, Rosh, both, Kiaan).',
     input_schema: { type: 'object', properties: { from: date('first day'), to: date('last day; up to 92 days after from') }, required: ['from'] } },
@@ -125,6 +133,23 @@ export const TOOLS: ArvyTool[] = [
     input_schema: { type: 'object', properties: { action: { type: 'string', enum: ['started', 'ended'] }, date: date('default today') }, required: ['action'] } },
   { name: 'log_body_weight', change: 'now', description: 'Log their body weight for a day, in their units.',
     input_schema: { type: 'object', properties: { weight: { type: 'number' }, date: date('default today') }, required: ['weight'] } },
+  { name: 'adjust_day', change: 'now', since: 2, description: 'Change the shape of ONE day of their routine (today unless a date is given; today or a day ahead): leave blocks out (skip), move times, and add blocks at a time. For a sick day, a rest day, a late night, travel, "sleep in tomorrow", "no sauna today", "gym at 5 tonight instead". The Today screen, the reminders and the streaks then follow that day’s plan (a skipped gym counts as a planned rest day). Give only what changes: it adds to changes already made to that day. reset true puts the day back to the normal routine. Things that are part of the day’s shape at a set time (a stretch session, a nap, breakfast, a walk) go in add, not in to-dos. For a change meant for every day from now on, use change_routine.',
+    input_schema: { type: 'object', properties: {
+      date: date('the day; default today'),
+      why: { type: 'string', description: 'two or three words shown on the Today screen, e.g. "Sick day", "Rest day", "Late night"' },
+      skip: { type: 'array', items: { type: 'string', enum: ['gym', 'sauna', 'brief', 'kitchen', 'dinner', 'morning_routine', 'kiaan_up', 'evening_review'] }, description: 'blocks to leave out that day (only ones their routine has; see routine_today in today_overview). kitchen = the kitchen-closed cut-off.' },
+      unskip: { type: 'array', items: { type: 'string' }, description: 'blocks to put back' },
+      wake: { type: 'string', description: 'up at, HH:MM 24-hour. The rest of the morning moves with it.' },
+      gym: { type: 'string', description: 'gym at, HH:MM 24-hour. Much later than usual (say 17:00) = the gym moves out of the morning for the day, sauna with it.' },
+      list_start: { type: 'string', description: 'when the to-do list starts, HH:MM 24-hour; only when they name a time (otherwise it follows the morning)' },
+      kitchen_closes: { type: 'string', description: 'last food that day, HH:MM 24-hour' },
+      dinner: { type: 'string', description: 'dinner at, HH:MM 24-hour' },
+      lights_out: { type: 'string', description: 'lights out that night, HH:MM 24-hour' },
+      sauna_minutes: { type: 'number', description: 'a shorter or longer sauna that day' },
+      add: { type: 'array', items: { type: 'object', properties: { title: { type: 'string', description: 'short, e.g. "Home stretch"' }, time: { type: 'string', description: 'HH:MM 24-hour' }, end_time: { type: 'string', description: 'HH:MM 24-hour' }, note: { type: 'string', description: 'one short line' } }, required: ['title', 'time'] }, description: 'blocks to add that day' },
+      remove: strs('titles of blocks added earlier to take out again'),
+      reset: { type: 'boolean', description: 'true = back to the normal routine for that day' },
+    } } },
 
   // ── changes that wait for a Confirm tap ──
   { name: 'create_habit', change: 'confirm', description: 'Make a new habit. Days default to every day. Keep the name short; add the tiny two-minute version and what it’s stacked after when they said.',
@@ -135,6 +160,17 @@ export const TOOLS: ArvyTool[] = [
     input_schema: { type: 'object', properties: { kcal: { type: 'number' }, protein: { type: 'number', description: 'grams' }, carbs: { type: 'number', description: 'grams' }, fat: { type: 'number', description: 'grams' } } } },
   { name: 'set_budget', change: 'confirm', description: 'Set the monthly budget for one spending category (0 removes it). Shared with the household.',
     input_schema: { type: 'object', properties: { category: { type: 'string' }, amount: { type: 'number', description: 'dollars a month' } }, required: ['category', 'amount'] } },
+  { name: 'change_routine', change: 'confirm', since: 2, description: 'Change their standing routine: every day from now on (Settings, My routine). Give only what changes. Moving the wake time moves the gym and the start of the list with it unless you give those too. For one day only, use adjust_day.',
+    input_schema: { type: 'object', properties: {
+      wake: { type: 'string', description: 'up at, HH:MM 24-hour' }, wake_grace_minutes: { type: 'number', description: 'minutes after the wake time that still count as on time' },
+      gym: { type: 'string', description: 'gym at, HH:MM 24-hour' }, sauna_minutes: { type: 'number', description: 'sauna after the gym, in minutes; 0 = none' },
+      list_start: { type: 'string', description: 'out of the sauna, the to-do list starts, HH:MM 24-hour' },
+      kitchen_closes: { type: 'string', description: 'last food of the day, HH:MM 24-hour; "none" = no cut-off' },
+      dinner: { type: 'string', description: 'dinner (the first meal when an eating window is on), HH:MM 24-hour' }, window_closes: { type: 'string', description: 'eating window closes, HH:MM 24-hour' },
+      eating_window: { type: 'boolean', description: 'follow an eating window (fasting card and streak) or not' },
+      lights_out: { type: 'string', description: 'HH:MM 24-hour' }, brief_minutes: { type: 'number' },
+      stretch_minutes: { type: 'number' }, meditate_minutes: { type: 'number' }, workout_minutes: { type: 'number', description: 'the morning routine’s light workout' }, kiaan_up: { type: 'string', description: 'HH:MM 24-hour' },
+    } } },
   { name: 'plan_workout', change: 'confirm', description: 'Put a training session you planned on their Train page. Write the session out in your reply too (one line per exercise, blocks named). when: "today" or "tomorrow" makes it that day’s session (replacing one already planned for that day); leave it out and it goes to today, or tomorrow if today’s workout is already done or under way; "now" starts it straight away; "template" saves it as a reusable template (replace = the name of a template to overwrite). Use the exercise names they already use (see workout_templates and recent workouts) so their history carries over. Sessions can be more than straight sets: supersets, circuits, EMOMs, AMRAPs, pyramids, countdowns, drop sets and intervals each get their own tracker (see the exercise fields).',
     input_schema: { type: 'object', properties: { name: { type: 'string', description: 'short session name, e.g. "Upper pull + core"' }, when: { type: 'string', enum: ['today', 'tomorrow', 'now', 'template'] }, replace: { type: 'string', description: 'with when "template": the template to overwrite' },
       exercises: { type: 'array', items: EXERCISE } }, required: ['name', 'exercises'] } },
@@ -154,7 +190,7 @@ export const TOOLS: ArvyTool[] = [
     input_schema: { type: 'object', properties: { search: { type: 'string' }, category: { type: 'string' }, month: { type: 'string', description: 'YYYY-MM; default this month' } }, required: ['search', 'category'] } },
 ];
 
-export const toolsFor = (profile?: Profile) => TOOLS.filter(t => !t.morningOnly || profile === 'morning')
+export const toolsFor = (profile?: Profile, v: number = TOOLS_VERSION) => TOOLS.filter(t => (!t.morningOnly || profile === 'morning') && (t.since || 1) <= v)
   .map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 /** How a tool changes things: 'now', 'confirm', or undefined for a look-up. */
 export const changeOf = (name: string) => TOOLS.find(t => t.name === name)?.change;
@@ -272,6 +308,7 @@ export const isCoaching = (messages: Msg[]): boolean => messages.some(m => Array
 export function system(ctx: ArvyCtx, coaching = false): string {
   const name = ctx.name || 'there';
   const other = ctx.username === 'rosh' ? 'Vijay' : 'Rosh';
+  const schedule = (ctx.v ?? TOOLS_VERSION) >= 2;   // the app can reshape a day and change the routine (adjust_day, change_routine)
   return [
     `You are Arvy (pronounced "AR-vee"), the assistant and coach inside ${name}'s personal planner app. You're helpful and upbeat: warm, quick, a little bit of energy, never cheesy or over the top. You are Arvy; don't describe yourself as an AI model.`,
     `You're talking with ${name}. Their household: ${name}, ${other}, and Kiaan (their son). The calendar, shopping list and money are shared by the household; everything else is ${name}'s own.`,
@@ -281,8 +318,10 @@ export function system(ctx: ArvyCtx, coaching = false): string {
     '- Use your tools to look things up: never guess or make up their data. Call several at once when a question needs them.',
     '- Keep it short: lead with what matters most, then two or three sentences (about 60 words) unless they ask for detail or a full list. No headings. A short list only when they asked for a list (like the shopping list). Numbers rounded, dates said naturally ("Saturday at 6").',
     '- Sound like a friend who knows their planner inside out: a quick nod to what they’ve done well, then what’s next. End with a short offer (open a screen, look at something else) only when it’s useful.',
-    `- You can make changes for them: shopping list, to-dos and must-dos, meals and favourites, habit marks, body weight${ctx.profile === 'morning' ? ' and the cycle log' : ''} happen straight away (they get an Undo button). Calendar events, a planned workout, new or paused habits, food targets, removing anything, and money (cash, categories, budgets) wait for them to tap Confirm: when a tool says waiting_for_confirm, say what you set up in a few words and ask them to tap Confirm. Never say it’s done until it is.`,
+    `- You can make changes for them: shopping list, to-dos and must-dos, meals and favourites, habit marks, body weight${schedule ? ', the shape of one day' : ''}${ctx.profile === 'morning' ? ' and the cycle log' : ''} happen straight away (they get an Undo button). Calendar events, a planned workout,${schedule ? ' the standing routine,' : ''} new or paused habits, food targets, removing anything, and money (cash, categories, budgets) wait for them to tap Confirm: when a tool says waiting_for_confirm, say what you set up in a few words and ask them to tap Confirm. Never say it’s done until it is.`,
     '- Do what they ask without double-checking first, unless something important is missing (like the day for an event): then ask one short question. If a tool says not_done, explain why in a sentence (and ask which one, if several match).',
+    !schedule ? '' : '- When their day changes (sick, a rest day, slept in, a late night, travelling, “no sauna today”, “gym tonight instead”), reshape that day with adjust_day so the Today screen and the reminders match what they’ll really do: skip what’s off, move the times, add what they’re doing instead. Don’t leave the old blocks standing and don’t turn the day’s shape into to-dos. If the planned workout no longer fits, plan one that does (or say there’s none). “From now on”, “every day” or new rules for the routine: change_routine.',
+    '- Earlier messages start with when they were sent, like [Tue Nov 10, 11:28 PM]: “today” and “tomorrow” in them, and in your replies to them, count from that day, not from now. A [Change: …] note under one of your earlier replies says what became of it (made, still waiting for Confirm, cancelled, undone): go by the note, not by what the reply said. Never start your own reply with a time stamp.',
     '- Anything to add, change or delete that no tool covers: call cant_do_yet, say it’s on the way, and open the screen where they can do it.',
     '- After a change, confirm it in one short sentence ("Added milk and eggs to the list!"). Don’t repeat the details shown under your reply.',
     '- When something would be easier to see on its screen, offer to open it (or just open it if they asked to see it).',

@@ -39,7 +39,7 @@ beforeEach(() => {
 describe('Arvy changes', () => {
   it('every change tool can be worked out, and is marked now or confirm', async () => {
     const changes = TOOLS.filter(t => t.change);
-    expect(changes.length).toBe(24);
+    expect(changes.length).toBe(26);
     for (const t of changes) expect(['now', 'confirm']).toContain(changeOf(t.name));
     expect(changeOf('calendar')).toBeUndefined();
     expect(toolsFor('night').map(t => t.name)).toContain('add_event');
@@ -159,7 +159,7 @@ describe('Arvy changes', () => {
     const plan = { name: 'Upper pull', exercises: [{ name: 'Lat Pulldown', sets: 3, reps: '8-10', weight: 110, rest_seconds: 120, cue: 'chest up' }, { name: 'Vijay’s odd carry', sets: 2, seconds: 40 }] };
     const c = (await prepare('plan_workout', plan))!;
     expect(c.confirm).toBe(true);
-    expect(c.lines[0]).toBe('Train today: “Upper pull” (2 exercises)');
+    expect(c.lines[0]).toMatch(/^Train today \(Tue,? Nov 10\): “Upper pull” \(2 exercises\)$/);   // the date too: read a day later, "today" alone would mislead
     expect(c.lines.join('\n')).toMatch(/Lat Pulldown: 3 × 8-10/);
     expect(c.lines.join('\n')).toMatch(/New exercises: Vijay’s odd carry/);
     await c.apply();
@@ -190,6 +190,79 @@ describe('Arvy changes', () => {
     expect(now.go?.to).toMatch(/^\/workout\/live\//);
     expect([...store.keys()].some(k => k.startsWith('workout|2026-11-10~'))).toBe(true);
     await expect(prepare('plan_workout', { name: 'Another', when: 'now', exercises: [{ name: 'Plank', sets: 1, seconds: 30 }] })).rejects.toThrow(/in progress/);
+  });
+
+  // ── the schedule follows the conversation ──
+  it('a sick day: skips the gym and sauna, moves the wake time, adds blocks; it is a planned rest day; undo puts it all back', async () => {
+    const routine = await import('../../lib/routine');
+    routine.setProfile('morning'); routine.setProfile('night');   // a fresh 5 am club routine (the defaults)
+    store.set('habit|g1', { id: 'g1', name: 'Gym', days: [], auto: 'gym', createdAt: '2026-01-01' });
+    const before = snap();
+    const c = (await prepare('adjust_day', { why: 'Sick day', skip: ['gym', 'sauna'], wake: '07:00',
+      add: [{ title: 'Home stretch', time: '07:00', note: 'easy, about 20 min' }, { title: 'Breakfast', time: '07:30' }] }))!;
+    expect(c.confirm).toBe(false);
+    expect(changeOf('adjust_day')).toBe('now');
+    expect(c.lines[0]).toBe('Today’s plan (Sick day): no gym · no sauna · up at 7:00 am · + Home stretch 7:00 am · + Breakfast 7:30 am');
+    expect(c.lines[1]).toBe('  The day now runs: 7:00 am Up · 7:00 am Home stretch · 7:15 am Today\'s Brief · 7:15 am Tackle the list · 7:30 am Breakfast · 2:00 pm Kitchen closed · 9:30 pm Lights out');
+    const undo = await c.apply();
+    const day = store.get('day|2026-11-10') as { adjust: { skip: string[]; times: Record<string, string>; added: { label: string }[] }; gym: { answer: string; planned: boolean }; todos: unknown[] };
+    expect(day.adjust.skip).toEqual(['gym', 'sauna']);
+    expect(day.adjust.times).toEqual({ wake: '07:00' });
+    expect(day.adjust.added.map(x => x.label)).toEqual(['Home stretch', 'Breakfast']);
+    expect(day.gym).toMatchObject({ answer: 'rest', planned: true });           // so "did you miss the gym?" isn't asked
+    expect(day.todos.length).toBe(2);                                             // the rest of the day is untouched
+    expect(store.get('habitlog|2026-11-10')).toEqual({ g1: 'skip' });           // a planned rest keeps the gym streak
+
+    // a second change adds to the first; "the day already runs that way" is refused; unskip gives the gym back
+    const c2 = (await prepare('adjust_day', { lights_out: '21:00', unskip: ['gym'] }))!;
+    expect(c2.lines[0]).toBe('Today’s plan (Sick day): no sauna · up at 7:00 am · lights out 9:00 pm · + Home stretch 7:00 am · + Breakfast 7:30 am');
+    await c2.apply();
+    expect((store.get('day|2026-11-10') as { gym?: unknown }).gym).toBeUndefined();
+    expect(store.get('habitlog|2026-11-10')).toEqual({});
+    await expect(prepare('adjust_day', { lights_out: '21:00' })).rejects.toThrow(/already runs that way/);
+
+    // reset: back to the normal routine; then the first undo… restores what it snapshotted (the untouched day)
+    const c3 = (await prepare('adjust_day', { reset: true }))!;
+    expect(c3.lines[0]).toBe('Today’s plan: back to the normal routine');
+    await c3.apply();
+    expect((store.get('day|2026-11-10') as { adjust?: unknown }).adjust).toBeUndefined();
+    await undo();
+    expect(snap()).toBe(before);
+  });
+  it('a day ahead can be changed, a past day can’t; only real blocks can be skipped; the gym can move to the evening', async () => {
+    const routine = await import('../../lib/routine');
+    routine.setProfile('morning'); routine.setProfile('night');
+    const c = (await prepare('adjust_day', { date: '2026-11-11', why: 'Late night', wake: '06:30' }))!;
+    expect(c.lines[0]).toMatch(/^Wed,? Nov 11’s plan \(Late night\): up at 6:30 am$/);
+    expect(c.lines[1]).toContain('6:30 am Up — straight to the gym · 6:45 am Gym');
+    await expect(prepare('adjust_day', { date: '2026-11-09', skip: ['gym'] })).rejects.toThrow(/over/);
+    await expect(prepare('adjust_day', { skip: ['lights out'] })).rejects.toThrow(/always stay/);
+    await expect(prepare('adjust_day', { skip: ['morning_routine'] })).rejects.toThrow(/always stay|no morning block/);
+    await expect(prepare('adjust_day', { wake: '7am' })).rejects.toThrow(/as a time/);
+    await expect(prepare('adjust_day', {})).rejects.toThrow(/Nothing to change/);
+    const eve = (await prepare('adjust_day', { gym: '17:00' }))!;
+    expect(eve.lines[1]).toBe('  The day now runs: 5:00 am Up · 5:15 am Today\'s Brief · 5:15 am Tackle the list · 2:00 pm Kitchen closed · 5:00 pm Gym · 6:05 pm Sauna · 9:30 pm Lights out');
+  });
+  it('the standing routine changes after Confirm; moving the wake time moves the morning; undo puts it back', async () => {
+    const routine = await import('../../lib/routine');
+    routine.setProfile('morning'); routine.setProfile('night');
+    const c = (await prepare('change_routine', { wake: '05:30', kitchen_closes: '15:00', sauna_minutes: 10 }))!;
+    expect(c.confirm).toBe(true);
+    expect(changeOf('change_routine')).toBe('confirm');
+    expect(c.lines.slice(0, -1)).toEqual([
+      'Routine, every day: Up 5:00 am → 5:30 am', 'Routine, every day: Gym 5:15 am → 5:45 am', 'Routine, every day: The list starts 6:45 am → 7:15 am',
+      'Routine, every day: Sauna 25 min → 10 min', 'Routine, every day: Kitchen closes 2:00 pm → 3:00 pm',
+    ]);
+    expect(c.lines[c.lines.length - 1]).toContain('5:30 am Up — straight to the gym · 5:45 am Gym · 7:05 am Sauna');
+    const undo = await c.apply();
+    expect((store.get('prefs|routine') as { wake: string; gym: string }).gym).toBe('05:45');
+    expect((await routine.loadRoutine()).wake).toBe('05:30');
+    await undo();
+    expect((await routine.loadRoutine()).wake).toBe('05:00');
+    await expect(prepare('change_routine', { wake: '05:00' })).rejects.toThrow(/already runs that way/);
+    const off = (await prepare('change_routine', { kitchen_closes: 'none', eating_window: false }))!;
+    expect(off.lines).toContain('Routine, every day: Kitchen closes 2:00 pm → none');
+    expect(off.lines).toContain('Routine, every day: Eating window on → off');
   });
 
   it('a name that matches nothing is marked as a miss (it goes in the improvements log)', async () => {

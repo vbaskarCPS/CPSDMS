@@ -2,6 +2,8 @@
 // with a snapshot of every doc it touches taken just before, so Undo puts them back exactly.
 //   Small, everyday changes are done straight away with an Undo: shopping items, to-dos, a meal, a habit mark, body weight.
 //   Bigger ones wait for a Confirm card: calendar events, removing anything, money.
+//   The schedule too: one day reshaped (a block skipped, a time moved, a block added: straight away, with an Undo) or
+//   the standing routine changed (after Confirm).
 // The same functions and doc shapes as the screens; after a change, screens holding a copy reload (lib/docs docsChanged).
 import { calendarKey, dayKey, docsChanged, getDoc, getDocs, putDocs } from '../../lib/docs';
 import { estimateFoodText } from '../../lib/ai';
@@ -24,6 +26,8 @@ import { daysAgo, loadCustomExercises, loadTemplates, loadWorkouts, startFromTem
 import { workoutKey, type Template } from '../workout/types';
 import { planExercisesFrom, sessionLines } from '../workout/format';
 import { findExercise } from '../workout/library';
+import { adjustWords, blocks, clock, loadRoutine, mergeAdjust, saveRoutine, SKIPPABLE, type AddedBlock, type AdjustTime, type DayAdjust, type Routine } from '../../lib/routine';
+import { autoMark } from '../habits/auto';
 import type { Budget } from '../money/types';
 
 type AnyIn = Record<string, unknown>;
@@ -162,6 +166,131 @@ async function setTodos(input: AnyIn, mode: 'done' | 'undone' | 'remove'): Promi
   };
 }
 
+// ───────────── the schedule: one day reshaped, or the standing routine ─────────────
+/** What Arvy calls a block → the routine's own id. */
+const BLOCK_OF: Record<string, string> = { gym: 'gym', sauna: 'sauna', brief: 'brief', the_brief: 'brief', kitchen: 'kitchen', kitchen_closed: 'kitchen', dinner: 'dinner',
+  morning: 'morning', morning_routine: 'morning', miracle_morning: 'morning', kiaan_up: 'kiaanUp', kiaanup: 'kiaanUp', evening: 'evening', evening_review: 'evening' };
+const blockIds = (v: unknown) => list(v).map(x => { const k = x.toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_|_$/g, ''); return BLOCK_OF[k] || k; });
+/** What Arvy sends for a time → the routine's field. */
+const DAY_TIMES: [string, AdjustTime, string][] = [['wake', 'wake', 'up at'], ['gym', 'gym', 'gym at'], ['list_start', 'review', 'the list from'], ['kitchen_closes', 'kitchenClose', 'kitchen closes'],
+  ['dinner', 'eatOpen', 'dinner at'], ['lights_out', 'lightsOut', 'lights out'], ['kiaan_up', 'kiaanUp', 'Kiaan up at']];
+const NIGHT_ONLY = new Set<AdjustTime>(['gym', 'review', 'kitchenClose']);
+const dayRun = (r: Routine, a: DayAdjust | undefined) => blocks(r, a).map(b => `${clock(b.at)} ${b.label}`).join(' · ');
+
+/** Reshape one day: blocks left out, times moved, blocks added (Day.adjust). A skipped gym is a planned rest day:
+ *  the missed-gym question isn't asked and the gym habit is marked "skip", which keeps its streak. */
+async function adjustDay(input: AnyIn): Promise<Change> {
+  const today = dayKey();
+  const date = isDate(input.date) ? input.date : today;
+  if (date < today) throw new Refuse('That day is over: I can change today or a day ahead.');
+  const [r, d] = await Promise.all([loadRoutine(), dayDoc(date)]);
+  const word = date === today ? 'Today' : pretty(date);
+  const has = new Set(blocks(r).map(b => b.id as string));
+  const before = d.adjust;
+
+  let next: DayAdjust | undefined;
+  if (input.reset === true) {
+    if (!before) throw new Refuse(`${word} already runs as the normal routine.`);
+    next = undefined;
+  } else {
+    const can = new Set(SKIPPABLE[r.profile]);
+    const skip = blockIds(input.skip), unskip = blockIds(input.unskip);
+    for (const b of skip) {
+      if (!can.has(b)) throw new Refuse(`“${b}” can’t be skipped: getting up, the list and lights out always stay. What can be left out: ${[...can].filter(x => has.has(x)).join(', ')}.`);
+      if (!has.has(b)) throw new Refuse(`There’s no ${b} block in the routine, so there’s nothing to skip.`);
+    }
+    const times: Partial<Record<AdjustTime, string>> = {};
+    for (const [key, field] of DAY_TIMES) {
+      const v = input[key];
+      if (v === undefined || v === null || v === '') continue;
+      if (!isTime(v)) throw new Refuse(`I need “${key.replace('_', ' ')}” as a time (like 07:00).`);
+      if (r.profile === 'morning' && NIGHT_ONLY.has(field)) throw new Refuse(`There’s no ${key.replace('_', ' ')} time in this routine.`);
+      times[field] = v;
+    }
+    const saunaMin = typeof input.sauna_minutes === 'number' && r.profile === 'night' ? Math.max(0, Math.min(90, Math.round(input.sauna_minutes))) : undefined;
+    const add: AddedBlock[] = (Array.isArray(input.add) ? input.add : []).map(x => x as AnyIn)
+      .filter(x => x && str(x.title, 60) && isTime(x.time)).slice(0, 8)
+      .map(x => ({ id: uid().slice(0, 8), at: x.time as string, label: str(x.title, 60), ...(isTime(x.end_time) ? { until: x.end_time } : {}), ...(str(x.note, 140) ? { note: str(x.note, 140) } : {}) }));
+    if (Array.isArray(input.add) && input.add.length && !add.length) throw new Refuse('Each block to add needs a title and a time (like 07:00).');
+    const remove = list(input.remove).map(n => one(before?.added || [], x => x.label, n, 'added block').id);
+    next = mergeAdjust(before, { why: str(input.why, 60) || undefined, skip, unskip, times, saunaMin, add, remove });
+    if (JSON.stringify({ ...next, at: 0 }) === JSON.stringify({ ...before, at: 0 })) throw new Refuse(before ? `${word} already runs that way.` : 'Nothing to change: tell me what to skip, move or add.');
+  }
+
+  // what the gym and sauna being off (or back on) means for the day: a planned rest, habits marked "skip"
+  const gymOff = !!next?.skip?.includes('gym'), gymWasOff = !!before?.skip?.includes('gym');
+  const saunaOff = !!next?.skip?.includes('sauna'), saunaWasOff = !!before?.skip?.includes('sauna');
+  // the card says everything that's different about that day now (not only this step), then how the day runs
+  const changed = next ? adjustWords(next) : ['back to the normal routine'];
+  return {
+    kinds: ['day', 'habitlog'], confirm: false,
+    lines: [`${word}’s plan${next?.why ? ` (${next.why})` : ''}: ${changed.join(' · ')}`, `  The day now runs: ${dayRun(r, next)}`],
+    apply: async () => {
+      const undoDay = await snapshot('day', [date]);
+      const undoHabits = await snapshot('habitlog', [date]);
+      const fresh = await dayDoc(date);
+      let gym = fresh.gym;
+      if (gymOff && !gym && !fresh.ticks.gym) gym = { answer: 'rest', at: new Date().toISOString(), planned: true };
+      if (!gymOff && gym?.planned) gym = undefined;
+      await putDocs([{ kind: 'day', key: date, data: { ...fresh, adjust: next, gym } }]);
+      if (gymOff !== gymWasOff) await autoMark('gym', gymOff, date, 'skip');
+      if (saunaOff !== saunaWasOff) await autoMark('sauna', saunaOff, date, 'skip');
+      return async () => { await undoHabits(); await undoDay(); };
+    },
+  };
+}
+
+/** What Arvy sends → a field of the standing routine. */
+const ROUTINE_TIMES: [string, keyof Routine, string][] = [['wake', 'wake', 'Up'], ['gym', 'gym', 'Gym'], ['list_start', 'review', 'The list starts'], ['dinner', 'eatOpen', 'Dinner'],
+  ['window_closes', 'eatClose', 'Eating window closes'], ['lights_out', 'lightsOut', 'Lights out'], ['kiaan_up', 'kiaanUp', 'Kiaan up']];
+const ROUTINE_MINS: [string, keyof Routine, string, number][] = [['wake_grace_minutes', 'wakeGrace', 'Wake-up grace', 120], ['sauna_minutes', 'saunaMin', 'Sauna', 60], ['brief_minutes', 'briefMinutes', 'Brief', 60],
+  ['stretch_minutes', 'stretchMin', 'Stretch', 60], ['meditate_minutes', 'meditateMin', 'Meditate', 60], ['workout_minutes', 'workoutMin', 'Light workout', 90]];
+const shiftTime = (t: string, by: number) => { const [h, m] = t.split(':').map(Number); const n = (((h * 60 + m + by) % 1440) + 1440) % 1440; return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`; };
+const minsOf = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+
+/** Change the standing routine (Settings › My routine): every day from now on. Waits for Confirm. */
+async function changeRoutine(input: AnyIn): Promise<Change> {
+  const r = await loadRoutine();
+  const next: Routine = { ...r };
+  const set = <K extends keyof Routine>(k: K, v: Routine[K]) => { next[k] = v; };
+  for (const [key, field] of ROUTINE_TIMES) {
+    const v = input[key];
+    if (v === undefined || v === null || v === '') continue;
+    if (!isTime(v)) throw new Refuse(`I need “${key.replace(/_/g, ' ')}” as a time (like 05:30).`);
+    set(field, v as never);
+  }
+  for (const [key, field, , max] of ROUTINE_MINS) {
+    const v = input[key];
+    if (typeof v === 'number' && Number.isFinite(v)) set(field, Math.max(field === 'briefMinutes' ? 1 : 0, Math.min(max, Math.round(v))) as never);
+  }
+  const kc = input.kitchen_closes;
+  if (typeof kc === 'string' && kc.trim()) {
+    if (/^(none|off|no)$/i.test(kc.trim())) next.kitchenClose = '';
+    else if (isTime(kc)) next.kitchenClose = kc;
+    else throw new Refuse('I need “kitchen closes” as a time (like 14:00), or “none”.');
+  }
+  if (typeof input.eating_window === 'boolean') next.fast = input.eating_window;
+  // the morning hangs off the wake time: moving it moves the gym and the start of the list too, unless they were given
+  const by = minsOf(next.wake) - minsOf(r.wake);
+  if (by && r.profile === 'night') {
+    if (input.gym === undefined) next.gym = shiftTime(r.gym, by);
+    if (input.list_start === undefined) next.review = shiftTime(r.review, by);
+  }
+  if (next.lightsOut !== r.lightsOut) next.windDown = shiftTime(r.windDown, minsOf(next.lightsOut) - minsOf(r.lightsOut));
+
+  const show = (v: Routine[keyof Routine]) => (typeof v === 'boolean' ? (v ? 'on' : 'off') : typeof v === 'number' ? `${v} min` : v ? clock(String(v)) : 'none');
+  const labels: [keyof Routine, string][] = [...ROUTINE_TIMES.map(([, f, l]) => [f, l] as [keyof Routine, string]), ...ROUTINE_MINS.map(([, f, l]) => [f, l] as [keyof Routine, string]), ['kitchenClose', 'Kitchen closes'], ['fast', 'Eating window']];
+  const lines = labels.filter(([f]) => next[f] !== r[f]).map(([f, l]) => `Routine, every day: ${l} ${show(r[f])} → ${show(next[f])}`);
+  if (!lines.length) throw new Refuse('The routine already runs that way.');
+  return {
+    kinds: ['prefs', 'day'], confirm: true,
+    lines: [...lines, `  A normal day then runs: ${dayRun(next, undefined)}`],
+    apply: async () => {
+      await saveRoutine(next);
+      return async () => { await saveRoutine(r); docsChanged(['prefs', 'day']); };
+    },
+  };
+}
 // ───────────── food ─────────────
 async function logMeal(input: AnyIn): Promise<Change> {
   const what = str(input.description, 400);
@@ -513,7 +642,7 @@ async function planWorkout(input: AnyIn): Promise<Change> {
   const t: Template = { ...template, id: existing?.id || template.id, plannedFor: date, order: -1 };
   return {
     kinds: ['template', 'exercise'], confirm: true,
-    lines: [`Train ${when}: “${t.name}” (${t.exercises.length} exercises)${existing ? `, instead of “${existing.name}”` : ''}`, ...shown],
+    lines: [`Train ${when} (${pretty(date)}): “${t.name}” (${t.exercises.length} exercises)${existing ? `, instead of “${existing.name}”` : ''}`, ...shown],
     apply: async () => { const u1 = await snap('exercise', created.map(e => e.id)); const u2 = await snapshot('template', [t.id]); await putDocs([...newExercises, { kind: 'template', key: t.id, data: t }]); return async () => { await u2(); await u1(); }; },
   };
 }
@@ -545,6 +674,8 @@ export async function prepare(name: string, input: AnyIn): Promise<Change | null
     case 'log_cycle_day': return logCycleDay(input);
     case 'log_period': return logPeriod(input);
     case 'plan_workout': return planWorkout(input);
+    case 'adjust_day': return adjustDay(input);
+    case 'change_routine': return changeRoutine(input);
     default: return null;
   }
 }

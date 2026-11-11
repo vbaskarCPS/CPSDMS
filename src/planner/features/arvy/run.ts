@@ -6,7 +6,7 @@ import { addMemory } from '../../lib/memory';
 import { getPass } from '../../lib/auth';
 import { lifeContext } from '../../lib/lifeContext';
 import { logArvy } from './log';
-import { loadRoutine, blocks } from '../../lib/routine';
+import { adjustWords, blocks, cleanAdjust, clock, loadRoutine } from '../../lib/routine';
 import { loadEvents } from '../calendar/store';
 import { eventsOn, WHO_LABEL, type CalEvent } from '../calendar/types';
 import { loadList } from '../shop/store';
@@ -46,7 +46,7 @@ const fmtSet = (s: AnyDoc) => (s.seconds && !s.reps ? `${s.seconds}s` : `${s.wei
 // ── the tools ──
 async function todayOverview(input: AnyDoc) {
   const date = isDate(input.date) ? input.date : dayKey();
-  const [day, habits, log, meals, tg, events, workouts, templates] = await Promise.all([
+  const [day, habits, log, meals, tg, events, workouts, templates, routine] = await Promise.all([
     getDoc<AnyDoc>('day', date).catch(() => null),
     getDocs<Habit>('habit').catch(() => []),
     getDoc<HabitLog>('habitlog', date).catch(() => null),
@@ -55,15 +55,21 @@ async function todayOverview(input: AnyDoc) {
     loadEvents(date, date).catch(() => [] as CalEvent[]),
     getDocs<Workout>('workout', `${date}~`, `${date}~￿`).catch(() => []),
     getDocs<Template>('template').catch(() => []),
+    loadRoutine().catch(() => null),
   ]);
   const wd = new Date(`${date}T12:00:00`).getDay();
   const d = day || {};
+  const adjust = cleanAdjust(d.adjust);   // that day's changes to the routine (adjust_day)
   const due = habits.map(h => h.data).filter(h => h && !h.archived && (h.days?.length ? h.days : [0, 1, 2, 3, 4, 5, 6]).includes(wd));
   const ms = meals.map(m => m.data).filter(Boolean);
   const ws = workouts.map(w => w.data).filter(w => w && !w.discarded);
   const planned = templates.map(t => t.data).filter(t => t && !t.archived && (t.plannedFor === date || (!t.plannedFor && t.days?.includes(wd))));
   return {
     date, weekday: weekdayOf(date),
+    routine_today: routine ? {
+      blocks: blocks(routine, adjust).map(b => `${clock(b.at)}${b.until ? `–${clock(b.until)}` : ''} ${b.label}${b.added ? (b.added.done ? ' (added for the day, done)' : ' (added for the day)') : ''}`),
+      changed_for_the_day: adjust ? { why: adjust.why, changes: adjustWords(adjust) } : 'no: it runs as the standing routine',
+    } : undefined,
     priorities: (d.priorities || []).filter((p: AnyDoc) => p?.text).map((p: AnyDoc) => `${p.done ? '✓' : '○'} ${p.text}`),
     todos: (d.todos || []).filter((t: AnyDoc) => t?.text).map((t: AnyDoc) => `${t.done ? '✓' : '○'} ${t.time ? t.time + ' ' : ''}${t.text}${t.must ? ' (must)' : ''}`),
     schedule: (d.schedule || []).filter((s: AnyDoc) => s?.text).map((s: AnyDoc) => `${s.time} ${s.text}`),

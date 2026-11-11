@@ -9,7 +9,7 @@
 // The challenge is saved as a normal session marked kind 'home', so it shows in History and the coach sees it. It isn't
 // the gym: finishing it doesn't tick the gym block; it marks the gym habit "mini" (the small version, which keeps the
 // streak — "never miss twice").
-import { blocks, routineMin, routineMinutes, type Routine } from '../../lib/routine';
+import { blocks, routineMin, routineMinutes, type DayAdjust, type Routine } from '../../lib/routine';
 import { uid } from '../../ui/primitives';
 import type { Workout, WorkoutExercise } from './types';
 export type { GymAnswer, GymCheck } from '../plan/types';
@@ -21,9 +21,10 @@ const LATE_UP = 30;
 
 export function shouldAskMissedGym(o: {
   routine: Routine; now: Date; ticks: { up?: string; gym?: string }; answered: boolean; workoutToday: boolean; gymDue: boolean;
+  adjust?: DayAdjust | null;   // today's changes to the routine: the gym skipped (never asked) or moved (asked after its new time)
 }): boolean {
   if (o.answered || o.ticks.gym || o.workoutToday || !o.gymDue) return false;
-  const gym = blocks(o.routine).find(b => b.id === 'gym');
+  const gym = blocks(o.routine, o.adjust).find(b => b.id === 'gym');
   if (!gym) return false;
   const start = routineMin(gym.at);
   const end = gym.until ? routineMin(gym.until) : start + 90;

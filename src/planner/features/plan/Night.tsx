@@ -5,7 +5,8 @@ import { Check, Moon, Gamepad2, Sparkles, Play, Square, Flame } from 'lucide-rea
 import { dayKey, getDoc, putDoc } from '../../lib/docs';
 import { useDoc } from '../../lib/useDoc';
 import { reflect } from '../../lib/ai';
-import { clock, loadRoutine, routineMin, routineMinutes, routineNow, type Routine } from '../../lib/routine';
+import { clock, routineMin, routineMinutes } from '../../lib/routine';
+import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Page, Header, Card, Button, Prompt, Score, Input, useToast } from '../../ui/primitives';
 import { addDays, nowHM, sleepEstimate } from './dates';
 import { beep } from './sound';
@@ -21,13 +22,12 @@ export function Night() {
   const { data, update, loading, loadError, save, flush } = useDoc<Day>('day', today, emptyDay(), 500);
   const day = useMemo(() => normalizeDay(data), [data]);
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
-  const [routine, setRoutine] = useState<Routine>(routineNow());
+  const { r: routine, base } = useTodayRoutine();   // tonight's lights out (moved for the day or not); tomorrow's wake time is the standing one
   const [now, setNow] = useState(() => Date.now());
   const [thinking, setThinking] = useState(false);
   const [toast, say] = useToast();
   const capHit = useRef(false);
 
-  useEffect(() => { void loadRoutine().then(setRoutine); }, []);
   useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(id); }, []);
 
   // countdown to lights out, on the routine scale (so 1:00 am is "later" than 11 pm)
@@ -98,7 +98,7 @@ export function Night() {
         <div>
           <p className="pl-eyebrow">{bedWord} {clock(routine.lightsOut)}</p>
           <b className="night-top__big">{done ? `In bed ${clock(day.ticks.lightsOut!)}` : left > 0 ? `${fmtLeft(left)} left` : `${fmtLeft(-left)} past`}</b>
-          <small>{done ? `≈ ${sleepEstimate(day.ticks.lightsOut!, routine.wake)} until ${clock(routine.wake)}` : morningP ? 'unwind · review · tomorrow\'s #1 · bed with Kiaan' : 'sauna · day review · unwind'}</small>
+          <small>{done ? `≈ ${sleepEstimate(day.ticks.lightsOut!, base.wake)} until ${clock(base.wake)}` : morningP ? 'unwind · review · tomorrow\'s #1 · bed with Kiaan' : 'sauna · day review · unwind'}</small>
         </div>
       </Card>
 
@@ -145,7 +145,7 @@ export function Night() {
 
           {!done
             ? <Button primary block onClick={lightsOut} style={{ minHeight: 60, fontSize: 18 }}><Moon /> {morningP ? 'In bed with Kiaan' : 'Lights out'}</Button>
-            : <Card className="night-goodnight"><Moon aria-hidden /><div><b>Good night.</b><small>{bedWord} {clock(day.ticks.lightsOut!)} · up {clock(routine.wake)}{morningP ? '' : ' with Kiaan'} · ≈ {sleepEstimate(day.ticks.lightsOut!, routine.wake)} sleep</small></div>
+            : <Card className="night-goodnight"><Moon aria-hidden /><div><b>Good night.</b><small>{bedWord} {clock(day.ticks.lightsOut!)} · up {clock(base.wake)}{morningP ? '' : ' with Kiaan'} · ≈ {sleepEstimate(day.ticks.lightsOut!, base.wake)} sleep</small></div>
                 <Button small ghost onClick={() => { set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: undefined } })); void autoMark('lightsOut', false); }}>Undo</Button></Card>}
           </>) : (<>
           {/* night: sauna → day review → tomorrow's #1 → unwind → lights out (the shake lives on Today) */}
@@ -203,7 +203,7 @@ export function Night() {
 
           {!done
             ? <Button primary block onClick={lightsOut} style={{ minHeight: 60, fontSize: 18 }}><Moon /> {morningP ? 'In bed with Kiaan' : 'Lights out'}</Button>
-            : <Card className="night-goodnight"><Moon aria-hidden /><div><b>Good night.</b><small>{bedWord} {clock(day.ticks.lightsOut!)} · up {clock(routine.wake)}{morningP ? '' : ' with Kiaan'} · ≈ {sleepEstimate(day.ticks.lightsOut!, routine.wake)} sleep</small></div>
+            : <Card className="night-goodnight"><Moon aria-hidden /><div><b>Good night.</b><small>{bedWord} {clock(day.ticks.lightsOut!)} · up {clock(base.wake)}{morningP ? '' : ' with Kiaan'} · ≈ {sleepEstimate(day.ticks.lightsOut!, base.wake)} sleep</small></div>
                 <Button small ghost onClick={() => set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: undefined } }))}>Undo</Button></Card>}
           </>)}
         </>

@@ -3,13 +3,15 @@
 // shakes and meals at their times ("Ate it" logs them) → kitchen closed → lights out; morning profile:
 // Miracle Morning → Brief → … → bed at 9),
 // the current block highlighted, each one tickable. Streaks on top; the feature cards below.
+// A day can differ from the routine (Day.adjust, set by Arvy from the conversation: sick, so no gym, no sauna, up at 7,
+// a stretch at 7): the timeline shows that day's blocks, a note on top says what changed, "Back to normal" clears it.
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Settings as Cog, Check, Sunrise, Moon, Flame, ChevronRight } from 'lucide-react';
 import type { PlannerPass } from '../lib/auth';
 import { dayKey, getDocs, putDoc } from '../lib/docs';
 import { useDoc } from '../lib/useDoc';
-import { blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, routineMin, routineMinutes, routineNow, type Block, type BlockId, type Routine } from '../lib/routine';
+import { adjustWords, blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, onRoutineChange, routineFor, routineMin, routineMinutes, routineNow, type Block, type BlockId, type Routine } from '../lib/routine';
 import { InstallHint } from '../ui/InstallHint';
 import { Stat } from '../ui/primitives';
 import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, todosDone, wakeStreak, TodoList, MissedBedtime, isMorningHours, type Day } from '../features/plan';
@@ -32,7 +34,7 @@ function greeting(h: number): string {
   return 'Good night';
 }
 
-type TickId = Exclude<BlockId, 'brief' | 'work' | 'night' | 'morning' | 'evening' | 'unwind' | 'windDown' | 'kitchen'>;
+type TickId = Exclude<BlockId, 'brief' | 'work' | 'night' | 'morning' | 'evening' | 'unwind' | 'windDown' | 'kitchen' | `x:${string}`>;
 const TICKS: Record<'night' | 'morning', TickId[]> = {
   night: ['wake', 'gym', 'sauna', 'dinner', 'lightsOut'],
   morning: ['wake', 'kiaanUp', 'dinner', 'lightsOut'],
@@ -63,12 +65,15 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const { data, update, loading, loadError } = useDoc<Day>('day', today, emptyDay(), 400);
   const day = useMemo(() => normalizeDay(data), [data]);
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
+  // today's changes to the routine, and the routine as it runs today (times moved, links skipped)
+  const adj = day.adjust;
+  const eff = useMemo(() => routineFor(routine, adj), [routine, adj]);
   const [streaks, setStreaks] = useState<{ up: number; lights: number; fast: number | null; morning: number } | null>(null);
   const isMorning = routine.profile === 'morning';
   const [askBed, setAskBed] = useState(false);   // lights out tapped in the morning: ask for last night's time
   const [yReviewed, setYReviewed] = useState(false);   // 5 am club: yesterday looked back, in the sauna
 
-  useEffect(() => { void loadRoutine().then(setRoutine); }, []);
+  useEffect(() => { void loadRoutine().then(setRoutine); return onRoutineChange(setRoutine); }, []);   // and when Arvy changes the routine
   useEffect(() => { const id = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(id); }, []);
 
   // streaks over the last 60 days (today's doc from this screen, so a fresh tick counts straight away)
@@ -84,7 +89,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
       // fast kept: consecutive logged days with no meal before the window, ending today or yesterday
       let fast: number | null = null;
       if (routine.fast) {
-        const kept = await fastByDay(addDays(today, -60), today, routine.eatOpen);
+        const kept = await fastByDay(addDays(today, -60), today, routine.eatOpen);   // past days: the standing window
         fast = 0;
         let k = kept[today] === undefined ? addDays(today, -1) : today;
         if (kept[today] === false) fast = 0;
@@ -95,7 +100,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
     return () => { on = false; };
   }, [loading, today, routine, day.ticks.up, day.ticks.lightsOut, day.morningRoutine.finishedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const list = blocks(routine);
+  const list = blocks(routine, adj);
   // the protein road's shakes and meals, in among the blocks at their times (blocks first on a tie)
   type Row = { b: Block; i: number; s?: undefined } | { s: ProteinSlot; b?: undefined };
   const rows: Row[] = [
@@ -125,9 +130,9 @@ export function Today({ pass }: { pass: PlannerPass }) {
     if (hits.length) { setAlready({ slotId: s.id, meals: hits.slice(0, 2) }); return; }
     await logSlot(s);
   };
-  const cur = currentBlock(routine, now);
+  const cur = currentBlock(routine, now, adj);
   const curIdx = list.findIndex(b => b.id === cur);
-  const fast = fastState(routine, now);
+  const fast = fastState(eff, now);
   const dateLine = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
   const t = day.ticks;
 
@@ -141,8 +146,17 @@ export function Today({ pass }: { pass: PlannerPass }) {
     else if (id === 'gym' || id === 'sauna' || id === 'shake' || id === 'lightsOut') void autoMark(id, on);
     else if (id === 'dinner') {
       void autoMark('dinner', on);
-      if (routine.fast) void fastByDay(today, today, routine.eatOpen).then(k2 => autoMark('fast', on && k2[today] !== false));
+      if (routine.fast) void fastByDay(today, today, eff.eatOpen).then(k2 => autoMark('fast', on && k2[today] !== false));
     }
+  };
+  // a block added for today only: ticked on the block itself
+  const tickAdded = (id: string) => set(d => (d.adjust?.added ? { ...d, adjust: { ...d.adjust, added: d.adjust.added.map(x => (x.id === id ? { ...x, done: x.done ? undefined : nowHM() } : x)) } } : d));
+  // "Back to normal": today runs as the routine says again. A rest day that came with the change goes too.
+  const backToNormal = () => {
+    const planned = !!day.gym?.planned;
+    set(d => ({ ...d, adjust: undefined, gym: d.gym?.planned ? undefined : d.gym }));
+    if (planned) void autoMark('gym', false, today, 'skip');
+    if (adj?.skip?.includes('sauna')) void autoMark('sauna', false, today, 'skip');
   };
   const ticked = (id: BlockId): string | undefined => {
     if (id === 'brief') return day.brief.finishedAt ? 'done' : undefined;
@@ -152,7 +166,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
     if (id === 'kitchen') return undefined;
     if (id === 'unwind' || id === 'windDown') return t.lightsOut ? 'done' : undefined;
     if (id === 'morning') return day.morningRoutine.finishedAt ? 'done' : undefined;
-    return t[tickKey(id)];
+    return t[tickKey(id as TickId)];   // added blocks (x:…) carry their own tick and never get here
   };
 
   return (
@@ -165,19 +179,25 @@ export function Today({ pass }: { pass: PlannerPass }) {
         <Link to="/settings" className="pl-btn pl-btn--ghost" aria-label="Settings" style={{ minHeight: 40, padding: '0 8px', border: 0 }}><Cog /></Link>
       </header>
 
-      <MissedBedtime routine={routine} open={askBed} onClose={() => setAskBed(false)} />
+      <MissedBedtime routine={eff} open={askBed} onClose={() => setAskBed(false)} />
       <MissedGym routine={routine} day={day} set={set} today={today} loading={loading} />
-      <GuessMeals routine={routine} today={today} />
+      <GuessMeals routine={eff} today={today} />
       {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
       <div className="pl-stats today-streaks">
-        <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Up on time</span>} value={streaks ? streaks.up : '–'} sub={`by ${clock(routine.wake)}`} tone={streaks && streaks.up > 0 ? 'good' : undefined} />
-        <Stat label={<span className="pl-row" style={{ gap: 4 }}><Moon aria-hidden style={{ width: 14, height: 14 }} /> {isMorning ? 'In bed' : 'Lights out'}</span>} value={streaks ? streaks.lights : '–'} sub={`by ${clock(routine.lightsOut)}`} tone={streaks && streaks.lights > 0 ? 'good' : undefined} />
+        <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Up on time</span>} value={streaks ? streaks.up : '–'} sub={`by ${clock(eff.wake)}`} tone={streaks && streaks.up > 0 ? 'good' : undefined} />
+        <Stat label={<span className="pl-row" style={{ gap: 4 }}><Moon aria-hidden style={{ width: 14, height: 14 }} /> {isMorning ? 'In bed' : 'Lights out'}</span>} value={streaks ? streaks.lights : '–'} sub={`by ${clock(eff.lightsOut)}`} tone={streaks && streaks.lights > 0 ? 'good' : undefined} />
         {routine.fast
           ? <Stat label={<span className="pl-row" style={{ gap: 4 }}><Flame aria-hidden style={{ width: 14, height: 14 }} /> Fast kept</span>} value={streaks ? (streaks.fast ?? '–') : '–'} sub={fast.eating ? 'eating now' : `${Math.floor(fast.fastedFor / 60)}h ${fast.fastedFor % 60}m fasted`} tone={streaks && (streaks.fast ?? 0) > 0 ? 'good' : undefined} />
           : <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Morning routine</span>} value={streaks ? streaks.morning : '–'} sub="days in a row" tone={streaks && streaks.morning > 0 ? 'good' : undefined} />}
       </div>
 
       <section className="today-timeline pl-card" aria-label="Today's routine">
+        {adj && (
+          <div className="today-adjust" role="note">
+            <div className="pl-grow"><b>{adj.why || 'Today is different'}</b><small>{adjustWords(adj).join(' · ')}</small></div>
+            <button type="button" className="pl-btn pl-btn--small pl-btn--ghost" onClick={backToNormal}>Back to normal</button>
+          </div>
+        )}
         {rows.map(row => {
           if (row.s) {
             const s = row.s, due = routineMin(s.time) <= routineMinutes(now);
@@ -210,9 +230,28 @@ export function Today({ pass }: { pass: PlannerPass }) {
             );
           }
           const { b, i } = row;
-          const done = ticked(b.id);
           const isCur = b.id === cur;
           const past = i < curIdx;
+          if (b.added) {
+            const x = b.added;
+            return (
+              <div key={b.id} className={`today-block ${isCur ? 'is-now' : ''} ${past ? 'is-past' : ''} ${x.done ? 'is-done' : ''}`}>
+                <div className="today-block__rail"><span className="today-block__dot">{x.done && <Check aria-hidden />}</span></div>
+                <div className="today-block__body">
+                  <div className="today-block__head">
+                    <span className="today-block__time">{clock(b.at)}{b.until ? `–${clock(b.until)}` : ''} · today only</span>
+                    {x.done && <span className="today-block__ticked">✓ {clock(x.done)}</span>}
+                  </div>
+                  <b className="today-block__label">{b.label}</b>
+                  {b.blurb && (isCur || !x.done) && <small className="pl-muted">{b.blurb}</small>}
+                  <div className="today-block__actions">
+                    <button type="button" className={`pl-btn pl-btn--small ${x.done ? 'pl-btn--ghost' : isCur ? 'pl-btn--primary' : ''}`} onClick={() => tickAdded(x.id)}>{x.done ? 'Undo' : 'Done'}</button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          const done = ticked(b.id);
           const canTick = (TICKS[isMorning ? 'morning' : 'night'] as string[]).includes(b.id);
           return (
             <div key={b.id} className={`today-block ${isCur ? 'is-now' : ''} ${past ? 'is-past' : ''} ${done ? 'is-done' : ''}`}>
@@ -224,7 +263,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
                 </div>
                 <SlotHabits block={b.id} when="before" />
                 <b className="today-block__label">{b.label}</b>
-                {(isCur || !done) && <small className="pl-muted">{b.id === 'work' && routine.fast && !fast.eating ? `${b.blurb} · window opens ${clock(routine.eatOpen)}` : b.blurb}</small>}
+                {(isCur || !done) && <small className="pl-muted">{b.id === 'work' && routine.fast && !fast.eating ? `${b.blurb} · window opens ${clock(eff.eatOpen)}` : b.blurb}</small>}
 
                 {b.id === 'work' && (isCur || day.todos.length > 0) && (
                   <div className="today-prios">

@@ -6,8 +6,14 @@
 //
 // The planner's "day" rolls over at 4 am, not midnight: lights out at 1 am still belongs to the day
 // that's ending (see dayKey in docs.ts).
-import { getDoc, putDoc } from './docs';
+//
+// One day can differ from the routine (sick: no gym, no sauna, up at 7): those changes are kept on the day
+// (Day.adjust) and worked out by supabase/functions/planner-push/adjust.ts, which the reminders share. blocks(),
+// currentBlock() and routineFor() take the day's changes; without them they give the standing routine.
+import { dayKey, getDoc, putDoc } from './docs';
 import { profileOf, type Profile } from './app';
+import { cleanAdjust, lateGym, routineFor, type AddedBlock, type DayAdjust } from '../../../supabase/functions/planner-push/adjust';
+export { cleanAdjust, lateGym, mergeAdjust, routineFor, SKIPPABLE, isHM, type AddedBlock, type AdjustTime, type DayAdjust } from '../../../supabase/functions/planner-push/adjust';
 
 export interface Routine {
   profile: Profile;    // 'night' (Vijay: the 5 am club — gym at 5, sauna review + Brief, bed at 9:30) | 'morning' (Rosh: Miracle Morning, bed at 9)
@@ -90,27 +96,47 @@ export function fastState(r: Routine, d = new Date()): { eating: boolean; openIn
 }
 
 export type BlockId = 'wake' | 'brief' | 'daycare' | 'work' | 'dinner' | 'kitchen' | 'gym' | 'sauna' | 'night' | 'shake' | 'unwind' | 'windDown' | 'lightsOut'
-  | 'morning' | 'kiaanUp' | 'evening';
+  | 'morning' | 'kiaanUp' | 'evening'
+  | `x:${string}`;   // a block added for one day (Day.adjust.added)
 /** Night profile (5 am club): gym → sauna (yesterday's review, today's Brief) → out at r.review, the list starts. */
 export const reviewAt = (r: Routine) => r.review;
 export const saunaAt = (r: Routine) => hhmm(minutesOf(r.review) - r.saunaMin);
 /** When the review and Brief happen: in the sauna, or straight after the gym when there's no sauna. */
 export const planAt = (r: Routine) => (r.saunaMin ? saunaAt(r) : r.review);
-export interface Block { id: BlockId; label: string; at: string; until?: string; blurb: string }
+/** `added` = a block added for that one day (its tick lives with it). */
+export interface Block { id: BlockId; label: string; at: string; until?: string; blurb: string; added?: AddedBlock }
 
-/** The day as an ordered list of blocks. */
-export function blocks(r: Routine): Block[] {
-  if (r.profile === 'morning') return morningBlocks(r);
+/** The day as an ordered list of blocks. `a` = that day's changes (Day.adjust): skipped blocks are left out, moved
+ *  times apply, a gym moved to later in the day sits there with its sauna, and added blocks slot in at their times. */
+export function blocks(r: Routine, a?: DayAdjust | null): Block[] {
+  if (!a) return r.profile === 'morning' ? morningBlocks(r) : nightBlocks(r);
+  const e = routineFor(r, a), skip = new Set(a.skip || []), late = lateGym(r, a);
+  const noMorningGym = skip.has('gym') || !!late;
+  if (e.profile === 'night' && skip.has('kitchen')) skip.add('dinner');   // no cut-off today doesn't bring the dinner block back
+  let list = (e.profile === 'morning' ? morningBlocks(e) : nightBlocks(e, { noMorningGym, nextWake: r.wake })).filter(b => !skip.has(b.id));
+  if (late) {
+    list = list.filter(b => b.id !== 'gym');
+    list.push({ id: 'gym', label: 'Gym', at: late.at, until: late.until, blurb: 'log the session · Complete workout' });
+    if (late.saunaUntil) list.push({ id: 'sauna', label: 'Sauna', at: late.until, until: late.saunaUntil, blurb: `${(minutesOf(late.saunaUntil) - minutesOf(late.until) + 1440) % 1440} min` });
+  }
+  for (const x of a.added || []) list.push({ id: `x:${x.id}`, label: x.label, at: x.at, until: x.until, blurb: x.note || '', added: x });
+  // by time on the planner's clock (the day starts at 4 am); blocks at the same time keep their order
+  return list.map((b, i) => ({ b, i })).sort((p, q) => routineMin(p.b.at) - routineMin(q.b.at) || p.i - q.i).map(x => x.b);
+}
+
+function nightBlocks(r: Routine, o: { noMorningGym?: boolean; nextWake?: string } = {}): Block[] {
   return [
-    { id: 'wake', label: 'Up — straight to the gym', at: r.wake, blurb: `by ${clock(hhmm(minutesOf(r.wake) + r.wakeGrace))} counts · no snooze, shoes on, out the door` },
+    o.noMorningGym
+      ? { id: 'wake', label: 'Up', at: r.wake, blurb: `by ${clock(hhmm(minutesOf(r.wake) + r.wakeGrace))} counts` }
+      : { id: 'wake', label: 'Up — straight to the gym', at: r.wake, blurb: `by ${clock(hhmm(minutesOf(r.wake) + r.wakeGrace))} counts · no snooze, shoes on, out the door` },
     { id: 'gym', label: 'Gym', at: r.gym, until: planAt(r), blurb: 'log the session · Complete workout' },
     ...(r.saunaMin ? [{ id: 'sauna' as BlockId, label: 'Sauna', at: saunaAt(r), until: r.review, blurb: `${r.saunaMin} min · plan the meals, then today's Brief` }] : []),
-    { id: 'brief', label: "Today's Brief", at: planAt(r), until: r.review, blurb: 'one word · 3 must-dos · → today\'s list' },
+    { id: 'brief', label: "Today's Brief", at: planAt(r), ...(planAt(r) !== r.review ? { until: r.review } : {}), blurb: 'one word · 3 must-dos · → today\'s list' },
     { id: 'work', label: 'Tackle the list', at: r.review, blurb: r.fast ? 'today\'s list · fasting: water, black coffee, tea' : 'today\'s list' },
     r.kitchenClose
       ? { id: 'kitchen', label: 'Kitchen closed', at: r.kitchenClose, blurb: 'done eating for the day · water, coffee, tea' }
       : { id: 'dinner', label: r.fast ? 'Dinner — first meal' : 'Dinner', at: r.eatOpen, blurb: r.fast ? `fast ends · protein first · window closes ${clock(r.eatClose)}` : 'log it' },
-    { id: 'lightsOut', label: 'Lights out', at: r.lightsOut, blurb: `phone down — up at ${clock(r.wake)}` },
+    { id: 'lightsOut', label: 'Lights out', at: r.lightsOut, blurb: `phone down — up at ${clock(o.nextWake || r.wake)}` },
   ];
 }
 
@@ -131,12 +157,31 @@ function morningBlocks(r: Routine): Block[] {
   ];
 }
 
-/** Which block the clock is in right now. */
-export function currentBlock(r: Routine, d = new Date()): BlockId {
+/** Which block the clock is in right now (on a changed day: among that day's blocks). */
+export function currentBlock(r: Routine, d = new Date(), a?: DayAdjust | null): BlockId {
   const now = routineMinutes(d);
-  const list = blocks(r);
+  const list = blocks(r, a);
   let cur: BlockId = 'lightsOut';
   for (const b of list) if (routineMin(b.at) <= now) cur = b.id;
-  if (now < routineMin(r.wake)) cur = 'lightsOut';   // still night
+  if (now < routineMin(routineFor(r, a).wake)) cur = 'lightsOut';   // still night
   return cur;
+}
+
+const BLOCK_NAME: Record<string, string> = { gym: 'gym', sauna: 'sauna', brief: 'Brief', kitchen: 'kitchen cut-off', dinner: 'dinner', morning: 'morning routine', kiaanUp: 'Kiaan up', evening: 'evening review' };
+const TIME_NAME: Record<string, string> = { wake: 'up at', gym: 'gym at', review: 'list from', lightsOut: 'lights out', kitchenClose: 'kitchen closes', eatOpen: 'dinner at', kiaanUp: 'Kiaan up at' };
+/** A day's changes in a few words each: "no gym", "up at 7:00 am", "+ Stretch 7:00 am". Shown on Today and told to Arvy. */
+export function adjustWords(a?: DayAdjust | null): string[] {
+  if (!a) return [];
+  return [
+    ...(a.skip || []).map(s => `no ${BLOCK_NAME[s] || s}`),
+    ...Object.entries(a.times || {}).map(([k, v]) => (k === 'kitchenClose' && !v ? 'no kitchen cut-off' : `${TIME_NAME[k] || k} ${clock(v as string)}`)),
+    ...(a.saunaMin !== undefined && !a.skip?.includes('sauna') ? [`sauna ${a.saunaMin} min`] : []),
+    ...(a.added || []).map(x => `+ ${x.label} ${clock(x.at)}`),
+  ];
+}
+
+/** A day's saved changes (today's by default), checked. undefined when the day runs as the routine says. */
+export async function loadDayAdjust(date = dayKey()): Promise<DayAdjust | undefined> {
+  const d = await getDoc<{ adjust?: unknown }>('day', date).catch(() => null);
+  return cleanAdjust(d?.adjust);
 }

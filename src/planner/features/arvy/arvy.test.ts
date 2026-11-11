@@ -11,6 +11,15 @@ describe('Arvy tools', () => {
     expect(toolsFor('night').map(t => t.name)).not.toContain('cycle');
     expect(toolsFor('morning').map(t => t.name)).toContain('cycle');
   });
+  it('offers a phone on an older version of the app only the tools it can run', () => {
+    expect(toolsFor('night').map(t => t.name)).toEqual(expect.arrayContaining(['adjust_day', 'change_routine']));
+    expect(toolsFor('night', 1).map(t => t.name)).not.toContain('adjust_day');
+    expect(toolsFor('night', 1).map(t => t.name)).not.toContain('change_routine');
+    expect(toolsFor('night', 1).map(t => t.name)).toContain('plan_workout');
+    expect(system({ name: 'Vijay' })).toContain('adjust_day');
+    expect(system({ name: 'Vijay', v: 1 })).not.toContain('adjust_day');
+    expect(system({ name: 'Vijay', v: 1 })).not.toContain('the shape of one day');
+  });
   it('has a label for every tool, and open_screen only offers real screens', () => {
     for (const t of TOOLS) expect(TOOL_LABEL[t.name]).toBeTruthy();
     const open = TOOLS.find(t => t.name === 'open_screen')!;
@@ -69,7 +78,21 @@ describe('the chat history the app sends', () => {
     const h = history([
       { role: 'assistant', text: 'hi', at }, { role: 'user', text: 'a', at }, { role: 'user', text: 'b', at }, { role: 'assistant', text: 'c', at },
     ]);
-    expect(h.map(x => [x.role, x.content])).toEqual([['user', 'b'], ['assistant', 'c']]);
+    expect(h.map(x => [x.role, (x.content as string).replace(/^\[[^\]]+\] /, '')])).toEqual([['user', 'b'], ['assistant', 'c']]);
+  });
+  it('says when each question was sent, and what became of each change, so an old "tomorrow" isn’t read as tomorrow from now', () => {
+    const h = history([
+      { role: 'user', text: 'plan tomorrow’s session', at: '2026-11-10T23:28:00' },
+      { role: 'assistant', text: 'Tomorrow’s chest session is set up. Please tap Confirm.', at: '2026-11-10T23:28:20', changes: [{ id: 'c1', lines: ['Train tomorrow (Wed, Nov 11): “Chest” (5 exercises)'], state: 'done' }] },
+      { role: 'user', text: 'and the day after?', at: '2026-11-11T05:14:00' },
+      { role: 'assistant', text: 'Rest.', at: '2026-11-11T05:14:10', changes: [{ id: 'c2', lines: ['Today’s plan: no gym'], state: 'waiting' }, { id: 'c3', lines: ['To-do today: nap'], state: 'undone' }] },
+    ]);
+    expect(h[0].content).toBe('[Tue, Nov 10, 11:28 PM] plan tomorrow’s session');
+    expect(h[1].content).toBe('Tomorrow’s chest session is set up. Please tap Confirm.\n[Change: MADE and saved (confirmed, if it needed Confirm). Train tomorrow (Wed, Nov 11): “Chest” (5 exercises)]');
+    expect(h[2].content).toMatch(/^\[Wed, Nov 11, 5:14 AM\] /);
+    expect(h[3].content).toContain('[Change: still waiting for their Confirm tap. Today’s plan: no gym]');
+    expect(h[3].content).toContain('[Change: they undid it. To-do today: nap]');
+    expect((h[3].content as string).startsWith('Rest.')).toBe(true);   // Arvy's own lines carry no stamp (it would start copying them)
   });
   it('reads out a short, plain version', () => {
     expect(speakable('**Today:**\n- Gym done\n- 3 todos left. Great work! Extra one. And more.')).toBe('Today: Gym done. 3 todos left. Great work!');
