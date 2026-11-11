@@ -1,0 +1,98 @@
+/* src/planner/features/shop/wish.css — the wish lists, a special part of Shopping (WishLists.tsx, WishSheets.tsx).
+   Colours come from the planner's variables only, so it follows Vijay's navy and gold, Rosh's plum and pink, light and
+   dark. The one exception is a picture opened full size: it sits on black, like any photo viewer. */
+
+/* the two switches under the title (Shopping · Wish lists, Mine · Rosh's): a thumb-sized target */
+.wish-switch .pl-seg button { min-height: 44px; }
+
+.wish-add { display: flex; flex-direction: column; gap: 8px; }
+.wish-pick { cursor: pointer; min-width: 0; }
+.wish-pick input, .wish-pics__add input { display: none; }
+.wish-reading { display: flex; align-items: center; gap: 12px; }
+.wish-reading img { flex: none; width: 56px; height: 56px; border-radius: 12px; object-fit: cover; }
+.wish-reading div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wish-reading small { font-size: 13px; }
+.wish-reading svg { flex: none; width: 22px; height: 22px; color: var(--accent); }
+.wish-foot { font-size: 12px; text-align: center; }
+
+/* a list of wishes */
+.wish-group { padding-top: 12px; padding-bottom: 6px; }
+.wish-group h3 { font-size: 16px; }
+.wish-group__head { display: flex; align-items: baseline; gap: 10px; }
+.wish-group__head h3 { flex: 1; }
+.wish-group__head span { font-size: 13px; font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.wish-none { padding: 10px 0 8px; font-size: 14px; }
+.wish { padding: 10px 0; border-bottom: 1px solid color-mix(in srgb, var(--ink-2) 15%, transparent); }
+.wish:last-child { border-bottom: 0; }
+.wish__open { display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 60px; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+.wish__pic { flex: none; width: 60px; height: 60px; border-radius: 12px; object-fit: cover; display: block; background: color-mix(in srgb, var(--ink) 6%, transparent); border: 1px solid var(--line); }
+.wish__pic--none { display: grid; place-items: center; color: var(--ink-2); }
+.wish__pic--none svg { width: 24px; height: 24px; }
+.wish__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wish__main b { font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.wish__main small { font-size: 13px; line-height: 1.35; color: var(--ink-2); overflow-wrap: anywhere; }
+.wish__note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.wish__main small svg { width: 12px; height: 12px; vertical-align: -1px; }
+.wish__main small.wish__got { color: var(--good); font-weight: 600; }
+.wish__main small.wish__gone { color: var(--amber-2); font-weight: 600; }
+.wish__hearts { flex: none; display: inline-flex; gap: 1px; padding-top: 2px; color: var(--amber-2); }
+.wish__hearts svg { width: 14px; height: 14px; fill: currentColor; }
+.wish__acts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 8px; }
+.wish__acts .pl-btn { min-height: 44px; }
+.wish__link { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; min-height: 44px; padding: 0 4px; font-size: 13px; font-weight: 600; color: var(--amber-2); text-decoration: none; }
+.wish__link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wish__link svg { flex: none; width: 13px; height: 13px; }
+
+/* the other one's list: what it comes to, and the reminder that marks are only on this side */
+.wish-sum { gap: 8px; }
+.wish-sum__row { display: flex; align-items: baseline; gap: 12px; font-size: 14px; }
+.wish-sum__row span { flex: 1; color: var(--ink-2); }
+.wish-sum__row b { font-family: var(--serif); font-size: 20px; font-variant-numeric: tabular-nums; }
+.wish-sum__note { font-size: 12px; }
+.wish-quiet { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; line-height: 1.4; }
+.wish-quiet svg { flex: none; width: 14px; height: 14px; margin-top: 1px; }
+
+/* pictures on a wish: square tiles; a tap opens one full size */
+.wish-pics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.wish-pics__item { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); }
+.wish-pics__item > button:first-child { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.wish-pics__item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* the ✕ is a small dark dot, but the whole corner takes the thumb (three tiles across leaves the middle of the picture for opening it) */
+.wish-pics__x { position: absolute; top: 0; right: 0; width: 44px; height: 44px; padding: 0; border: 0; background: none; display: grid; place-items: start end; cursor: pointer; }
+.wish-pics__x i { display: grid; place-items: center; width: 26px; height: 26px; margin: 4px; border-radius: 999px; background: rgba(0, 0, 0, .6); color: #fff; }
+.wish-pics__x svg { width: 15px; height: 15px; }
+.wish-pics__add { aspect-ratio: 1; min-width: 0; padding: 4px; border-radius: 12px; border: 1.5px dashed color-mix(in srgb, var(--ink-2) 45%, transparent); background: none; color: var(--ink-2); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; text-align: center; font-size: 12px; font-weight: 600; line-height: 1.2; cursor: pointer; }
+.wish-pics__add svg { width: 22px; height: 22px; }
+.wish-full { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(0, 0, 0, .9); cursor: zoom-out; animation: plFade .2s ease-out; }
+.wish-full img { max-width: calc(100vw - 16px); max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 16px); object-fit: contain; border-radius: 6px; }
+.wish-full__wait { position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 24px); transform: translateX(-50%); display: grid; place-items: center; width: 40px; height: 40px; border-radius: 999px; background: rgba(0, 0, 0, .6); color: #fff; }
+.wish-full__wait svg { width: 20px; height: 20px; }
+.wish-full__x { position: absolute; top: calc(env(safe-area-inset-top) + 8px); right: 8px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 999px; display: grid; place-items: center; background: rgba(0, 0, 0, .6); color: #fff; cursor: pointer; }
+.wish-full__x svg { width: 22px; height: 22px; }
+@media (prefers-reduced-motion: reduce) { .wish-full { animation: none; } }
+
+/* the form for one of your own wishes */
+.wish-form__hint { font-size: 13px; }
+.wish-form__paste { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin: -8px 0 -4px; padding: 0 4px; border: 0; background: none; font-size: 14px; font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.wish-form__paste svg { width: 16px; height: 16px; }
+.wish-form .pl-chip { min-height: 44px; }
+.wish-hearts { display: flex; align-items: center; gap: 6px; }
+.wish-hearts button { flex: none; width: 48px; height: 48px; padding: 0; border-radius: 14px; border: 1px solid var(--line); background: var(--bg-2); color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
+.wish-hearts button svg { width: 22px; height: 22px; }
+.wish-hearts button.is-on { color: var(--amber-2); border-color: color-mix(in srgb, var(--amber-2) 45%, var(--line)); background: color-mix(in srgb, var(--amber-2) 10%, var(--bg-2)); }
+.wish-hearts button.is-on svg { fill: currentColor; }
+.wish-hearts > span { margin-left: 6px; font-size: 14px; color: var(--ink-2); }
+
+/* a wish opened for reading (one of theirs, or a gift received) */
+.wish-title { overflow-wrap: anywhere; }
+.wish-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; color: var(--ink-2); }
+.wish-facts b { flex-basis: 100%; font-size: 15px; color: var(--ink); overflow-wrap: anywhere; }
+.wish-facts__note { font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wish-facts__site { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wish-gotline { display: flex; align-items: flex-start; gap: 6px; font-size: 14px; font-weight: 600; color: var(--good); }
+.wish-gotline svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
+.wish-gone { font-size: 13px; font-weight: 600; color: var(--amber-2); }
+
+/* the guided demo keeps its card over the bottom of the screen (demo/Tour.tsx): a wish's sheet leaves room for it,
+   so its last button can be scrolled into reach */
+.pl-demo .pl-sheet > div:has(.wish-form), .pl-demo .pl-sheet > div:has(.wish-title) { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 264px); }
