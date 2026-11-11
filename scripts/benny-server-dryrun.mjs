@@ -31,6 +31,12 @@ const fakeSb = `
         map: 'NORTH DELTA #2', route: 'NDEL32', pin: { lat: 49.15, lng: -122.92, label: args.p_label || 'NDEL32', route: 'NDEL32' } } : { ok: false, problems: ['Open a route manager’s map first: pins live on a manager’s map.'] }, error: null };
       if (fn === 'benny_plan_stops') return { data: { ok: true, kind: args.p_kind, date: '2026-11-10', manager: args.p_manager, start: { lat: 49.24, lng: -122.88 }, km: 4.2, maps: ['NORTH DELTA #2'], routes: ['NDEL28', 'NDEL32'],
         stops: [{ n: 1, label: 'Drop 1 · David', who: 'David', lat: 49.153, lng: -122.923, by: 'route', route: 'NDEL28' }, { n: 2, label: 'Drop 2 · Michael', who: 'Michael', lat: 49.15, lng: -122.925, by: 'route', route: 'NDEL32' }], left_out: ['Kyle (no route yet)'] }, error: null };
+      if (fn === 'benny_live_jobs') return { data: { ok: true, date: '2026-11-10', worker: { cn: 'I1479', name: 'Kevontae Ragguette' }, cart: { id: 's7', workers: ['Kevontae Ragguette'], paid_out: false, totals: { steps: 2, cash: 180 } },
+        jobs: [{ id: 't1', client: 'Ron Gee', address: '406 Cumberland St', type: 'Sale', service: 'Lawn Rejuvenation', does: ['dethatch'], amount: 180, paid_by: 'Cash' }, { id: 't2', type: 'Production', flat: 'AFSL', amount: 210, paid_by: 'Prepaid' }] }, error: null };
+      if (fn === 'benny_check_job') return args.p_job === 't2'
+        ? { data: { ok: false, problems: ['It’s an office flat (AFSL): its value is set by the office. Change it on the edit screen if it is really wrong.'] }, error: null }
+        : { data: { ok: true, date: '2026-11-10', worker: { cn: 'I1479', name: 'Kevontae Ragguette' }, cart: { id: 's7', workers: ['Kevontae Ragguette'] }, job: { id: 't1', client: 'Ron Gee', type: 'Sale', amount: 180, paid_by: 'Cash' },
+            change: { amount: { from: 180, to: 250 }, paid_by: { from: 'Cash', to: 'Prepaid' } }, ask: args.p_change, patch: { price: 250, display_price: 'RJ250.00', payment_method: 'Prepaid', payment_breakdown: { Prepaid: 250 } }, stamp: 's', notes: [] }, error: null };
       if (fn === 'benny_map') return { data: { maps: ['SURREY #1'], highlight: ['SRY01'], pins: [{ lat: 1, lng: 2, label: 'x', route: 'SRY01' }] }, error: null };
       return { data: null, error: { message: 'no such function ' + fn } }; } }; }`;
 const r = await build({ entryPoints: ['supabase/functions/benny-assist/index.ts'], bundle: true, format: 'esm', write: false, logLevel: 'silent',
@@ -63,7 +69,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 20); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 22); assert(!('roles' in state.lastAsk.tools[0]));
 console.log('1 start the day: card + map ✓');
 
 // 2. a change with a problem makes no card
@@ -203,6 +209,23 @@ assert.deepEqual(fns(), ['benny_ok_any', 'benny_vocab', 'benny_live']);
 assert.equal(state.rpc[1][1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung'); assert.equal(state.rpc[2][1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');
 state.role = 'admin';
 console.log('5g the floater map: "my team" is the managers followed, checked by the database ✓');
+
+// 5h. a logsheet job: looked up, then a card; the server saves nothing, a refusal makes no card, and an old tab is told to refresh
+for (const role of ['admin', 'rm']) {
+  state.role = role;
+  state.script = [turn(use('logsheet', { worker: 'Kevontae' })), turn(use('propose_job_change', { worker: 'Kevontae', job: 't1', amount: 250, paid_by: 'prepaid' })), say('Ron’s sale: $180 cash becomes $250 prepaid. Tap Save to do it.')];
+  a = await ask('change rons job on kevontaes cart to 250 prepaid', { screen: 'rm', rm_manager: 'rm_me', cards: ['job'] });
+  assert.equal(a.body.proposal.kind, 'job'); assert.deepEqual(a.body.proposal.check.ask, { amount: 250, paid_by: 'prepaid' }); assert.equal(a.body.map, null);
+  assert.deepEqual(fns().filter(f => /job/.test(f)), ['benny_live_jobs', 'benny_check_job'], 'the server looks and checks: it never begins or saves a change');
+}
+state.role = 'admin';
+state.script = [turn(use('propose_job_change', { worker: 'Kevontae', job: 't2', amount: 250 })), say('That one is an office flat: change it on the edit screen.')];
+a = await ask('make the afsl 250', { cards: ['job'] });
+assert.equal(a.body.proposal, null);
+state.script = [turn(use('propose_job_change', { worker: 'Kevontae', job: 't1', amount: 250 })), say('Tap Save to do it.')];
+a = await ask('make rons 250', {});   // a tab opened before this card existed
+assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
+console.log('5h logsheet jobs: looked up and checked, a card for admins and route managers, nothing saved by the server ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;
