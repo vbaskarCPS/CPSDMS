@@ -47,4 +47,11 @@ describe('routine reminders', () => {
     expect(due(6, 30, { adjust: { skip: ['morning'], times: { wake: '06:30' } } }, {}, MORNING_ROUTINE)).toEqual(['wake: Morning. An easy start today, then the Brief.']);
     expect(reminders(MORNING_ROUTINE, 'roshplanner', { skip: ['evening'] }).map(x => x.id)).toEqual(['wake', 'bed']);
   });
+  it('Rosh with no morning routine at all (her choice in the set-up): up, then the Brief, opening Today', () => {
+    const none = { ...MORNING_ROUTINE, wake: '08:00', stretchMin: 0, meditateMin: 0, workoutMin: 0 };
+    expect(due(8, 0, {}, {}, none)).toEqual(['wake: Morning. Up, then the Brief.']);
+    expect(reminders(none, 'roshplanner')[0].url).toBe('/roshplanner/');
+    expect(reminders(MORNING_ROUTINE, 'roshplanner')[0]).toMatchObject({ body: 'Morning. Stretch, breathe, move — then the Brief.', url: '/roshplanner/plan/morning' });
+    expect(due(5, 30, {}, {}, { ...MORNING_ROUTINE, meditateMin: 0, workoutMin: 0 })).toEqual(['wake: Morning. Stretch, breathe, move — then the Brief.']);   // a stretch alone is still a routine
+  });
 });

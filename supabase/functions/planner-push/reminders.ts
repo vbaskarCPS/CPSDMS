@@ -56,8 +56,10 @@ export function reminders(r: Routine, app: AppId, a?: DayAdjust | null): Reminde
     id: `x:${x.id}`, at: routineMin(minutesOf(x.at)), body: `${clock(x.at)} · ${x.label}${x.note ? ` — ${x.note}` : ''}`, url: u('/'),
     done: d => !!cleanAdjust(d.adjust)?.added?.find(y => y.id === x.id)?.done,
   }));
+  // no minutes set for the morning routine = she doesn't do one: the day starts with the Brief
+  const noRoutine = r.profile === 'morning' && !(r.stretchMin + r.meditateMin + r.workoutMin > 0);
   if (r.profile === 'morning') return [
-    { id: 'wake', at: routineMin(minutesOf(e.wake)), body: skip.has('morning') ? 'Morning. An easy start today, then the Brief.' : 'Morning. Stretch, breathe, move — then the Brief.', url: u(skip.has('morning') ? '/' : '/plan/morning'), done: d => !!d.ticks?.up },
+    { id: 'wake', at: routineMin(minutesOf(e.wake)), body: noRoutine ? 'Morning. Up, then the Brief.' : skip.has('morning') ? 'Morning. An easy start today, then the Brief.' : 'Morning. Stretch, breathe, move — then the Brief.', url: u(noRoutine || skip.has('morning') ? '/' : '/plan/morning'), done: d => !!d.ticks?.up },
     ...(skip.has('evening') ? [] : [{ id: 'evening', at: routineMin(minutesOf(e.lightsOut) - 30), body: 'Evening review, then bed with Kiaan.', url: u('/plan/night'), done: (d: DayDoc) => !!d.ticks?.lightsOut }]),
     { id: 'bed', at: routineMin(minutesOf(e.lightsOut) - 10), body: 'Lights out.', url: u('/plan/night'), done: d => !!d.ticks?.lightsOut },
     ...added,

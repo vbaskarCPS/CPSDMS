@@ -191,7 +191,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
         <Stat label={<span className="pl-row" style={{ gap: 4 }}><Moon aria-hidden style={{ width: 14, height: 14 }} /> {isMorning ? 'In bed' : 'Lights out'}</span>} value={streaks ? streaks.lights : '–'} sub={`by ${clock(eff.lightsOut)}`} tone={streaks && streaks.lights > 0 ? 'good' : undefined} />
         {routine.fast
           ? <Stat label={<span className="pl-row" style={{ gap: 4 }}><Flame aria-hidden style={{ width: 14, height: 14 }} /> Fast kept</span>} value={streaks ? (streaks.fast ?? '–') : '–'} sub={fast.eating ? 'eating now' : `${Math.floor(fast.fastedFor / 60)}h ${fast.fastedFor % 60}m fasted`} tone={streaks && (streaks.fast ?? 0) > 0 ? 'good' : undefined} />
-          : <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Morning routine</span>} value={streaks ? streaks.morning : '–'} sub="days in a row" tone={streaks && streaks.morning > 0 ? 'good' : undefined} />}
+          : routine.stretchMin + routine.meditateMin + routine.workoutMin > 0 && <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Morning routine</span>} value={streaks ? streaks.morning : '–'} sub="days in a row" tone={streaks && streaks.morning > 0 ? 'good' : undefined} />}
       </div>
 
       <section className="today-timeline pl-card" aria-label="Today's routine">

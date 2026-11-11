@@ -143,6 +143,35 @@ body:has(.wo-rest) .pl-nav__rv.is-hearing i { animation: none; }
 .hub-tile__text small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 3px; font-size: 14px; line-height: 1.35; color: var(--ink-2); }   /* a long headline takes a second line, then … */
 .hub-tile__go { flex: none; width: 20px; height: 20px; color: var(--ink-2); }
 
+/* the first-open set-up (screens/SetUp.tsx): a full page of short steps in Arvy's voice, no bottom bar */
+.setup { min-height: 100dvh; max-width: 520px; }
+.setup-dots { display: flex; gap: 6px; }
+.setup-dots i { width: 22px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--ink) 14%, transparent); }
+.setup-dots i.is-on { background: var(--accent); }
+.setup-face { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 3px var(--amber); }
+.setup-face svg { width: 20px; height: 20px; }
+.setup-hello { display: flex; flex-direction: column; gap: 10px; padding: 12vh 0 8px; }
+.setup-hello .setup-face { width: 56px; height: 56px; margin-bottom: 6px; }
+.setup-hello .setup-face svg { width: 26px; height: 26px; }
+.setup-hello h1 { font-size: 28px; line-height: 1.15; }
+.setup-says { display: flex; gap: 12px; align-items: flex-start; }
+.setup-says p { flex: 1; padding: 10px 14px; border-radius: 4px 16px 16px 16px; background: color-mix(in srgb, var(--accent) 9%, var(--bg-2)); border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line)); font-size: 15px; line-height: 1.4; }
+.setup-mins { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 4px; }
+.setup-day { display: flex; flex-direction: column; }
+.setup-day > div { display: flex; align-items: baseline; gap: 12px; padding: 7px 0; }
+.setup-day > div + div { border-top: 1px solid var(--line); }
+.setup-day .pl-num { flex: none; width: 76px; color: var(--ink-2); font-size: 14px; }
+.setup-day b { font-size: 15px; }
+.setup-habits { padding-top: 4px; padding-bottom: 4px; }
+.setup-habit { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; cursor: pointer; }
+.setup-habit + .setup-habit { border-top: 1px solid var(--line); }
+.setup-habit input { flex: none; width: 22px; height: 22px; margin-top: 1px; accent-color: var(--accent); }
+.setup-habit span { flex: 1; min-width: 0; }
+.setup-habit b { font-size: 15px; }
+.setup-habit em { margin-left: 8px; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-size: 11px; font-style: normal; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.setup-habit small { display: block; color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+.setup-foot { display: flex; gap: 10px; }
+.setup-foot .pl-btn--primary { flex: 1; }
 .pl-login { min-height: 100dvh; display: flex; flex-direction: column; justify-content: center; padding: 24px; max-width: 420px; margin: 0 auto; gap: 24px; }
 .pl-logo { width: 72px; height: 72px; border-radius: 20px; }
 

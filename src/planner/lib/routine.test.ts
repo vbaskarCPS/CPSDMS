@@ -77,6 +77,13 @@ describe('a changed day', () => {
     expect(blocks(MORNING_ROUTINE, { skip: ['morning'], times: { wake: '06:30' } }).map(x => `${x.at} ${x.id}`))
       .toEqual(['06:30 wake', '06:30 brief', '08:00 kiaanUp', '08:00 work', '18:00 dinner', '20:30 evening', '21:00 lightsOut']);
   });
+  it('Rosh with no minutes for a morning routine: no Miracle Morning block, the Brief starts the day', () => {
+    const none = { ...MORNING_ROUTINE, wake: '08:00', stretchMin: 0, meditateMin: 0, workoutMin: 0 };
+    expect(blocks(none).map(x => `${x.at} ${x.id}`)).toEqual(['08:00 wake', '08:00 brief', '08:00 kiaanUp', '08:00 work', '18:00 dinner', '20:30 evening', '21:00 lightsOut']);
+    expect(blocks(none).find(x => x.id === 'brief')).toMatchObject({ at: '08:00', until: '08:10' });
+    // only the parts she does are named
+    expect(blocks({ ...MORNING_ROUTINE, meditateMin: 0 }).find(x => x.id === 'morning')).toMatchObject({ until: '06:00', blurb: 'stretch 10 · move 20' });
+  });
   it('says what changed in a few words', () => {
     expect(adjustWords(sick)).toEqual(['no gym', 'no sauna', 'up at 7:00 am', '+ Home stretch 7:00 am', '+ Breakfast 7:30 am']);
     expect(adjustWords(undefined)).toEqual([]);

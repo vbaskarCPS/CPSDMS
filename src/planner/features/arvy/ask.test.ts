@@ -16,7 +16,8 @@ vi.mock('./act', () => ({
   Refuse: class extends Error {},
   prepare: vi.fn(async (_name: string, input: { items?: { text: string }[] }) => ({ lines: [`Shopping list: add ${input.items?.map(i => i.text).join(', ')}`], kinds: ['shop'], apply })),
 }));
-const { ask, choicesFrom } = await import('./arvy');
+const { ask, choicesFrom, NO_CONNECTION, RETRY_WAIT } = await import('./arvy');
+RETRY_WAIT.ms = 0;
 
 const SEARCH = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'banana bread recipe' } };
 const RESULT = { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_1', content: [{ type: 'web_search_result', url: 'https://bake.example/banana', title: 'Banana bread', encrypted_content: 'Eqg…' }] };
@@ -109,6 +110,27 @@ describe('asking Arvy', () => {
     expect(t.used).toEqual(['add_shopping_items']);
     expect(t.sources).toBeUndefined();
     expect(t.choices).toBeUndefined();
+  });
+});
+
+describe('a dropped connection', () => {
+  const lost = () => new Error('Failed to send a request to the Edge Function');
+  it('is tried once more by itself, and the question is answered', async () => {
+    invoke.mockRejectedValueOnce(lost()).mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Here you go.' }] });
+    const t = await ask([], 'how is my day?', '/', false);
+    expect(t.reply).toBe('Here you go.');
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1][0]).toEqual(invoke.mock.calls[0][0]);   // the same step, asked again
+  });
+  it('still down on the second try: says to check the connection', async () => {
+    invoke.mockRejectedValueOnce(lost()).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await expect(ask([], 'how is my day?', '/', false)).rejects.toThrow(NO_CONNECTION);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+  it('anything else that goes wrong is not asked twice', async () => {
+    invoke.mockRejectedValueOnce(new Error('Anthropic 529'));
+    await expect(ask([], 'how is my day?', '/', false)).rejects.toThrow('Anthropic 529');
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 });
 

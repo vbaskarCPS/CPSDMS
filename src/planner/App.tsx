@@ -1,6 +1,8 @@
 // src/planner/App.tsx — routes and the sign-in gate. Each feature folder exports its routes.
+// A person whose set-up is still to do (lib/setup.ts: Rosh's planner, the first time) gets the set-up screens in
+// place of the planner until they're done or put off; /setup runs them again from Settings.
 import { useEffect, useState } from 'react';
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { getPass, onPassChange, refreshMe, type PlannerPass } from './lib/auth';
 import { isDemo, profileOf } from './lib/app';
 import { Tour } from './demo/Tour';
@@ -10,6 +12,9 @@ import { UpdateReady } from './ui/UpdateReady';
 import { Login } from './screens/Login';
 import { Today } from './screens/Today';
 import { Settings } from './screens/Settings';
+import { SetUp } from './screens/SetUp';
+import { SETUP_ASK, setupDue, setupLater, setupSkipped } from './lib/setup';
+import { openArvy } from './features/arvy/arvy';
 import { HealthHub, LifestyleHub } from './screens/Hub';
 import { planRoutes } from './features/plan';
 import { habitsRoutes } from './features/habits';
@@ -28,6 +33,17 @@ const featureRoutes = [...planRoutes, ...habitsRoutes, ...workoutRoutes, ...food
 export function PlannerApp() {
   const [pass, setPass] = useState<PlannerPass | null>(() => getPass());
   const location = useLocation();
+  const nav = useNavigate();
+  // the first-open set-up: 'checking' only while the server is asked whether it's been done (on a phone that doesn't know yet)
+  const [setup, setSetup] = useState<'checking' | 'due' | 'no'>(() => (pass && !setupSkipped(pass.user) ? 'checking' : 'no'));
+  const profile = profileOf(pass?.user.settings);
+  useEffect(() => {
+    if (!pass || setupSkipped(pass.user)) { setSetup('no'); return; }
+    let on = true;
+    setSetup('checking');
+    void setupDue(pass.user).then(due => { if (on) setSetup(due ? 'due' : 'no'); });
+    return () => { on = false; };
+  }, [pass?.user.id, profile]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => onPassChange(setPass), []);
   // the routine's defaults follow the signed-in person's profile (night: Vijay, morning: Rosh)
@@ -44,6 +60,18 @@ export function PlannerApp() {
           <Route path="/login" element={<Login />} />
           <Route path="*" element={<Navigate to="/login" replace state={{ from: location.pathname }} />} />
         </Routes>
+        <UpdateReady />
+      </>
+    );
+  }
+  if (setup === 'checking') return <div className="pl-login" aria-busy="true" />;
+  const again = location.pathname === '/setup' && profile === 'morning';   // asked for from Settings
+  if (setup === 'due' || again) {
+    return (
+      <>
+        <SetUp pass={pass} again={setup !== 'due'}
+          onDone={() => { setSetup('no'); nav('/', { replace: true }); openArvy({ ask: SETUP_ASK }); }}
+          onLater={() => { if (setup === 'due') setupLater(); setSetup('no'); if (again) nav('/settings', { replace: true }); }} />
         <UpdateReady />
       </>
     );

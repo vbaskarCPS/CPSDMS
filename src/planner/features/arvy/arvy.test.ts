@@ -122,6 +122,23 @@ describe('the RV button and the chat', () => {
     off();
     expect(asked).toEqual([{ mic: true }, { ask: 'How’s my day looking?' }]);
   });
+  it('asked to open before the chat is on screen (the set-up’s last tap): it opens once the chat is there', async () => {
+    vi.useFakeTimers();
+    try {
+      const got: unknown[] = [];
+      openArvy({ ask: 'I’ve just finished setting up my day.' });   // nobody listening yet
+      // in development React mounts the chat, cleans it up and mounts it again: only the one that stays gets it
+      const first = onOpenArvy(o => got.push(['first', o]));
+      first();
+      const off = onOpenArvy(o => got.push(['second', o]));
+      expect(got).toEqual([]);
+      await vi.runAllTimersAsync();
+      expect(got).toEqual([['second', { ask: 'I’ve just finished setting up my day.' }]]);
+      openArvy({ mic: true });                                       // from then on, straight away as before
+      expect(got).toHaveLength(2);
+      off();
+    } finally { vi.useRealTimers(); }
+  });
 });
 
 describe('Arvy and the web', () => {
