@@ -3,7 +3,22 @@ import { useEffect, useState } from 'react';
 import { Bell, BellOff, Smartphone } from 'lucide-react';
 import { Card, Button } from './primitives';
 import { disablePush, enablePush, pushState, sendTest, type PushState } from '../lib/push';
-import { clock, hhmm, minutesOf, routineNow, planAt } from '../lib/routine';
+import { clock, hhmm, minutesOf, routineNow, planAt, type Routine } from '../lib/routine';
+
+/** The reminders a routine gives, as shown before turning them on (the sending is supabase/functions/planner-push). */
+export function reminderTimes(r: Routine): { at: string; what: string }[] {
+  return r.profile === 'morning' ? [
+    { at: r.wake, what: r.stretchMin + r.meditateMin + r.workoutMin > 0 ? 'Miracle Morning, then the Brief' : 'Up, then the Brief' },
+    { at: hhmm(minutesOf(r.lightsOut) - 30), what: 'Evening review, then bed' },
+    { at: hhmm(minutesOf(r.lightsOut) - 10), what: 'Lights out' },
+  ] : [
+    { at: r.wake, what: 'Up — straight to the gym' },
+    { at: planAt(r), what: "Sauna: yesterday's review, the protein road, today's Brief" },
+    ...(r.kitchenClose ? [{ at: hhmm(minutesOf(r.kitchenClose) - 30), what: `Kitchen closes at ${clock(r.kitchenClose)} — protein still to go` }] : []),
+    ...(r.fast ? [{ at: hhmm(minutesOf(r.eatOpen) - 15), what: `Eating window opens at ${clock(r.eatOpen)}` }] : []),
+    { at: hhmm(minutesOf(r.lightsOut) - 15), what: `Lights out at ${clock(r.lightsOut)} — up at ${clock(r.wake)}` },
+  ];
+}
 
 export function PushCard() {
   const [state, setState] = useState<PushState | 'loading'>('loading');
@@ -21,17 +36,7 @@ export function PushCard() {
     finally { setBusy(false); refresh(); }
   };
 
-  const reminders = r.profile === 'morning' ? [
-    { at: r.wake, what: 'Miracle Morning, then the Brief' },
-    { at: hhmm(minutesOf(r.lightsOut) - 30), what: 'Evening review, then bed' },
-    { at: hhmm(minutesOf(r.lightsOut) - 10), what: 'Lights out' },
-  ] : [
-    { at: r.wake, what: 'Up — straight to the gym' },
-    { at: planAt(r), what: "Sauna: yesterday's review, the protein road, today's Brief" },
-    ...(r.kitchenClose ? [{ at: hhmm(minutesOf(r.kitchenClose) - 30), what: `Kitchen closes at ${clock(r.kitchenClose)} — protein still to go` }] : []),
-    ...(r.fast ? [{ at: hhmm(minutesOf(r.eatOpen) - 15), what: `Eating window opens at ${clock(r.eatOpen)}` }] : []),
-    { at: hhmm(minutesOf(r.lightsOut) - 15), what: `Lights out at ${clock(r.lightsOut)} — up at ${clock(r.wake)}` },
-  ];
+  const reminders = reminderTimes(r);
 
   return (
     <Card className="pl-stack">

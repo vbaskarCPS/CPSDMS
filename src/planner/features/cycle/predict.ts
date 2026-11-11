@@ -1,5 +1,8 @@
 // src/planner/features/cycle/predict.ts — cycle statistics and predictions. Pure: periods + prefs + today in,
 // phase / next period / fertile window out. Gaps over 60 days (pregnancy, untracked) are left out of averages.
+// The same goes for today: once the last logged period is more than a cycle and 60 days back, periods have gone
+// unlogged (an imported history that stops, a long break), so nothing is counted from it ("671 days late") until
+// the latest one is logged (TodayView.stale).
 import { addDays, diffDays } from './dates';
 import { DEFAULT_PREFS, type CyclePrefs, type Period } from './types';
 // (Stats is used by project())
@@ -21,7 +24,11 @@ export interface TodayView {
   next: Projection | null;
   late: number;                  // days past the predicted start (0 when not late)
   projections: Projection[];
+  /** the last logged period is too long ago to count from: no day, phase, prediction or "late" until the latest one is logged */
+  stale?: boolean;
 }
+/** Days since the last period started beyond which it's too old to count from: a cycle, and the longest gap that is still a cycle. */
+export const staleAfter = (s: Stats): number => s.cycleLength + MAX_GAP;
 
 export const median = (xs: number[]): number | null => {
   if (!xs.length) return null;
@@ -82,6 +89,7 @@ export function today(periods: Period[], prefs: Partial<CyclePrefs>, todayKey: s
   const lastStart = cs[cs.length - 1].start;
   const inPeriod = periods.find(x => x.start <= todayKey && x.end >= todayKey) || null;
   const day = diffDays(lastStart, todayKey) + 1;
+  if (!inPeriod && day > staleAfter(s)) return { day: null, phase: null, lastStart, inPeriod: null, next: null, late: 0, projections: [], stale: true };
   const next = proj[0] || null;
   let phase: Phase;
   if (inPeriod || day <= s.periodLength) phase = 'menstrual';

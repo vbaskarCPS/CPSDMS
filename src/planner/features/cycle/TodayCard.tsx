@@ -13,6 +13,7 @@ export function useCycleLine(): string | null {
   const v = c.view;
   if (c.loading) return null;
   if (!v.lastStart) return 'Log your first period';
+  if (v.stale) return `Last period logged ${fmtDay(v.lastStart, { day: 'numeric', month: 'short', year: 'numeric' })} · add your latest`;
   return `Day ${v.day}${v.phase ? ` · ${PHASE_LABEL[v.phase]}` : ''}${v.late > 0 ? ` · ${v.late} day${v.late === 1 ? '' : 's'} late` : v.next ? ` · next period in ${diffDays(c.todayKey, v.next.start)} days` : ''}`;
 }
 
@@ -26,16 +27,21 @@ export function CycleTodayCard(_: { pass: PlannerPass }) {
         <Heart aria-hidden style={{ color: 'var(--cy-pink)', width: 20, height: 20 }} />
         <div className="pl-grow">
           <p className="pl-eyebrow">Cycle</p>
-          {c.loading ? <b>…</b> : !v.lastStart ? <b>Log your first period</b> : (
-            <b>Day {v.day} · {v.phase ? PHASE_LABEL[v.phase] : ''}{v.late > 0 ? ` · ${v.late} day${v.late === 1 ? '' : 's'} late` : v.next ? ` · next period in ${diffDays(c.todayKey, v.next.start)} days` : ''}</b>
+          {c.loading ? <b>…</b> : !v.lastStart ? <b>Log your first period</b> : v.stale ? (
+            <>
+              <b style={{ display: 'block' }}>Add your latest period</b>
+              <small className="pl-muted">The last one logged is {fmtDay(v.lastStart, { day: 'numeric', month: 'short', year: 'numeric' })}. Add the latest and the predictions come back.</small>
+            </>
+          ) : (
+            <b style={{ display: 'block' }}>Day {v.day} · {v.phase ? PHASE_LABEL[v.phase] : ''}{v.late > 0 ? ` · ${v.late} day${v.late === 1 ? '' : 's'} late` : v.next ? ` · next period in ${diffDays(c.todayKey, v.next.start)} days` : ''}</b>
           )}
           {!c.loading && v.next && !v.inPeriod && <small className="pl-muted">{inFertile ? 'Fertile window — ' : ''}ovulation ~ {fmtDay(v.next.ovulation, { day: 'numeric', month: 'short' })}</small>}
         </div>
         <ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} />
       </Link>
-      {!c.loading && v.lastStart && <Strip marks={c.marks} todayKey={c.todayKey} from={addDays(c.todayKey, -3)} />}
+      {!c.loading && v.lastStart && !v.stale && <Strip marks={c.marks} todayKey={c.todayKey} from={addDays(c.todayKey, -3)} />}
       <div className="pl-row">
-        <Link to={`/cycle/log/${c.todayKey}`} className="pl-btn pl-btn--small">{v.inPeriod ? 'Log today' : v.late > 0 || (v.next && c.todayKey >= addDays(v.next.start, -2)) ? 'Log period' : 'Log today'}</Link>
+        {v.stale ? <Link to="/cycle" className="pl-btn pl-btn--small pl-btn--primary">Add it</Link> : <Link to={`/cycle/log/${c.todayKey}`} className="pl-btn pl-btn--small">{v.inPeriod ? 'Log today' : v.late > 0 || (v.next && c.todayKey >= addDays(v.next.start, -2)) ? 'Log period' : 'Log today'}</Link>}
       </div>
     </section>
   );

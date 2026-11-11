@@ -209,6 +209,8 @@ async function cycle() {
   const view = cycleToday(ps, { ...CYCLE_DEFAULTS, ...(prefs || {}) }, today);
   return {
     today, cycle_day: view.day, phase: view.phase, days_late: view.late || undefined,
+    // too old to count from: say so and ask for the latest one, rather than a cycle day in the hundreds
+    out_of_date: view.stale ? `The last period logged started ${view.lastStart}: too long ago to count from, so there is no cycle day, phase or prediction. Periods since then were not logged. Ask when her last period started and log it (log_period, with that date).` : undefined,
     in_period: view.inPeriod || undefined,
     next_period: view.next ? { start: view.next.start, end: view.next.end } : undefined,
     fertile_window: view.next ? { from: view.next.fertileStart, to: view.next.fertileEnd, ovulation: view.next.ovulation } : undefined,

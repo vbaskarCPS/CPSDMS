@@ -7,6 +7,7 @@ import { useCycle } from './useCycle';
 import { MonthGrid, YearGrid, Legend } from './Calendar';
 import { addDays, diffDays, fmtDay, monthKey, shiftMonth } from './dates';
 import { PHASE_BLURB, PHASE_LABEL } from './predict';
+import { LastPeriod } from './LastPeriod';
 
 const NOTE_KEY = 'cycle-note-seen';
 
@@ -49,6 +50,13 @@ export function CycleHome() {
           <div className="pl-stack">
             <p>No periods logged yet. Tap the button on the day your period starts and predictions begin after a cycle or two.</p>
             <Button primary onClick={() => void startToday()} disabled={busy}><Droplet /> Period started today</Button>
+          </div>
+        ) : v.stale ? (
+          // the last period logged is too old to count from (an imported history that stops, a long break)
+          <div className="pl-stack">
+            <p><b>Add your latest period.</b> The last one logged is {fmtDay(v.lastStart, { day: 'numeric', month: 'long', year: 'numeric' })}, too long ago to count from, so there’s no cycle day or prediction yet.</p>
+            <LastPeriod todayKey={c.todayKey} periodDays={s.periodLength} logged={c.periods} onSave={async p => { await c.savePeriod(p); say('Period logged', 'good'); }} />
+            <Button block onClick={() => void startToday()} disabled={busy}><Droplet /> It started today</Button>
           </div>
         ) : (
           <div className="pl-stack">

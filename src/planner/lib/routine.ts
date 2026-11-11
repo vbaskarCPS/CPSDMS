@@ -140,14 +140,15 @@ function nightBlocks(r: Routine, o: { noMorningGym?: boolean; nextWake?: string 
   ];
 }
 
-/** Rosh's day: Miracle Morning before Kiaan is up, bed with him at 9. */
+/** Rosh's day: Miracle Morning before Kiaan is up, bed with him at 9. With no minutes for the routine (stretch,
+ *  meditate and move all 0: her choice in the set-up) there is no Miracle Morning block and the Brief starts the day. */
 function morningBlocks(r: Routine): Block[] {
   const routineMins = r.stretchMin + r.meditateMin + r.workoutMin;
   const routineEnd = hhmm(minutesOf(r.wake) + routineMins);
   const briefEnd = hhmm(minutesOf(routineEnd) + r.briefMinutes);
   return [
     { id: 'wake', label: 'Up', at: r.wake, blurb: `by ${clock(hhmm(minutesOf(r.wake) + r.wakeGrace))} counts` },
-    { id: 'morning', label: 'Miracle Morning', at: r.wake, until: routineEnd, blurb: `stretch ${r.stretchMin} · meditate ${r.meditateMin} · move ${r.workoutMin}` },
+    ...(routineMins > 0 ? [{ id: 'morning' as BlockId, label: 'Miracle Morning', at: r.wake, until: routineEnd, blurb: [r.stretchMin ? `stretch ${r.stretchMin}` : '', r.meditateMin ? `meditate ${r.meditateMin}` : '', r.workoutMin ? `move ${r.workoutMin}` : ''].filter(Boolean).join(' · ') }] : []),
     { id: 'brief', label: 'Morning Brief', at: routineEnd, until: briefEnd, blurb: `${r.briefMinutes} minutes, before the house wakes` },
     { id: 'kiaanUp', label: 'Kiaan up', at: r.kiaanUp, blurb: 'breakfast, ready for the day' },
     { id: 'work', label: 'Tackle the list', at: r.kiaanUp, until: r.eatOpen, blurb: 'the to-do list from the Morning Brief' },

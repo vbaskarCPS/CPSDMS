@@ -54,10 +54,17 @@ export async function confirmChange(id: string): Promise<Change['go']> {
 // ── opening Arvy from a screen's own button ("Ask Arvy" on Train, after a workout…) ──
 export interface OpenAsk { suggest?: string[]; ask?: string; mic?: boolean }
 const openers = new Set<(o: OpenAsk) => void>();
-export const onOpenArvy = (fn: (o: OpenAsk) => void) => { openers.add(fn); return () => { openers.delete(fn); }; };
+let waitingOpen: OpenAsk | null = null;   // asked to open before the chat was on screen (the set-up's last tap): opened once it is
+export const onOpenArvy = (fn: (o: OpenAsk) => void) => {
+  openers.add(fn);
+  // a moment later, and only if this listener is still there: the chat's own clean-up closes it, and in development
+  // React mounts, cleans up and mounts again
+  if (waitingOpen) setTimeout(() => { if (waitingOpen && openers.has(fn)) { const o = waitingOpen; waitingOpen = null; fn(o); } }, 0);
+  return () => { openers.delete(fn); };
+};
 /** Open the chat; `suggest` = the chips to offer, `ask` = a question to send straight away, `mic` = start listening
  *  (the RV button held down). */
-export const openArvy = (o: OpenAsk = {}) => { for (const fn of [...openers]) fn(o); };
+export const openArvy = (o: OpenAsk = {}) => { if (!openers.size) { waitingOpen = o; return; } for (const fn of [...openers]) fn(o); };
 
 // ── is the chat open, and is it listening? Shared with the bottom bar's RV button (ui/Shell.tsx): a tap opens and
 //    closes the chat, a hold opens it listening, and the button shows a mic while it listens ──
@@ -129,6 +136,23 @@ const sentAt = (iso: string): string => {
 };
 
 const MAX_STEPS = 8;
+/** How long to wait before the second try (the tests don't wait). */
+export const RETRY_WAIT = { ms: 1200 };
+/** What a question ends with when the phone can't reach Arvy's server, even on the second try. Not something to fix
+ *  in the app, so the chat doesn't put it in the improvements log. */
+export const NO_CONNECTION = 'I couldn’t reach the server. Check your connection and ask again.';
+const dropped = (e: unknown) => /failed to send a request|failed to fetch|networkerror|network request failed|load failed/i.test(e instanceof Error ? e.message : String(e));
+/** One step with Arvy's server. A connection that drops mid-question (the phone changes networks, a tunnel) is tried
+ *  once more after a moment: a step changes nothing on the server, so asking it twice is safe. */
+async function serverStep<T>(body: Record<string, unknown>, wait = 1200): Promise<T> {
+  try { return await invoke<T>(body, 'planner-arvy'); }
+  catch (e) {
+    if (!dropped(e)) throw e;
+    await new Promise(r => setTimeout(r, wait));
+    try { return await invoke<T>(body, 'planner-arvy'); }
+    catch (again) { throw dropped(again) ? new Error(NO_CONNECTION) : again; }
+  }
+}
 /** How much of a tool's answer Claude gets (characters). The coaching context is the whole planner, so it gets more. */
 const RESULT_CAP: Record<string, number> = { coaching_context: 36000 };
 /** What each tool is called on screen while Arvy works ("Checking your calendar…"). */
@@ -206,7 +230,7 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   const pages = () => { const list = sources.length ? sources : found; return list.filter((s, i) => list.findIndex(x => site(x.url) === site(s.url)) === i).slice(0, sources.length ? 6 : 4); };
   const extras = () => ({ ...(pages().length ? { sources: pages() } : {}), ...(choices.length ? { choices } : {}) });
   for (let step = 0; step < MAX_STEPS; step++) {
-    const r = await invoke<{ content: Block[]; stop_reason: string; raw?: Block[]; web?: { searches?: string[]; sources?: Source[]; found?: Source[] } }>({ action: 'turn', messages: msgs, context: ctx }, 'planner-arvy');
+    const r = await serverStep<{ content: Block[]; stop_reason: string; raw?: Block[]; web?: { searches?: string[]; sources?: Source[]; found?: Source[] } }>({ action: 'turn', messages: msgs, context: ctx }, RETRY_WAIT.ms);
     const content = Array.isArray(r.content) ? r.content : [];
     if (r.web) {
       if (!searched) used.push('web_search');

@@ -11,7 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExter
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Check, Mic, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { getPass } from '../../lib/auth';
-import { arvyIsOpen, ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onArvyChange, onOpenArvy, primeVoice, setArvyHearing, setArvyOpen, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
+import { NO_CONNECTION, arvyIsOpen, ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onArvyChange, onOpenArvy, primeVoice, setArvyHearing, setArvyOpen, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
 import { logArvy } from './log';
 import { flushChat, loadChat, newer, saveChat } from './chat';
 import './arvy.css';
@@ -123,7 +123,7 @@ export function Arvy() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Something went wrong';
       setError(msg);
-      void logArvy({ type: 'error', title: `Arvy couldn’t answer: ${msg}`.slice(0, 160), question, path: loc.pathname });
+      if (msg !== NO_CONNECTION) void logArvy({ type: 'error', title: `Arvy couldn’t answer: ${msg}`.slice(0, 160), question, path: loc.pathname });
     } finally { setBusy(false); setStep(null); }
   }, [busy, lines, loc.pathname, muted, nav]);
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { cycles, median, projections, stats, today, marksFor } from './predict';
+import { cycles, median, projections, stats, today, marksFor, staleAfter } from './predict';
+import { periodFrom } from './LastPeriod';
 import type { Period } from './types';
 
 const P = (start: string, end: string): Period => ({ start, end });
@@ -46,6 +47,29 @@ describe('predictions', () => {
     expect(today(periods, {}, '2025-01-20').phase).toBe('luteal');
     expect(today(periods, {}, '2025-02-01').late).toBe(3);
     expect(today([], {}, '2025-02-01').day).toBeNull();
+  });
+  it('stops counting from a last period that is too old, instead of "671 days late"', () => {
+    // 30-day cycles: late is counted up to 60 days past the due date (day 90), then the tracker asks for the latest period
+    expect(staleAfter(stats(periods, {}))).toBe(90);
+    expect(today(periods, {}, '2025-03-29')).toMatchObject({ day: 90, late: 59 });
+    expect(today(periods, {}, '2025-03-29').stale).toBeUndefined();
+    expect(today(periods, {}, '2025-03-30')).toEqual({ day: null, phase: null, lastStart: '2024-12-30', inPeriod: null, next: null, late: 0, projections: [], stale: true });
+    // her case: the imported history stops in December 2024 and it is November 2026
+    expect(today(periods, {}, '2026-11-11')).toMatchObject({ stale: true, late: 0, day: null });
+    // once the latest period is logged, the count is back (the long gap before it is left out of the averages)
+    const caughtUp = [...periods, P('2026-09-22', '2026-09-26')];
+    expect(today(caughtUp, {}, '2026-11-11')).toMatchObject({ day: 51, late: 20, phase: 'luteal' });
+    expect(today(caughtUp, {}, '2026-11-11').stale).toBeUndefined();
+    // a period that is running now is never too old, however long it is
+    expect(today([P('2026-01-01', '2026-11-30')], {}, '2026-11-11').stale).toBeUndefined();
+  });
+  it('makes the period to save from the day her last one started', () => {
+    expect(periodFrom('2026-09-22', 5, '2026-11-11', periods)).toEqual({ start: '2026-09-22', end: '2026-09-26', source: 'app' });
+    expect(periodFrom('2026-11-10', 5, '2026-11-11', periods)).toEqual({ start: '2026-11-10', end: '2026-11-11', source: 'app' });   // still running: ends today for now
+    expect(periodFrom('2026-11-12', 5, '2026-11-11', periods)).toBeNull();   // not yet
+    expect(periodFrom('2024-12-31', 5, '2026-11-11', periods)).toBeNull();   // a period is already logged on that day
+    expect(periodFrom('soon', 5, '2026-11-11', periods)).toBeNull();
+    expect(periodFrom('2026-09-22', 0, '2026-11-11', [])).toMatchObject({ end: '2026-09-26' });   // no usual length yet: 5 days
   });
   it('marks calendar days', () => {
     const m = marksFor(periods, {});
