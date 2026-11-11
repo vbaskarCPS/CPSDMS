@@ -1,7 +1,8 @@
-// src/planner/features/us/occasions.ts — the occasions the chat's stickers are for, and which one is coming up next.
-// No React here (tested in stickers.test.ts). Halloween, Diwali, Christmas, New Year, Valentine's Day and Easter have
-// their dates worked out here; birthdays come from the household calendar (a yearly event with "birthday" in its
-// title), so nobody's date of birth is written into the code.
+// src/planner/features/us/occasions.ts — the occasions the chat's emoji are for, which one is coming up next, and the
+// themes the emoji tray switches between (one shown at a time). No React here (tested in stickers.test.ts and
+// emoji.test.ts). Halloween, Diwali, Christmas, New Year, Valentine's Day and Easter have their dates worked out here;
+// birthdays come from the household calendar (a yearly event with "birthday" in its title), so nobody's date of
+// birth is written into the code.
 
 export type OccasionId = 'halloween' | 'diwali' | 'christmas' | 'newyear' | 'valentine' | 'easter' | 'birthday';
 /** An occasion with its next date (today counts). `id` picks the sticker set; a birthday carries whose it is. */
@@ -67,3 +68,21 @@ export function countdown(o: Occasion): string {
   if (!Number.isFinite(o.days)) return '';
   return o.days === 0 ? 'today!' : o.days === 1 ? 'tomorrow' : `in ${o.days} days`;
 }
+
+// ── the emoji tray: one theme at a time ──
+/** A theme in the tray: one pack of emoji, under the occasion it is for. Every birthday on the calendar shares the
+ *  one birthday pack, so they are one theme, headed by the soonest (`also` = the others, for their countdowns).
+ *  `label` = what its chip is called; `next` = it is the one coming up. */
+export interface Theme extends Occasion { label: string; next: boolean; also: Occasion[] }
+/** The tray's themes, in the order the occasions come up (`upcoming`): the first is the one the tray opens on. */
+export function themesOf(list: Occasion[]): Theme[] {
+  const out: Theme[] = [];
+  for (const o of list) {
+    const had = out.find(t => t.id === o.id);
+    if (had) had.also.push(o);
+    else out.push({ ...o, label: o.id === 'birthday' ? 'Birthdays' : o.name, next: !out.length && Number.isFinite(o.days), also: [] });
+  }
+  return out;
+}
+/** The one theme the tray shows: the one picked on its chip, or else the one coming up next. */
+export const themeShown = (themes: Theme[], picked?: OccasionId | null): Theme => themes.find(t => t.id === picked) || themes[0];

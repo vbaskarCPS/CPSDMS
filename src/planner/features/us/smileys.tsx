@@ -1,17 +1,19 @@
 // src/planner/features/us/smileys.tsx — the faces in the chat's emoji packs (emoji.tsx): five or six for each occasion
-// (occasions.ts), all built from one face (Face below): a skin colour, a pair of eyes, a mouth, and what the occasion
-// puts on top (a Santa hat, bunny ears, a tilak, a party blower). Same 64 × 64 box, colours and movement (us.css st-…)
-// as the drawings of things in stickers.tsx. The drawings are ours; each stands for an ordinary look-alike emoji
-// (`emoji`), which is what a notification shows.
+// (occasions.ts), and twenty-two for Christmas, the first theme with a full set: something for laughing, loving,
+// thanking, sulking, being ill, being surprised. All are built from one face (Face below): a skin colour, a pair of
+// eyes, eyebrows, a mouth, and what the occasion puts on top (a Santa hat, bunny ears, a tilak, a party blower). Same
+// 64 × 64 box, colours and movement (us.css st-…) as the drawings of things in stickers.tsx. The drawings are ours;
+// each stands for an ordinary look-alike emoji (`emoji`), which is what a notification shows.
 import type { ReactNode } from 'react';
-import { HEART, STAR, dots, rays, type StickerDef } from './stickers';
+import { HEART, STAR, dots, holly, rays, type StickerDef } from './stickers';
 import type { OccasionId } from './occasions';
 
 const INK = '#2b2540', MOUTH = '#6b2737', TONGUE = '#ff7a90', HAND = '#ffc21f', HAND_EDGE = '#e5a312';
 type Skin = [fill: string, edge: string];
 const YELLOW: Skin = ['#ffd23f', '#eeb01e'];
-type Eyes = 'dot' | 'wide' | 'happy' | 'shut' | 'wink' | 'heart' | 'star' | 'none';
-type Mouth = 'smile' | 'grin' | 'open' | 'o' | 'yum' | 'kiss' | 'yawn' | 'fangs' | 'none';
+type Eyes = 'dot' | 'wide' | 'happy' | 'shut' | 'wink' | 'heart' | 'star' | 'tight' | 'none';
+type Mouth = 'smile' | 'grin' | 'open' | 'o' | 'yum' | 'kiss' | 'yawn' | 'fangs' | 'frown' | 'none';
+type Brows = 'cross' | 'sad' | 'up';
 
 // small shapes, placed by their middle (cx, cy) and how wide they are
 const heart = (cx: number, cy: number, w: number, fill = '#e8324f') => <path d={HEART} fill={fill} transform={`translate(${cx} ${cy}) scale(${w / 42}) translate(-32 -34.5)`} />;
@@ -21,6 +23,8 @@ const flower = (cx: number, cy: number, r: number, petal: string, mid = '#ffd166
   {[0, 72, 144, 216, 288].map(a => <circle key={a} cx={cx + Math.sin((a * Math.PI) / 180) * r * 0.62} cy={cy - Math.cos((a * Math.PI) / 180) * r * 0.62} r={r * 0.55} fill={petal} stroke="#00000014" strokeWidth=".6" />)}
   <circle cx={cx} cy={cy} r={r * 0.4} fill={mid} /></g>;
 const hand = (cx: number, cy: number, r = 4.6) => <circle cx={cx} cy={cy} r={r} fill={HAND} stroke={HAND_EDGE} strokeWidth="1.4" />;
+// a tear, placed by the middle of its round end (r = how round); `turn` leans its point over, in degrees
+const drop = (cx: number, cy: number, r: number, turn = 0) => <path d={`M0 ${-2.3 * r} C${0.3 * r} ${-1.3 * r} ${r} ${-0.7 * r} ${r} 0 A${r} ${r} 0 0 1 ${-r} 0 C${-r} ${-0.7 * r} ${-0.3 * r} ${-1.3 * r} 0 ${-2.3 * r} Z`} fill="#6ec6ff" stroke="#3a9de0" strokeWidth=".9" strokeLinejoin="round" transform={`translate(${cx} ${cy}) rotate(${turn})`} />;
 
 // the eyes and the mouth, drawn around the middle of a face 44 wide (Face moves and sizes them)
 const line = { fill: 'none', stroke: INK, strokeWidth: 2.6, strokeLinecap: 'round' as const };
@@ -36,9 +40,14 @@ function eyesOf(kind: Eyes): ReactNode {
     case 'wink': return <>{dot(-8)}{arcUp(8)}</>;
     case 'heart': return <>{heart(-8.5, -4, 12)}{heart(8.5, -4, 12)}</>;
     case 'star': return <>{star(-8.5, -4.5, 12.5, '#ff7a1a', '#c2500a')}{star(8.5, -4.5, 12.5, '#ff7a1a', '#c2500a')}</>;
+    case 'tight': return <path d="M-12.6 -8 L-5.4 -4.4 L-12.6 -.8 M12.6 -8 L5.4 -4.4 L12.6 -.8" {...line} strokeLinejoin="round" />;   // screwed up, laughing
     default: return null;
   }
 }
+// eyebrows: cross (down in the middle), sad (up in the middle), up (raised, surprised)
+const BROWS: Record<Brows, string> = {
+  cross: 'M-14 -12.6 L-4.6 -8.4 M14 -12.6 L4.6 -8.4', sad: 'M-13 -10.4 L-5 -13.2 M13 -10.4 L5 -13.2', up: 'M-13 -13.5 Q-8.5 -17 -4 -13 M13 -13.5 Q8.5 -17 4 -13',
+};
 function mouthOf(kind: Mouth): ReactNode {
   const smile = <path d="M-9 6 Q0 15.5 9 6" {...line} />;
   switch (kind) {
@@ -50,21 +59,22 @@ function mouthOf(kind: Mouth): ReactNode {
     case 'kiss': return <path d="M-1.5 4.8 C3.6 5.4 3.6 9.2 -0.5 10 C3.6 10.8 3.6 14.6 -1.5 15.2" {...line} strokeWidth={2.4} />;
     case 'yawn': return <><ellipse cx={0} cy={9.5} rx={7.4} ry={8.8} fill={MOUTH} /><ellipse cx={0} cy={14.8} rx={4.6} ry={2.8} fill={TONGUE} /></>;
     case 'fangs': return <><path d="M-10 5 Q0 16 10 5 Z" fill={MOUTH} /><path d="M-6.4 6.4 L-4.2 12.4 L-2 7.6 Z M6.4 6.4 L4.2 12.4 L2 7.6 Z" fill="#fff" /></>;
+    case 'frown': return <path d="M-8 14 Q0 6.4 8 14" {...line} />;
     default: return null;
   }
 }
 interface FaceOpt {
-  skin?: Skin; eyes?: Eyes; mouth?: Mouth; blush?: boolean;
+  skin?: Skin; eyes?: Eyes; mouth?: Mouth; brows?: Brows; blush?: boolean;
   /** where its middle is and how big (the box is 64 × 64): lower and smaller when something sits on its head */ x?: number; y?: number; r?: number;
   /** no round head: only the eyes and the mouth, for a face on something else (an egg, a lamb) */ bare?: boolean;
   edge?: number; /** drawn on the face, in its own measure (a tilak, stitches, a beak) */ more?: ReactNode;
 }
-function Face({ skin = YELLOW, eyes = 'dot', mouth = 'smile', blush, x = 32, y = 33, r = 24, bare, edge = 1.6, more }: FaceOpt) {
+function Face({ skin = YELLOW, eyes = 'dot', mouth = 'smile', brows, blush, x = 32, y = 33, r = 24, bare, edge = 1.6, more }: FaceOpt) {
   return (
     <g transform={`translate(${x} ${y}) scale(${r / 22})`}>
       {!bare && <circle r="22" fill={skin[0]} stroke={skin[1]} strokeWidth={edge} />}
       {blush && <><circle cx="-13.5" cy="5" r="3.7" fill="#ff7a90" opacity=".5" /><circle cx="13.5" cy="5" r="3.7" fill="#ff7a90" opacity=".5" /></>}
-      {eyesOf(eyes)}{mouthOf(mouth)}{more}
+      {eyesOf(eyes)}{brows && <path d={BROWS[brows]} {...line} strokeWidth={2.3} />}{mouthOf(mouth)}{more}
     </g>
   );
 }
@@ -130,15 +140,120 @@ export const SMILEYS: StickerDef[] = [
     <g className="st-pop" style={{ animationDelay: '.6s' }}>{rays(52, 11, 3, 9, ['#9b7bff', '#7be495', '#ffd166'], 10, 2.4)}</g>
     <g className="st-bob"><Face y={40} r={20} eyes="wide" mouth="o" /></g></>),
 
-  // ── Christmas ──
+  // ── Christmas: a full set, in the order the tray shows it: glad and loving, then what happened, then low and
+  // cross, then the ones that are more a character than a feeling ──
   S('santa', '🎅', 'Santa hat', 'christmas', <g className="st-wobble">
     <Face y={41} r={19} eyes="happy" mouth="grin" blush />
     <path d="M12 27 C12 12 24 4 35 5 C46 6 54 15 57 28 C53 22 48 21 46 27 Z" fill="#e23d4b" />
     <rect x="9" y="22" width="43" height="9" rx="4.5" fill="#fff" stroke="#e3dfe8" strokeWidth="1.2" /><circle cx="57" cy="31" r="5" fill="#fff" stroke="#e3dfe8" strokeWidth="1.2" /></g>),
+  S('hoho', '😂', 'Ho ho ho', 'christmas', <g className="st-hop"><g transform="rotate(-8 32 42)">
+    <Face y={41} r={19} eyes="tight" mouth="grin" more={<>{drop(-19, 5, 3.5, 32)}{drop(19, 5, 3.5, -32)}</>} />
+    <g transform="translate(64 0) scale(-1 1)"><path d="M12 27 C12 12 24 4 35 5 C46 6 54 15 57 28 C53 22 48 21 46 27 Z" fill="#e23d4b" />
+      <rect x="9" y="22" width="43" height="9" rx="4.5" fill="#fff" stroke="#e3dfe8" strokeWidth="1.2" /><circle cx="57" cy="31" r="5" fill="#fff" stroke="#e3dfe8" strokeWidth="1.2" /></g></g></g>),
+  S('smitten', '😍', 'Smitten', 'christmas', <g className="st-beat"><Face y={38} r={21} eyes="heart" mouth="grin" />{holly(32, 16)}</g>),
+  S('mistle', '😘', 'Mistletoe kiss', 'christmas', <>
+    <g className="st-swing"><path d="M30 0 V8" stroke="#8a5a33" strokeWidth="1.8" strokeLinecap="round" />
+      {[-66, -24, 24, 66].map(a => <ellipse key={a} cx="30" cy="15.2" rx="3" ry="6.8" fill="#8fd08a" stroke="#4f9e55" strokeWidth="1" transform={`rotate(${a} 30 8)`} />)}
+      <circle cx="27.4" cy="12" r="2.4" fill="#fff" stroke="#bccdbc" strokeWidth=".9" /><circle cx="32.6" cy="12" r="2.4" fill="#fff" stroke="#bccdbc" strokeWidth=".9" /><circle cx="30" cy="15" r="2.4" fill="#fff" stroke="#bccdbc" strokeWidth=".9" />
+      <path d="M30 7 L23.5 3.6 V10.4 Z M30 7 L36.5 3.6 V10.4 Z" fill="#e23d4b" stroke="#c4263f" strokeWidth=".8" strokeLinejoin="round" /><circle cx="30" cy="7" r="2" fill="#c4263f" /></g>
+    <g className="st-bob"><Face x={27} y={42} r={19} eyes="wink" mouth="kiss" blush /></g>
+    <g className="st-beat">{heart(52, 47, 14)}</g></>),
+  S('mitts', '🤗', 'Warm hug', 'christmas', <g className="st-bob">
+    <Face y={40} r={19} eyes="happy" blush />
+    <path d="M14.5 24 C14.5 12 23 7.5 32 7.5 C41 7.5 49.5 12 49.5 24 Z" fill="#2f9e5b" /><path d="M19 14.2 L23.3 17.8 L27.7 14.2 L32 17.8 L36.3 14.2 L40.7 17.8 L45 14.2" fill="none" stroke="#bfe8cd" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+    <rect x="11.5" y="20.5" width="41" height="9" rx="4.5" fill="#46b872" stroke="#27894e" strokeWidth="1.2" /><path d="M19 21.6 V28.4 M25.5 21.6 V28.4 M32 21.6 V28.4 M38.5 21.6 V28.4 M45 21.6 V28.4" stroke="#27894e" strokeWidth="1.1" />
+    <circle cx="32" cy="6.5" r="4.8" fill="#fff" stroke="#e3dfe8" strokeWidth="1.2" />
+    {[[13.5, 1], [50.5, -1]].map(([x, k]) => <g key={x} transform={`translate(${x} 50) scale(${k} 1)`} fill="#e23d4b" stroke="#c4263f" strokeWidth="1.3">
+      <ellipse cx="8.2" cy="-4.4" rx="3.4" ry="5.4" transform="rotate(28 8.2 -4.4)" /><ellipse cx="0" cy="-.5" rx="7.4" ry="8.8" transform="rotate(-12)" />
+      <rect x="-6.2" y="6.4" width="12.4" height="6" rx="2.9" fill="#fff" stroke="#e3dfe8" /></g>)}</g>),
+  S('nailed', '👍', 'Nailed it', 'christmas', <g className="st-bob">
+    <Face x={26} y={31} r={21} eyes="shut" mouth="grin" blush />
+    <g className="st-twinkle">{star(54, 13, 15, '#ffd166', '#e9b53a')}</g>
+    <path d="M42.5 42 V34.5 A4.6 4.6 0 0 1 51.7 34.5 V41 H52.5 A6.5 6.5 0 0 1 59 47.5 V51.5 A6.5 6.5 0 0 1 52.5 58 H45.5 A6.5 6.5 0 0 1 39 51.5 V47.5 A6.5 6.5 0 0 1 42.5 42 Z" fill="#e23d4b" stroke="#c4263f" strokeWidth="1.3" strokeLinejoin="round" />
+    <path d="M43.5 47.5 H50" stroke="#c4263f" strokeWidth="1.3" strokeLinecap="round" /><rect x="54.5" y="39.5" width="8" height="20.5" rx="3.6" fill="#fff" stroke="#e3dfe8" strokeWidth="1.2" /></g>),
+  S('thanks', '🙏', 'Thank you', 'christmas', <g className="st-bob">
+    <path d="M13.5 20 C8 25 7 33 10 39 C14 37 17 31 16.5 22 Z M50.5 20 C56 25 57 33 54 39 C50 37 47 31 47.5 22 Z" fill="#e23d4b" stroke="#c4263f" strokeWidth="1.2" strokeLinejoin="round" />
+    <path d="M10 39 L9 45.5 M54 39 L55 45.5" stroke="#c4263f" strokeWidth="1.6" strokeLinecap="round" /><circle cx="9" cy="47.5" r="2.5" fill="#fff" stroke="#e3dfe8" strokeWidth="1" /><circle cx="55" cy="47.5" r="2.5" fill="#fff" stroke="#e3dfe8" strokeWidth="1" />
+    <Face y={31} r={19} eyes="shut" blush />
+    <path d="M12.6 24.5 C12.6 11 22 6.5 32 6.5 C42 6.5 51.4 11 51.4 24.5 C45 21 19 21 12.6 24.5 Z" fill="#e23d4b" stroke="#c4263f" strokeWidth="1.2" strokeLinejoin="round" />
+    <path d="M17 18 L20.8 14.4 L24.5 18 L28.3 14.4 L32 18 L35.7 14.4 L39.5 18 L43.2 14.4 L47 18" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" /><circle cx="32" cy="6" r="4.5" fill="#fff" stroke="#e3dfe8" strokeWidth="1.2" />
+    <path d="M32 41.5 C28 45 25.5 50 25.5 56.5 H32 Z" fill={HAND} stroke={HAND_EDGE} strokeWidth="1.5" strokeLinejoin="round" /><path d="M32 41.5 C36 45 38.5 50 38.5 56.5 H32 Z" fill={HAND} stroke={HAND_EDGE} strokeWidth="1.5" strokeLinejoin="round" />
+    <path d="M22.5 60 H41.5 L43 64 H21 Z" fill="#2f9e5b" /><rect x="21" y="55" width="22" height="6" rx="3" fill="#fff" stroke="#e3dfe8" strokeWidth="1.2" /></g>),
   S('elf', '🧝', 'Elf', 'christmas', <g className="st-wobble">
     <path d="M14.5 38 L5.5 32.5 L13 46 Z M49.5 38 L58.5 32.5 L51 46 Z" fill={HAND} stroke={HAND_EDGE} strokeWidth="1.4" strokeLinejoin="round" />
     <Face y={42} r={19} eyes="wink" blush />
     <path d="M13 27 C17 14 27 8 46 4 C41 12 46 20 51 27 Z" fill="#2f9e5b" /><rect x="10" y="22" width="44" height="8" rx="4" fill="#e23d4b" /><circle cx="47" cy="5" r="3.7" fill="#ffd166" stroke="#e9b53a" strokeWidth="1" /></g>),
+  S('cool', '😎', 'Cool snowman', 'christmas', <g className="st-wobble">
+    <Face skin={['#ffffff', '#cfe3f2']} y={30} r={21} eyes="none" mouth="none" more={<>
+      <path d="M-19 -10 H-1.6 V-5.5 C-1.6 -.5 -5 2 -10.3 2 C-15.6 2 -19 -.5 -19 -5.5 Z M19 -10 H1.6 V-5.5 C1.6 -.5 5 2 10.3 2 C15.6 2 19 -.5 19 -5.5 Z" fill={INK} />
+      <path d="M-21.4 -9 H21.4" stroke={INK} strokeWidth="2.4" strokeLinecap="round" /><path d="M-15.5 -6.6 L-11.5 -6.6 M5 -6.6 L9 -6.6" stroke="#8f8aa8" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M-1 3.6 L10.5 7.2 L-1 9.4 Z" fill="#ff9d2e" stroke="#e07a0c" strokeWidth=".8" strokeLinejoin="round" /><path d="M-8 12.6 Q1 18.6 10 11.2" {...line} strokeWidth={2.8} /></>} />
+    <path d="M13 44 C22 53 42 53 51 44 L54 51.5 C43 60.5 21 60.5 10 51.5 Z" fill="#e23d4b" /><path d="M39 55.5 L48.5 52.5 L51.5 62.5 L42 64 Z" fill="#c4263f" /><path d="M20 49.8 L18.6 56.6 M29 52.6 L28.5 59.4 M37 52.6 L37.6 59.4" stroke="#fff" strokeWidth="2" /></g>),
+  S('lights', '🤩', 'Twinkly lights', 'christmas', <>
+    <g className="st-bob"><Face y={40} r={20} eyes="star" mouth="grin" /></g>
+    <path d="M5 31 C12 7 52 7 59 31" fill="none" stroke="#1f7743" strokeWidth="1.8" strokeLinecap="round" />
+    {([[7.3, 25.7, '#ff5d6c'], [16.6, 16.8, '#ffd166'], [32, 13, '#5fd0ff'], [47.4, 16.8, '#7be495'], [56.7, 25.7, '#ff7ac0']] as [number, number, string][]).map(([x, y, c], i) => <g key={i}>
+      <rect x={x - 1.5} y={y - .6} width="3" height="2.6" rx=".8" fill="#1f7743" /><ellipse className="st-twinkle" style={{ animationDelay: `${i * 0.3}s` }} cx={x} cy={y + 5} rx="3.1" ry="4" fill={c} stroke="#00000022" strokeWidth=".7" /></g>)}</>),
+  S('cracker', '🥳', 'Cracker crown', 'christmas', <g className="st-wobble">
+    <Face x={27} y={41} r={19} eyes="happy" mouth="grin" blush />
+    <g transform="rotate(-7 27 24)"><path d="M10 30 V14 L15.7 20.5 L21.3 14 L27 20.5 L32.7 14 L38.3 20.5 L44 14 V30 Z" fill="#9b7bff" stroke="#7d5fe6" strokeWidth="1.3" strokeLinejoin="round" /><path d="M10.8 25.6 H43.2" stroke="#cdbdff" strokeWidth="1.8" /></g>
+    <g transform="translate(51 52) rotate(-30)"><path d="M-6 -4 L-11 -6.5 V6.5 L-6 4 Z M6 -4 L11 -6.5 V6.5 L6 4 Z" fill="#2f9e5b" /><rect x="-6.5" y="-5" width="13" height="10" rx="1.6" fill="#e23d4b" /><path d="M-3.6 -5 V5 M3.6 -5 V5" stroke="#ffd166" strokeWidth="1.8" /><circle r="1.7" fill="#ffd166" /></g>
+    <circle cx="54" cy="12" r="2.2" fill="#ffd166" /><circle cx="59" cy="27" r="1.9" fill="#7be495" /><circle cx="5" cy="15" r="2" fill="#ff5d8f" /><circle cx="52" cy="35" r="1.7" fill="#5fd0ff" /></g>),
+  S('angel', '😇', 'Angel', 'christmas', <g className="st-bob">
+    <ellipse cx="9" cy="41" rx="8" ry="13.5" fill="#eef4ff" stroke="#bfd0ea" strokeWidth="1.4" transform="rotate(18 9 41)" /><ellipse cx="55" cy="41" rx="8" ry="13.5" fill="#eef4ff" stroke="#bfd0ea" strokeWidth="1.4" transform="rotate(-18 55 41)" />
+    <Face y={39} r={20} eyes="happy" blush />
+    <ellipse className="st-twinkle" cx="32" cy="10" rx="13" ry="4" fill="none" stroke="#ffc93a" strokeWidth="3.4" /></g>),
+  S('gasp', '😲', 'What a present', 'christmas', <>
+    <g className="st-bob"><Face x={25} y={29} r={20} eyes="wide" mouth="open" brows="up" /></g>
+    <g className="st-pop">{rays(48.5, 38, 4, 10, ['#ffd166', '#ff9d2e', '#fff1a8'], 8, 2.2)}</g>
+    <rect x="37" y="43" width="23" height="18" rx="2.5" fill="#e23d4b" /><rect x="46" y="43" width="5" height="18" fill="#ffd166" />
+    <g className="st-wobble"><g transform="rotate(-18 48.5 33)"><rect x="35" y="29.5" width="27" height="7.4" rx="2.6" fill="#f0525f" /><rect x="46" y="29.5" width="5" height="7.4" fill="#ffd166" />
+      <path d="M48.5 29.5 C44 22.5 38.5 25.5 41 28.2 C42.5 29.8 46 29.8 48.5 29.5 Z M48.5 29.5 C53 22.5 58.5 25.5 56 28.2 C54.5 29.8 51 29.8 48.5 29.5 Z" fill="#ffd166" stroke="#e9b53a" strokeWidth="1" /></g></g></>),
+  S('hmm', '🤔', 'Hmm', 'christmas', <g className="st-bob">
+    <Face x={27} y={30} r={21} eyes="dot" mouth="none" more={<>
+      <path d="M-13.5 -11.4 L-5 -11.8 M4 -13 Q8.5 -17.4 13.5 -13.6" {...line} strokeWidth={2.3} /><path d="M-6.5 11.5 Q-1 9 5.5 11.5" {...line} strokeWidth={2.4} /></>} />
+    <g transform="rotate(8 51 44)"><rect x="42" y="27" width="19" height="34" rx="2.6" fill="#fffdf4" stroke="#d6cbb2" strokeWidth="1.3" /><path d="M42 31.5 V29.6 A2.6 2.6 0 0 1 44.6 27 H58.4 A2.6 2.6 0 0 1 61 29.6 V31.5 Z" fill="#e23d4b" />
+      <path d="M45 38 l1.5 1.7 l2.6 -3.4 M45 45.5 l1.5 1.7 l2.6 -3.4" fill="none" stroke="#2f9e5b" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /><rect x="44.8" y="51.4" width="4.6" height="4.2" rx=".8" fill="#e23d4b" /><path d="M47.1 51.4 V55.6" stroke="#ffd166" strokeWidth="1.1" />
+      <path d="M52 38 H58 M52 45.5 H58 M52 53.4 H58" stroke="#b9b3cf" strokeWidth="1.7" strokeLinecap="round" /></g>
+    <path d="M24 51.5 L35 44.5" stroke={HAND_EDGE} strokeWidth="7.6" strokeLinecap="round" /><path d="M24 51.5 L35 44.5" stroke={HAND} strokeWidth="5" strokeLinecap="round" />{hand(23, 53, 6.4)}</g>),
+  S('secret', '🤫', 'Shh', 'christmas', <g className="st-bob">
+    <g transform="rotate(9 53 46)"><rect x="42" y="38" width="20.5" height="19" rx="2.6" fill="#2f9e5b" /><rect x="50" y="38" width="4.6" height="19" fill="#ffd166" />
+      <path d="M52.3 38 C48 30.5 42.5 33.5 45 36.6 C46.5 38.4 50 38.4 52.3 38 Z M52.3 38 C56.6 30.5 62.1 33.5 59.6 36.6 C58.1 38.4 54.6 38.4 52.3 38 Z" fill="#ffd166" stroke="#e9b53a" strokeWidth="1" /></g>
+    <Face x={26} y={31} r={20.5} eyes="dot" mouth="none" brows="up" blush />
+    <rect x="23.2" y="33.5" width="5.6" height="17" rx="2.8" fill={HAND} stroke={HAND_EDGE} strokeWidth="1.3" /><ellipse cx="26.5" cy="54" rx="8" ry="6.2" fill={HAND} stroke={HAND_EDGE} strokeWidth="1.4" /></g>),
+  S('melt', '😢', 'Sad snowman', 'christmas', <g className="st-bob">
+    <ellipse cx="32" cy="55.5" rx="28.5" ry="7" fill="#cfeaff" stroke="#93c9ee" strokeWidth="1.3" />
+    <path d="M13 54 C10.5 41 15 20 32 20 C49 20 53.5 41 51 54 C50 57.6 42 58.6 32 58.6 C22 58.6 14 57.6 13 54 Z" fill="#fff" stroke="#cfe3f2" strokeWidth="1.5" />
+    <g transform="rotate(24 46 15)"><rect x="33" y="18" width="27" height="4.8" rx="2.4" fill="#33285a" /><rect x="38.5" y="5.5" width="16" height="14" rx="1.8" fill="#33285a" /><rect x="38.5" y="13.6" width="16" height="3.8" fill="#e23d4b" /></g>
+    <Face bare y={39} r={18} eyes="dot" mouth="none" brows="sad" blush more={<>
+      <path d="M-1.6 1.6 L7.6 11 L-2.4 7 Z" fill="#ff9d2e" stroke="#e07a0c" strokeWidth=".8" strokeLinejoin="round" />
+      {[[-8, 16.4], [-4.4, 14], [0, 13.2], [4.4, 14], [8, 16.4]].map(([x, y]) => <circle key={x} cx={x} cy={y} r="1.6" fill={INK} />)}{drop(-13, 5.5, 2.5)}</>} /></g>),
+  S('coal', '😠', 'Bah humbug', 'christmas', <g className="st-wobble">
+    <Face skin={['#ff8f5a', '#e4622d']} x={28} y={30} r={21} eyes="dot" mouth="frown" brows="cross" />
+    <path d="M38 52 L43 43.5 L52 41.5 L60 47 L60.5 56 L52 61.5 L42 59.5 Z" fill="#2b2540" stroke="#1d1830" strokeWidth="1.2" strokeLinejoin="round" />
+    <path d="M43 43.5 L52 41.5 L48 49.5 Z M48 49.5 L60 47 L60.5 56 L46 56.5 Z" fill="#453e63" /><path d="M43 43.5 L48 49.5 L52 41.5 M48 49.5 L60 47 M48 49.5 L46 56.5 L52 61.5 M46 56.5 L38 52 M46 56.5 L60.5 56" fill="none" stroke="#6a628f" strokeWidth="1" strokeLinejoin="round" />
+    <path d="M44.6 46.4 L47 45" stroke="#b9b4d4" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M52 42 C48.6 36 43.6 38.6 45.8 41.2 C47 42.8 50 42.7 52 42 Z M52 42 C55.4 36 60.4 38.6 58.2 41.2 C57 42.8 54 42.7 52 42 Z" fill="#ffd166" stroke="#e9b53a" strokeWidth="1" strokeLinejoin="round" /><circle cx="52" cy="42" r="1.7" fill="#e9b53a" /></g>),
+  S('sleepy', '😴', 'Christmas Eve', 'christmas', <g className="st-bob">
+    <Face x={34} y={41} r={19} eyes="shut" mouth="o" blush />
+    <path d="M52 28 C52 13 41 5 30 6 C17 7 8 18 5.5 40 C10 30 15 24.5 19 28 Z" fill="#5b74d6" />
+    <circle cx="27" cy="14.5" r="1.7" fill="#ffd166" /><circle cx="38" cy="12.5" r="1.7" fill="#ffd166" /><circle cx="17" cy="20" r="1.5" fill="#ffd166" /><circle cx="45" cy="18.5" r="1.5" fill="#ffd166" />
+    <rect x="14" y="22.5" width="42" height="8.6" rx="4.3" fill="#fff" stroke="#e3dfe8" strokeWidth="1.2" /><circle cx="5.8" cy="43" r="4.6" fill="#ffd166" stroke="#e9b53a" strokeWidth="1.1" />
+    <path className="st-twinkle" d="M50.5 3 H59.5 L50.5 12.5 H59.5 M56.5 15 H62 L56.5 20.6 H62" fill="none" stroke="#7d6bd0" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></g>),
+  S('sniffle', '🤒', 'Sniffles', 'christmas', <g className="st-bob">
+    <Face y={29} r={20} eyes="shut" mouth="none" brows="sad" more={<>
+      <path d="M-8 13.5 Q-4 11 0 13.5 T8 13.5" {...line} strokeWidth={2.2} />
+      <path d="M4 13 L17 16" stroke="#aaa4c2" strokeWidth="5" strokeLinecap="round" /><path d="M4 13 L17 16" stroke="#fff" strokeWidth="3.2" strokeLinecap="round" /><path d="M11 14.6 L17 16" stroke="#e23d4b" strokeWidth="3.2" strokeLinecap="round" />
+      <circle cx="0" cy="4.2" r="4.6" fill="#f0525f" stroke="#c4263f" strokeWidth="1" /><circle cx="-1.5" cy="2.7" r="1.3" fill="#ffb3bb" /></>} />
+    <path d="M13 43 C22 52 42 52 51 43 L54 50.5 C43 59.5 21 59.5 10 50.5 Z" fill="#2bb3a3" /><path d="M16 53 L26 56.5 L24 64 L14.5 61 Z" fill="#1f9486" /><path d="M27 51.6 L26.4 58.4 M35.5 51.8 L36 58.6 M43.5 49.6 L45 56.2" stroke="#e8fbf7" strokeWidth="2" /></g>),
+  S('brr', '🥶', 'Brr', 'christmas', <g className="st-wobble">
+    <path d="M12 33 C12 3 52 3 52 33" fill="none" stroke="#e23d4b" strokeWidth="4" strokeLinecap="round" />
+    <Face skin={['#cfeaff', '#93c9ee']} y={32} r={20} mouth="none" more={<>
+      <path d="M-12.5 -11 L-5 -12.6 M12.5 -11 L5 -12.6" stroke={INK} strokeWidth="2" strokeLinecap="round" />
+      <rect x="-7.5" y="6" width="15" height="7.4" rx="2.2" fill="#fff" stroke={INK} strokeWidth="1.6" /><path d="M-2.5 6 V13.4 M2.5 6 V13.4 M-7.5 9.7 H7.5" stroke={INK} strokeWidth="1.1" /></>} />
+    <circle cx="11.5" cy="34" r="7.6" fill="#f0525f" stroke="#c4263f" strokeWidth="1.4" /><circle cx="52.5" cy="34" r="7.6" fill="#f0525f" stroke="#c4263f" strokeWidth="1.4" />
+    <path d="M14 47 C23 55 41 55 50 47 L53 54.5 C42 62.5 22 62.5 11 54.5 Z" fill="#2f9e5b" /><path d="M38 57 L47.5 54.5 L50 63 L41 64 Z" fill="#27894e" /><path d="M21 52 L19.5 59 M29 54.5 L28.5 61 M36 54.5 L36.5 61" stroke="#ffd166" strokeWidth="2" />
+    {spark(7, 9, 4.4, '#9fd6ff')}{spark(58, 12, 3.4, '#9fd6ff')}</g>),
   S('deer', '🦌', 'Reindeer', 'christmas', <g className="st-bob">
     <path d="M23 25 C21 18 17 12 12 6 M19.4 15.8 L10.5 15 M16.4 10.6 L21 4 M41 25 C43 18 47 12 52 6 M44.6 15.8 L53.5 15 M47.6 10.6 L43 4" fill="none" stroke="#7a4a22" strokeWidth="3" strokeLinecap="round" />
     <ellipse cx="11" cy="31" rx="7" ry="4.4" fill="#b9773f" stroke="#8f5529" strokeWidth="1.4" transform="rotate(-25 11 31)" /><ellipse cx="53" cy="31" rx="7" ry="4.4" fill="#b9773f" stroke="#8f5529" strokeWidth="1.4" transform="rotate(25 53 31)" />
@@ -150,19 +265,6 @@ export const SMILEYS: StickerDef[] = [
       <path d="M-1 1.5 L11.5 5 L-1 7.6 Z" fill="#ff9d2e" stroke="#e07a0c" strokeWidth=".8" strokeLinejoin="round" />
       {[[-9, 10.5], [-5, 13], [0, 14], [5, 13], [9, 10.5]].map(([x, y]) => <circle key={x} cx={x} cy={y} r="1.5" fill={INK} />)}</>} />
     <rect x="14" y="18" width="36" height="5.4" rx="2.7" fill="#33285a" /><rect x="21" y="3" width="22" height="17" rx="2" fill="#33285a" /><rect x="21" y="13.4" width="22" height="4.6" fill="#e23d4b" /></g>),
-  S('brr', '🥶', 'Brr', 'christmas', <g className="st-wobble">
-    <path d="M12 33 C12 3 52 3 52 33" fill="none" stroke="#e23d4b" strokeWidth="4" strokeLinecap="round" />
-    <Face skin={['#cfeaff', '#93c9ee']} y={32} r={20} mouth="none" more={<>
-      <path d="M-12.5 -11 L-5 -12.6 M12.5 -11 L5 -12.6" stroke={INK} strokeWidth="2" strokeLinecap="round" />
-      <rect x="-7.5" y="6" width="15" height="7.4" rx="2.2" fill="#fff" stroke={INK} strokeWidth="1.6" /><path d="M-2.5 6 V13.4 M2.5 6 V13.4 M-7.5 9.7 H7.5" stroke={INK} strokeWidth="1.1" /></>} />
-    <circle cx="11.5" cy="34" r="7.6" fill="#f0525f" stroke="#c4263f" strokeWidth="1.4" /><circle cx="52.5" cy="34" r="7.6" fill="#f0525f" stroke="#c4263f" strokeWidth="1.4" />
-    <path d="M14 47 C23 55 41 55 50 47 L53 54.5 C42 62.5 22 62.5 11 54.5 Z" fill="#2f9e5b" /><path d="M38 57 L47.5 54.5 L50 63 L41 64 Z" fill="#27894e" /><path d="M21 52 L19.5 59 M29 54.5 L28.5 61 M36 54.5 L36.5 61" stroke="#ffd166" strokeWidth="2" />
-    {spark(7, 9, 4.4, '#9fd6ff')}{spark(58, 12, 3.4, '#9fd6ff')}</g>),
-  S('angel', '😇', 'Angel', 'christmas', <g className="st-bob">
-    <ellipse cx="9" cy="41" rx="8" ry="13.5" fill="#eef4ff" stroke="#bfd0ea" strokeWidth="1.4" transform="rotate(18 9 41)" /><ellipse cx="55" cy="41" rx="8" ry="13.5" fill="#eef4ff" stroke="#bfd0ea" strokeWidth="1.4" transform="rotate(-18 55 41)" />
-    <Face y={39} r={20} eyes="happy" blush />
-    <ellipse className="st-twinkle" cx="32" cy="10" rx="13" ry="4" fill="none" stroke="#ffc93a" strokeWidth="3.4" /></g>),
-
   // ── New Year ──
   S('party', '🥳', 'Party time', 'newyear', <g className="st-wobble">
     <Face x={29} y={41} r={19} eyes="happy" mouth="none" blush />

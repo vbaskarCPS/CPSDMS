@@ -42,10 +42,10 @@ describe('the occasion coming up', () => {
 });
 
 describe('stickers', () => {
-  it('three for every occasion, each with its own emoji', () => {
+  it('three for every occasion and ten for Christmas, each with its own emoji', () => {
     const per = new Map<string, number>();
     for (const s of STICKERS) per.set(s.occasion, (per.get(s.occasion) || 0) + 1);
-    expect([...per.values()]).toEqual([3, 3, 3, 3, 3, 3, 3]);
+    expect(Object.fromEntries(per)).toEqual({ halloween: 3, diwali: 3, christmas: 10, newyear: 3, valentine: 3, easter: 3, birthday: 3 });
     expect(new Set(STICKERS.map(s => s.emoji)).size).toBe(STICKERS.length);
     expect(new Set(STICKERS.map(s => s.id)).size).toBe(STICKERS.length);
     expect(upcoming('2026-11-11').every(o => STICKERS.some(s => s.occasion === o.id))).toBe(true);
@@ -56,7 +56,15 @@ describe('stickers', () => {
     expect(stickerOf('❤️')?.id).toBe('heart');   // with the "show as a picture" mark a keyboard adds
     expect(stickerOf('❤')?.id).toBe('heart');
     expect(stickerOf('❄\uFE0F')?.id).toBe('snowflake');
-    expect(STICKERS.every(s => stickerOf(s.emoji) === s && stickerOf(`${s.emoji}\uFE0F`) === s)).toBe(true);
+    const typed = STICKERS.filter(s => !s.trayOnly);
+    expect(typed).toHaveLength(21);
+    expect(typed.every(s => stickerOf(s.emoji) === s && stickerOf(`${s.emoji}\uFE0F`) === s)).toBe(true);
+  });
+  it('the Christmas things added since are ours only from the tray: typed alone they stay ordinary', () => {
+    const picked = STICKERS.filter(s => s.trayOnly);
+    expect(picked.map(s => s.id)).toEqual(['ribbon', 'star', 'bell', 'cocoa', 'ginger', 'cane', 'stocking']);
+    expect(picked.every(s => s.occasion === 'christmas' && stickerOf(s.emoji) === null && stickerOf(`${s.emoji}\uFE0F`) === null)).toBe(true);
+    expect(stickerOf('☕')).toBeNull();
   });
   it('words, two emoji, or an emoji we have no drawing for stay ordinary messages', () => {
     expect(stickerOf('🎄 see you at 6')).toBeNull();

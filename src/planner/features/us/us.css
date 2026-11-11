@@ -30,18 +30,19 @@
 /* the dot that says there's something unread: on the RV button, and on the chat button in Arvy's panel */
 .us-dot { position: absolute; top: 5px; right: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--bad, #d43c3c); box-shadow: 0 0 0 2px var(--bg-2); }
 .arvy-icon { position: relative; }
-/* ── the emoji packs (emoji.tsx): our own small drawings, smileys and things. The tray opens above the box you type
-   in, a pack for each occasion and the one coming up next first; in a message they sit in the line of words, and a
-   message that is only emoji shows them big, moving, with no bubble. ── */
+/* ── the emoji packs (emoji.tsx): our own small drawings, smileys and things. The tray (Tray.tsx) opens above the box
+   you type in and shows one theme at a time, the occasion coming up next first; in a message they sit in the line of
+   words, and a message that is only emoji shows them big, moving, with no bubble. ── */
 .st { display: block; overflow: visible; }
 .st-bob, .st-beat, .st-spin, .st-flap, .st-pop, .st-hop { transform-box: fill-box; transform-origin: center; }
 .st-flick, .st-wobble { transform-box: fill-box; transform-origin: 50% 100%; }
+.st-swing { transform-box: fill-box; transform-origin: 50% 0; }   /* hung from its top: a bell, a stocking, mistletoe */
 .st-bob { animation: stBob 2.4s ease-in-out infinite; }
 .st-beat { animation: stBeat 1.1s ease-in-out infinite; }
 .st-flick { animation: stFlick .9s ease-in-out infinite; }
 .st-spin { animation: stSpin 10s linear infinite; }
 .st-twinkle { animation: stTwinkle 1.5s ease-in-out infinite; }
-.st-wobble { animation: stWobble 1.9s ease-in-out infinite; }
+.st-wobble, .st-swing { animation: stWobble 1.9s ease-in-out infinite; }
 .st-flap { animation: stFlap .55s ease-in-out infinite; }
 .st-pop { animation: stPop 1.7s ease-out infinite; }
 .st-hop { animation: stHop 1.3s ease-in-out infinite; }
@@ -64,13 +65,20 @@
 .us-sticker { padding: 2px 4px; display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; }
 .us-msg.mine .us-sticker { justify-content: flex-end; }
 .arvy-mic.us-on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.us-tray { border-top: 1px solid var(--line); padding: 10px 12px 6px; max-height: 42dvh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-.us-tray h4 { margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; font: 700 12px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
+.us-tray { border-top: 1px solid var(--line); padding: 10px 12px 0; max-height: 42dvh; display: flex; flex-direction: column; gap: 8px; }
+.us-tray h4 { margin: 0; display: flex; gap: 8px; align-items: baseline; font: 700 12px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
 .us-tray h4 em { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--accent); }
-.us-pack { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.us-tray > .us-meta { margin: 0 0 6px; }
+/* the chips that switch theme: one row, however many themes; small to look at, 44 px to the finger (::after) */
+.us-themes { flex: none; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
+.us-themes button { position: relative; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); display: grid; place-items: center; cursor: pointer; }
+.us-themes button::after { content: ''; position: absolute; inset: -7px -3px; }   /* 6 px past the edge, above and below */
+.us-themes button.is-on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--bg)); }
+/* the theme's emoji, six across; a long theme (Christmas has 32) scrolls here, under the heading and the chips */
+.us-pack { min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; padding-bottom: 8px; }
 .us-pack button { aspect-ratio: 1; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); display: grid; place-items: center; cursor: pointer; }
-.us-pack button:active { transform: scale(.92); }
-.us-tray .is-next .us-pack button { background: color-mix(in srgb, var(--amber) 14%, var(--bg)); border-color: color-mix(in srgb, var(--amber) 50%, var(--line)); }
+.us-pack button:active, .us-themes button:active { transform: scale(.92); }
+.us-pack.is-next button { background: color-mix(in srgb, var(--amber) 14%, var(--bg)); border-color: color-mix(in srgb, var(--amber) 50%, var(--line)); }
 /* how the message being written will look, shown while it has one of ours in it (the box itself can only show the look-alike) */
 .us-preview { display: flex; gap: 8px; align-items: baseline; padding: 8px 14px 0; border-top: 1px solid var(--line); }
 .us-preview span { flex-shrink: 0; font: 700 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
