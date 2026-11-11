@@ -128,6 +128,8 @@ d('describe', () => {
     const one = describe({ kind: 'stops', check: { ...order, kind: 'drop', start: undefined, replaces: undefined, left_out: [], stops: [order.stops[1]], km: 0 } });
     expect(one.title).toBe('Drop order: 1 stop'); expect(one.action).toBe('Drop the pin');
     expect(one.lines[1]).toBe('About 0 km in a straight line, starting at Kyle + David (I don’t have your location)');
+    const road = describe({ kind: 'stops', check: { ...order, by_road: true, minutes: 31, km: 24.2 } });
+    expect(road.lines[3]).toBe('About 31 min of driving (24.2 km), from where you are');
   });
   it('an order only ever replaces its own kind of pin', () => {
     expect(stopPin('drop').test('Drop 3 · Kyle')).toBe(true);

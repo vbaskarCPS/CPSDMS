@@ -8,6 +8,7 @@ import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import { actAsLegacyRouteManager, actAsSharedViewer, legacyLiveSession, legacyRouteManagers, legacySharedWith } from '../../lib/legacy';
 import { legacyManagerId } from '../../lib/startSession';
+import { rmCenterFor } from '../../lib/floater';
 import { beginManagerDay } from '../../../lib/offline/fieldDay';
 import { Btn, ErrorBox, Loading } from '../../ui';
 import { Benny } from '../benny/BennyPanel';
@@ -15,8 +16,10 @@ import { Benny } from '../benny/BennyPanel';
 const RMLogbook = React.lazy(() => import('../../../pages/Management/RMLogbook'));
 
 export const RMMap: React.FC = () => {
-  const { profile, center, can } = useAuth();
-  const centerId = profile?.rm_center_id || center?.id || null;
+  const { profile, center, centers, can } = useAuth();
+  // a route manager: the center on their account. A super admin: the center they are on in the top bar.
+  const centerId = rmCenterFor(profile, center);
+  const mapCenter = center?.id === centerId ? center : centers.find(c => c.id === centerId) || null;
   const [viewing, setViewing] = useState<string | null>(null);
   const [viewingName, setViewingName] = useState<string | null>(null);
   const own = profile ? legacyManagerId(profile.full_name) : null;
@@ -53,9 +56,9 @@ export const RMMap: React.FC = () => {
       <div className="v2-head"><Link to="/app" className="v2-link">‹ Home</Link><span className="v2-h1">Route Manager map</span></div>
       <div className="v2-card" style={{ padding: 24 }}>
         {s?.kind === 'nocenter' && <>Your account isn’t linked to a command center yet. Ask the Super Admin to set your RM center in User Management.</>}
-        {s?.kind === 'nosession' && <>No session is live at {center?.display_name || 'your center'} yet. Your map opens here once today’s session has been started.</>}
+        {s?.kind === 'nosession' && <>No session is live at {mapCenter?.display_name || 'your center'} yet. Your map opens here once today’s session has been started.</>}
         {s?.kind === 'notmanager' && <>
-          <div style={{ marginBottom: 12 }}>You aren’t a route manager on today’s session{center ? ` at ${center.display_name}` : ''}, and no manager has shared their map with you. Once one does (RM map › Layers › Share with), it opens here.</div>
+          <div style={{ marginBottom: 12 }}>You aren’t a route manager on today’s session{mapCenter ? ` at ${mapCenter.display_name}` : ''}, and no manager has shared their map with you. Once one does (RM map › Layers › Share with), it opens here.</div>
           {s.managers.length > 0 && <>
             <div className="v2-card-h">Open a manager’s map</div>
             <div className="v2-row">{s.managers.map(m => <Btn key={m.user_id} kind="o" onClick={() => { setViewing(m.user_id); setViewingName(m.name); }}>{m.name}</Btn>)}</div>

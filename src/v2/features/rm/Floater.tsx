@@ -9,7 +9,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Map as MapIcon, RefreshCw, Users } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
-import { actAsLegacyFloater, floaterManagers, routeRuns, type FloaterManager } from '../../lib/floater';
+import { actAsLegacyFloater, floaterManagers, rmCenterFor, routeRuns, type FloaterManager } from '../../lib/floater';
 import { hasLiveRouteManagerSeat } from '../../lib/legacy';
 import { legacyManagerId } from '../../lib/startSession';
 import { serviceLabel } from '../../lib/permissions';
@@ -30,7 +30,7 @@ export const FloaterPicker: React.FC = () => {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [note, setNote] = useState<string | null>(null);
   // my own map, when I'm a manager on a session today
-  const ownCenter = profile?.rm_center_id || center?.id || null;
+  const ownCenter = rmCenterFor(profile, center);
   const own = useLoad(async () => ownCenter && profile ? hasLiveRouteManagerSeat(ownCenter, legacyManagerId(profile.full_name)) : false, [ownCenter, profile?.full_name]);
 
   const byCenter = useMemo(() => {

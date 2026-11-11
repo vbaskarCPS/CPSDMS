@@ -41,7 +41,7 @@ export function bennyFeatures(spec: Spec, shapes: RouteShape[], outlines: Record
   // an order: its stops joined in order, from where the manager is when that is known
   const stops = spec.pins.filter(p => typeof p.n === 'number' && Number.isFinite(p.lat) && Number.isFinite(p.lng)).sort((a, b) => a.n! - b.n!);
   const start = spec.start && Number.isFinite(spec.start.lat) && Number.isFinite(spec.start.lng) ? spec.start : null;
-  const line = [...(start && stops.length ? [[start.lng, start.lat]] : []), ...stops.map(p => [p.lng, p.lat])];
+  const line = spec.path && spec.path.length > 1 && stops.length ? spec.path : [...(start && stops.length ? [[start.lng, start.lat]] : []), ...stops.map(p => [p.lng, p.lat])];
   const path: GeoJSON.Feature[] = [
     ...(line.length > 1 ? [{ type: 'Feature', properties: { kind: 'line' }, geometry: { type: 'LineString', coordinates: line } } as GeoJSON.Feature] : []),
     ...(start && stops.length ? [{ type: 'Feature', properties: { kind: 'start' }, geometry: { type: 'Point', coordinates: [start.lng, start.lat] } } as GeoJSON.Feature] : []),
@@ -148,10 +148,11 @@ const MapBox: React.FC<{ spec: Spec; centerId?: string | null; tall?: boolean }>
         paint: { 'text-color': '#7c2d12', 'text-halo-color': '#fff', 'text-halo-width': 2 } });
       m.addLayer({ id: 'b-out-name', type: 'symbol', source: 'b-names', layout: { 'text-field': ['get', 'name'], 'text-size': 13, 'text-anchor': 'bottom', 'text-offset': [0, -0.4], 'text-allow-overlap': true,
         'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'] }, paint: { 'text-color': '#0f172a', 'text-halo-color': '#fff', 'text-halo-width': 2 } });
-      // an order's line and "you are here", under the pins
+      // an order's line (solid along the road when the road is known, dotted straight legs when not) and "you are here", under the pins
+      const byRoad = !!spec.path && spec.path.length > 1;
       m.addSource('b-path', { type: 'geojson', data: fc.path });
       m.addLayer({ id: 'b-path', type: 'line', source: 'b-path', filter: ['==', ['get', 'kind'], 'line'], layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': STOP, 'line-width': 3, 'line-dasharray': [0.6, 1.8], 'line-opacity': 0.9 } });
+        paint: { 'line-color': STOP, 'line-width': byRoad ? 4 : 3, 'line-opacity': byRoad ? 0.75 : 0.9, ...(byRoad ? {} : { 'line-dasharray': [0.6, 1.8] }) } });
       m.addLayer({ id: 'b-start', type: 'circle', source: 'b-path', filter: ['==', ['get', 'kind'], 'start'], paint: { 'circle-radius': 7, 'circle-color': '#16a34a', 'circle-stroke-color': '#fff', 'circle-stroke-width': 3 } });
       // pins: a stop in an order is bigger and carries its number
       m.addLayer({ id: 'b-pins', type: 'circle', source: 'b-pins', paint: { 'circle-radius': ['case', ['has', 'n'], 12, 6], 'circle-color': ['case', ['has', 'n'], STOP, '#dc2626'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });

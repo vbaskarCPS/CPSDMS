@@ -19,6 +19,7 @@ import { appShowedDates, countBefore } from './payoutEngine';
 import { fullName } from './workerbook';
 import { saveBooking, type BookingPatch, type BookingStatus } from './bookings';
 import type { BookingEmailKind, EmailPreset } from './bookingEmails';
+import { STOP_WORD } from './bennyDrive';
 
 export type TeamMode = 'roster' | 'solo' | 'pairs';
 export interface StartDayCheck {
@@ -67,8 +68,9 @@ export interface Stop { n: number; label: string; who: string; lat: number; lng:
 export interface StopsCheck {
   ok: boolean; problems?: string[]; kind: StopKind; date: string; manager: string; start?: { lat: number; lng: number };
   stops: Stop[]; left_out?: string[]; km: number; replaces?: number; maps?: string[]; routes?: string[];
+  /** set in the app once the stops are in driving order (bennyDrive): then km is road kilometres and minutes the drive */
+  by_road?: boolean; minutes?: number;
 }
-const STOP_WORD: Record<StopKind, string> = { drop: 'Drop', pickup: 'Pickup', check: 'Check' };
 /** The pins an order of this kind leaves on the map: "Drop 3 · Kyle". */
 export const stopPin = (kind: StopKind) => new RegExp(`^${STOP_WORD[kind]} \\d+ · `);
 
@@ -149,7 +151,7 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         lines: [
           ...c.stops.slice(0, 10).map(s => `${s.n}. ${s.who} · ${where(s)}`),
           ...(c.stops.length > 10 ? [`+ ${c.stops.length - 10} more`] : []),
-          c.start ? `About ${c.km} km in a straight line, from where you are` : `About ${c.km} km in a straight line, starting at ${c.stops[0]?.who} (I don’t have your location)`,
+          `About ${c.by_road ? `${c.minutes} min of driving (${c.km} km)` : `${c.km} km in a straight line`}${c.start ? ', from where you are' : `, starting at ${c.stops[0]?.who} (I don’t have your location)`}`,
           ...(c.left_out?.length ? [`Left out: ${c.left_out.join(', ')}`] : []),
           ...(c.replaces ? [`Replaces your ${c.replaces} earlier ${c.kind} pin${c.replaces === 1 ? '' : 's'}`] : []),
           'Only you see these pins. Tap one on the map, then Navigate.',
