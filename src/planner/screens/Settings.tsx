@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, ListChecks, Sparkles } from 'lucide-react';
 import { changePin, saveSettings, signOut, type PlannerPass } from '../lib/auth';
 import { PushCard } from '../ui/PushCard';
 import { MemoryCard } from '../ui/MemoryCard';
+import { ArrangeTile } from '../features/widgets';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
@@ -89,6 +90,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
       </form>
 
       {morningP && <Link className="pl-tile" to="/setup"><Sparkles aria-hidden /><div className="pl-grow"><b>Set up my day again</b><small>The four short steps: your times, habits, last period, reminders</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>}
+
+      <ArrangeTile />
 
       <MemoryCard />
 
