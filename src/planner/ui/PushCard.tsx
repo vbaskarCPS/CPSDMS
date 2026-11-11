@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react';
 import { Bell, BellOff, Smartphone } from 'lucide-react';
 import { Card, Button } from './primitives';
-import { disablePush, enablePush, pushState, sendTest, type PushState } from '../lib/push';
+import { checkPush, disablePush, enablePush, pushAdvice, pushState, type PushCheck, type PushState } from '../lib/push';
+import { app, appBase } from '../lib/app';
 import { clock, hhmm, minutesOf, routineNow, planAt, type Routine } from '../lib/routine';
 
 /** The reminders a routine gives, as shown before turning them on (the sending is supabase/functions/planner-push). */
@@ -24,7 +25,14 @@ export function PushCard() {
   const [state, setState] = useState<PushState | 'loading'>('loading');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [check, setCheck] = useState<PushCheck | 'running' | null>(null);   // "Check notifications": where they stop
   const r = routineNow();
+  const runCheck = async () => {
+    setMsg(null); setCheck('running');
+    try { setCheck(await checkPush(app().name, `${appBase()}/icon-192.png`)); }
+    catch (e) { setCheck(null); setMsg({ text: e instanceof Error ? e.message : 'The check didn’t run.', bad: true }); }
+  };
+  const found = check && check !== 'running' ? pushAdvice(check) : null;
 
   const refresh = () => { void pushState().then(setState); };
   useEffect(refresh, []);
@@ -65,9 +73,16 @@ export function PushCard() {
       <div className="pl-row" style={{ flexWrap: 'wrap' }}>
         {state === 'off' && <Button primary disabled={busy} onClick={() => void run(enablePush, 'Reminders are on.')}>Turn on notifications</Button>}
         {state === 'on' && <Button disabled={busy} onClick={() => void run(disablePush, 'Reminders are off.')}>Turn off</Button>}
-        {state === 'on' && <Button ghost disabled={busy} onClick={() => void run(async () => { const r = await sendTest(); if (!r.sent) throw new Error('Nothing was delivered — try turning them off and on again.'); }, 'Test sent.')}>Send a test</Button>}
+        {state === 'on' && <Button ghost disabled={busy || check === 'running'} onClick={() => void runCheck()}>{check === 'running' ? 'Checking…' : 'Check notifications'}</Button>}
       </div>
       {msg && <p className={msg.bad ? 'pl-error' : 'pl-muted'} style={{ fontSize: 13 }}>{msg.text}</p>}
+      {check === 'running' && <p className="pl-muted" style={{ fontSize: 13 }}>Putting one up from this phone, then sending one from the server. This can take 20 seconds.</p>}
+      {found && (
+        <div className="pl-stack" style={{ gap: 6, fontSize: 14 }} role="status">
+          {found.lines.map(l => <div key={l.text} className="pl-row" style={{ alignItems: 'flex-start', gap: 8 }}><b style={{ color: l.ok ? 'var(--good)' : l.ok === false ? 'var(--bad)' : 'var(--ink-2)', flex: 'none' }}>{l.ok ? '✓' : l.ok === false ? '✗' : '?'}</b><span>{l.text}</span></div>)}
+          {found.todo && <p className={found.ok ? 'pl-muted' : ''} style={{ fontSize: 13.5, fontWeight: found.ok ? 400 : 600 }}>{found.todo}</p>}
+        </div>
+      )}
 
       <div>
         <p className="pl-eyebrow" style={{ marginBottom: 6 }}>What you'll get</p>
