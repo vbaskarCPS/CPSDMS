@@ -55,33 +55,47 @@ async function claude(sys: string, messages: unknown[], tools: unknown[], coachi
   return { content: Array.isArray(d.content) ? d.content : [], stop_reason: d.stop_reason || 'end_turn' };
 }
 
-/** A structured answer through a forced tool call (the API makes it match the schema). Forced tools can't be used
- *  with thinking, so it's switched off; a model that rejects the switch is asked again without it. */
-let thinkingParamOk = true;
+/** A structured answer through a tool call named `answer`. Best is forcing the call (the API then makes it match the
+ *  schema) with thinking off, as a forced call can't be combined with thinking. Some models can't switch thinking off
+ *  or can't be forced at all: those are asked to call the tool instead (tool_choice auto) and given room to think.
+ *  What worked is remembered per model. An answer that isn't a tool call is asked again from the fallback model. */
+const forcedMode = new Map<string, number>();   // model → 0 forced, thinking off · 1 forced · 2 asked to call it
 async function claudeForced<T>(sys: string, user: string, schema: unknown, maxTokens: number): Promise<T> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
-  let model = COACH_MODEL; let res: Response | null = null; let data: Record<string, unknown> = {};
-  for (let attempt = 0; attempt < 4; attempt++) {
+  type Out = { stop_reason?: string; content?: { type: string; input?: unknown }[]; error?: { message?: string } };
+  const answerOf = (d: Out) => (d.stop_reason === 'max_tokens' ? undefined : (d.content || []).find(c => c.type === 'tool_use'));
+  let model = COACH_MODEL; let res: Response | null = null; let data: Out = {}; let waits = 0;
+  for (let attempt = 0; attempt < 9; attempt++) {
+    const mode = forcedMode.get(model) ?? 0;
     res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-      body: JSON.stringify({ model, max_tokens: maxTokens, system: sys, messages: [{ role: 'user', content: user }], ...(thinkingParamOk ? { thinking: { type: 'disabled' } } : {}),
-        tools: [{ name: 'answer', description: 'The structured answer.', input_schema: schema }], tool_choice: { type: 'tool', name: 'answer' } }),
+      body: JSON.stringify({ model, max_tokens: mode === 2 ? maxTokens + 3000 : maxTokens,
+        system: mode === 2 ? `${sys}\n\nGive your answer only by calling the "answer" tool, once, with the complete answer. Write nothing else.` : sys,
+        messages: [{ role: 'user', content: user }], ...(mode === 0 ? { thinking: { type: 'disabled' } } : {}),
+        tools: [{ name: 'answer', description: 'The structured answer.', input_schema: schema }], tool_choice: mode === 2 ? { type: 'auto' } : { type: 'tool', name: 'answer' } }),
       signal: AbortSignal.timeout(110000),
     });
-    data = await res.json().catch(() => ({}));
-    if (res.ok) break;
-    const msg = String((data as { error?: { message?: string } }).error?.message || '');
-    if (res.status === 400 && thinkingParamOk && /thinking/i.test(msg)) { thinkingParamOk = false; continue; }
-    if (res.status === 404 || /model/i.test(msg) && res.status === 400) { if (model !== FALLBACK) { model = FALLBACK; continue; } }
-    if (!(res.status === 429 || res.status === 529 || res.status >= 500)) break;
-    await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+    data = await res.json().catch(() => ({})) as Out;
+    if (res.ok) {
+      if (answerOf(data) || model === FALLBACK) break;
+      console.error(`planner-arvy: ${model} gave no structured answer (${data.stop_reason}), asking ${FALLBACK}`);
+      model = FALLBACK; continue;
+    }
+    const msg = String(data.error?.message || '');
+    if (res.status === 400 && mode < 2 && /thinking|tool_choice/i.test(msg)) {
+      console.error(`planner-arvy: ${model}, forced answer mode ${mode}: ${msg}`);
+      forcedMode.set(model, /tool_choice/i.test(msg) ? 2 : mode + 1); continue;
+    }
+    if ((res.status === 404 || res.status === 400 && /model/i.test(msg)) && model !== FALLBACK) { console.error(`planner-arvy: ${model} unavailable (${msg || res.status}), using ${FALLBACK}`); model = FALLBACK; continue; }
+    if (!(res.status === 429 || res.status === 529 || res.status >= 500) || ++waits > 3) break;
+    await new Promise(r => setTimeout(r, 1200 * waits));
   }
-  if (!res || !res.ok) throw new Error((data as { error?: { message?: string } }).error?.message || `Anthropic ${res?.status}`);
+  if (!res || !res.ok) throw new Error(data.error?.message || `Anthropic ${res?.status}`);
   if (data.stop_reason === 'max_tokens') throw new Error('That plan ran too long. Try again.');
-  const use = ((data.content || []) as { type: string; input?: unknown }[]).find(c => c.type === 'tool_use');
-  if (!use) throw new Error('Arvy didn’t answer. Try again.');
+  const use = answerOf(data);
+  if (!use || !use.input || typeof use.input !== 'object') throw new Error('Arvy didn’t answer. Try again.');
   return use.input as T;
 }
 
