@@ -3,7 +3,7 @@
 //   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, following, user_name, spoken, diag } }
 //     → { reply, map?, proposal? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
-//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | payouts | bonus | texts.
+//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | payouts | bonus | texts | remove.
 //              The Benny never makes the change itself: the app does, with the same code as its screens, after the person taps
 //              Confirm. booking_emails changes nothing at all: its card opens the Send booking emails screen, where the person sends.
 //              payouts changes nothing either: its card opens the payout screen, where the person finalizes each payout.
@@ -27,7 +27,7 @@
 // model) and roughly what it cost (cost.ts): Super Admin › Bug log › AI logs (benny_ai_log). Saving never holds up or
 // fails an answer.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { FAST_TOOLS, TOOLS, arrayLengths, fastAnswerStop, forModel, needsMain, now, openMap, systemBlocks, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
+import { FAST_TOOLS, TOOLS, arrayLengths, fastAnswerStop, forModel, namedIn, needsMain, now, openMap, saidForNames, systemBlocks, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
 import { costUsd, type Tally } from './cost.ts';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
@@ -63,13 +63,19 @@ const FIRST_CARDS = ['start_day', 'give_route', 'partner', 'solo'];
 const CANT = /\b(can['’]?t|cannot|not able to|unable to|don['’]t have (a|the) (tool|way)|no (tool|way) (to|for)|isn['’]t (something i can|switched on|available)|not (yet )?(supported|possible|available))\b/i;
 const OFF_TOPIC = /only help with the DMS/i;
 
-async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, input: Record<string, unknown>): Promise<{ out: unknown; proposal?: Proposal }> {
+async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, input: Record<string, unknown>, said: string[] = []): Promise<{ out: unknown; proposal?: Proposal }> {
   if (!TOOLS.some(t => t.name === name && t.roles.includes(role))) return { out: { error: `${name} isn't available to you` } };
   const call = toolCall(name, input, ctx);
   if (!call) return { out: { error: `unknown tool ${name}` } };
   if ('log' in call) return { out: await logEntry(sb, ctx, call.log, input) };
   const { data, error } = await sb.rpc(call.fn, call.args);
   if (error) return { out: { error: error.message } };
+  // taking someone off the day erases their logsheet: each worker has to have been named, in what the person just said or
+  // in the short question of ours they are answering. A match the Benny made by sound is asked about, never carded.
+  if (call.card?.kind === 'remove' && data && (data as { ok?: boolean }).ok === true) {
+    const unnamed = ((data as { workers?: { cn: string; name: string }[] }).workers || []).filter(w => !namedIn(w, said));
+    if (unnamed.length) return { out: { ok: false, problems: unnamed.map(w => `${w.name} (${w.cn}) wasn’t named in what they said. Ask whether that is who they mean, giving the full name and CN, and make the card only after they say yes.`) } };
+  }
   // a change that checks out becomes a card for the person to confirm
   if (call.card && data && (data as { ok?: boolean }).ok === true) {
     return { out: { ...(forModel(call.card.kind, data) as object), card: 'shown: the person confirms it there' }, proposal: { ...call.card, check: data as Record<string, unknown> } };
@@ -218,7 +224,7 @@ Deno.serve(async req => {
         for (const u of uses) {
           if (u.name === 'log_request' || u.name === 'report_bug') out.logged = true;
           const s0 = Date.now();
-          const { out: got, proposal: p } = await runTool(sb, ctx, role as Role, u.name || '', u.input || {});
+          const { out: got, proposal: p } = await runTool(sb, ctx, role as Role, u.name || '', u.input || {}, saidForNames(history));
           toolRuns.push({ name: u.name || '', model: fast ? 'fast' : 'main', ok: !(got && (got as { error?: string }).error), ms: Date.now() - s0 });
           if (fast && got && (got as { error?: string }).error) return { ...out, stop: { why: 'tool_error' } };
           if (p) out.proposal = p;

@@ -31,6 +31,7 @@ import { saveBooking, type BookingPatch, type BookingStatus } from './bookings';
 import type { BookingEmailKind, EmailPreset } from './bookingEmails';
 import { STOP_WORD } from './bennyDrive';
 import { textOf, textsTitle, type TextPerson, type TextsCheck, type TextsState } from './bennyTexts';
+import { removeCard, removedSaid, type RemoveCheck, type RemoveDone } from './bennyRemove';
 import { queueHref } from './payoutQueue';
 import { cartContext, dayLines, listCarts, saveDay } from './payoutCarts';
 import { bonusName, bonusesSaid, liveBonusPatch, withBonuses, type BonusCheck, type LiveNow } from './bennyBonus';
@@ -133,6 +134,7 @@ const PAID_AS: [string, string][] = [['card', 'card'], ['e_transfer', 'e-transfe
 export const payoutsStart = (c: PayoutsCheck): string | null => queueHref(c.date, c.carts.map(x => x.cn));
 
 export type BennyProposal =
+  | { kind: 'remove'; check: RemoveCheck }
   | { kind: 'texts'; check: TextsCheck }
   | { kind: 'bonus'; check: BonusCheck }
   | { kind: 'payouts'; check: PayoutsCheck }
@@ -279,6 +281,7 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         action: 'Open',
       };
     }
+    case 'remove': return removeCard(p.check);
     case 'texts':
       // drawn by its own card (a button per worker); these are its words for anything that reads a card as lines
       return { title: textsTitle(p.check), lines: p.check.people.map(x => `${x.name}: “${x.text}”`), action: 'Text' };
@@ -467,6 +470,34 @@ export async function moveFromBenny(p: Extract<BennyProposal, { kind: 'partner' 
   return `${c.b.name} is on ${c.a.name.split(' ')[0]}’s cart now.`;
 }
 
+/**
+ * RM map › the worker › Remove from session (the same steps as RMTeamTab's remove): off a shared cart first, then off the
+ * day. It erases the worker's logsheet for the day, so the database checks again that nothing is logged and nothing
+ * moved, records who is about to come off, and afterwards says who really is off: only that is reported as done.
+ */
+export async function removeFromBenny(p: Extract<BennyProposal, { kind: 'remove' }>, centerId: string): Promise<string> {
+  const c = p.check; const names = (xs: { name: string }[]) => xs.map(x => x.name).join(', ');
+  const begun = must(await db.rpc('benny_remove_begin', { p_center: centerId, p_workers: c.workers.map(w => w.cn), p_stamp: c.stamp })) as RemoveCheck & { change_ids?: string[] };
+  if (!begun?.ok || !begun.change_ids?.length || !begun.workers?.length) throw new Error(begun?.problems?.[0] || 'That can’t be done any more. Ask me again.');
+  let failed: unknown = null;
+  try {
+    const { sessionService, date } = await legacy(centerId);
+    if (date !== c.date) throw new Error('The live day changed since I checked. Ask me again.');
+    for (const w of begun.workers) {
+      if (w.mates?.length) await sessionService.reassignWorker(w.cn, { type: 'new_solo' });
+      await sessionService.deleteWorker(w.cn);
+    }
+  } catch (e) { failed = e; }
+  // look at the live day whatever happened, so the record and the answer say who is really off
+  const done: RemoveDone | null = await (async () => { try { return (await db.rpc('benny_remove_done', { p_ids: begun.change_ids })).data as RemoveDone | null; } catch { return null; /* no signal: not confirmed */ } })();
+  const off = (done?.workers || []).filter(x => x.state === 'done'); const still = (done?.workers || []).filter(x => x.state !== 'done');
+  const why = failed instanceof Error && failed.message ? ` (${failed.message.replace(/\.$/, '')})` : '';
+  if (done?.state === 'done') return removedSaid(c, done);
+  if (done?.state === 'partly') throw new Error(`Only part of it went through${why}. ${removedSaid(c, done)} Still on: ${names(still)}. Check the route manager map before trying again.`);
+  if (done?.state === 'not_removed') throw new Error(`${names(still) || names(c.workers)} ${still.length === 1 || c.workers.length === 1 ? 'is' : 'are'} still on today’s map${why}. Check the route manager map, and use Remove from session there if it doesn’t work from here.`);
+  throw new Error(`I couldn’t read the live map back to confirm it${off.length ? '' : why}. Check the route manager map before trying again.`);
+}
+
 /** Bookings › List › save: the same save, after the same check that made the card says nothing moved since. */
 export async function bookingFromBenny(p: Extract<BennyProposal, { kind: 'booking' }>, centerId: string): Promise<string> {
   const c = await recheck<BookingCheck>('benny_check_booking', { p_center: centerId, p_booking: p.check.booking.id, p_change: p.check.ask });
@@ -602,6 +633,7 @@ export async function doProposal(p: BennyProposal, center: CenterLite): Promise<
   if (p.kind === 'booking') return bookingFromBenny(p, center.id);
   if (p.kind === 'job') return jobFromBenny(p, center.id);
   if (p.kind === 'bonus') return bonusesFromBenny(p, center);
+  if (p.kind === 'remove') return removeFromBenny(p, center.id);
   if (p.kind === 'pin') return pinFromBenny(p, center.id);
   if (p.kind === 'stops') return stopsFromBenny(p, center.id);
   // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)

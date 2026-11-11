@@ -1,6 +1,6 @@
 // The Benny's tools (supabase/functions/benny-assist/tools.ts): who gets which, and that each one goes somewhere.
 import { describe, it, expect } from 'vitest';
-import { FAST_TOOLS, TOOLS, arrayLengths, dayOpen, fastAnswerStop, forModel, heardRight, needsMain, now, openMap, rules, system, systemBlocks, toolCall, toolsFor, ungrounded } from '../../../supabase/functions/benny-assist/tools';
+import { FAST_TOOLS, TOOLS, arrayLengths, dayOpen, fastAnswerStop, forModel, heardRight, namedIn, needsMain, now, openMap, rules, saidForNames, system, systemBlocks, toolCall, toolsFor, ungrounded } from '../../../supabase/functions/benny-assist/tools';
 
 const ctx = { center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-10', rm_manager: 'rm_x' };
 
@@ -85,6 +85,41 @@ describe('the Benny’s tools', () => {
       expect(fastAnswerStop('Today is 2026-11-10 and 2 didn’t show.', [lookup], chat, lengths)).toBeNull();   // today's date is known without a lookup
     });
   });
+  describe('taking a worker off today', () => {
+    it('is a card for super admins and route managers, by CN or full name, never run by the small model', () => {
+      expect(toolsFor('rm').map(x => x.name)).toContain('propose_remove'); expect(toolsFor('admin').map(x => x.name)).toContain('propose_remove');
+      expect(toolCall('propose_remove', { workers: [' I1012 ', '', 7, 'Kevontae Ragguette'] }, ctx)).toEqual({ fn: 'benny_check_remove', card: { kind: 'remove' }, args: { p_center: 'c1', p_workers: ['I1012', 'Kevontae Ragguette'] } });
+      expect(toolCall('propose_remove', {}, ctx)).toMatchObject({ args: { p_workers: [] } });
+      expect(FAST_TOOLS).not.toContain('propose_remove');
+      for (const q of ['Remove Devante and Keenan from today’s payout they are not active today', 'take Kenan off today', 'take him off the payout']) expect(needsMain(q), q).toBe('change');
+      for (const role of ['admin', 'rm'] as const) {
+        expect(rules(role)).toContain('taking a worker off today\'s live day');
+        expect(rules(role)).toContain('don\'t swap in the one that sounds closest'); expect(rules(role)).toContain('Tap Remove from today to do it.'); expect(rules(role)).toContain('Never say anyone was taken off');
+      }
+      expect(heardRight({})).toContain('Taking a worker off today is stricter: a name matched by sound is never enough');
+    });
+    it('a worker has to have been named: a name that sounds close doesn’t name them', () => {
+      const kev = { cn: 'I1479', name: 'Kevontae Ragguette' }, kenan = { cn: 'I1012', name: 'Kenan Francis-Bull' };
+      const heard = ['Remove Devante and Keenan from today\'s payout they are not active today'];
+      expect(namedIn(kev, heard)).toBe(false); expect(namedIn(kenan, heard)).toBe(false);   // "Devante" is not Kevontae; "Keenan" is not Kenan
+      expect(namedIn(kenan, ['take Kenan off today'])).toBe(true);
+      expect(namedIn(kenan, ['remove francis-bull'])).toBe(true); expect(namedIn(kenan, ['remove Bull, he went home'])).toBe(true);
+      expect(namedIn(kev, ['remove i1479 please'])).toBe(true); expect(namedIn(kev, ['Remove KEVONTAE.'])).toBe(true);
+      expect(namedIn(kev, ['remove Kev'])).toBe(false);   // part of a name isn't the name
+      expect(namedIn({ cn: '', name: '' }, ['anything'])).toBe(false); expect(namedIn(kev, [])).toBe(false);
+      // a yes to our own short question names them
+      expect(namedIn(kev, ['yes', 'Nobody is called Devante. Do you mean Kevontae Ragguette (I1479)?'])).toBe(true);
+    });
+    it('only what they just said, and a short question of ours they are answering, count', () => {
+      const ask = { role: 'assistant', content: 'Do you mean Kevontae Ragguette (I1479)?' };
+      expect(saidForNames([{ role: 'user', content: 'remove Devante' }, ask, { role: 'user', content: 'yes' }])).toEqual(['yes', ask.content]);
+      // a long answer of ours (the team list) is not a question about one person: a guess can't hide behind it
+      const team = { role: 'assistant', content: 'Your team: ' + 'Kevontae Ragguette (I1479) NSR42, '.repeat(14) + 'want anything else?' };
+      expect(saidForNames([{ role: 'user', content: 'who is on my team' }, team, { role: 'user', content: 'remove Devante' }])).toEqual(['remove Devante']);
+      expect(saidForNames([{ role: 'user', content: 'what route is Kenan on' }, { role: 'assistant', content: 'Kenan Francis-Bull has no route.' }, { role: 'user', content: 'remove him' }])).toEqual(['remove him']);
+      expect(saidForNames([{ role: 'user', content: 'remove Kenan' }])).toEqual(['remove Kenan']);
+    });
+  });
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);
     expect(rm).toEqual(expect.arrayContaining(['live_team', 'logsheet', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'propose_job_change', 'propose_pin', 'propose_stops', 'report_bug', 'log_request', 'show_map']));
@@ -94,7 +129,7 @@ describe('the Benny’s tools', () => {
   });
   it('changes become cards; lookups don’t', () => {
     const kinds = TOOLS.map(t => { const c = toolCall(t.name, {}, ctx); return c && 'fn' in c && c.card ? c.card.kind : null; }).filter(Boolean);
-    expect(kinds.sort()).toEqual(['bonus', 'booking', 'booking_emails', 'give_route', 'job', 'partner', 'payouts', 'pin', 'solo', 'start_day', 'stops', 'texts']);
+    expect(kinds.sort()).toEqual(['bonus', 'booking', 'booking_emails', 'give_route', 'job', 'partner', 'payouts', 'pin', 'remove', 'solo', 'start_day', 'stops', 'texts']);
     const start = toolCall('propose_start_day', { assign: [], team_mode: 'whatever' }, ctx);
     expect(start && 'fn' in start && start.card?.team_mode).toBe('roster');
     expect(toolCall('propose_start_day', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
