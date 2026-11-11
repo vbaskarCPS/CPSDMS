@@ -352,6 +352,11 @@ const who = (v: unknown): Who => (WHO.includes(String(v).toLowerCase() as Who) ?
 const whoLabel = (w: Who) => ({ vijay: 'Vijay', rosh: 'Rosh', both: 'both of you', kiaan: 'Kiaan' }[w]);
 const evText = (e: CalEvent) => `${e.title}, ${pretty(e.date)}${e.time ? ` ${time12(e.time)}${e.endTime ? `–${time12(e.endTime)}` : ''}` : ' (all day)'} for ${whoLabel(e.who)}${e.repeat && e.repeat !== 'none' ? `, repeats ${e.repeat}${e.until ? ` until ${pretty(e.until)}` : ''}` : ''}${e.notes ? ` — ${e.notes}` : ''}`;
 
+/** Two event titles that say the same thing: case, punctuation and extra spaces don't count ("Dentist" and "dentist!"). */
+const sameTitle = (a: string, b: string): boolean => {
+  const plain = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim() || t.trim().toLowerCase();   // a title that is only symbols is compared as it is
+  return plain(a) === plain(b);
+};
 async function addEvent(input: AnyIn): Promise<Change> {
   const title = str(input.title, 100);
   if (!title || !isDate(input.date)) throw new Refuse('I need a title and a date.');
@@ -360,6 +365,10 @@ async function addEvent(input: AnyIn): Promise<Change> {
   if (e.time && isTime(input.end_time) && input.end_time > e.time) e.endTime = input.end_time;
   if (str(input.notes)) e.notes = str(input.notes, 300);
   if (e.repeat !== 'none' && isDate(input.until) && input.until >= e.date) e.until = input.until;
+  // already on the calendar that day at that time under the same title (a screenshot pasted twice, or by both of
+  // them: the calendar is shared): it isn't added again. Arvy says so; it's not something missing, so not a "miss"
+  const twin = (await loadEvents(e.date, e.date)).find(x => occursOn(x, e.date) && (x.time || '') === (e.time || '') && sameTitle(x.title, e.title));
+  if (twin) throw new Refuse(`That’s already on the calendar: ${evText(twin)}.`);
   return {
     kinds: ['event'], confirm: true, lines: [`Calendar: add ${evText(e)}`],
     apply: async () => { const key = eventKey(e); const undo = await snapshot('event', [key]); await putDocs([{ kind: 'event', key, data: e }]); return undo; },

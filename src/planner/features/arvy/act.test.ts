@@ -92,6 +92,39 @@ describe('Arvy changes', () => {
     expect(c.lines[0]).toMatch(/Dentist, .* 3 PM for Rosh/);
   });
 
+  it('the same event isn’t added twice (a screenshot pasted again, or by both of them)', async () => {
+    store.set('event|2026-11-19~e2', { id: 'e2', title: 'Dentist', date: '2026-11-19', time: '15:00', endTime: '16:00', who: 'vijay', repeat: 'none', createdAt: '2026-11-11' });
+    store.set('event|2026-11-27~e3', { id: 'e3', title: 'PD day: no school', date: '2026-11-27', who: 'kiaan', repeat: 'none', createdAt: '2026-11-11' });
+    const before = snap();
+    const again = await prepare('add_event', { title: 'Dentist', date: '2026-11-19', time: '15:00', end_time: '16:00' }).catch(x => x);
+    expect(again).toBeInstanceOf(Refuse);
+    expect(again.message).toMatch(/^That’s already on the calendar: Dentist, .*Nov 19 3 PM–4 PM for Vijay\.$/);
+    expect(again.miss).toBe(false);   // nothing is missing from the planner, so it doesn't go in the improvements log
+    // case, punctuation and extra spaces don't make it another event, and nor does whose it is or how long it runs
+    await expect(prepare('add_event', { title: '  dentist! ', date: '2026-11-19', time: '15:00', who: 'rosh' })).rejects.toThrow(/already on the calendar/);
+    // an all-day one matches an all-day one
+    await expect(prepare('add_event', { title: 'PD Day - no school', date: '2026-11-27' })).rejects.toThrow(/already on the calendar: PD day: no school, .*\(all day\) for Kiaan/);
+    // a repeating event that falls on that day counts (swim class is every Friday at 10)
+    await expect(prepare('add_event', { title: 'Swim class', date: '2026-11-20', time: '10:00', who: 'kiaan' })).rejects.toThrow(/already on the calendar: Swim class, .* repeats weekly/);
+    expect(snap()).toBe(before);   // refusing changed nothing
+    // another time, another day or another title is another event
+    for (const other of [
+      { title: 'Dentist', date: '2026-11-19', time: '16:00' }, { title: 'Dentist', date: '2026-11-19' }, { title: 'Dentist', date: '2026-11-20', time: '15:00' },
+      { title: 'Dentist: Kiaan', date: '2026-11-19', time: '15:00' }, { title: 'PD day: no school', date: '2026-11-27', time: '09:00' },
+      { title: 'Swim class', date: '2026-11-21', time: '10:00' }, { title: 'Swim class', date: '2026-11-20', time: '11:00' },
+    ]) expect((await prepare('add_event', other))!.lines[0]).toMatch(/^Calendar: add /);
+    // a Friday the swim class was skipped is free again
+    store.set('event|2026-11-13~e1', { ...(store.get('event|2026-11-13~e1') as object), skip: ['2026-11-20'] });
+    expect((await prepare('add_event', { title: 'Swim class', date: '2026-11-20', time: '10:00' }))!.confirm).toBe(true);
+    // titles in another alphabet, or that are only symbols, are compared as they are: two different ones aren't the same
+    store.set('event|2026-12-01~e4', { id: 'e4', title: 'पूजा', date: '2026-12-01', time: '18:00', who: 'both', repeat: 'none', createdAt: '2026-11-11' });
+    store.set('event|2026-12-01~e5', { id: 'e5', title: '🎂', date: '2026-12-01', who: 'both', repeat: 'none', createdAt: '2026-11-11' });
+    expect((await prepare('add_event', { title: 'दिवाली', date: '2026-12-01', time: '18:00' }))!.confirm).toBe(true);
+    expect((await prepare('add_event', { title: '🎄', date: '2026-12-01' }))!.confirm).toBe(true);
+    await expect(prepare('add_event', { title: 'पूजा', date: '2026-12-01', time: '18:00' })).rejects.toThrow(/already on the calendar/);
+    await expect(prepare('add_event', { title: '🎂', date: '2026-12-01' })).rejects.toThrow(/already on the calendar/);
+  });
+
   it('skips one day of a repeating event, or deletes the whole series, and undo brings it back', async () => {
     const before = snap();
     const one = (await prepare('delete_event', { date: '2026-11-20', title: 'swim', scope: 'this' }))!;

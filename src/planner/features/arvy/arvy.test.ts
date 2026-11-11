@@ -94,6 +94,23 @@ describe('the chat history the app sends', () => {
     expect(h[3].content).toContain('[Change: they undid it. To-do today: nap]');
     expect((h[3].content as string).startsWith('Rest.')).toBe(true);   // Arvy's own lines carry no stamp (it would start copying them)
   });
+  it('a question that came with pictures says so, and a picture with no words still counts as a question', () => {
+    const at = '2026-11-11T16:00:00';
+    const lines = [
+      { role: 'user' as const, text: '', at, pics: { n: 2, thumbs: ['data:image/jpeg;base64,AA', 'data:image/jpeg;base64,BB'] } },
+      { role: 'assistant' as const, text: 'Two appointments set up.', at },
+      { role: 'user' as const, text: 'thanks', at },
+    ];
+    const h = history(lines);
+    expect(h.map(x => x.role)).toEqual(['user', 'assistant', 'user']);
+    expect(h[0].content).toBe('[Wed, Nov 11, 4:00 PM] (no words: just the picture)\n[2 pictures came with this. You can’t see them any more: if you need to look again, ask them to send them again.]');
+    expect(JSON.stringify(h)).not.toContain('data:image');   // the previews stay on the phone
+    // the pictures themselves go again only for the question just before this one, when this visit still has them
+    const pic = { media_type: 'image/jpeg', data: 'QUJD' };
+    const again = history(lines.slice(0, 2), l => (l.pics ? [pic] : undefined));
+    expect(again[0].content).toEqual([{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'QUJD' } }, { type: 'text', text: '[Wed, Nov 11, 4:00 PM] (no words: just the picture)' }]);
+    expect(typeof history([...lines, { role: 'assistant' as const, text: 'Any time!', at }], () => [pic])[0].content).toBe('string');
+  });
   it('reads out a short, plain version', () => {
     expect(speakable('**Today:**\n- Gym done\n- 3 todos left. Great work! Extra one. And more.')).toBe('Today: Gym done. 3 todos left. Great work!');
   });
