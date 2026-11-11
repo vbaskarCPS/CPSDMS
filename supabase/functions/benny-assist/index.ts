@@ -141,7 +141,9 @@ Deno.serve(async req => {
     const shows = new Set<string>([...FIRST_CARDS, ...(Array.isArray(ctx.cards) ? ctx.cards.map(String) : [])]);
     const done = (reply: string) => {
       // a tab opened before this kind of card existed can't draw it: say so, rather than send a card it would choke on
-      if (proposal && !shows.has(proposal.kind)) return json({ reply: 'I can do that, but this screen is on an older version of the app. Refresh the page, then ask me again.', map: null, proposal: null });
+      // (the same for a start-day card that splits the crew between managers: an older tab would start the day without the crews)
+      const old = proposal && (!shows.has(proposal.kind) || (proposal.kind === 'start_day' && (proposal.check as { crews?: boolean })?.crews === true && !shows.has('crews')));
+      if (old) return json({ reply: 'I can do that, but this screen is on an older version of the app. Refresh the page, then ask me again.', map: null, proposal: null });
       return json({ reply, map: map ? { ...(map as object), title: mapTitle } : mapOf(proposal), proposal });
     };
     for (let round = 0; round < 8; round++) {

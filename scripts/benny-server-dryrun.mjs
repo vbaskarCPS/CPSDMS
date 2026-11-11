@@ -13,6 +13,10 @@ const fakeSb = `
       if (fn === 'benny_ok_any') return s.role ? { data: s.role, error: null } : { data: null, error: { message: 'Not allowed' } };
       if (fn === 'benny_my_rm_ids') return { data: s.role === 'rm' ? ['rm_me', 'rm_buddy'] : null, error: null };
       if (fn === 'benny_side') return { data: { codes: ['NVN19', 'NVN24'], of: 19 }, error: null };
+      if (fn === 'benny_crew_stats') return { data: { ok: true, date: args.p_date, ranked_by: 'average equiv per day worked', ranked: [{ rank: 1, name: 'Tim Hale', cn: 'I1001', days: 9, avg_equiv: 23.17 }, { rank: 2, name: 'Kyle Pitt', cn: 'I1065', days: 7, avg_equiv: 15.99 }],
+        no_days_yet: [], no_shows: [], counts: { booked: 2, showed: 2, ranked: 2, no_days_yet: 0 } }, error: null };
+      if (fn === 'benny_plan_day' && (args.p_assign || []).some(e => e.workers)) return { data: { ok: true, crews: true, notes: [], date: args.p_date, maps: ['MISSION #1'], booked: 2, showed: 2,
+        assign: args.p_assign.map((e, i) => ({ managers: [{ id: 'u' + i, name: e.managers[0] }], routes: [{ code: 'MIS0' + i }], crew: e.workers.map(cn => ({ hire_id: 'h' + cn, cn, name: cn, days: 5, avg_equiv: 12 })), crew_avg: 12 })) }, error: null };
       if (fn === 'benny_plan_day') return { data: { ok: true, date: args.p_date, maps: ['NORTH VANCOUVER #1', 'NORTH VANCOUVER #2'], assign: [{ managers: [{ id: 'u1', name: 'Vijay' }], routes: [{ code: 'NVN01' }, { code: 'NVN19' }] }], booked: 15, showed: 15 }, error: null };
       if (fn === 'benny_check_give') return { data: { ok: false, problems: ['Which one: Michael A, Michael B?'] }, error: null };
       if (fn === 'benny_live') return { data: { live: true, carts: [] }, error: null };
@@ -74,7 +78,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 24); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 25); assert(!('roles' in state.lastAsk.tools[0]));
 console.log('1 start the day: card + map ✓');
 
 // 2. a change with a problem makes no card
@@ -251,6 +255,27 @@ a = await ask('close the payouts', { screen: 'rm', rm_manager: 'rm_me', cards: [
 assert(!state.lastAsk.tools.some(t => ['payouts', 'propose_payouts'].includes(t.name))); assert.equal(a.body.proposal, null); assert(!fns().includes('benny_check_payouts'));
 state.role = 'admin';
 console.log('5i payouts: lined up on a card for super admins, nobody paid out by the server ✓');
+
+// 5j. crews: the averages are looked up, the plan carries who goes with whom, and a tab that can't deal crews is told to refresh
+state.role = 'admin';
+const crewPlan = { date: '2026-11-11', assign: [{ managers: ['Franklyn'], maps: ['MISSION #1'], workers: ['I1065'] }, { managers: ['Jovan'], maps: ['MISSION #2'], workers: ['I1001'] }] };
+state.script = [turn(use('crew_stats', { date: '2026-11-11' })), turn(use('propose_start_day', crewPlan)), say('Franklyn gets Kyle (16.0), Jovan gets Tim (23.2). Tap Start the day to do it.')];
+a = await ask('start tomorrow, give franklyn the worst half in mission and jovan the good guys', { cards: ['crews'] });
+assert.deepEqual(fns().filter(f => /crew|plan/.test(f)), ['benny_crew_stats', 'benny_plan_day']);
+assert.deepEqual(state.rpc.find(x => x[0] === 'benny_plan_day')[1].p_assign.map(e => e.workers), [['I1065'], ['I1001']], 'who goes with whom reaches the database');
+assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.check.crews, true); assert.deepEqual(a.body.proposal.check.assign.map(e => e.crew.map(w => w.cn)), [['I1065'], ['I1001']]);
+state.script = [turn(use('crew_stats', { date: '2026-11-11' })), turn(use('propose_start_day', crewPlan)), say('Tap Start the day to do it.')];
+a = await ask('start tomorrow, give franklyn the worst half', {});   // a tab opened before crews: it would start the day without them
+assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
+state.script = [turn(use('crew_stats', {})), say('Tim is your best at 23.2 equiv a day, then Kyle at 16.0.')];
+a = await ask('who are my best workers', {});
+assert.equal(a.body.proposal, null); assert.deepEqual(state.rpc.find(x => x[0] === 'benny_crew_stats')[1], { p_center: 'c1', p_date: '2026-11-10' });
+state.role = 'rm';
+state.script = [say('That is for the office.')];
+a = await ask('who are my best workers', { screen: 'rm', rm_manager: 'rm_me' });
+assert(!state.lastAsk.tools.some(t => t.name === 'crew_stats'));
+state.role = 'admin';
+console.log('5j crews: averages looked up, the plan carries each manager’s crew, older tabs are told to refresh ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

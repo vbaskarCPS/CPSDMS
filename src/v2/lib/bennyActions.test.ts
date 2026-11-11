@@ -1,5 +1,5 @@
 import { describe as d, it, expect } from 'vitest';
-import { bookingSaved, buildBennyPlan, describe, dollars, emailsPreset, jobUpdates, payoutsStart, stopPin, type JobCheck, type PayoutsCheck, type StartDayCheck } from './bennyActions';
+import { bookingSaved, buildBennyPlan, crewProblems, describe, dollars, emailsPreset, jobUpdates, payoutsStart, stopPin, type JobCheck, type PayoutsCheck, type StartDayCheck } from './bennyActions';
 import { planProblems } from './startSession';
 import { defaultRateCard } from './rateCard';
 import type { RosterRow } from './workerbook';
@@ -49,6 +49,57 @@ d('buildBennyPlan', () => {
     expect(two.routes.map(r => r.managerId)).toEqual(['m1', 'm2']);
     expect(planProblems(two)).toEqual([]);
   });
+  // "give Franklyn the worst half and Jovan the good guys": the plan says who goes with whom
+  const crews = (): StartDayCheck => {
+    const c = check(false, true);
+    c.crews = true;
+    c.assign[0].crew = [{ hire_id: '3', cn: 'I3', name: 'Cal X', days: 4, avg_equiv: 11.4 }, { hire_id: '2', cn: 'I2', name: 'Bob X', days: 6, avg_equiv: 9.04 }];
+    c.assign[0].crew_avg = 10.22;
+    c.assign[1].crew = [{ hire_id: '1', cn: 'I1', name: 'Ann X', days: 9, avg_equiv: 23.17 }, { hire_id: '4', cn: 'I4', name: 'Dee X', days: 0 }];
+    c.assign[1].crew_avg = 23.17;
+    c.notes = ['Roster cart A is split between the crews (Ann X, Bob X): each of them gets a cart of their own.'];
+    return c;
+  };
+  const whose = (p: ReturnType<typeof buildBennyPlan>) => Object.fromEntries(Object.entries(p.members).map(([h, t]) => [h, p.teams.find(x => x.name === t)!.managerId]));
+  it('crews: every worker’s cart goes to the manager whose crew they are in, whatever the cart mode', () => {
+    for (const mode of ['roster', 'solo', 'pairs'] as const) {
+      const p = buildBennyPlan(crews(), mode, roster, mgrs, card, 'lawn_rejuv', 2026);
+      expect(whose(p), mode).toEqual({ 1: 'm2', 2: 'm1', 3: 'm1', 4: 'm2' });
+      expect(planProblems(p), mode).toEqual([]);
+    }
+  });
+  it('crews: a roster cart split between crews is broken up; one kept whole follows its crew; pairs stay inside a crew', () => {
+    const split = buildBennyPlan(crews(), 'roster', roster, mgrs, card, 'lawn_rejuv', 2026);
+    expect(split.teams).toHaveLength(4);                                  // Ann and Bob were cart A: now a cart each
+    expect(new Set(Object.values(split.members)).size).toBe(4);
+    const whole = crews();
+    whole.assign[0].crew = [{ hire_id: '1', name: 'Ann X' }, { hire_id: '2', name: 'Bob X' }]; whole.assign[1].crew = [{ hire_id: '3', name: 'Cal X' }, { hire_id: '4', name: 'Dee X' }];
+    const kept = buildBennyPlan(whole, 'roster', roster, mgrs, card, 'lawn_rejuv', 2026);
+    expect(kept.members[1]).toBe('A'); expect(kept.members[2]).toBe('A');
+    expect(kept.teams.find(t => t.name === 'A')!.managerId).toBe('m1');
+    const pairs = buildBennyPlan(crews(), 'pairs', roster, mgrs, card, 'lawn_rejuv', 2026);
+    expect(pairs.teams).toHaveLength(2);
+    expect(pairs.members[2]).toBe(pairs.members[3]); expect(pairs.members[1]).toBe(pairs.members[4]);   // Bob with Cal (Franklyn's), Ann with Dee (Jovan's)
+    expect(pairs.members[1]).not.toBe(pairs.members[2]);
+  });
+  it('crews: someone the plan missed keeps the old rule, and a crew for a manager who is gone falls back to it too', () => {
+    const c = crews(); c.assign[1].crew = [{ hire_id: '1', name: 'Ann X' }];   // Dee is in nobody's crew
+    const p = buildBennyPlan(c, 'solo', roster, mgrs, card, 'lawn_rejuv', 2026);
+    expect(Object.keys(p.members)).toHaveLength(4);
+    expect(planProblems(p)).toEqual([]);
+    const gone = buildBennyPlan(crews(), 'solo', roster, [mgrs[0]], card, 'lawn_rejuv', 2026);   // Jovan isn't available any more
+    expect(new Set(gone.teams.map(t => t.managerId))).toEqual(new Set(['m1']));
+    expect(planProblems(gone)).toEqual([]);
+  });
+  it('crews: a card gone stale stops the start (a manager gone, or a worker added since) instead of dealing them out quietly', () => {
+    expect(crewProblems(crews(), roster, mgrs)).toEqual([]);
+    expect(crewProblems(check(false, true), [...roster, row('9', 'Zed')], [mgrs[0]])).toEqual([]);   // no crews: the old rules deal with it
+    expect(crewProblems(crews(), roster, [mgrs[0]])).toEqual(['Jovan Chung isn’t available on 2026-11-11 any more, so the crews don’t hold. Ask me again.']);
+    expect(crewProblems(crews(), [...roster, row('9', 'Zed')], mgrs)).toEqual(['Zed X isn’t in a crew: the roster changed since I checked. Ask me again.']);
+    const noShow = roster.map(r => r.hire_id === '4' ? { ...r, attendance: 'no_show' as const } : r);       // someone in a crew marked a no-show since: just not started
+    expect(crewProblems(crews(), noShow, mgrs)).toEqual([]);
+    expect(buildBennyPlan(crews(), 'solo', noShow, mgrs, card, 'lawn_rejuv', 2026).teams).toHaveLength(3);
+  });
   it('a manager no longer available is left out', () => {
     const p = buildBennyPlan(check(true), 'solo', roster, [mgrs[0]], card, 'lawn_rejuv', 2026);
     expect(p.pairs).toBeUndefined();
@@ -62,6 +113,21 @@ d('describe', () => {
     expect(c.action).toBe('Start the day');
     expect(c.lines[0]).toBe('Manager: Franklyn Mitchell, solo');
     expect(c.lines[1]).toBe('Routes: NORTH VANCOUVER #1 (2)');
+    expect(c.lines[2]).toBe('Workers: 4 of 5 booked, roster carts, 2 without one get their own');
+    expect(describe({ kind: 'start_day', check: { ...check(), teams: 0, no_team: 4 }, team_mode: 'roster' }).lines[2]).toBe('Workers: 4 of 5 booked, each on their own cart');   // no roster carts set
+  });
+  it('start day card with crews: who goes with whom, each crew’s average, and what it does to the roster carts', () => {
+    const c = check(false, true); c.crews = true;
+    c.assign[0].crew = [{ hire_id: '3', name: 'Cal Stone', days: 4, avg_equiv: 11.4 }, { hire_id: '2', name: 'Bob Marsh', days: 6, avg_equiv: 9.04 }]; c.assign[0].crew_avg = 10.22;
+    c.assign[1].crew = [{ hire_id: '1', name: 'Ann Lee', days: 9, avg_equiv: 23.17 }, { hire_id: '6', name: 'Bob Young', days: 3, avg_equiv: 15 }, { hire_id: '4', name: 'Dee Roy', days: 0 }]; c.assign[1].crew_avg = 19.09;
+    c.notes = ['Roster cart A is split between the crews (Ann Lee, Bob Marsh): each of them gets a cart of their own.'];
+    const lines = describe({ kind: 'start_day', check: c, team_mode: 'pairs' }).lines;
+    expect(lines).toContain('Franklyn’s crew (2, average 10.2 equiv a day): Cal 11.4, Bob M 9.0');
+    expect(lines).toContain('Jovan’s crew (3, average 19.1 equiv a day): Ann 23.2, Bob Y 15.0, Dee (no days yet)');
+    expect(lines).toContain(c.notes[0]);
+    expect(lines.slice(1, 3)).toEqual(['Franklyn’s routes: NORTH VANCOUVER #1 (1)', 'Jovan’s routes: NORTH VANCOUVER #2 (1)']);   // who goes where, a line each
+    expect(lines.find(l => l.startsWith('Workers:'))).toContain('paired two to a cart within each crew');
+    expect(describe({ kind: 'start_day', check: check(false, true), team_mode: 'pairs' }).lines.some(l => /crew/.test(l))).toBe(false);   // no crews, no crew lines
   });
   it('give route and partner cards', () => {
     const g = describe({ kind: 'give_route', check: { ok: true, date: '2026-11-10', route: 'NDEL33', map: 'NORTH DELTA #2', open_prebooks: 1,
