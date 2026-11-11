@@ -41,9 +41,12 @@
 @media (prefers-reduced-motion: reduce) { .arvy-typing i { animation: none; opacity: .7; } }
 .arvy-error { color: var(--bad); font-size: 13.5px; }
 .arvy-clear { align-self: center; border: 0; background: none; color: var(--ink-2); font: 600 12.5px var(--sans); cursor: pointer; padding: 4px 8px; }
-.arvy-input { display: flex; gap: 8px; align-items: center; padding: 10px; border-top: 1px solid var(--line); }
-.arvy-input input, .arvy-hearing { flex: 1; min-width: 0; height: 44px; border-radius: 22px; border: 1.5px solid var(--line); background: var(--bg); color: var(--ink); padding: 0 16px; font: 15px var(--sans); }
-.arvy-hearing { display: flex; align-items: center; color: var(--ink-2); font-style: italic; overflow: hidden; white-space: nowrap; }
+/* the box grows with the text (Arvy.tsx sets its height) up to about a third of the screen, so with the keyboard up
+   there's still room for the chat; past that it scrolls. The buttons stay at the bottom. */
+.arvy-input { display: flex; gap: 8px; align-items: flex-end; padding: 10px; border-top: 1px solid var(--line); }
+.arvy-input textarea, .arvy-hearing { flex: 1; min-width: 0; min-height: 44px; max-height: 150px; max-height: clamp(110px, 32dvh, 260px); border-radius: 22px; border: 1.5px solid var(--line); background: var(--bg); color: var(--ink); padding: 10px 16px; font: 15px/1.4 var(--sans); overflow-y: auto; }
+.arvy-input textarea { display: block; height: 44px; resize: none; outline-offset: 2px; }
+.arvy-hearing { color: var(--ink-2); font-style: italic; overflow-wrap: anywhere; }
 .arvy-mic, .arvy-send { width: 44px; height: 44px; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
 .arvy-mic { background: var(--bg); color: var(--accent); border: 1.5px solid var(--line); }
 .arvy-mic.on { background: var(--bad); color: #fff; border-color: var(--bad); animation: arvy-pulse 1.2s infinite; }
