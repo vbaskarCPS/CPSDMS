@@ -10,6 +10,9 @@
 //   POST { token, action: 'speak', text } → { audio }   MP3, base64: Arvy's voice (a woman's for Rosh, a man's for Vijay)
 //   POST { token, action: 'dayplan', context, units, library: [exercise names], answers? } → { review, questions, tomorrow }
 //        After a workout: a review of it, two questions, and tomorrow's session in Arvy's exercise shape (tools.ts EXERCISE).
+//   POST { token, action: 'classes', clubs?: [club keys], from: 'YYYY-MM-DD' } → { clubs: [{ key, name, classes | problem }] }
+//        The class timetable of their GoodLife clubs for seven days from `from` (gym.ts): the gym_classes tool runs in
+//        the app like every tool, and the app asks here because a browser can't read GoodLife's site itself.
 //
 // The planner token (planner_sign_in) is checked with planner_me; nothing runs without it. Deployed without JWT
 // verification because planner users have no Supabase account. Whose voice and which tools come from the account
@@ -18,6 +21,7 @@
 // answer and the COACH_MODEL secret's model if set. Model otherwise: ARVY_MODEL secret, else a Sonnet-class model. Claude key: ANTHROPIC_API_KEY. Voice: GOOGLE_TTS_KEY
 // (else GOOGLE_API_KEY), voices ARVY_VOICE_MORNING / ARVY_VOICE_NIGHT.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { gymClassesFrom, gymClubsFor, gymFeedUrl, type GymClass, type GymClubClasses } from './gym.ts';
 import { canWeb, cleanMessages, contextText, DAYPLAN_SCHEMA, dayplanSystem, isCoaching, speakable, system, toolsFor, voiceFor, webOut, webRaw, WEB_SEARCH, type ArvyCtx, type Profile } from './tools.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
@@ -136,6 +140,36 @@ async function voice(text: string, profile: Profile): Promise<Response> {
   return json({ audio: out.audioContent });
 }
 
+/** Their clubs' class timetables, read from GoodLife (gym.ts). Each club answers for itself: its classes, or what went
+ *  wrong. Kept a few minutes, so a conversation about classes asks GoodLife once, not on every question. */
+const gymKept = new Map<string, { at: number; classes: GymClass[] }>();
+const GYM_KEEP_MS = 3 * 60 * 1000;
+async function gymClasses(q: { clubs?: unknown; from?: unknown }): Promise<Response> {
+  const from = typeof q.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(q.from) ? q.from : '';
+  if (!from) return json({ error: 'Which day?' }, 400);
+  const clubs = await Promise.all(gymClubsFor(q.clubs).map(async (club): Promise<GymClubClasses> => {
+    const key = `${club.id}|${from}`, kept = gymKept.get(key);
+    if (kept && Date.now() - kept.at < GYM_KEEP_MS) return { key: club.key, name: club.name, classes: kept.classes };
+    try {
+      const res = await fetch(gymFeedUrl(club.id, from), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(12000) });
+      // no content = a day GoodLife has no timetable for (it publishes today to about two weeks ahead)
+      if (res.status === 204) return { key: club.key, name: club.name, problem: 'GoodLife has no timetable out for those days: it shows today to about two weeks ahead.' };
+      const classes = res.ok ? gymClassesFrom(await res.json().catch(() => null)) : null;
+      if (!classes) {
+        console.error(`planner-arvy classes: club ${club.id} from ${from}: ${res.ok ? 'not the timetable we know' : `HTTP ${res.status}`}`);
+        return { key: club.key, name: club.name, broken: true, problem: res.ok ? 'GoodLife’s timetable has changed and couldn’t be read.' : `GoodLife’s timetable didn’t answer (${res.status}).` };
+      }
+      if (gymKept.size > 60) gymKept.clear();
+      gymKept.set(key, { at: Date.now(), classes });
+      return { key: club.key, name: club.name, classes };
+    } catch (e) {
+      console.error(`planner-arvy classes: club ${club.id} from ${from}:`, e instanceof Error ? e.message : String(e));
+      return { key: club.key, name: club.name, broken: true, problem: 'GoodLife’s timetable didn’t answer in time.' };
+    }
+  }));
+  return json({ clubs });
+}
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -165,6 +199,7 @@ Deno.serve(async req => {
       if (!Array.isArray(r.questions)) r.questions = [];
       return json(r);
     }
+    if (b.action === 'classes') return await gymClasses(b as unknown as { clubs?: unknown; from?: unknown });
     if (b.action !== 'turn') return json({ error: 'Unknown action' }, 400);
 
     const c = b.context || {};
