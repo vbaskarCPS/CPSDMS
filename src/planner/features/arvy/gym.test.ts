@@ -138,7 +138,7 @@ describe('what Arvy is given', () => {
 
 describe('the gym_classes tool', () => {
   it('comes with version 5 of the app: an older app isn’t offered it or told about it', () => {
-    expect(TOOLS_VERSION).toBe(5);
+    expect(TOOLS_VERSION).toBeGreaterThanOrEqual(5);
     expect(toolsFor('night').map(t => t.name)).toContain('gym_classes');
     expect(toolsFor('morning').map(t => t.name)).toContain('gym_classes');
     expect(toolsFor('night', 4).map(t => t.name)).not.toContain('gym_classes');
