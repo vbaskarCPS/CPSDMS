@@ -27,7 +27,8 @@ export function stillTimes(seconds: number, n: number): number[] {
 
 /** A video: the file itself, a preview and up to `n` stills. A clip this phone can't decode still goes: without stills. */
 export async function readyVideo(file: File, n = 4): Promise<Ready> {
-  const out: Ready = { kind: 'video', type: file.type || 'video/mp4', blob: file, looks: [] };
+  // a clip the phone gave no type for goes up as MP4 (the storage only takes the kinds it knows)
+  const out: Ready = { kind: 'video', type: file.type || 'video/mp4', blob: file.type ? file : new Blob([file], { type: 'video/mp4' }), looks: [] };
   const url = URL.createObjectURL(file);
   const v = document.createElement('video');
   v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
