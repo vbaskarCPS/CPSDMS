@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const invoke = vi.fn();
 const apply = vi.fn(async () => async () => undefined);
 vi.mock('../../lib/ai', () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
-vi.mock('../../lib/app', () => ({ isDemo: () => false }));
+vi.mock('../../lib/app', () => ({ isDemo: () => false, profileOf: () => 'night' }));
 vi.mock('../../lib/auth', () => ({ getPass: () => ({ user: { username: 'vijay', settings: { units: 'lb' } } }) }));
 vi.mock('../../lib/docs', () => ({ dayKey: () => '2026-11-11', docsChanged: vi.fn() }));
 vi.mock('../../lib/memory', () => ({ memoryContext: async () => [] }));
@@ -110,6 +110,17 @@ describe('asking Arvy', () => {
     expect(t.used).toEqual(['add_shopping_items']);
     expect(t.sources).toBeUndefined();
     expect(t.choices).toBeUndefined();
+  });
+});
+
+describe('what’s new', () => {
+  it('“what’s new?” takes the release notes along; any other question doesn’t', async () => {
+    invoke.mockResolvedValue({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Here.' }] });
+    await ask([], 'What’s new in the planner?', '/', false);
+    const sent = invoke.mock.calls[0][0].messages.at(-1).content as string;
+    expect(sent).toMatch(/^What’s new in the planner\?\n\n\[The planner’s release notes, newest first/);
+    await ask([], 'what’s left today?', '/', false);
+    expect(invoke.mock.calls[1][0].messages.at(-1).content).toBe('what’s left today?');
   });
 });
 

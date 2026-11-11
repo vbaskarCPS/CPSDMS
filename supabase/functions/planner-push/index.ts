@@ -3,7 +3,9 @@
 //   POST { action: 'key' }            → { publicKey }   the VAPID key the phone subscribes with (shared push_keys)
 //   POST { token, action: 'test' }    → sends "notifications are on" to every device of the planner user
 //   POST { action: 'tick' }  header x-cron-key = planner_secrets.cron_key (or PLANNER_CRON_KEY)  (pg_cron, every 5 minutes)
-//        → sends the routine reminders that are due right now, Toronto time, once each per planner day
+//        → sends the routine reminders that are due right now, Toronto time, once each per planner day; and, when the
+//          planner has been updated with something to tell (the newest entry of its "what's new" list, published by
+//          the app at /planner-news.json), one notification about it per person
 //
 // Subscriptions are planner docs (kind 'push'); reminders already sent are in kind 'pushlog' (one doc per
 // planner day); the routine's times come from kind 'prefs' key 'routine', and a day's own changes to it (sick: no
@@ -73,6 +75,24 @@ async function doc<T>(svc: Svc, userId: string, kind: string, key: string): Prom
   return data && data.data && typeof data.data === 'object' ? data.data as T : null;
 }
 
+/** The planner's "what's new" list, newest first (src/planner/news.json, published with the app). Asked for at most
+ *  every ten minutes; empty when it can't be read. */
+interface News { id: string; title: string; for?: string }
+const SITE = Deno.env.get('PLANNER_SITE') || 'https://planner.propertystars.app';
+let newsKept: { at: number; list: News[] } | null = null;
+async function newsList(): Promise<News[]> {
+  if (newsKept && Date.now() - newsKept.at < 10 * 60_000) return newsKept.list;
+  let list: News[] = [];
+  try {
+    const res = await fetch(`${SITE}/planner-news.json`, { signal: AbortSignal.timeout(8000) });
+    const all = res.ok ? await res.json() : [];
+    list = (Array.isArray(all) ? all : []).slice(0, 10).filter((n): n is News => !!n && typeof n.id === 'string' && typeof n.title === 'string')
+      .map(n => ({ id: n.id.slice(0, 80), title: n.title.slice(0, 140), ...(typeof n.for === 'string' ? { for: n.for } : {}) }));
+  } catch { /* the site didn't answer: asked again next time */ }
+  newsKept = { at: Date.now(), list };
+  return list;
+}
+
 /** "Kitchen closes at 2:00 pm — 45 g protein still to go." from today's logged meals and the protein goal. */
 async function kitchenBody(svc: Svc, userId: string, dayKey: string, r: Routine): Promise<string> {
   const head = `Kitchen closes at ${clock(r.kitchenClose)}`;
@@ -113,12 +133,19 @@ Deno.serve(async req => {
       const now = new Date();
       const dayKey = plannerDayKey(now);
       let sent = 0, skipped = 0;
+      const allNews = await newsList();
       const { data: users } = await svc.from('planner_users').select('id, settings');
       for (const u of (users || []) as { id: string; settings: UserSettings | null }[]) {
         const subs = await subsOf(svc, u.id);
         if (!subs.length) continue;
         const app = appOf(u.settings);
         const profile = profileOf(u.settings, app);
+        // the planner was updated: the newest entry meant for their kind of planner is told once
+        const news = allNews.find(n => !n.for || n.for === profile);
+        if (news && (await doc<{ id?: string }>(svc, u.id, 'pushlog', 'news'))?.id !== news.id) {
+          sent += (await sendAll(svc, u.id, { title: APP_NAME[app], body: `New in your planner: ${news.title}. Tap Update if it asks, then see Arvy’s chat.`, url: `/${app}/`, tag: 'news', icon: `/${app}/icon-192.png` })).sent;
+          await svc.from('planner_docs').upsert({ user_id: u.id, kind: 'pushlog', key: 'news', data: { id: news.id, at: now.toISOString() }, updated_at: now.toISOString() }, { onConflict: 'user_id,kind,key' });
+        }
         const routine: Routine = { ...(profile === 'morning' ? MORNING_ROUTINE : NIGHT_ROUTINE), ...((await doc<Partial<Routine>>(svc, u.id, 'prefs', 'routine')) || {}), profile };
         const log = (await doc<Record<string, string>>(svc, u.id, 'pushlog', dayKey)) || {};
         const day = (await doc<DayDoc>(svc, u.id, 'day', dayKey)) || {};

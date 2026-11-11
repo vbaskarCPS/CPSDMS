@@ -9,9 +9,13 @@
 // coaching questions. A thumbs-down under a reply, an Undo, or an error goes in Arvy's improvements log (log.ts).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Check, Mic, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } from 'lucide-react';
+import { Check, MessagesSquare, Mic, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } from 'lucide-react';
+import { onUs, openUs, otherName, usUnread, usVersion } from '../us/us';
 import { getPass } from '../../lib/auth';
-import { NO_CONNECTION, arvyIsOpen, ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onArvyChange, onOpenArvy, primeVoice, setArvyHearing, setArvyOpen, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
+import { isDemo, profileOf } from '../../lib/app';
+import { dayKey, getDoc, putDoc } from '../../lib/docs';
+import { NEWS, newsSince, newsText } from '../../lib/news';
+import { NO_CONNECTION, setArvyNews, arvyIsOpen, ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onArvyChange, onOpenArvy, primeVoice, setArvyHearing, setArvyOpen, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
 import { logArvy } from './log';
 import { flushChat, loadChat, newer, saveChat } from './chat';
 import './arvy.css';
@@ -66,6 +70,8 @@ export function Arvy() {
   const nav = useNavigate();
   const loc = useLocation();
   const open = useSyncExternalStore(onArvyChange, arvyIsOpen);   // the bar's RV button opens and closes it
+  useSyncExternalStore(onUs, usVersion);
+  const unread = usUnread();                                       // the other one has written in the chat between the two of them
   const [lines, setLines] = useState<ChatLine[]>(() => load(keyFor(user)));
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -97,6 +103,22 @@ export function Arvy() {
     return () => { on = false; };
   }, [user]);
   useEffect(() => { save(keyFor(user), lines); if (ready) saveChat(lines); }, [lines, user, ready]);
+  // after an update: what's new that this person hasn't been told goes in the chat as a message from Arvy, once
+  // (prefs/news remembers the last one told, for the account), and RV gets a dot until the chat is opened
+  const toldNews = useRef(false);
+  useEffect(() => {
+    if (!ready || toldNews.current || isDemo() || !pass) return;
+    toldNews.current = true;
+    void (async () => {
+      const seen = (await getDoc<{ seen?: string }>('prefs', 'news'))?.seen;
+      if (seen === NEWS[0]?.id) return;
+      const fresh = newsSince(seen, profileOf(pass.user.settings), dayKey());
+      await putDoc('prefs', 'news', { seen: NEWS[0]?.id, at: new Date().toISOString() });
+      if (!fresh.length) return;
+      setLines(cur => [...cur, { role: 'assistant', text: newsText(fresh), at: new Date().toISOString() }]);
+      if (!arvyIsOpen()) setArvyNews(true);
+    })().catch(() => { toldNews.current = false; });   // offline: it's told the next time the planner is opened
+  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { void flushChat(); }, []);
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [lines, busy, step, open]);
   useEffect(() => () => { rec.current?.cancel(); stopSpeaking(); setArvyOpen(false); setArvyHearing(false); }, []);
@@ -192,6 +214,7 @@ export function Arvy() {
             <button type="button" className="arvy-icon" onClick={toggleMute} aria-label={muted ? 'Turn Arvy’s voice on' : 'Turn Arvy’s voice off'} title={muted ? 'Voice off' : 'Voice on'}>
               {muted ? <VolumeX /> : <Volume2 />}
             </button>
+            <button type="button" className="arvy-icon" onClick={openUs} aria-label={`Chat with ${otherName(user)}${unread ? `: ${unread} new` : ''}`} title={`Chat with ${otherName(user)}`}><MessagesSquare />{unread > 0 && <i className="us-dot" />}</button>
             <button type="button" className="arvy-icon" onClick={() => setArvyOpen(false)} aria-label="Close"><X /></button>
           </header>
           <div className="arvy-body">
