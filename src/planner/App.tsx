@@ -15,6 +15,7 @@ import { Settings } from './screens/Settings';
 import { SetUp } from './screens/SetUp';
 import { SETUP_ASK, setupDue, setupLater, setupSkipped } from './lib/setup';
 import { openArvy } from './features/arvy/arvy';
+import { openUs } from './features/us/us';
 import { HealthHub, LifestyleHub } from './screens/Hub';
 import { planRoutes } from './features/plan';
 import { habitsRoutes } from './features/habits';
@@ -29,6 +30,12 @@ import './features/shop/shop.css';
 import './features/calendar/calendar.css';
 
 const featureRoutes = [...planRoutes, ...habitsRoutes, ...workoutRoutes, ...foodRoutes, ...moneyRoutes, ...cycleRoutes];
+
+/** /us: where a notification about the chat between the two of them lands. It opens the chat over Today. */
+function OpenUs() {
+  useEffect(() => { openUs(); }, []);
+  return <Navigate to="/" replace />;
+}
 
 export function PlannerApp() {
   const [pass, setPass] = useState<PlannerPass | null>(() => getPass());
@@ -87,6 +94,7 @@ export function PlannerApp() {
         <Route path="/shop" element={<Shopping pass={pass} />} />
         <Route path="/settings" element={<Settings pass={pass} />} />
         <Route path="/settings/arvy-log" element={<ArvyLog />} />
+        <Route path="/us" element={<OpenUs />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

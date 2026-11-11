@@ -5,7 +5,8 @@
 // sets up waits for a Confirm tap, and where it read is linked under the reply.
 import { invoke } from '../../lib/ai';
 import { dayKey } from '../../lib/docs';
-import { isDemo } from '../../lib/app';
+import { isDemo, profileOf } from '../../lib/app';
+import { asksWhatsNew, newsNote } from '../../lib/news';
 import { getPass } from '../../lib/auth';
 import { docsChanged } from '../../lib/docs';
 import { runTool } from './run';
@@ -72,6 +73,9 @@ let chatOpen = false;
 let chatHearing = false;
 const barWatchers = new Set<() => void>();
 const tellBar = () => { for (const fn of [...barWatchers]) fn(); };
+let chatNews = false;   // Arvy has posted what's new and the chat hasn't been opened since: RV shows a dot
+export const arvyHasNews = (): boolean => chatNews;
+export function setArvyNews(v: boolean): void { if (v !== chatNews) { chatNews = v; tellBar(); } }
 export const arvyIsOpen = (): boolean => chatOpen;
 export const arvyIsHearing = (): boolean => chatHearing;
 /** Told when the chat opens or closes, and when it starts or stops listening. */
@@ -79,6 +83,7 @@ export const onArvyChange = (fn: () => void) => { barWatchers.add(fn); return ()
 export function setArvyOpen(open: boolean): void {
   if (open === chatOpen) return;
   chatOpen = open;
+  if (open) chatNews = false;
   tellBar();
 }
 export function setArvyHearing(hearing: boolean): void {
@@ -215,7 +220,9 @@ export function choicesFrom(input: unknown): Choice[] {
 export async function ask(lines: ChatLine[], question: string, path: string, spoken: boolean, onStep?: (tools: string[]) => void): Promise<Turn> {
   const changes: ChangeView[] = [];
   if (isDemo()) return demoTurn(question, changes);
-  const msgs: Msg[] = [...history(lines), { role: 'user', content: question }];
+  // "what's new?": the planner's release notes ride along with the question (they aren't shown in the chat)
+  const profile = profileOf(getPass()?.user.settings);
+  const msgs: Msg[] = [...history(lines), { role: 'user', content: asksWhatsNew(question) ? `${question}\n\n${newsNote(profile)}` : question }];
   const ctx = { ...context(path, spoken), about: await aboutMe() };
   const used: string[] = [];
   let navigate: string | undefined;

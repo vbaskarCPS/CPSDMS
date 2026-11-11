@@ -52,8 +52,18 @@ function plannerPage(): Plugin {
   };
 }
 
+/** The planner's "what's new" list (src/planner/news.json, built into the app) is also published as
+ *  /planner-news.json: the reminders function reads it there, to send each person one notification when the planner
+ *  has been updated (supabase/functions/planner-push). */
+function plannerNews(): Plugin {
+  return {
+    name: 'cps-planner-news',
+    generateBundle() { this.emitFile({ type: 'asset', fileName: 'planner-news.json', source: readFileSync(resolve(__dirname, 'src/planner/news.json'), 'utf8') }); },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), precacheManifest(), plannerPage()],
+  plugins: [react(), precacheManifest(), plannerPage(), plannerNews()],
   build: {
     rollupOptions: {
       input: { main: resolve(__dirname, 'index.html'), planner: resolve(__dirname, 'planner.html'), mainstreetai: resolve(__dirname, 'mainstreetai.html') },

@@ -1,0 +1,32 @@
+/* src/planner/features/us/us.css — the chat between the two of them. It sits in Arvy's sheet (arvy.css) and adds
+   what a chat between people needs: who said it, photos and videos, and Arvy's offers under a message. */
+.us-avatar { font: 800 16px var(--sans); background: var(--amber); color: #2a1a00; }
+.us-msg { display: flex; flex-direction: column; gap: 4px; max-width: 86%; }
+.us-msg.mine { align-self: flex-end; align-items: flex-end; }
+.us-msg.theirs { align-self: flex-start; align-items: flex-start; }
+.us-bubble { padding: 10px 13px; border-radius: 16px; font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+.us-msg.mine .us-bubble { background: var(--accent); color: var(--accent-ink); border-bottom-right-radius: 5px; }
+.us-msg.theirs .us-bubble { background: var(--bg); border-bottom-left-radius: 5px; }
+.us-meta { font-size: 11.5px; color: var(--ink-2); padding: 0 4px; }
+.us-media { display: grid; gap: 4px; width: min(260px, 100%); border-radius: 14px; overflow: hidden; }
+.us-media.n2, .us-media.n3, .us-media.n4 { grid-template-columns: 1fr 1fr; }
+.us-media img, .us-media video, .us-blank { display: block; width: 100%; height: 100%; min-height: 96px; max-height: 320px; object-fit: cover; background: var(--bg); }
+.us-media img.is-thumb { filter: blur(2px); }
+.us-media a { display: block; }
+.us-video { position: relative; padding: 0; border: 0; background: #000; cursor: pointer; min-height: 120px; }
+.us-video i { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%; display: grid; place-items: center; background: rgba(0, 0, 0, .55); color: #fff; }
+.us-video i svg { width: 22px; height: 22px; margin-left: 2px; }
+.us-video small { position: absolute; right: 6px; bottom: 6px; padding: 2px 6px; border-radius: 8px; background: rgba(0, 0, 0, .6); color: #fff; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.us-arvy { width: 100%; min-width: 220px; }
+.us-arvy .arvy-change { margin-top: 4px; }
+.us-arvy-line { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; color: var(--ink-2); padding: 2px 4px 0; }
+.us-arvy-line svg { width: 13px; height: 13px; color: var(--accent); flex: none; }
+.us-push { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 12px; background: color-mix(in srgb, var(--amber) 16%, var(--bg-2)); border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--line)); font-size: 13px; line-height: 1.35; }
+.us-push button { flex: none; margin-left: auto; border: 0; border-radius: 10px; padding: 7px 11px; background: var(--accent); color: var(--accent-ink); font: 700 13px var(--sans); cursor: pointer; }
+.us-picked { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
+.us-picked span { display: inline-flex; align-items: center; gap: 4px; padding: 5px 6px 5px 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); font-size: 13px; font-weight: 600; }
+.us-picked button { width: 22px; height: 22px; border: 0; border-radius: 50%; background: transparent; color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
+.us-picked svg { width: 14px; height: 14px; }
+/* the dot that says there's something unread: on the RV button, and on the chat button in Arvy's panel */
+.us-dot { position: absolute; top: 5px; right: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--bad, #d43c3c); box-shadow: 0 0 0 2px var(--bg-2); }
+.arvy-icon { position: relative; }
