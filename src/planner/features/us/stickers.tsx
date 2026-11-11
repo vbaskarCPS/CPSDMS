@@ -1,18 +1,20 @@
-// src/planner/features/us/stickers.tsx — the chat's own stickers: small drawings that move, three for each occasion
-// (occasions.ts). A sticker travels as its ordinary emoji, so nothing about sending changes: a message that is only
-// that emoji is drawn as the sticker here, a notification shows the emoji, and Arvy doesn't read it (it has no words).
+// src/planner/features/us/stickers.tsx — the chat's own drawings of things: three for each occasion (occasions.ts).
+// With the smileys (smileys.tsx) they make up the emoji packs (emoji.tsx), which is where sending and showing live.
+// Each one stands for an ordinary emoji: a message that is nothing but that emoji, typed on any keyboard, is drawn
+// as our drawing (stickerOf).
 // The drawings are ours; the movement is in us.css (st-…) and stops for anyone who has asked their phone for less motion.
 import type { ReactNode } from 'react';
 import type { OccasionId } from './occasions';
 
-export interface StickerDef { id: string; emoji: string; name: string; occasion: OccasionId; art: ReactNode }
+/** One emoji of ours. `emoji` = the ordinary emoji it stands for (what a notification shows); `smiley` = a face. */
+export interface StickerDef { id: string; emoji: string; name: string; occasion: OccasionId; art: ReactNode; smiley?: boolean }
 
-const HEART = 'M32 54 C10 38 8 22 20 16 C27 13 32 19 32 23 C32 19 37 13 44 16 C56 22 54 38 32 54 Z';
-const STAR = 'M32 4 L35 12 L43 12 L37 17 L39 25 L32 20 L25 25 L27 17 L21 12 L29 12 Z';
-const dots = (pts: [number, number, string][], r = 2.4) => pts.map(([x, y, c], i) => <circle key={i} className="st-twinkle" style={{ animationDelay: `${(i % 5) * 0.3}s` }} cx={x} cy={y} r={r} fill={c} />);
-const rays = (cx: number, cy: number, from: number, to: number, colors: string[], n = 12) => Array.from({ length: n }, (_, i) => {
+export const HEART = 'M32 54 C10 38 8 22 20 16 C27 13 32 19 32 23 C32 19 37 13 44 16 C56 22 54 38 32 54 Z';
+export const STAR = 'M32 4 L35 12 L43 12 L37 17 L39 25 L32 20 L25 25 L27 17 L21 12 L29 12 Z';
+export const dots = (pts: [number, number, string][], r = 2.4) => pts.map(([x, y, c], i) => <circle key={i} className="st-twinkle" style={{ animationDelay: `${(i % 5) * 0.3}s` }} cx={x} cy={y} r={r} fill={c} />);
+export const rays = (cx: number, cy: number, from: number, to: number, colors: string[], n = 12, width = 3) => Array.from({ length: n }, (_, i) => {
   const a = (i / n) * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
-  return <line key={i} x1={cx + c * from} y1={cy + s * from} x2={cx + c * to} y2={cy + s * to} stroke={colors[i % colors.length]} strokeWidth="3" strokeLinecap="round" />;
+  return <line key={i} x1={cx + c * from} y1={cy + s * from} x2={cx + c * to} y2={cy + s * to} stroke={colors[i % colors.length]} strokeWidth={width} strokeLinecap="round" />;
 });
 
 export const STICKERS: StickerDef[] = [
@@ -100,15 +102,9 @@ export const STICKERS: StickerDef[] = [
 ];
 
 // the emoji as typed can carry an invisible "show as a picture" mark (U+FE0F): the same sticker with or without it
-const bare = (s: string) => s.replace(/️/g, '').trim();
+export const bare = (s: string) => s.replace(/\uFE0F/g, '').trim();
 const BY_EMOJI = new Map(STICKERS.map(s => [bare(s.emoji), s]));
 /** The sticker a message is, when the message is nothing but that one emoji. */
 export function stickerOf(text?: string | null): StickerDef | null {
   return (text && BY_EMOJI.get(bare(text))) || null;
-}
-/** What is sent for a sticker: its emoji, marked to show as a picture where the sticker isn't drawn (a notification). */
-export const stickerText = (s: StickerDef): string => `${bare(s.emoji)}️`;
-
-export function Sticker({ s, size = 96 }: { s: StickerDef; size?: number }) {
-  return <svg className="st" viewBox="0 0 64 64" width={size} height={size} role="img" aria-label={s.name}>{s.art}</svg>;
 }

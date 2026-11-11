@@ -30,8 +30,9 @@
 /* the dot that says there's something unread: on the RV button, and on the chat button in Arvy's panel */
 .us-dot { position: absolute; top: 5px; right: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--bad, #d43c3c); box-shadow: 0 0 0 2px var(--bg-2); }
 .arvy-icon { position: relative; }
-/* ── stickers (stickers.tsx): our own small drawings that move. The tray opens above the box you type in, the occasion
-   coming up next first; a sticker in the chat stands on its own, with no bubble. ── */
+/* ── the emoji packs (emoji.tsx): our own small drawings, smileys and things. The tray opens above the box you type
+   in, a pack for each occasion and the one coming up next first; in a message they sit in the line of words, and a
+   message that is only emoji shows them big, moving, with no bubble. ── */
 .st { display: block; overflow: visible; }
 .st-bob, .st-beat, .st-spin, .st-flap, .st-pop, .st-hop { transform-box: fill-box; transform-origin: center; }
 .st-flick, .st-wobble { transform-box: fill-box; transform-origin: 50% 100%; }
@@ -53,13 +54,24 @@
 @keyframes stFlap { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(.72); } }
 @keyframes stPop { 0% { transform: scale(.35); opacity: 0; } 25% { opacity: 1; } 70% { transform: scale(1); opacity: 1; } 100% { transform: scale(1.08); opacity: 0; } }
 @keyframes stHop { 0%, 100% { transform: translateY(0); } 30% { transform: translateY(-11%); } 55% { transform: translateY(0); } 70% { transform: translateY(-4%); } }
+/* still: in a line of words and in the tray, and for anyone who has asked their phone for less motion */
+.st-still * { animation: none !important; }
 @media (prefers-reduced-motion: reduce) { .st * { animation: none !important; } }
-.us-sticker { padding: 2px 4px; }
+/* a hairline of light around one in a line of words, and around all of them on a dark screen: the dark drawings
+   (the bat, the black cat) still show on a dark bubble */
+.st-in { display: inline-block; vertical-align: -.34em; margin: 0 .05em; filter: drop-shadow(0 0 .6px rgba(255, 255, 255, .75)); }
+@media (prefers-color-scheme: dark) { .st { filter: drop-shadow(0 0 .7px rgba(255, 255, 255, .6)); } }
+.us-sticker { padding: 2px 4px; display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; }
+.us-msg.mine .us-sticker { justify-content: flex-end; }
 .arvy-mic.us-on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .us-tray { border-top: 1px solid var(--line); padding: 10px 12px 6px; max-height: 42dvh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
 .us-tray h4 { margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; font: 700 12px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
 .us-tray h4 em { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--accent); }
-.us-tray-row { display: flex; gap: 8px; }
-.us-tray-row button { flex: 1; max-width: 104px; aspect-ratio: 1; padding: 6px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); display: grid; place-items: center; cursor: pointer; }
-.us-tray-row button:active { transform: scale(.94); }
-.us-tray .is-next .us-tray-row button { background: color-mix(in srgb, var(--amber) 14%, var(--bg)); border-color: color-mix(in srgb, var(--amber) 50%, var(--line)); }
+.us-pack { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.us-pack button { aspect-ratio: 1; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); display: grid; place-items: center; cursor: pointer; }
+.us-pack button:active { transform: scale(.92); }
+.us-tray .is-next .us-pack button { background: color-mix(in srgb, var(--amber) 14%, var(--bg)); border-color: color-mix(in srgb, var(--amber) 50%, var(--line)); }
+/* how the message being written will look, shown while it has one of ours in it (the box itself can only show the look-alike) */
+.us-preview { display: flex; gap: 8px; align-items: baseline; padding: 8px 14px 0; border-top: 1px solid var(--line); }
+.us-preview span { flex-shrink: 0; font: 700 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
+.us-preview div { min-width: 0; max-height: 4.6em; overflow-y: auto; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }

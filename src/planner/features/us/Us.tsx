@@ -1,17 +1,17 @@
 // src/planner/features/us/Us.tsx — the chat between the two of them, in the same place above the bar as Arvy's.
-// RV dragged up and to the right opens it (ui/Shell.tsx); Arvy's panel has a button for it too. Words, photos and
-// short videos. Arvy reads along: under a message it may offer to add something to the shopping list, the calendar
+// RV dragged up and to the right opens it (ui/Shell.tsx); Arvy's panel has a button for it too. Words, photos,
+// short videos and our own emoji (emoji.tsx: a pack for each occasion). Arvy reads along: under a message it may offer to add something to the shopping list, the calendar
 // or a to-do, and waits for a Confirm tap (either of them for the shared things; a to-do only the person it's for).
 // The list, sending and confirming are in us.ts; a message and a proposal are defined in planner-chat/chat.ts.
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Check, ImagePlus, Play, Send, Smile, Sparkles, X } from 'lucide-react';
 import { calendarKey, getDocs } from '../../lib/docs';
 import { birthdaysFrom, countdown, upcoming, type Birthday } from './occasions';
-import { STICKERS, Sticker, stickerOf, stickerText, type StickerDef } from './stickers';
+import { Emoji, EmojiText, bigEmoji, hasOurs, healDraft, packOf, putIn, type EmojiDef } from './emoji';
 import { getPass } from '../../lib/auth';
 import { enablePush, pushState, type PushState } from '../../lib/push';
 import { setArvyOpen } from '../arvy/arvy';
-import { canConfirm, type ChatMsg, type Proposal } from '../../../../supabase/functions/planner-chat/chat';
+import { canConfirm, MAX_TEXT, type ChatMsg, type Proposal } from '../../../../supabase/functions/planner-chat/chat';
 import { answer, filesProblem, mediaUrl, onUs, otherName, say, setUsOpen, usIsOpen, usLoaded, usRows, usVersion, type Row } from './us';
 import '../arvy/arvy.css';
 import './us.css';
@@ -54,7 +54,7 @@ function ProposalCard({ row, p, user }: { row: Row; p: Proposal; user: string })
 function Message({ row, user }: { row: Row; user: string }) {
   const m: ChatMsg = row.msg;
   const mine = m.by === user;
-  const sticker = !m.media?.length ? stickerOf(m.text) : null;   // a message that is only one of our emoji: drawn as the sticker
+  const big = !m.media?.length ? bigEmoji(m.text) : null;   // a message that is only emoji of ours: drawn big, with no bubble
   const [playing, setPlaying] = useState<number | null>(null);
   return (
     <div className={`us-msg ${mine ? 'mine' : 'theirs'}`}>
@@ -75,7 +75,7 @@ function Message({ row, user }: { row: Row; user: string }) {
               : x.thumb ? <img key={i} src={x.thumb} alt="Photo" className="is-thumb" /> : <span key={i} className="us-blank" />;
           })}
         </div>)}
-      {sticker ? <div className="us-sticker"><Sticker s={sticker} size={112} /></div> : m.text && <div className="us-bubble">{m.text}</div>}
+      {big ? <div className="us-sticker">{big.list.map((e, i) => <Emoji key={i} e={e} size={big.size} />)}</div> : m.text && <div className="us-bubble"><EmojiText text={m.text} /></div>}
       <div className="us-meta">{row.sending ? 'Sending…' : sentAt(m.at)}</div>
       {m.arvy && m.arvy.state !== 'none' && !row.sending && (
         <div className="us-arvy">
@@ -100,7 +100,17 @@ export function Us() {
   const [push, setPush] = useState<PushState | null>(null);
   const pickRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  // the sticker tray: the occasion coming up next first. Birthdays are read off the calendar the first time it opens
+  // the emoji tray: a pack for each occasion, the one coming up next first. Birthdays are read off the calendar the
+  // first time it opens. A tap puts the emoji into the message where the caret is (or was: the box needn't be in use,
+  // so the keyboard stays down while picking)
+  const boxRef = useRef<HTMLTextAreaElement>(null);
+  const caret = useRef<number | null>(null);      // where typing would land, as last seen
+  const setCaret = useRef<number | null>(null);   // where to put the caret once the box has the new text
+  useLayoutEffect(() => {
+    const at = setCaret.current, el = boxRef.current;
+    setCaret.current = null;
+    if (at !== null && el && document.activeElement === el) el.setSelectionRange(at, at);
+  }, [text]);
   const [tray, setTray] = useState(false);
   const [birthdays, setBirthdays] = useState<Birthday[] | null>(null);
   useEffect(() => {
@@ -119,17 +129,21 @@ export function Us() {
   const send = async () => {
     const t = text, f = files;
     if (sending || (!t.trim() && !f.length)) return;
-    setSending(true); setError(null); setText(''); setFiles([]);
+    setSending(true); setError(null); setText(''); setFiles([]); caret.current = null;
     try { await say(t, f); }
     catch (e) { setError(e instanceof Error ? e.message : 'That didn’t send.'); setText(t); setFiles(f); }
     finally { setSending(false); }
   };
-  const sendSticker = async (s: StickerDef) => {
-    if (sending) return;
-    setTray(false); setSending(true); setError(null);
-    try { await say(stickerText(s), []); }
-    catch (e) { setError(e instanceof Error ? e.message : 'That didn’t send.'); }
-    finally { setSending(false); }
+  const putEmoji = (e: EmojiDef) => {
+    const next = putIn(text, e, caret.current ?? text.length);
+    if (next.text.length > MAX_TEXT) { setError('That message is full.'); return; }
+    setError(null); setText(next.text); caret.current = setCaret.current = next.caret;
+  };
+  // typing: one backspace on an emoji of ours takes all of it (emoji.tsx healDraft)
+  const typed = (el: HTMLTextAreaElement) => {
+    const next = healDraft(el.value, el.selectionStart ?? el.value.length);
+    if (next.text !== el.value) setCaret.current = next.caret;
+    caret.current = next.caret; setText(next.text);
   };
   const pick = (list: File[]) => {
     const all = [...files, ...list];
@@ -172,17 +186,18 @@ export function Us() {
           {occasions.map((o, i) => (
             <section key={`${o.id}:${o.name}`} className={i === 0 ? 'is-next' : ''}>
               <h4>{i === 0 && Number.isFinite(o.days) ? 'Coming up: ' : ''}{o.name}{countdown(o) && <em>{countdown(o)}</em>}</h4>
-              <div className="us-tray-row">
-                {STICKERS.filter(s => s.occasion === o.id).map(s => <button key={s.id} type="button" disabled={sending} onClick={() => void sendSticker(s)} aria-label={`Send the ${s.name} sticker`}><Sticker s={s} size={56} /></button>)}
+              <div className="us-pack">
+                {packOf(o.id).map(e => <button key={e.id} type="button" onClick={() => putEmoji(e)} aria-label={`Add ${e.name}`} title={e.name}><Emoji e={e} size={38} still /></button>)}
               </div>
             </section>))}
           {birthdays && !birthdays.length && <p className="us-meta">Put your birthdays on the calendar as yearly events (“Rosh’s birthday”) and they count down here too.</p>}
         </div>)}
+      {hasOurs(text) && <div className="us-preview" aria-label="How it will look"><span>Preview</span><div><EmojiText text={text} /></div></div>}
       <form className="arvy-input" onSubmit={e => { e.preventDefault(); void send(); }}>
         <input ref={pickRef} type="file" accept="image/*,video/*" multiple hidden onChange={e => { const list = Array.from(e.target.files || []); e.target.value = ''; pick(list); }} />
         <button type="button" className="arvy-mic" onClick={() => pickRef.current?.click()} disabled={sending} aria-label="Add a photo or a video"><ImagePlus /></button>
-        <button type="button" className={`arvy-mic${tray ? ' us-on' : ''}`} onClick={() => setTray(t => !t)} aria-label="Stickers" aria-expanded={tray}><Smile /></button>
-        <textarea rows={1} value={text} onChange={e => setText(e.target.value)} placeholder={`Message ${other}…`} aria-label={`Message ${other}`} enterKeyHint="send"
+        <button type="button" className={`arvy-mic${tray ? ' us-on' : ''}`} onClick={() => setTray(t => !t)} aria-label="Emoji" aria-expanded={tray}><Smile /></button>
+        <textarea ref={boxRef} rows={1} value={text} onChange={e => typed(e.target)} onSelect={e => { caret.current = e.currentTarget.selectionStart; }} placeholder={`Message ${other}…`} aria-label={`Message ${other}`} enterKeyHint="send"
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
         <button type="submit" className="arvy-send" disabled={sending || (!text.trim() && !files.length)} aria-label="Send"><Send /></button>
       </form>

@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-11-emoji-packs", "date": "2026-11-11", "title": "Emoji packs for every occasion",
+    "lines": ["The smiley beside the message box in your chat now opens packs of our own emoji: themed smileys and drawings for Christmas, New Year, Valentine’s Day, Easter, Diwali, Halloween and birthdays.", "Tap them into a message along with your words. A message that is only emoji shows them big.", "The box shows an ordinary look-alike while you type; the preview just above it shows how the message will look."] },
   { "id": "2026-11-11-stickers", "date": "2026-11-11", "title": "Stickers in your chat",
     "lines": ["Tap the smiley beside the message box: our own little moving stickers for Halloween, Diwali, Christmas, New Year, Valentine’s Day, Easter and birthdays.", "The occasion coming up next is always first, with a countdown.", "Put your birthdays on the calendar as yearly events and they count down there too."] },
   { "id": "2026-11-11-icon", "date": "2026-11-11", "title": "A new small notification icon",
