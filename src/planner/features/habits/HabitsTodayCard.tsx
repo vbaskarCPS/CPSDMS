@@ -7,6 +7,16 @@ import { useHabits } from './useHabits';
 import { HabitRow } from './HabitRow';
 import { counts, isDue, missedLastDue } from './streak';
 
+/** Today's habits in one line, for the Lifestyle menu: "3 of 5 done today". null while it loads. */
+export function useHabitsLine(): string | null {
+  const { today, active, logs, loading } = useHabits();
+  if (loading) return null;
+  if (!active.length) return 'No habits yet';
+  const due = active.filter(h => isDue(h, today));
+  if (!due.length) return 'Nothing due today';
+  return `${due.filter(h => counts(logs[today]?.[h.id])).length} of ${due.length} done today`;
+}
+
 export function HabitsTodayCard(_: { pass: PlannerPass }): JSX.Element {
   const { today, active, logs, loading, mark } = useHabits();
   const due = active.filter(h => isDue(h, today));

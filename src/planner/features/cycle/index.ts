@@ -5,7 +5,7 @@ import { CycleHome } from './CycleHome';
 import { DayLog } from './DayLog';
 import { History } from './History';
 import { CycleSettings } from './CycleSettings';
-export { CycleTodayCard } from './TodayCard';
+export { CycleTodayCard, useCycleLine } from './TodayCard';
 export type { Period, DayLog as CycleDayLog, CyclePrefs } from './types';
 
 export const cycleRoutes: { path: string; element: JSX.Element }[] = [

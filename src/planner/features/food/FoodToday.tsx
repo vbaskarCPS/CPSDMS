@@ -226,6 +226,14 @@ export function FoodToday() {
   );
 }
 
+/** Today's food in one line, for the Health menu: "62 of 180 g protein · 1,240 kcal". null while it loads. */
+export function useFoodLine(): string | null {
+  const { meals, targets, totals, loading } = useDay(dayKey());
+  if (loading && !meals.length) return null;
+  if (!meals.length) return 'Nothing logged yet today';
+  return `${Math.round(totals.protein)} of ${(targets || DEFAULT_TARGETS).protein} g protein · ${Math.round(totals.kcal).toLocaleString()} kcal`;
+}
+
 /** The card on the Today screen. */
 export function FoodTodayCard({ pass }: { pass: PlannerPass }) {
   void pass;

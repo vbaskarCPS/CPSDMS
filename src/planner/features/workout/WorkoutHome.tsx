@@ -6,7 +6,7 @@ import type { PlannerPass } from '../../lib/auth';
 import { clock, routineMin, routineMinutes } from '../../lib/routine';
 import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Page, Header, Card, Button, Bars, Stat, Empty } from '../../ui/primitives';
-import { daysAgo, emptyWorkout, fmtDate, loadCustomExercises, loadTemplates, loadWorkouts, nextTarget, saveWorkout, sessionToday, startFromTemplate, weekSessions } from './store';
+import { daysAgo, emptyWorkout, fmtDate, loadCustomExercises, loadTemplates, loadWorkouts, nextTarget, saveWorkout, sessionToday, startFromTemplate, trainLine, trainToday, weekSessions } from './store';
 import { durationMin, fmtNum, fmtSec, volumeOf, workoutKey, type Exercise, type Template, type Units, type Workout } from './types';
 import { blocksOf, blockTitle, isNoLoad, targetLine } from './format';
 import { findExercise } from './library';
@@ -149,20 +149,22 @@ function useGymLine(doneToday: boolean, unfinished: boolean): string {
   return routineMinutes() > routineMin(r.gym) + 30 ? 'Late start — still counts' : `Gym · ${clock(r.gym)}`;
 }
 
+/** Today's training in one line, for the Health menu: "Home stretch (easy) · 7 exercises · at home". null while it loads. */
+export function useTrainLine(): string | null {
+  const { templates, workouts, loading } = useWorkoutData(30);
+  const { adjust } = useTodayRoutine();
+  return loading ? null : trainLine(trainToday(templates, workouts, !!adjust?.skip?.includes('gym')));
+}
+
 /** The card on the Today screen. */
 export function WorkoutTodayCard({ pass }: { pass: PlannerPass }) {
   const nav = useNavigate();
   const units = useUnits(pass);
   const { templates, workouts, custom, loading } = useWorkoutData(30);
-  const unfinished = workouts.find(w => !w.endedAt);
   const { adjust } = useTodayRoutine();
-  const tpl = useMemo(() => sessionToday(templates, workouts, !!adjust?.skip?.includes('gym')), [templates, workouts, adjust]);
+  const { unfinished, doneToday, last, tpl, planned, head } = useMemo(() => trainToday(templates, workouts, !!adjust?.skip?.includes('gym')), [templates, workouts, adjust]);
   const week = weekSessions(workouts).reduce((a, b) => a + b, 0);
-  const doneToday = workouts.find(w => w.endedAt && w.date === daysAgo(0));
   const cardGymLine = useGymLine(!!doneToday, !!unfinished);
-  const last = workouts.find(w => w.endedAt);
-  // a session set for today's date (Arvy plans them by date) or for this weekday
-  const planned = !!tpl && (tpl.plannedFor === daysAgo(0) || !!tpl.days?.includes(new Date().getDay()));
   if (loading) return <Card><p className="pl-eyebrow">Train</p><p className="pl-muted">Loading…</p></Card>;
 
   const start = async () => {
@@ -177,10 +179,7 @@ export function WorkoutTodayCard({ pass }: { pass: PlannerPass }) {
       <div className="pl-row">
         <div className="pl-grow">
           <p className="pl-eyebrow">{cardGymLine} · {week} this week</p>
-          {unfinished ? <h3>{unfinished.name} in progress</h3>
-            : doneToday ? <h3>Done: {doneToday.name}</h3>
-            : planned && tpl ? <h3>{tpl.name}</h3>
-            : <h3>Rest day</h3>}
+          <h3>{head}</h3>
           <p className="pl-muted" style={{ fontSize: 13 }}>
             {unfinished ? 'Pick up where you left off.'
               : doneToday ? `${durationMin(doneToday)} min · ${fmtNum(volumeOf(doneToday))} ${units}${doneToday.prs?.length ? ` · ${doneToday.prs.length} PR` : ''}`

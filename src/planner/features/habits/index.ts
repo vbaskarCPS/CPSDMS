@@ -4,7 +4,7 @@ import './habits.css';
 import { HabitsList } from './HabitsList';
 import { HabitForm } from './HabitForm';
 import { HabitDetail } from './HabitDetail';
-export { HabitsTodayCard } from './HabitsTodayCard';
+export { HabitsTodayCard, useHabitsLine } from './HabitsTodayCard';
 export { autoMark } from './auto';
 export { SlotHabits, SlotHabitsProvider } from './SlotHabits';
 

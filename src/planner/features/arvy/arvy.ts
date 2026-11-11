@@ -51,6 +51,19 @@ const openers = new Set<(o: OpenAsk) => void>();
 export const onOpenArvy = (fn: (o: OpenAsk) => void) => { openers.add(fn); return () => { openers.delete(fn); }; };
 /** Open the chat; `suggest` = the chips to offer, `ask` = a question to send straight away. */
 export const openArvy = (o: OpenAsk = {}) => { for (const fn of [...openers]) fn(o); };
+
+// ── is the chat open? Shared with the bottom bar's RV button (ui/Shell.tsx), which opens and closes it ──
+let chatOpen = false;
+const openWatchers = new Set<() => void>();
+export const arvyIsOpen = (): boolean => chatOpen;
+export const onArvyOpenChange = (fn: () => void) => { openWatchers.add(fn); return () => { openWatchers.delete(fn); }; };
+export function setArvyOpen(open: boolean): void {
+  if (open === chatOpen) return;
+  chatOpen = open;
+  for (const fn of [...openWatchers]) fn();
+}
+/** The RV button: open the chat, or close it when it's open. Call it from the tap itself: opening unlocks the voice. */
+export function toggleArvy(): void { if (!chatOpen) primeVoice(); setArvyOpen(!chatOpen); }
 /** What to offer when the chat is opened for coaching (what the Coach screen offered). */
 export const COACH_ASKS = ['Plan my next session', 'Shake up my next session', 'Build me a kettlebell circuit', 'I’m sore — adjust my next session', 'Why am I stuck on bench?'];
 export const cancelChange = (id: string) => { waiting.delete(id); };

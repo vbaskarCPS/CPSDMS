@@ -8,6 +8,23 @@ import { loadEvents } from './store';
 import { useDocsChanged } from '../../lib/useDocsChanged';
 import { addDays, eventsOn, WHO_LABEL, type CalEvent } from './types';
 
+/** What's on in one line, for the Lifestyle menu: "Today: 2:00 pm Swim lesson · 1 more". Pure. */
+export function calendarLine(events: CalEvent[], today: string, tomorrow: string): string {
+  const say = (e: CalEvent) => `${e.time ? `${clock(e.time)} ` : ''}${e.title}`;
+  const t = eventsOn(events, today), n = eventsOn(events, tomorrow);
+  if (t.length) return `Today: ${say(t[0])}${t.length > 1 ? ` · ${t.length - 1} more` : ''}`;
+  if (n.length) return `Tomorrow: ${say(n[0])}${n.length > 1 ? ` · ${n.length - 1} more` : ''}`;
+  return 'Nothing on today or tomorrow';
+}
+/** The same, loaded. null while it loads. */
+export function useCalendarLine(): string | null {
+  const today = calendarKey(), tomorrow = addDays(today, 1);
+  const [events, setEvents] = useState<CalEvent[] | null>(null);
+  useEffect(() => { loadEvents(today, tomorrow).then(setEvents).catch(() => setEvents([])); }, [today, tomorrow]);
+  useDocsChanged(['event'], () => { loadEvents(today, tomorrow).then(setEvents).catch(() => undefined); });
+  return events ? calendarLine(events, today, tomorrow) : null;
+}
+
 export function CalendarTodayCard() {
   const today = calendarKey(), tomorrow = addDays(today, 1);
   const [events, setEvents] = useState<CalEvent[] | null>(null);
