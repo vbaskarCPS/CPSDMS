@@ -20,10 +20,14 @@
 // they are billed in full once and at a fraction on every step and question that follows within a few minutes. What is
 // true right now (who, the day, the screen) comes after them and is never kept. One line per question goes to the
 // function log with the token counts (no names, no text): "benny-assist usage {…}".
+// Two models: in fast_first mode (a setting in the database, benny_model_mode) a small model takes plain lookups first,
+// and this server redoes the question on the main model whenever its answer isn't safe to show (the rules are in
+// tools.ts, at FAST_TOOLS). BENNY_FAST_MODEL names the small one, else a Haiku-class model.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { TOOLS, forModel, openMap, systemBlocks, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
+import { FAST_TOOLS, TOOLS, arrayLengths, fastAnswerStop, forModel, needsMain, now, openMap, systemBlocks, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
+const FAST = Deno.env.get('BENNY_FAST_MODEL') || 'claude-haiku-5-5';
 const WORKSPACE = Deno.env.get('ANTHROPIC_WORKSPACE_ID') || '';
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -36,6 +40,8 @@ type Msg = { role: 'user' | 'assistant'; content: unknown };
 type Proposal = { kind: ProposalKind; check: Record<string, unknown>; team_mode?: string };
 /** What one call to the model was billed for: input in full, input written to the cache, input read from it, and output. */
 type Usage = { input_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number; output_tokens?: number };
+/** One go at a question on one model. stop = why the small model's go may not be shown (the main model then does the question). */
+type Run = { reply: string; map: unknown; mapTitle: string; proposal: Proposal | null; usedTools: number; logged: boolean; stop?: { why: string; tokens?: string[] } };
 
 /** A bug, or a request the Benny couldn't do, goes into the app's own log (Super Admin › Bug log), with what the page knew. */
 async function logEntry(sb: SupabaseClient, ctx: Ctx, kind: 'bug' | 'request', input: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -67,7 +73,7 @@ async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, i
   return { out: data };
 }
 
-async function claude(sys: unknown[], messages: Msg[], tools: unknown[]): Promise<{ content: { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[]; stop_reason: string; usage?: Usage }> {
+async function claude(model: string, sys: unknown[], messages: Msg[], tools: unknown[]): Promise<{ content: { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[]; stop_reason: string; usage?: Usage }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
   let res: Response | null = null; let data: Record<string, unknown> = {};
@@ -75,7 +81,7 @@ async function claude(sys: unknown[], messages: Msg[], tools: unknown[]): Promis
     res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-      body: JSON.stringify({ model: MODEL, max_tokens: 1500, system: sys, messages, tools }),
+      body: JSON.stringify({ model, max_tokens: 1500, system: sys, messages, tools }),
     });
     data = await res.json().catch(() => ({}));
     if (res.ok || !(res.status === 429 || res.status === 529 || res.status >= 500)) break;
@@ -98,7 +104,7 @@ Deno.serve(async req => {
 
     const b = await req.json().catch(() => ({})) as { messages?: Msg[]; context?: Ctx };
     const ctx: Ctx = b.context || {};
-    const { data: role, error: roleErr } = await sb.rpc('benny_ok_any', { p_center: ctx.center_id || null });
+    const [{ data: role, error: roleErr }, { data: mode }] = await Promise.all([sb.rpc('benny_ok_any', { p_center: ctx.center_id || null }), sb.rpc('benny_model_mode')]);
     if (roleErr || (role !== 'admin' && role !== 'rm')) return json({ error: 'The Benny is for super admins and route managers.' }, 403);
     // a route manager's "my team" is their own map; only admins can open someone else's.
     // The floater map is the floater's own: the database checks it (their id, the permission, the managers followed).
@@ -121,10 +127,12 @@ Deno.serve(async req => {
     }
     const sys = systemBlocks(ctx, role as Role, vocab);
     const tools = toolsFor(role as Role);
-    const msgs: Msg[] = [...history];
-    let map: unknown = null; let mapTitle = ''; let proposal: Proposal | null = null;
-    let usedTools = 0; let logged = false;
-    const used = { steps: 0, input: 0, cache_write: 0, cache_read: 0, output: 0 };
+    const question = String(history[history.length - 1].content);
+    // which model: the setting in the database; a super admin's own app can ask for one or the other to try it out
+    const asked = role === 'admin' && (ctx.model === 'fast' || ctx.model === 'main') ? ctx.model : null;
+    const fastOn = (asked ? asked === 'fast' : mode === 'fast_first') && FAST !== MODEL;
+    const tally = () => ({ steps: 0, input: 0, cache_write: 0, cache_read: 0, output: 0 });
+    const used = { fast: tally(), main: tally() };
     // a change that is about routes always comes with its map, even when the Benny didn't draw one
     const mapOf = (p: Proposal | null): unknown => {
       if (!p) return null;
@@ -147,8 +155,9 @@ Deno.serve(async req => {
       return null;
     };
     const shows = new Set<string>([...FIRST_CARDS, ...(Array.isArray(ctx.cards) ? ctx.cards.map(String) : [])]);
-    const done = (reply: string) => {
-      console.log('benny-assist usage ' + JSON.stringify({ role, model: MODEL, ...used }));
+    const done = (res: Run, route: Record<string, unknown>) => {
+      const reply = res.reply || 'Sorry, I didn’t get an answer for that. Try asking another way.';
+      let map = res.map; const proposal = res.proposal;
       // a tab opened before this kind of card existed can't draw it: say so, rather than send a card it would choke on
       // (the same for a start-day card that splits the crew between managers: an older tab would start the day without the crews)
       const old = proposal && (!shows.has(proposal.kind) || (proposal.kind === 'start_day' && (proposal.check as { crews?: boolean })?.crews === true && !shows.has('crews')));
@@ -156,39 +165,73 @@ Deno.serve(async req => {
       // a plan's map shows the plan's routes, also when the Benny drew the maps and picked no routes out
       const plan = proposal?.kind === 'start_day' ? mapOf(proposal) as { maps: unknown; highlight: unknown[] } : null;
       if (map && plan?.highlight.length && !((map as { highlight?: unknown[] }).highlight || []).length) map = { ...(map as object), maps: plan.maps, highlight: plan.highlight };
-      return json({ reply, map: map ? { ...(map as object), title: mapTitle } : mapOf(proposal), proposal });
+      // a super admin trying the models out is also told which one answered, and why
+      return json({ reply, map: map ? { ...(map as object), title: res.mapTitle } : mapOf(proposal), proposal, ...(asked ? { route } : {}) });
     };
-    for (let round = 0; round < 8; round++) {
-      const r = await claude(sys, msgs, tools);
-      used.steps++; used.input += r.usage?.input_tokens || 0; used.cache_write += r.usage?.cache_creation_input_tokens || 0;
-      used.cache_read += r.usage?.cache_read_input_tokens || 0; used.output += r.usage?.output_tokens || 0;
-      const uses = r.content.filter(c => c.type === 'tool_use');
-      if (!uses.length || r.stop_reason !== 'tool_use') {
-        const reply = r.content.filter(c => c.type === 'text').map(c => c.text || '').join('').trim();
-        // it said it couldn't, straight off, and logged nothing: log it for it
-        if (!logged && usedTools === 0 && !proposal && CANT.test(reply) && !OFF_TOPIC.test(reply)) {
-          const asked = String(history[history.length - 1].content);
-          await logEntry(sb, ctx, 'request', { title: asked.slice(0, 120), asked, reply: reply.slice(0, 600), auto: true });
+    /** One go at the question on one model. The small model's go (fast) stops, with why, the moment its answer wouldn't be safe to show. */
+    const run = async (model: string, fast: boolean): Promise<Run> => {
+      const msgs: Msg[] = [...history]; const t = fast ? used.fast : used.main;
+      const out: Run = { reply: '', map: null, mapTitle: '', proposal: null, usedTools: 0, logged: false };
+      const lookups: string[] = []; const lengths: number[] = [];
+      for (let round = 0; round < 8; round++) {
+        const r = await claude(model, sys, msgs, tools);
+        t.steps++; t.input += r.usage?.input_tokens || 0; t.cache_write += r.usage?.cache_creation_input_tokens || 0;
+        t.cache_read += r.usage?.cache_read_input_tokens || 0; t.output += r.usage?.output_tokens || 0;
+        const uses = r.content.filter(c => c.type === 'tool_use');
+        if (!uses.length || r.stop_reason !== 'tool_use') {
+          out.reply = r.content.filter(c => c.type === 'text').map(c => c.text || '').join('').trim();
+          if (!fast) return out;
+          const stop = CANT.test(out.reply) ? { why: 'cant' } : fastAnswerStop(out.reply, lookups, [...history.map(m => String(m.content)), now(ctx, role as Role)], lengths);
+          return stop ? { ...out, stop } : out;
         }
-        return done(reply || 'Sorry, I didn’t get an answer for that. Try asking another way.');
+        if (fast) {
+          // anything but a plain lookup is for the main model, and so is a third round of lookups: nothing of this round is run
+          const hard = uses.find(u => !FAST_TOOLS.includes(u.name || ''));
+          if (hard) return { ...out, stop: { why: `tool:${hard.name}` } };
+          if (round >= 2) return { ...out, stop: { why: 'steps' } };
+        }
+        msgs.push({ role: 'assistant', content: r.content });
+        const results = [];
+        out.usedTools += uses.length;
+        for (const u of uses) {
+          if (u.name === 'log_request' || u.name === 'report_bug') out.logged = true;
+          const { out: got, proposal: p } = await runTool(sb, ctx, role as Role, u.name || '', u.input || {});
+          if (fast && got && (got as { error?: string }).error) return { ...out, stop: { why: 'tool_error' } };
+          if (p) out.proposal = p;
+          if (u.name === 'show_map' && got && !(got as { error?: string }).error) { out.map = got; out.mapTitle = String(u.input?.title || ''); }
+          // a map's pins can be many: Claude only needs the counts
+          const forClaude = u.name === 'show_map' && got && (got as { pins?: unknown[] }).pins
+            ? { maps: (got as { maps: unknown }).maps, highlighted_routes: (got as { highlight: unknown[] }).highlight, pins: (got as { pins: unknown[] }).pins.length, shown: true }
+            : got;
+          const text = JSON.stringify(forClaude).slice(0, 30000);
+          if (fast) { lookups.push(text); arrayLengths(forClaude, 0, lengths); }
+          results.push({ type: 'tool_result', tool_use_id: u.id, content: text });
+        }
+        msgs.push({ role: 'user', content: results });
       }
-      msgs.push({ role: 'assistant', content: r.content });
-      const results = [];
-      usedTools += uses.length;
-      for (const u of uses) {
-        if (u.name === 'log_request' || u.name === 'report_bug') logged = true;
-        const { out, proposal: p } = await runTool(sb, ctx, role as Role, u.name || '', u.input || {});
-        if (p) proposal = p;
-        if (u.name === 'show_map' && out && !(out as { error?: string }).error) { map = out; mapTitle = String(u.input?.title || ''); }
-        // a map's pins can be many: Claude only needs the counts
-        const forClaude = u.name === 'show_map' && out && (out as { pins?: unknown[] }).pins
-          ? { maps: (out as { maps: unknown }).maps, highlighted_routes: (out as { highlight: unknown[] }).highlight, pins: (out as { pins: unknown[] }).pins.length, shown: true }
-          : out;
-        results.push({ type: 'tool_result', tool_use_id: u.id, content: JSON.stringify(forClaude).slice(0, 30000) });
+      return fast ? { ...out, stop: { why: 'steps' } } : { ...out, reply: 'That took too many steps. Try asking a narrower question.' };
+    };
+
+    // the small model first, when that is on and the question is one it may take; the main model whenever its go may not be shown
+    const skip = !fastOn ? null : ctx.spoken ? 'spoken' : needsMain(question);
+    let res: Run | null = null;
+    if (fastOn && !skip) {
+      // the small model being unavailable must never cost the person their answer: the main model takes the question
+      try { res = await run(FAST, true); } catch (e) {
+        console.error('benny-assist fast:', e instanceof Error ? e.message : String(e));
+        res = { reply: '', map: null, mapTitle: '', proposal: null, usedTools: 0, logged: false, stop: { why: 'fast_failed' } };
       }
-      msgs.push({ role: 'user', content: results });
     }
-    return done('That took too many steps. Try asking a narrower question.');
+    const why = !fastOn ? null : skip || res?.stop?.why || null;
+    const tokens = res?.stop?.tokens;
+    if (!res || res.stop) res = await run(MODEL, false);
+    // it said it couldn't, straight off, and logged nothing: log it for it
+    if (!res.logged && res.usedTools === 0 && !res.proposal && CANT.test(res.reply) && !OFF_TOPIC.test(res.reply)) {
+      await logEntry(sb, ctx, 'request', { title: question.slice(0, 120), asked: question, reply: res.reply.slice(0, 600), auto: true });
+    }
+    const by = fastOn && !why ? 'fast' : 'main';
+    console.log('benny-assist usage ' + JSON.stringify({ role, mode: fastOn ? 'fast_first' : 'main', by, why, fast_model: FAST, main_model: MODEL, fast: used.fast, main: used.main }));
+    return done(res, { by, why, ...(tokens ? { tokens } : {}) });
   } catch (e) {
     console.error('benny-assist:', e instanceof Error ? e.message : String(e));
     return json({ error: e instanceof Error ? e.message : String(e) }, 500);

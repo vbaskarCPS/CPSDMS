@@ -13,6 +13,8 @@ export interface Ctx {
   diag?: { ua?: string; viewport?: string; build?: string; errors?: string[] };
   /** the change cards this open app can show (a tab opened before a new kind existed doesn't list it) */
   cards?: string[];
+  /** a super admin trying the models out: 'fast' = the small model first, 'main' = the main model only (anyone else's is ignored) */
+  model?: string;
 }
 /** The names to expect in a spoken message (benny_vocab). */
 export interface Vocab { workers?: string[]; managers?: string[]; places?: string[] }
@@ -270,6 +272,67 @@ export function systemBlocks(ctx: Ctx, role: Role, vocab?: Vocab | null): { type
 /** Everything the Benny is told, as one text (what the two parts add up to). */
 export function system(ctx: Ctx, role: Role, vocab?: Vocab | null): string {
   return rules(role) + now(ctx, role, vocab);
+}
+
+/*
+ * Which model answers. In fast_first mode a small, cheap model takes a question first, and the server (never the model)
+ * decides whether its answer may be shown. It may only when all of this holds:
+ *   - the question doesn't ask to compare, rank or pick out, or to change anything (needsMain)
+ *   - it wasn't spoken (misheard names are for the main model)
+ *   - the answer rests on at least one lookup made for this question, on plain lookups only (FAST_TOOLS), and on no
+ *     more than two rounds of them; none failed, and none had to guess between names
+ *   - every number and every code (a route, a CN) in the answer is in what those lookups returned (ungrounded)
+ * Otherwise the whole question is done again by the main model and only that answer is shown. The small model never
+ * makes a card, never writes to the log, and nothing it worked out by itself reaches the person.
+ */
+/** The lookups the small model may answer from: each returns facts to read out. Nothing that plans, ranks, splits or changes. */
+export const FAST_TOOLS = ['find_people', 'day', 'bookings', 'booking', 'maps', 'route', 'live_team', 'logsheet', 'payouts', 'text_people', 'show_map'];
+
+const COMPARES = /\b(most|least|highest|lowest|best|worst|top|bottom|rank\w*|compar\w*|versus|vs|average\w*|avg|better|worse|heav\w+|dens\w+|biggest|smallest|largest|fewest|more than|less than|fewer than)\b/i;
+const CHANGES = /\b(start|give|assign|partner|pair|solo|split|draft|text|drop|pin|plan|add|change|update|edit|fix|close|finali[sz]e|send|move|mark|set up|cancel|reopen|bonus\w*)\b/i;
+/** A question the small model isn't tried on: it asks to compare or pick out ("which has the most"), or to change something. */
+export function needsMain(question: string): 'compare' | 'change' | null {
+  return COMPARES.test(question) ? 'compare' : CHANGES.test(question) ? 'change' : null;
+}
+
+const NUMBER_WORDS: Record<string, string> = { two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12',
+  thirteen: '13', fourteen: '14', fifteen: '15', sixteen: '16', seventeen: '17', eighteen: '18', nineteen: '19', twenty: '20' };
+/** Phone numbers as one run of digits, and thousands without their commas, so "(604) 555-0101" and "$3,582" compare with the data as stored. */
+const plainDigits = (t: string) => t.replace(/\(?\b(\d{3})\)?[\s.-]?(\d{3})[\s.-](\d{4})\b/g, '$1$2$3').replace(/(\d),(?=\d{3}(?!\d))/g, '$1');
+/** The figures in a text. Digits that are part of a code (the 19 of NVN19, the 1002 of I1002) are not figures: codes are checked whole. */
+const numbersIn = (t: string): string[] => (plainDigits(t).match(/(?<![A-Za-z\d.])\d+(?:\.\d+)?/g) || []).map(n => String(Number(n)));
+const codesIn = (t: string): string[] => (t.match(/\b[A-Za-z]{1,6}\d{1,4}\b/g) || []).map(c => c.toUpperCase());
+/** How long every list in a lookup's result is: "5 didn't show" is checked against the list of 5, not counted on trust. */
+export function arrayLengths(v: unknown, depth = 0, out: number[] = []): number[] {
+  if (depth > 8 || out.length > 400 || !v || typeof v !== 'object') return out;
+  if (Array.isArray(v)) { out.push(v.length); for (const x of v) arrayLengths(x, depth + 1, out); }
+  else for (const x of Object.values(v as Record<string, unknown>)) arrayLengths(x, depth + 1, out);
+  return out;
+}
+/**
+ * The numbers and codes in an answer that are NOT in its sources (what the lookups returned, the chat so far, and what
+ * is true right now), nor the length of a list a lookup returned. A sum, a difference, a rounded figure or an invented
+ * route code shows up here, because the small model would have had to work it out or make it up.
+ */
+export function ungrounded(reply: string, sources: string[], lengths: number[] = []): string[] {
+  const all = sources.join('\n'); const upper = all.toUpperCase();
+  const known = new Set([...numbersIn(all), ...lengths.map(String)]);
+  const said = reply.split('\n').map(l => l.replace(/^\s*(?:[-*•]\s*)?\d{1,2}[.)]\s+/, '')).join('\n')   // "1." at the start of a line is a list, not a figure
+    .replace(/\b(two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/gi, w => NUMBER_WORDS[w.toLowerCase()]);
+  const missing = [...numbersIn(said).filter(n => !known.has(n)), ...codesIn(reply).filter(c => !upper.includes(c))];
+  return [...new Set(missing)];
+}
+/**
+ * Why an answer from the small model may not be shown (null = it may). lookups = what its lookups for this question
+ * returned, as it saw them; context = the chat so far and what is true right now; lengths = arrayLengths of the lookups.
+ */
+export function fastAnswerStop(reply: string, lookups: string[], context: string[], lengths: number[] = []): { why: string; tokens?: string[] } | null {
+  if (!reply.trim()) return { why: 'empty' };
+  if (!lookups.length) return { why: 'no_lookup' };
+  if (/\btap\b/i.test(reply)) return { why: 'says_tap' };   // "Tap … to do it" belongs to a card, and the small model makes none
+  if (/"(?:which|closest|heard_as)"\s*:/.test(lookups.join('\n'))) return { why: 'names' };   // a name matched by sound, or more than one fits
+  const tokens = ungrounded(reply, [...lookups, ...context], lengths);
+  return tokens.length ? { why: 'ungrounded', tokens: tokens.slice(0, 8) } : null;
 }
 
 export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus' | 'texts';
