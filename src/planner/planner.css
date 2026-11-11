@@ -115,6 +115,13 @@ a.pl-btn { text-decoration: none; }   /* links styled as buttons */
 /* the rest timer runs along the top of the bar in a live workout: RV sits inside the bar then, so it doesn't cover the countdown */
 body:has(.wo-rest) .pl-nav__rv i { top: 5px; width: 30px; height: 30px; margin-left: -15px; box-shadow: 0 0 0 2px var(--amber); }
 body:has(.wo-rest) .pl-nav__rv i svg { width: 17px; height: 17px; }
+/* Health and Wealth take a drag as well as a tap: press, drag up, let go, and the camera opens (a meal, a receipt).
+   touch-action: none keeps the page from scrolling under the finger, so the drag stays the button's. */
+.pl-nav a.pl-nav__shot { position: relative; touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+/* the bubble that rises with the finger (--lift 0 to 1) and fills in when letting go will take the photo */
+.pl-nav__pull { position: absolute; left: 50%; bottom: calc(100% + var(--rv-rise) + 6px); z-index: 2; display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: 999px; white-space: nowrap; font: 700 13px/1 var(--sans); background: var(--bg-2); color: var(--ink); border: 1.5px solid var(--line); box-shadow: 0 8px 22px rgba(16, 28, 58, .22); pointer-events: none; transform: translate(-50%, calc(var(--lift, 0) * -30px)) scale(calc(.9 + var(--lift, 0) * .1)); animation: plFade .15s ease-out; }
+.pl-nav .pl-nav__pull svg { width: 17px; height: 17px; }
+.pl-nav__pull.is-armed { background: var(--accent); color: var(--accent-ink); border-color: transparent; box-shadow: 0 0 0 3px var(--amber), 0 10px 24px rgba(16, 28, 58, .3); }
 
 /* the menu pages behind Health and Lifestyle (screens/Hub.tsx): one big tile per section, today's headline on it */
 .hub-tiles { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }   /* minmax(0, …): a long headline is cut with …, it doesn't widen the page */

@@ -1,32 +1,104 @@
 // src/planner/ui/Shell.tsx — the bottom bar around every signed-in screen: Today · RV · Health · Wealth · Lifestyle
 // (ui/nav.ts says which screens sit under which button). RV is Arvy: the one button that stands out, it opens the
 // chat panel and closes it again. Health and Lifestyle open their menu pages (screens/Hub.tsx).
-import { useSyncExternalStore, type ReactNode } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { Compass, HeartPulse, Sparkles, Sunrise, Wallet, X, type LucideIcon } from 'lucide-react';
+// Health and Wealth also take a drag: press, drag up and let go, and the camera opens: for a meal (Health) or a
+// receipt (Wealth). The photo lands on Add a meal / Add a receipt as if its own "Take a photo" had been tapped
+// (lib/quickShot.ts). A tap still opens the page.
+import { useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Camera, ChevronsUp, Compass, HeartPulse, Sparkles, Sunrise, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Arvy } from '../features/arvy/Arvy';
 import { arvyIsOpen, onArvyOpenChange, toggleArvy } from '../features/arvy/arvy';
-import { groupOf, NAV_TO, type NavGroup } from './nav';
+import { giveShot, SHOT_TO, type ShotKind } from '../lib/quickShot';
+import { groupOf, NAV_TO, pull, PULL_SLOP, SHOTS, type NavGroup } from './nav';
 
-const TABS: { group: NavGroup; label: string; Icon: LucideIcon }[] = [
+interface Tab { group: NavGroup; label: string; Icon: LucideIcon }
+const TABS: Tab[] = [
   { group: 'today', label: 'Today', Icon: Sunrise },
   { group: 'health', label: 'Health', Icon: HeartPulse },
   { group: 'wealth', label: 'Wealth', Icon: Wallet },
   { group: 'lifestyle', label: 'Lifestyle', Icon: Compass },
 ];
+/** Held still this long (ms), a button that takes a drag shows its bubble, so the drag can be found. */
+const HOLD_MS = 280;
+
+/** A bar button that can also be dragged up to take a photo. A bubble rises with the finger and fills in once it's
+ *  far enough: letting go there calls `onShoot`; anywhere lower, nothing happens. */
+function ShotTab({ t, active, shot, onShoot }: { t: Tab; active: boolean; shot: { kind: ShotKind; label: string }; onShoot: (kind: ShotKind) => void }) {
+  const [up, setUp] = useState<number | null>(null);   // how far it's been dragged up (px); null = no bubble
+  const from = useRef<{ id: number; y: number } | null>(null);
+  const dragged = useRef(false);   // it turned into a drag: a click that follows is not a tap
+  const armed = useRef(false);
+  const hold = useRef(0);
+  const stop = () => { from.current = null; window.clearTimeout(hold.current); setUp(null); };
+  const p = up === null ? null : pull(up);
+  return (
+    <Link to={NAV_TO[t.group]} className={`pl-nav__shot ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} draggable={false}
+      onPointerDown={e => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        from.current = { id: e.pointerId, y: e.clientY }; dragged.current = false; armed.current = false;
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* the pointer is already gone */ }
+        window.clearTimeout(hold.current);
+        hold.current = window.setTimeout(() => setUp(u => u ?? 0), HOLD_MS);
+      }}
+      onPointerMove={e => {
+        const s = from.current;
+        if (!s || s.id !== e.pointerId) return;
+        const dy = s.y - e.clientY;
+        if (dy > PULL_SLOP) dragged.current = true;
+        if (!dragged.current) return;
+        window.clearTimeout(hold.current);
+        setUp(dy);
+        const a = pull(dy).armed;
+        if (a && !armed.current) { try { navigator.vibrate?.(12); } catch { /* no buzz on this phone */ } }
+        armed.current = a;
+      }}
+      onPointerUp={e => {
+        const s = from.current;
+        if (!s || s.id !== e.pointerId) return;
+        const fire = dragged.current && pull(s.y - e.clientY).armed;
+        stop();
+        if (fire) onShoot(shot.kind);   // straight from the finger lifting: the browser only opens the camera from a touch
+      }}
+      onPointerCancel={stop}
+      onClick={e => { if (dragged.current) { e.preventDefault(); dragged.current = false; } }}
+      onContextMenu={e => e.preventDefault()}>
+      <t.Icon aria-hidden /> {t.label}
+      {p && (
+        <span className={`pl-nav__pull ${p.armed ? 'is-armed' : ''}`} style={{ '--lift': p.lift } as CSSProperties} aria-hidden>
+          {p.armed ? <Camera /> : <ChevronsUp />}{shot.label}
+        </span>)}
+    </Link>
+  );
+}
 
 export function Shell({ children }: { children: ReactNode }) {
   const here = groupOf(useLocation().pathname);
+  const nav = useNavigate();
   const chatOpen = useSyncExternalStore(onArvyOpenChange, arvyIsOpen);
-  const tab = (t: typeof TABS[number]) => (
-    <Link key={t.group} to={NAV_TO[t.group]} className={here === t.group ? 'active' : ''} aria-current={here === t.group ? 'page' : undefined}>
-      <t.Icon aria-hidden /> {t.label}
-    </Link>
-  );
+  // the bar's own camera: one hidden picker, opened by a drag; the screen it then goes to picks the photo up
+  const camRef = useRef<HTMLInputElement>(null);
+  const shooting = useRef<ShotKind>('meal');
+  const shoot = (kind: ShotKind) => {
+    shooting.current = kind;
+    camRef.current?.click();   // first: it only works while the touch is still "live"
+    nav(SHOT_TO[kind]);        // the screen under the camera: if the camera didn't open, its own button is right there
+  };
+  const tab = (t: Tab) => {
+    const shot = SHOTS[t.group];
+    if (shot) return <ShotTab key={t.group} t={t} active={here === t.group} shot={shot} onShoot={shoot} />;
+    return (
+      <Link key={t.group} to={NAV_TO[t.group]} className={here === t.group ? 'active' : ''} aria-current={here === t.group ? 'page' : undefined}>
+        <t.Icon aria-hidden /> {t.label}
+      </Link>
+    );
+  };
   return (
     <>
       {children}
       <Arvy />
+      <input ref={camRef} type="file" accept="image/*" capture="environment" hidden tabIndex={-1} aria-hidden
+        onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; giveShot(shooting.current, files); }} />
       <nav className="pl-nav" aria-label="Planner">
         {tab(TABS[0])}
         <button type="button" className={`pl-nav__rv ${chatOpen ? 'is-open' : ''}`} onClick={toggleArvy} aria-expanded={chatOpen} aria-label={chatOpen ? 'Close Arvy' : 'Ask Arvy'}>
