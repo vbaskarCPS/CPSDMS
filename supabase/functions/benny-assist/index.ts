@@ -23,8 +23,12 @@
 // Two models: in fast_first mode (a setting in the database, benny_model_mode) a small model takes plain lookups first,
 // and this server redoes the question on the main model whenever its answer isn't safe to show (the rules are in
 // tools.ts, at FAST_TOOLS). BENNY_FAST_MODEL names the small one, else a Haiku-class model.
+// AI log: each question is saved, as the person who asked it, with the answer, the tools it used (in order, and on which
+// model) and roughly what it cost (cost.ts): Super Admin › Bug log › AI logs (benny_ai_log). Saving never holds up or
+// fails an answer.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { FAST_TOOLS, TOOLS, arrayLengths, fastAnswerStop, forModel, needsMain, now, openMap, systemBlocks, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
+import { costUsd, type Tally } from './cost.ts';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
 const FAST = Deno.env.get('BENNY_FAST_MODEL') || 'claude-haiku-5-5';
@@ -73,6 +77,19 @@ async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, i
   return { out: data };
 }
 
+/** One tool the Benny ran for a question: which, on which model's go, whether it worked, how long it took. */
+type ToolRun = { name: string; model: 'fast' | 'main'; ok: boolean; ms: number };
+
+/** Saves one question to the AI log, after the answer is on its way: the runtime keeps working until it's saved. */
+function saveLog(sb: SupabaseClient, row: Record<string, unknown>): void {
+  const p = Promise.resolve(sb.rpc('benny_ai_log_save', { p: row }))
+    .then(({ error }) => { if (error) console.error('benny-assist log:', error.message); })
+    .catch(e => console.error('benny-assist log:', e instanceof Error ? e.message : String(e)));
+  const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+  if (rt?.waitUntil) rt.waitUntil(p);
+}
+const costOf = (fast: Tally, main: Tally) => Math.round((costUsd(FAST, fast) + costUsd(MODEL, main)) * 1e5) / 1e5;
+
 async function claude(model: string, sys: unknown[], messages: Msg[], tools: unknown[]): Promise<{ content: { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[]; stop_reason: string; usage?: Usage }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
@@ -94,6 +111,10 @@ async function claude(model: string, sys: unknown[], messages: Msg[], tools: unk
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
+  const t0 = Date.now();
+  // for the AI log, also when something goes wrong part way
+  let logTo: SupabaseClient | null = null; let logBase: Record<string, unknown> = {}; const toolRuns: ToolRun[] = [];
+  const tallies = { fast: { steps: 0, input: 0, cache_write: 0, cache_read: 0, output: 0 } as Tally, main: { steps: 0, input: 0, cache_write: 0, cache_read: 0, output: 0 } as Tally };
   try {
     const auth = req.headers.get('Authorization') || '';
     const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
@@ -131,8 +152,9 @@ Deno.serve(async req => {
     // which model: the setting in the database; a super admin's own app can ask for one or the other to try it out
     const asked = role === 'admin' && (ctx.model === 'fast' || ctx.model === 'main') ? ctx.model : null;
     const fastOn = (asked ? asked === 'fast' : mode === 'fast_first') && FAST !== MODEL;
-    const tally = () => ({ steps: 0, input: 0, cache_write: 0, cache_read: 0, output: 0 });
-    const used = { fast: tally(), main: tally() };
+    const used = tallies;
+    logTo = sb;
+    logBase = { role, center_id: ctx.center_id || null, path: ctx.path || null, spoken: !!ctx.spoken, question, fast_model: FAST, main_model: MODEL };
     // a change that is about routes always comes with its map, even when the Benny didn't draw one
     const mapOf = (p: Proposal | null): unknown => {
       if (!p) return null;
@@ -195,7 +217,9 @@ Deno.serve(async req => {
         out.usedTools += uses.length;
         for (const u of uses) {
           if (u.name === 'log_request' || u.name === 'report_bug') out.logged = true;
+          const s0 = Date.now();
           const { out: got, proposal: p } = await runTool(sb, ctx, role as Role, u.name || '', u.input || {});
+          toolRuns.push({ name: u.name || '', model: fast ? 'fast' : 'main', ok: !(got && (got as { error?: string }).error), ms: Date.now() - s0 });
           if (fast && got && (got as { error?: string }).error) return { ...out, stop: { why: 'tool_error' } };
           if (p) out.proposal = p;
           if (u.name === 'show_map' && got && !(got as { error?: string }).error) { out.map = got; out.mapTitle = String(u.input?.title || ''); }
@@ -231,9 +255,13 @@ Deno.serve(async req => {
     }
     const by = fastOn && !why ? 'fast' : 'main';
     console.log('benny-assist usage ' + JSON.stringify({ role, mode: fastOn ? 'fast_first' : 'main', by, why, fast_model: FAST, main_model: MODEL, fast: used.fast, main: used.main }));
+    saveLog(sb, { ...logBase, reply: res.reply, tools: toolRuns, card: res.proposal?.kind || null, answered_by: by, why,
+      tokens: used, cost_usd: costOf(used.fast, used.main), ms: Date.now() - t0 });
     return done(res, { by, why, ...(tokens ? { tokens } : {}) });
   } catch (e) {
-    console.error('benny-assist:', e instanceof Error ? e.message : String(e));
-    return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('benny-assist:', msg);
+    if (logTo) saveLog(logTo, { ...logBase, tools: toolRuns, tokens: tallies, cost_usd: costOf(tallies.fast, tallies.main), ms: Date.now() - t0, error: msg });
+    return json({ error: msg }, 500);
   }
 });

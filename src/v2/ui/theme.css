@@ -768,4 +768,17 @@
 .v2-bug-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; }
 .v2-bug-row ol { margin: 0; padding-left: 18px; }
 .v2-bug-row pre { margin: 0; padding: 8px 10px; background: var(--soft); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Bug log › AI logs */
+.v2-ai-bar { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; }
+.v2-ai-sum { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.v2-ai-people { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.v2-ai-person { border: 1px solid var(--line); background: var(--soft); border-radius: 999px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+.v2-ai-person.on { border-color: var(--blue); background: var(--sel); }
+.v2-ai-person:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.v2-ai-tools { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.v2-ai-tool { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--soft); border: 1px solid var(--line-soft); }
+.v2-ai-tool.bad, .v2-ai-bad { color: var(--rose); }
+.v2-ai-cost { display: flex; flex-direction: column; align-items: flex-end; margin-left: auto; font-size: 13px; font-variant-numeric: tabular-nums; min-width: 44px; }
+.v2-ai-reply { white-space: pre-wrap; overflow-wrap: anywhere; }
+.v2-ai-steps { margin: 0; padding-left: 18px; }
 @media (max-width: 640px) { .v2-bug-row { grid-template-columns: 1fr; gap: 2px; } .v2-bug-detail { padding-left: 14px; } .v2-bug-h { flex-wrap: wrap; } .v2-bug-t { flex-basis: 100%; } }

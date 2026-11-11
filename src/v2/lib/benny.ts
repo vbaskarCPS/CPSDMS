@@ -192,6 +192,59 @@ export async function resolveBug(id: string, done: boolean): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+// ── Super Admin › Bug log › AI logs: every question asked, by whom, the tools used, roughly what it cost ──
+/** One tool the Benny ran: which, on which model's go (the small model first, in fast-first mode), whether it worked. */
+export interface AiTool { name: string; model?: 'fast' | 'main'; ok?: boolean; ms?: number }
+export interface AiLogRow {
+  id: number; at: string; user_id?: string; name?: string; role?: string; center?: string; path?: string; spoken?: boolean;
+  question?: string; reply?: string; tools?: AiTool[]; card?: string; answered_by?: 'fast' | 'main'; why?: string;
+  /** US dollars, roughly */
+  cost?: number; ms?: number; error?: string;
+}
+export interface AiLogPerson { user_id: string | null; name: string; questions: number; tools: number; cost: number }
+export interface AiLog {
+  day: string; rows: AiLogRow[]; people: AiLogPerson[];
+  totals: { questions: number; tools: number; cost: number; errors: number };
+  last30: { questions: number; cost: number; since: string | null };
+}
+export async function listAiLog(day: string | null, userId: string | null): Promise<AiLog> {
+  const { data, error } = await db.rpc('benny_ai_log_list', { p_day: day, p_user: userId });
+  if (error) throw new Error(error.message);
+  return data as AiLog;
+}
+
+/** "route ×20, show_map": the tools a question used, each once with how many times. */
+export function toolCounts(tools: AiTool[] | undefined): { name: string; n: number; failed: number }[] {
+  const out = new Map<string, { name: string; n: number; failed: number }>();
+  for (const t of tools || []) {
+    const c = out.get(t.name) || { name: t.name, n: 0, failed: 0 };
+    c.n++; if (t.ok === false) c.failed++;
+    out.set(t.name, c);
+  }
+  return [...out.values()];
+}
+
+/** The tools in the order they ran, a run of the same one in a row as one step: "route ×20 · main model · 6.0s". */
+export function toolSteps(tools: AiTool[] | undefined): (AiTool & { n: number })[] {
+  const out: (AiTool & { n: number })[] = [];
+  for (const t of tools || []) {
+    const last = out[out.length - 1];
+    if (last && last.name === t.name && last.model === t.model && (last.ok !== false) === (t.ok !== false)) {
+      last.n++; if (t.ms != null) last.ms = (last.ms || 0) + t.ms;
+    } else out.push({ ...t, n: 1 });
+  }
+  return out;
+}
+
+/** A rough cost in US dollars, readable: "<0.1¢", "0.8¢", "$1.24". */
+export function roughCost(usd: number | null | undefined): string {
+  const v = Number(usd) || 0;
+  if (v <= 0) return '0¢';
+  if (v < 0.001) return '<0.1¢';
+  if (v < 1) return `${(v * 100).toFixed(v < 0.1 ? 1 : 0)}¢`;
+  return `$${v.toFixed(2)}`;
+}
+
 // ── for bug reports: the last errors on the page, the browser and the app build ──
 const errors: string[] = [];
 let listening = false;
