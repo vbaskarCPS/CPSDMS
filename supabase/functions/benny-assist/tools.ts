@@ -77,6 +77,10 @@ export const TOOLS: Tool[] = [
     input_schema: { type: 'object', properties: { a: { type: 'string', description: 'the worker whose cart it is' }, b: { type: 'string', description: 'the worker who joins' } }, required: ['a', 'b'] } },
   { name: 'propose_solo', roles: ['admin', 'rm'], description: 'Prepare moving a worker off their cart onto a cart of their own, for the person to confirm on a card.',
     input_schema: { type: 'object', properties: { worker: str }, required: ['worker'] } },
+  { name: 'propose_remove', roles: ['admin', 'rm'], description: 'Prepare taking one or more workers off today\'s live day (they are not working today), for the person to confirm on a card. '
+      + 'Only a worker with nothing logged today can come off: removing erases their logsheet for the day. Pass each worker\'s CN (best: live_team has them) or full name. '
+      + 'A name that only sounds close, or only part of a name, never makes a card: the check says who is closest, and you ask the person.',
+    input_schema: { type: 'object', properties: { workers: strs('CNs (best) or full names, e.g. ["I1012", "Kevontae Ragguette"]') }, required: ['workers'] } },
   { name: 'propose_job_change', roles: ['admin', 'rm'], description: 'Prepare a change to one job on a worker\'s logsheet today, for the person to confirm on a card: its amount, how it was paid (cash, cheque, e-transfer, prepaid, billed), or both. '
       + 'Call logsheet first and pass that job\'s id. It refuses the jobs that must not be changed from here (a logsheet already paid out, a card or split payment, an office flat, an asphalt job) and says where to change them instead.',
     input_schema: { type: 'object', properties: { worker: { type: 'string', description: 'the worker whose cart it is: name or CN' }, job: { type: 'string', description: 'the job\'s id, from logsheet' },
@@ -181,6 +185,7 @@ The last message was SPOKEN and turned into text by the phone, which doesn't kno
 - Names and codes may be misheard as ordinary words: "Jaz will" = Jahswill, "Kevin Tay" = Kevontae, "Joe Van" = Jovan, "N Dell 33" or "endel thirty three" = NDEL33, "poco 64" = PCQ64, "north van one" = NORTH VANCOUVER #1.
 - Before using a tool, match what you heard to the real names below BY SOUND and use the real one. When the name you use differs from what was heard, say so in a few words ("I heard Kevin Tay: using Kevontae Ragguette").
 - If two real names could fit, ask which. If nothing sounds close, say what you heard and ask who they mean. Never guess a person for a change.
+- Taking a worker off today is stricter: a name matched by sound is never enough. Say who you think they mean, with the full name and CN, and wait for their yes before making that card.
 - A route code is a place's prefix + the number (two digits under 10: "NVN 7" = NVN07). A map is the place + #number.${list('Workers today', vocab?.workers)}${list('Route managers', vocab?.managers)}${list('Places (route prefix) and how many maps', vocab?.places)}`;
 }
 
@@ -224,7 +229,7 @@ You help ${who} with the app's own data and work. Who is asking, today's date, t
 Rules:
 - Answer from the tools, never from memory or guesses. If the tools can't answer it, say so and name the screen that can.
 - Only the app's data and work. Anything else: "I can only help with the DMS."
-- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, changing a job on a logsheet (amount, how it was paid), changing a booking (status, notes, route), setting up the booking emails to customers, lining up payouts to finalize, adding bonuses to paid-out carts, and setting up texts to workers' : 'giving a route to a cart, partnering workers, solo carts and changing a job on a logsheet (amount, how it was paid)'} with the propose_ tools, and on the route manager map dropping a pin and planning a drop, pickup or check order. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
+- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, taking a worker off today\'s live day, changing a job on a logsheet (amount, how it was paid), changing a booking (status, notes, route), setting up the booking emails to customers, lining up payouts to finalize, adding bonuses to paid-out carts, and setting up texts to workers' : 'giving a route to a cart, partnering workers, solo carts, taking a worker off today\'s live day and changing a job on a logsheet (amount, how it was paid)'} with the propose_ tools, and on the route manager map dropping a pin and planning a drop, pickup or check order. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
 - One change per answer. If they ask for several, prepare the first and say you'll do the next after.
 - Names: if a tool says "Which one", ask which, listing the names. "Michael A" = Michael with a last name starting A.
 - Starting the day: work out each manager's maps and routes first (whole maps by name; map_side for "the side of 2 connected to 1"; bookings.by_route for "only the routes with prebooks in Surrey"), show them with show_map (routes = every route in the plan), then propose_start_day. If they don't say the date, it is today. If they don't say who, the manager is "me".
@@ -237,6 +242,7 @@ ${role === 'admin' ? `- Crews ("give Franklyn the worst half and me the good guy
 - Texts to workers ("text the guys that didn't show", "set up a text for the no-shows"): you never send a text. The card has a Text button per worker that opens the phone's Messages with the text written, and the person presses send. Call text_people first (who: no_shows = on the day's list and not marked as showed). If they gave the wording, pass it as template EXACTLY as they said it, with {name} where the name goes ("<name>" or "NAME" in what they said = {name}): don't soften, correct or rewrite their words. If they ask you to write them, or give only a tone, write one short text for each worker (under 300 characters, starting from their first name, plain words, no emoji unless asked) in that tone, from what text_people gives: days worked against days on the list, the last day worked, and the earlier texts (don't repeat one; a second warning can say it is the second). Firm is fine; no insults, and never a fact, a time, a rule or a consequence they didn't give you. Then propose_texts. After ok: say how many, name anyone with no cell number, then "Tap Text on each one; you press send." Never say a text was sent. "Who didn't show today" on its own is an answer from text_people, not a card.
 - Bookings: to change a booking (a "service ticket") use propose_booking with the address as they said it, house number first in digits ("thirty five seventy five Latimer" = "3575 Latimer"). "Close", "complete", "finish" = done; "reopen" = open. A note with no kind: field note when it is for the crew (gate code, dog, where to start), office note otherwise; ask if you can't tell. "Add a note" = add; "change the note to" = replace. Say the card's cautions in a few words. Then "Tap Save to do it." Address, people, phone, services and price change in Bookings › List, not here.
 ` : ''}- Pins and orders (the route manager map): "drop a pin at/on …" = propose_pin with one place (a route code, a worker, an address, or here = where they are) and the name they gave it, if any. Only they see it unless they say everyone, name a manager, or say it is a stop for a driver. "Plan my drop order / pickup order / check order" = propose_stops. After ok, say how many stops there are, anyone left out and why, and that it replaces their earlier pins of that kind when it says so. Do NOT list the order or give a distance: the app works the order out by driving time and adds it under your answer. Say nothing about where they are either, unless the result has start_far: then say their location is too far from the carts, so the order starts at its first stop. Then "Tap Drop the pins to do it." ("Drop the pin" for one). Never say a pin is on the map before they tap.
+- Taking a worker off today ("remove Kenan from today", "take him off the payout, he isn't working", "they are not active today"): propose_remove with the workers they named, by CN when you know it. It is for someone who isn't working today and has nothing logged; it erases their logsheet for the day, so it is never a guess. Use a name only as they gave it: if what they said (or what was heard) isn't a worker's actual name, don't swap in the one that sounds closest. Ask "Do you mean Kevontae Ragguette (I1479)?", give the full name and CN, and make the card only after they say yes. The same when the tool says nobody is called exactly that, or that a worker wasn't named in what they said. If it says no because they have jobs logged or are paid out, say that plainly; that is an answer, not something to log. After ok: say who comes off, which routes go back to free, and what today's list will say, then "Tap Remove from today to do it." Never say anyone was taken off.
 - Logsheet jobs: "what has Kyle logged", "how much cash should Nathan have" = logsheet for that worker. To change a job ("change Ron's job on Mugove's cart to 250 prepaid") call logsheet first and find the job by client, address or service; if more than one fits, ask which, giving each one's client and amount. Then propose_job_change with that job's id and only what they asked to change. This changes what the worker is paid, so never guess: if the amount or the payment type wasn't clear, ask. After ok, say what it reads now and what it will read ("$180 cash becomes $250 prepaid") and any caution on the card, then "Tap Save to do it." If it says no (a logsheet already paid out, a card or split payment, an office flat), say why and where to change it instead; that is an answer, not something to log.
 - Bugs: when something in the app is broken, use report_bug with a clear developer-ready description, then say "I'll let Vijay know — it's in the bug log." If the tool returns an error, say it wasn't saved.
 - Be short and specific: the answer first, with the numbers; a list only when it helps; no more than about 8 lines. Phone numbers as written.
@@ -289,7 +295,7 @@ export function system(ctx: Ctx, role: Role, vocab?: Vocab | null): string {
 export const FAST_TOOLS = ['find_people', 'day', 'bookings', 'booking', 'maps', 'route', 'live_team', 'logsheet', 'payouts', 'text_people', 'show_map'];
 
 const COMPARES = /\b(most|least|highest|lowest|best|worst|top|bottom|rank\w*|compar\w*|versus|vs|average\w*|avg|better|worse|heav\w+|dens\w+|biggest|smallest|largest|fewest|more than|less than|fewer than)\b/i;
-const CHANGES = /\b(start|give|assign|partner|pair|solo|split|draft|text|drop|pin|plan|add|change|update|edit|fix|close|finali[sz]e|send|move|mark|set up|cancel|reopen|bonus\w*)\b/i;
+const CHANGES = /\b(start|give|assign|partner|pair|solo|split|draft|text|drop|pin|plan|add|change|update|edit|fix|close|finali[sz]e|send|move|mark|set up|cancel|reopen|remove|take \w+ off|bonus\w*)\b/i;
 /** A question the small model isn't tried on: it asks to compare or pick out ("which has the most"), or to change something. */
 export function needsMain(question: string): 'compare' | 'change' | null {
   return COMPARES.test(question) ? 'compare' : CHANGES.test(question) ? 'change' : null;
@@ -335,7 +341,7 @@ export function fastAnswerStop(reply: string, lookups: string[], context: string
   return tokens.length ? { why: 'ungrounded', tokens: tokens.slice(0, 8) } : null;
 }
 
-export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus' | 'texts';
+export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus' | 'texts' | 'remove';
 
 /**
  * What the Benny itself is shown of a checked change. A texts card carries each worker's cell number for its links;
@@ -346,6 +352,24 @@ export function forModel(kind: ProposalKind | undefined, data: unknown): unknown
   const d = data as { people?: unknown };
   if (!Array.isArray(d.people)) return data;
   return { ...d, people: d.people.map(p => { if (!p || typeof p !== 'object') return p; const { phone, ...rest } = p as Record<string, unknown>; return { ...rest, has_cell: !!phone }; }) };
+}
+/**
+ * Was this worker named in these texts (what the person just said, and the question of ours they are answering)? Their
+ * CN, or their first or last name as a whole word ("Francis-Bull": either half too). "Keenan" does not name Kenan, and
+ * "Devante" does not name Kevontae: a match the Benny made by sound has to be asked about before it goes on a card
+ * that takes someone off the day.
+ */
+export function namedIn(worker: { cn?: string; name?: string }, texts: string[]): boolean {
+  const words = new Set(texts.join(' ').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+  const cn = (worker.cn || '').toLowerCase();
+  if (cn && words.has(cn)) return true;
+  return (worker.name || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 1).some(w => words.has(w));
+}
+/** The texts a named worker has to appear in: what they just said, and our last message when it was a short question (a "Do you mean …?"). */
+export function saidForNames(history: { role: string; content: unknown }[]): string[] {
+  const last = history[history.length - 1]; const prev = history[history.length - 2];
+  const question = prev && prev.role === 'assistant' && typeof prev.content === 'string' && prev.content.length <= 400 && prev.content.includes('?') ? [prev.content] : [];
+  return [typeof last?.content === 'string' ? last.content : '', ...question];
 }
 /** What a tool does: a database function to call (as the signed-in person), and for a change the card it becomes. */
 export type ToolCall =
@@ -381,6 +405,8 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     case 'propose_give_route': return { fn: 'benny_check_give', args: { p_center: c, p_route: String(input.route || ''), p_worker: String(input.worker || '') }, card: { kind: 'give_route' } };
     case 'propose_partner': return { fn: 'benny_check_move', args: { p_center: c, p_a: String(input.a || ''), p_b: String(input.b || '') }, card: { kind: 'partner' } };
     case 'propose_solo': return { fn: 'benny_check_move', args: { p_center: c, p_a: String(input.worker || ''), p_b: null }, card: { kind: 'solo' } };
+    case 'propose_remove': return { fn: 'benny_check_remove', args: { p_center: c,
+      p_workers: (Array.isArray(input.workers) ? input.workers : []).filter((w): w is string => typeof w === 'string' && !!w.trim()).map(w => w.trim()).slice(0, 12) }, card: { kind: 'remove' } };
     case 'logsheet': return { fn: 'benny_live_jobs', args: { p_center: c, p_worker: String(input.worker || '') } };
     case 'propose_job_change': {
       // only what was asked: an amount (a number, or the words as heard for the database to refuse), a payment type, or both

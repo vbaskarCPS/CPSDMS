@@ -12,6 +12,14 @@ const fakeSb = `
     rpc: async (fn, args) => { s.rpc.push([fn, args]);
       if (fn === 'benny_ok_any') return s.role ? { data: s.role, error: null } : { data: null, error: { message: 'Not allowed' } };
       if (fn === 'benny_model_mode') return { data: s.mode || 'main', error: null };
+      if (fn === 'benny_ai_log_save') { (s.logs = s.logs || []).push(args.p); return { data: null, error: null }; }
+      if (fn === 'benny_check_remove') {
+        const known = { 'kevontae ragguette': ['I1479', 'Kevontae Ragguette'], i1479: ['I1479', 'Kevontae Ragguette'], 'kenan francis-bull': ['I1012', 'Kenan Francis-Bull'], i1012: ['I1012', 'Kenan Francis-Bull'], kenan: ['I1012', 'Kenan Francis-Bull'] };
+        const hit = args.p_workers.map(w => known[w.toLowerCase()]);
+        if (!hit.length || hit.some(h => !h)) return { data: { ok: false, date: '2026-11-10', problems: args.p_workers.filter((w, i) => !hit[i]).map(w => 'No worker called “' + w + '” is on today’s map.') }, error: null };
+        return { data: { ok: true, date: '2026-11-10', center_type: 'road_trip', stamp: 'st1', workers: hit.map(([cn, name]) => ({ cn, name, manager: 'rm_me', manager_name: 'Franklyn Mitchell', cart_id: 's_' + cn,
+          ...(cn === 'I1479' ? { routes: ['NSR42'], frees: ['NSR42'] } : {}), roster: { id: 'r_' + cn, now: 'showed', then: 'not marked' } })) }, error: null };
+      }
       if (fn === 'benny_my_rm_ids') return { data: s.role === 'rm' ? ['rm_me', 'rm_buddy'] : null, error: null };
       if (fn === 'benny_side') return { data: { codes: ['NVN19', 'NVN24'], of: 19 }, error: null };
       if (fn === 'benny_bonus_rank') return { data: { ok: true, date: args.p_date || '2026-11-10', kept_as: 'the live day',
@@ -85,7 +93,7 @@ const ask = async (text, context = {}, opts = {}) => {
   const res = await handler(new Request('http://x', { method: 'POST', headers: { Authorization: 'Bearer t' }, body: JSON.stringify({ messages: opts.messages || [{ role: 'user', content: text }], context: { center_id: 'c1', today: '2026-11-10', ...context } }) }));
   return { status: res.status, body: await res.json() };
 };
-const calls = () => state.rpc.filter(x => x[0] !== 'benny_model_mode');   // the mode is read with every question
+const calls = () => state.rpc.filter(x => x[0] !== 'benny_model_mode' && x[0] !== 'benny_ai_log_save');   // the mode is read with every question, and every question is saved to the AI log
 const fns = () => calls().map(x => x[0]);
 // the server logs one line of token counts per question: kept here (and off the screen) to be checked in 5n
 const print = console.log; state.usage = [];
@@ -103,7 +111,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 29); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 30); assert(!('roles' in state.lastAsk.tools[0]));
 // the Benny drew the maps itself and picked no routes out: the plan's routes are highlighted all the same
 state.script = [turn(use('show_map', { maps: ['NORTH VANCOUVER #1'], title: 'Tomorrow' })),
   turn(use('propose_start_day', { date: '2026-11-11', assign: [{ managers: ['me'], maps: ['NORTH VANCOUVER #1'] }] })), say('Tap Start the day to do it.')];
@@ -186,7 +194,7 @@ assert.equal(a.body.proposal, null); assert.match(a.body.reply, /Refresh the pag
 state.script = [turn(use('propose_booking', { booking: '3575 Latimer', status: 'done' })), say('Tap Save to do it.')];
 a = await ask('update the service ticket for 3575 Latimer to done', { cards: ['booking'] });
 assert.equal(a.body.proposal.kind, 'booking'); assert.deepEqual(a.body.proposal.check.patch, { status: 'done' }); assert.equal(a.body.map, null);
-assert.deepEqual(state.rpc.at(-1), ['benny_check_booking', { p_center: 'c1', p_booking: '3575 Latimer', p_change: { status: 'done' } }]);
+assert.deepEqual(calls().at(-1), ['benny_check_booking', { p_center: 'c1', p_booking: '3575 Latimer', p_change: { status: 'done' } }]);
 assert(!fns().some(f => /save/.test(f)), 'the server never saves a booking');
 state.script = [turn(use('propose_booking', { booking: '3575 Latimer', route: 'RMD137' })), say('Tap Save to do it.')];
 a = await ask('move 3575 latimer to rmd137', { cards: ['booking'] });
@@ -207,7 +215,7 @@ console.log('5d booking change: a card for admins, its map on a move, never save
 state.script = [turn(use('propose_booking_emails', { kind: 'day_before', maps: ['North Delta 2'] })), say('4 customers get one, 1 has no email. Tap Open to read and send.')];
 a = await ask('send the service notification emails for north delta 2 tomorrow', { cards: ['booking', 'booking_emails'] });
 assert.equal(a.body.proposal.kind, 'booking_emails'); assert.equal(a.body.proposal.check.counts.to_email, 4);
-assert.deepEqual(state.rpc.at(-1), ['benny_check_emails', { p_center: 'c1', p_kind: 'day_before', p_date: null, p_today: '2026-11-10', p_routes: null, p_maps: ['North Delta 2'] }]);
+assert.deepEqual(calls().at(-1), ['benny_check_emails', { p_center: 'c1', p_kind: 'day_before', p_date: null, p_today: '2026-11-10', p_routes: null, p_maps: ['North Delta 2'] }]);
 assert.deepEqual(a.body.map, { maps: ['NORTH DELTA #2'], highlight: ['NDEL27', 'NDEL28'], pins: [], title: 'Routes to email' });
 assert(!state.http.some(([u]) => !u.includes('api.anthropic.com')), 'nothing but the model is called: no mail goes out');
 assert(!fns().some(f => /mail|send/.test(f) && f !== 'benny_check_emails'), 'no mail function is called');
@@ -230,7 +238,7 @@ assert(!fns().some(f => /pin|stop/.test(f) && !['benny_check_pin', 'benny_plan_s
 state.role = 'admin';
 state.script = [turn(use('propose_pin', { here: true })), say('Open a route manager’s map first: pins live on a manager’s map.')];
 a = await ask('drop a pin here', { cards: ['pin', 'stops'] });   // the top bar, no map open
-assert.equal(a.body.proposal, null); assert.equal(state.rpc.at(-1)[1].p_manager, null);
+assert.equal(a.body.proposal, null); assert.equal(calls().at(-1)[1].p_manager, null);
 console.log('5f pins and orders: cards with their maps for the open map, nothing written by the server ✓');
 
 // 5g. the floater map: the floater's own id and the managers followed reach the database together, for it to check
@@ -239,7 +247,7 @@ const floater = { screen: 'rm', rm_manager: 'floater_stebe', following: ['rm_fra
 state.script = [turn(use('propose_stops', { kind: 'check' })), say('Two stops. Tap Drop the pins to do it.')];
 a = await ask('plan my check order', floater);
 assert(!fns().includes('benny_my_rm_ids'), 'the floater map is not swapped for the person’s own manager map');
-assert.equal(state.rpc.at(-1)[1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');
+assert.equal(calls().at(-1)[1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');
 assert.equal(a.body.proposal.check.manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');   // the stand-in echoes it; the real check answers with the floater's id
 assert(sysText().includes('on the floater map, following Franklyn Mitchell, Jovan Chung'));
 state.script = [turn(use('live_team', {})), say('8 carts out.')];
@@ -292,14 +300,14 @@ const crewPlan = { date: '2026-11-11', assign: [{ managers: ['Franklyn'], maps: 
 state.script = [turn(use('crew_stats', { date: '2026-11-11' })), turn(use('propose_start_day', crewPlan)), say('Franklyn gets Kyle (16.0), Jovan gets Tim (23.2). Tap Start the day to do it.')];
 a = await ask('start tomorrow, give franklyn the worst half in mission and jovan the good guys', { cards: ['crews'] });
 assert.deepEqual(fns().filter(f => /crew|plan/.test(f)), ['benny_crew_stats', 'benny_plan_day']);
-assert.deepEqual(state.rpc.find(x => x[0] === 'benny_plan_day')[1].p_assign.map(e => e.workers), [['I1065'], ['I1001']], 'who goes with whom reaches the database');
+assert.deepEqual(calls().find(x => x[0] === 'benny_plan_day')[1].p_assign.map(e => e.workers), [['I1065'], ['I1001']], 'who goes with whom reaches the database');
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.check.crews, true); assert.deepEqual(a.body.proposal.check.assign.map(e => e.crew.map(w => w.cn)), [['I1065'], ['I1001']]);
 state.script = [turn(use('crew_stats', { date: '2026-11-11' })), turn(use('propose_start_day', crewPlan)), say('Tap Start the day to do it.')];
 a = await ask('start tomorrow, give franklyn the worst half', {});   // a tab opened before crews: it would start the day without them
 assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
 state.script = [turn(use('crew_stats', {})), say('Tim is your best at 23.2 equiv a day, then Kyle at 16.0.')];
 a = await ask('who are my best workers', {});
-assert.equal(a.body.proposal, null); assert.deepEqual(state.rpc.find(x => x[0] === 'benny_crew_stats')[1], { p_center: 'c1', p_date: '2026-11-10' });
+assert.equal(a.body.proposal, null); assert.deepEqual(calls().find(x => x[0] === 'benny_crew_stats')[1], { p_center: 'c1', p_date: '2026-11-10' });
 state.role = 'rm';
 state.script = [say('That is for the office.')];
 a = await ask('who are my best workers', { screen: 'rm', rm_manager: 'rm_me' });
@@ -313,8 +321,8 @@ const two = { bonuses: [{ worker: 'I1013', place: 1, amount: 50 }, { worker: 'I1
 state.script = [turn(use('bonus_ranking', {})), turn(use('propose_bonuses', two)), say('1st Michael, 2nd Kyle (Mugove is higher but doesn’t qualify). Tap Add the bonuses to do it.')];
 a = await ask('give the top two bonus equiv carts 50 each', { cards: ['bonus'], path: '/app/workerbook/days/2026-11-10' });
 assert.deepEqual(fns().filter(f => /bonus/.test(f)), ['benny_bonus_rank', 'benny_check_bonus'], 'the server only ranks and checks: it has nothing that adds a bonus');
-assert.deepEqual(state.rpc.find(x => x[0] === 'benny_bonus_rank')[1], { p_center: 'c1', p_date: '2026-11-10' }, 'the day on the screen');
-assert.deepEqual(state.rpc.find(x => x[0] === 'benny_check_bonus')[1], { p_center: 'c1', p_date: '2026-11-10', p_bonuses: two.bonuses });
+assert.deepEqual(calls().find(x => x[0] === 'benny_bonus_rank')[1], { p_center: 'c1', p_date: '2026-11-10' }, 'the day on the screen');
+assert.deepEqual(calls().find(x => x[0] === 'benny_check_bonus')[1], { p_center: 'c1', p_date: '2026-11-10', p_bonuses: two.bonuses });
 assert.equal(a.body.proposal.kind, 'bonus'); assert.equal(a.body.proposal.check.bonuses.length, 2); assert.equal(a.body.map, null);
 assert(/They have the workerbook day 2026-11-10 open/.test(sysText()));
 state.script = [turn(use('bonus_ranking', {})), turn(use('propose_bonuses', two)), say('Tap Add the bonuses to do it.')];
@@ -337,7 +345,7 @@ const toolResults = () => state.lastAsk.messages.flatMap(m => Array.isArray(m.co
 state.script = [turn(use('text_people', {})), turn(use('propose_texts', { template: wording })), say('2 texts are set up; Tim Chan has no cell number. Tap Text on each one; you press send.')];
 a = await ask('text the guys that didnt show: <name> if you dont get out of bed right now you can start packing', { cards: ['texts'] });
 assert.deepEqual(fns().filter(f => /text/.test(f)), ['benny_text_people', 'benny_check_texts'], 'the server looks up and checks: it has nothing that sends or records a text');
-assert.deepEqual(state.rpc.find(x => x[0] === 'benny_check_texts')[1], { p_center: 'c1', p_date: '2026-11-10', p_who: { group: 'no_shows' }, p_template: wording, p_texts: null, p_tone: null });
+assert.deepEqual(calls().find(x => x[0] === 'benny_check_texts')[1], { p_center: 'c1', p_date: '2026-11-10', p_who: { group: 'no_shows' }, p_template: wording, p_texts: null, p_tone: null });
 assert.equal(a.body.proposal.kind, 'texts'); assert.equal(a.body.proposal.check.people[0].phone, '6045550101', 'the card has the number for its link');
 assert.equal(a.body.proposal.check.people[0].text, 'Steven if you dont get out of bed right now you can start packing'); assert.equal(a.body.map, null);
 assert(toolResults().length === 2 && toolResults().every(t => !t.includes('604')), 'no phone number ever reaches the model');
@@ -362,7 +370,7 @@ console.log('5l texts: no number reaches the model, the card carries them, nothi
 // 5m. maps: past clients by service, ranked when a service is named
 state.script = [turn(use('maps', { q: 'Surrey', service: 'lawn_rejuv' })), say('Southeast Surrey #3 is highest: 6.2 rejuv past clients per route.')];
 a = await ask('which surrey map has the highest rejuv pcl density');
-assert.deepEqual(state.rpc.find(x => x[0] === 'benny_maps_pcl')[1], { p_center: 'c1', p_q: 'Surrey', p_service: 'lawn_rejuv' });
+assert.deepEqual(calls().find(x => x[0] === 'benny_maps_pcl')[1], { p_center: 'c1', p_q: 'Surrey', p_service: 'lawn_rejuv' });
 assert.equal(a.body.proposal, null); assert(/per_route/.test(toolResults()[0]));
 console.log('5m maps: past clients by service, ranked for the one asked ✓');
 
@@ -448,6 +456,39 @@ state.role = 'admin'; state.mode = 'fast_first'; state.script = [say('ok')]; a =
 state.role = 'rm'; state.script = [turn(use('live_team', {})), say('Your team is live.')]; a = await ask('who is on my team', { screen: 'rm', rm_manager: 'rm_me' }); assert.deepEqual(state.models, [FASTM, FASTM]);
 state.role = 'admin'; state.mode = 'main'; state.usage = [];
 console.log('5o two models: plain lookups on the small one, checked by the server; cards, rankings, the log and anything unchecked on the main one ✓');
+
+// 5p. taking a worker off today: a card for super admins and route managers, and never on a name the Benny matched by sound
+state.role = 'rm'; state.mode = 'fast_first';
+const heard = 'Remove Devante and Keenan from today\'s payout they are not active today';
+const rmCtx = { screen: 'rm', rm_manager: 'rm_me', spoken: true, cards: ['remove'] };
+// spoken, and the model swaps in the names that sound closest: the check passes, but nobody they named is on it, so no card
+state.script = [turn(use('propose_remove', { workers: ['Kevontae Ragguette', 'Kenan Francis-Bull'] })), say('Do you mean Kevontae Ragguette (I1479) and Kenan Francis-Bull (I1012)?')];
+a = await ask(heard, rmCtx);
+assert.equal(a.body.proposal, null, 'a match made by sound is asked about, never put on the card');
+assert.deepEqual(state.models, ['claude-sonnet-5-5', 'claude-sonnet-5-5'], 'a change, and spoken: never the small model');
+assert(toolResults().length === 1 && /Kevontae Ragguette \(I1479\) wasn’t named in what they said/.test(toolResults()[0]) && /Kenan Francis-Bull \(I1012\) wasn’t named/.test(toolResults()[0]) && /"ok":false/.test(toolResults()[0]));
+assert(state.lastAsk.tools.some(t => t.name === 'propose_remove'), 'route managers have it for their own team');
+// they say yes to that question: now the same call makes the card
+const yes = [{ role: 'user', content: heard }, { role: 'assistant', content: 'Do you mean Kevontae Ragguette (I1479) and Kenan Francis-Bull (I1012)?' }, { role: 'user', content: 'yes' }];
+state.script = [turn(use('propose_remove', { workers: ['I1479', 'I1012'] })), say('Kevontae and Kenan come off; NSR42 goes back to free. Tap Remove from today to do it.')];
+a = await ask('yes', rmCtx, { messages: yes });
+assert.equal(a.body.proposal.kind, 'remove'); assert.deepEqual(a.body.proposal.check.workers.map(w => w.cn), ['I1479', 'I1012']); assert.equal(a.body.proposal.check.stamp, 'st1');
+assert.deepEqual(calls().find(x => x[0] === 'benny_check_remove')[1], { p_center: 'c1', p_workers: ['I1479', 'I1012'] });
+assert(!fns().some(f => /remove_begin|remove_done/.test(f)), 'the server only checks: the app removes, after the tap');
+// typed with the real name: straight to the card
+state.script = [turn(use('propose_remove', { workers: ['I1012'] })), say('Tap Remove from today to do it.')];
+a = await ask('take Kenan off today, he went home', { ...rmCtx, spoken: false }); assert.equal(a.body.proposal.kind, 'remove'); assert.equal(a.body.proposal.check.workers.length, 1);
+// a yes to a long answer of ours (not a question about them) doesn't name anyone
+state.script = [turn(use('propose_remove', { workers: ['I1479'] })), say('Do you mean Kevontae Ragguette (I1479)?')];
+a = await ask('remove Devante', { ...rmCtx, spoken: false }, { messages: [{ role: 'user', content: 'who is on my team' }, { role: 'assistant', content: 'Your team today: ' + 'Kevontae Ragguette (I1479) on NSR42; '.repeat(14) }, { role: 'user', content: 'remove Devante' }] });
+assert.equal(a.body.proposal, null);
+// the database's own no (nobody by that name) makes no card either; an older tab is told to refresh
+state.script = [turn(use('propose_remove', { workers: ['Devante'] })), say('Nobody called Devante is on today’s map.')];
+a = await ask('remove Devante', { ...rmCtx, spoken: false }); assert.equal(a.body.proposal, null);
+state.script = [turn(use('propose_remove', { workers: ['I1012'] })), say('Tap Remove from today to do it.')];
+a = await ask('take Kenan off today', { screen: 'rm', rm_manager: 'rm_me' }); assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
+state.role = 'admin'; state.mode = 'main';
+console.log('5p remove: named workers only (a by-sound match is asked about), a card for the app to carry out, nothing removed by the server ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;
