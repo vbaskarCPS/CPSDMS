@@ -35,8 +35,10 @@ export async function legacyRouteManagers(centerId: string): Promise<{ user_id: 
  * Signs the old RM screens in as one of today's route managers, the same way the old login
  * did (current_user in local storage, with the manager's floater and digital-map settings).
  * Returns false when that manager isn't on the live session.
+ * lookingIn = someone else opening that manager's map from their own device: everything works as it does for the
+ * manager, except that this device's GPS is never written as the manager's position.
  */
-export async function actAsLegacyRouteManager(centerId: string, userId: string): Promise<boolean> {
+export async function actAsLegacyRouteManager(centerId: string, userId: string, lookingIn = false): Promise<boolean> {
   await pointLegacyAt(centerId);
   const [{ supabase }, { USER_COLS }, { setStorageItem }] = await Promise.all([
     import('../../lib/supabase'), import('../../lib/legacyColumns'), import('../../lib/localStorage'),
@@ -57,6 +59,7 @@ export async function actAsLegacyRouteManager(centerId: string, userId: string):
     floatingFor: Array.isArray(meta.floatingFor) ? meta.floatingFor : [],
     digitalMapping: mapping || undefined,
     digitalMappings: Array.isArray(meta.digitalMappings) ? meta.digitalMappings : (mapping ? [mapping] : []),
+    ...(lookingIn ? { lookingIn: true } : {}),
   });
   return true;
 }

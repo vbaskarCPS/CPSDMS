@@ -30,7 +30,8 @@ export const RMMap: React.FC = () => {
     if (profile) await beginManagerDay(profile.id);   // today's map data also kept on this phone (src/lib/offline)
     const live = await legacyLiveSession(centerId);
     if (!live) return { kind: 'nosession' as const, managers: [] };
-    const ok = await actAsLegacyRouteManager(centerId, who);
+    // someone else's map, opened from this device: this device's GPS isn't theirs, so it is never reported as theirs
+    const ok = await actAsLegacyRouteManager(centerId, who, who !== own);
     if (ok) return { kind: 'ok' as const };
     // No workers or routes of my own today: if another manager has shared their map with me, open it.
     if (who === own && profile) {
