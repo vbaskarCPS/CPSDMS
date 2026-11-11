@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, ListChecks, Sparkles } from 'lucide-react';
 import { changePin, saveSettings, signOut, type PlannerPass } from '../lib/auth';
 import { PushCard } from '../ui/PushCard';
 import { MemoryCard } from '../ui/MemoryCard';
+import { IconsTile } from '../features/icons';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
@@ -95,6 +96,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
       <Link className="pl-tile" to="/settings/arvy-log"><ListChecks aria-hidden /><div className="pl-grow"><b>Arvy’s log</b><small>What Arvy couldn’t do or got wrong, and the fixes on the way</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
 
       <PushCard />
+
+      <IconsTile />
 
       <form className="pl-card pl-stack" onSubmit={save}>
         <label className="pl-field">
