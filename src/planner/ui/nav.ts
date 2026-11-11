@@ -4,6 +4,9 @@
 //   Health     a menu page (screens/Hub.tsx): Train, Food, and Cycle on the morning profile
 //   Wealth     Money (one section, so the button goes straight to it)
 //   Lifestyle  a menu page: Plan, Habits, Calendar, Shopping
+// Health and Wealth can also be dragged up: that goes straight to the camera, for a meal or a receipt (SHOTS, pull).
+import type { ShotKind } from '../lib/quickShot';
+
 export type NavGroup = 'today' | 'health' | 'wealth' | 'lifestyle';
 
 /** Where each button goes. */
@@ -21,4 +24,18 @@ export function groupOf(pathname: string): NavGroup | null {
   const first = pathname.split('/').filter(Boolean)[0];
   if (!first) return 'today';
   return SECTION[first] ?? null;
+}
+
+/** Drag one of these buttons up and let go: the camera opens for this kind of photo. */
+export const SHOTS: Partial<Record<NavGroup, { kind: ShotKind; label: string }>> = {
+  health: { kind: 'meal', label: 'Meal photo' },
+  wealth: { kind: 'receipt', label: 'Receipt photo' },
+};
+/** How far up (px) the finger has to go before letting go takes the photo, and how far before it counts as a drag at all. */
+export const PULL_ARM = 44;
+export const PULL_SLOP = 10;
+/** A drag `up` px above where it started: how far the bubble has risen (0 to 1), and whether letting go takes the photo. */
+export function pull(up: number): { lift: number; armed: boolean } {
+  const u = Math.max(0, up);
+  return { lift: Math.min(1, u / PULL_ARM), armed: u >= PULL_ARM };
 }

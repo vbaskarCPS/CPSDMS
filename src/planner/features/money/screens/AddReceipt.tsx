@@ -7,6 +7,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Banknote, Camera, Check, Image, Link2, Loader2, X } from 'lucide-react';
 import { Button, Card, Field, Header, Input, Page, Segmented, TextArea, uid } from '../../../ui/primitives';
 import { keeperImage, readReceipt, shrinkImage, type ReceiptRead } from '../../../lib/ai';
+import { useQuickShot } from '../../../lib/quickShot';
 import { SPENDING_CATEGORIES } from '../categories';
 import { CategoryIcon } from '../CategoryIcon';
 import { dayLabel, money, niceName, round2, todayIso } from '../lib';
@@ -40,12 +41,23 @@ export function AddReceipt() {
   const total = Number((draft?.total || '').replace(/[^\d.]/g, ''));
   const split = useMemo(() => (draft ? splitByCategory({ items: draft.items, total: total || 0, category: draft.category }) : []), [draft, total]);
 
-  async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files || []);
     e.target.value = '';
+    void addPhotos(files);
+  }
+  // a photo taken from the bottom bar (Wealth dragged up: ui/Shell.tsx) comes in like one taken here. After a saved
+  // receipt it starts the next one; over a receipt still being checked it's refused, so nothing unsaved is lost
+  useQuickShot('receipt', files => {
+    if (done) { again(); void addPhotos(files, true); return; }
+    if (draft || busy) { setError('Save this receipt or go back to its photos first. That photo wasn’t added.'); return; }
+    void addPhotos(files);
+  });
+  /** `fresh` = a new receipt is starting: the photos on screen don't count against the limit. */
+  async function addPhotos(files: File[], fresh = false) {
     if (!files.length) return;
     setError(null);
-    const room = MAX_PHOTOS - photos.length;
+    const room = MAX_PHOTOS - (fresh ? 0 : photos.length);
     try {
       const added = await Promise.all(files.slice(0, room).map(async file => ({ id: uid(), file, thumb: (await shrinkImage(file, 240, 0.6)).dataUrl })));
       setPhotos(p => [...p, ...added].slice(0, MAX_PHOTOS));
@@ -215,19 +227,19 @@ export function AddReceipt() {
           )}
           {photos.length < MAX_PHOTOS && (photos.length === 0 ? (
             <label className="fd-bigbtn">
-              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={e => void onPick(e)} />
+              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPick} />
               <Camera /><span>Take a photo of the receipt</span>
               <small className="pl-muted" style={{ fontWeight: 400 }}>Flat, the whole receipt in the frame · a long one can take up to {MAX_PHOTOS} photos</small>
             </label>
           ) : (
             <label className="pl-btn pl-btn--block" style={{ cursor: 'pointer' }}>
-              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={e => void onPick(e)} style={{ display: 'none' }} />
+              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPick} style={{ display: 'none' }} />
               <Camera style={{ width: 18, height: 18 }} /> Add the next part ({photos.length}/{MAX_PHOTOS})
             </label>
           ))}
           {photos.length < MAX_PHOTOS && (
             <label className="pl-btn pl-btn--block" style={{ cursor: 'pointer' }}>
-              <input ref={libRef} type="file" accept="image/*" multiple onChange={e => void onPick(e)} style={{ display: 'none' }} />
+              <input ref={libRef} type="file" accept="image/*" multiple onChange={onPick} style={{ display: 'none' }} />
               <Image style={{ width: 18, height: 18 }} /> {photos.length ? 'Add from photos' : 'A screenshot or saved photo'}
             </label>
           )}

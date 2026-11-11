@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Camera, Image, Loader2, Star, Utensils, X } from 'lucide-react';
 import { estimateFoodPhotos, estimateFoodText, shrinkImage, type FoodEstimate } from '../../lib/ai';
 import { dayKey, getDoc, getDocs, putDoc } from '../../lib/docs';
+import { useQuickShot } from '../../lib/quickShot';
 import { Button, Card, Empty, Field, Header, Page, Segmented, TextArea, useToast, uid } from '../../ui/primitives';
 import { MealEditor, type Draft } from './MealEditor';
 import { mealKey, nowTime, removeMeal, round, saveFavourite, saveMeal, sum, type FavMeal, type Meal } from './model';
@@ -65,8 +66,8 @@ export function AddMeal() {
     } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong.'); }
     finally { setBusy(null); }
   };
-  const onPick = async (e: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []); e.target.value = '';
+  const onPick = (e: ChangeEvent<HTMLInputElement>) => { const files = Array.from(e.target.files || []); e.target.value = ''; void addPhotos(files); };
+  const addPhotos = async (files: File[]) => {
     const room = MAX_PHOTOS - photos.length;
     if (!files.length || room <= 0) return;
     setError(null);
@@ -76,6 +77,12 @@ export function AddMeal() {
       if (files.length > room) setError(`Up to ${MAX_PHOTOS} photos a meal; the first ${room} were added.`);
     } catch { setError("Couldn't read that photo. Try another."); }
   };
+  // a photo taken from the bottom bar (Health dragged up: ui/Shell.tsx) comes in like one taken here
+  useQuickShot('meal', files => {
+    if (draft || busy) { show('Save this meal or start over first. That photo wasn’t added.', 'bad'); return; }
+    setMode('photo');
+    void addPhotos(files);
+  });
 
   const describe = async () => {
     if (!text.trim()) return;
@@ -169,19 +176,19 @@ export function AddMeal() {
           )}
           {photos.length < MAX_PHOTOS && (photos.length === 0 ? (
             <label className="fd-bigbtn">
-              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={e => void onPick(e)} />
+              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPick} />
               <Camera /><span>Take a photo</span>
               <small className="pl-muted" style={{ fontWeight: 400 }}>Overhead for plates, 45° for bowls · add up to {MAX_PHOTOS} of the same meal</small>
             </label>
           ) : (
             <label className="pl-btn pl-btn--block" style={{ cursor: 'pointer' }}>
-              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={e => void onPick(e)} style={{ display: 'none' }} />
+              <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={onPick} style={{ display: 'none' }} />
               <Camera style={{ width: 18, height: 18 }} /> Add another angle ({photos.length}/{MAX_PHOTOS})
             </label>
           ))}
           {photos.length < MAX_PHOTOS && (
             <label className="pl-btn pl-btn--block" style={{ cursor: 'pointer' }}>
-              <input ref={libRef} type="file" accept="image/*" multiple onChange={e => void onPick(e)} style={{ display: 'none' }} />
+              <input ref={libRef} type="file" accept="image/*" multiple onChange={onPick} style={{ display: 'none' }} />
               <Image style={{ width: 18, height: 18 }} /> {photos.length ? 'Add from library' : 'Choose from library'}
             </label>
           )}
