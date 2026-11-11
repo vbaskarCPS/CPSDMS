@@ -7,6 +7,7 @@ import { HabitDetail } from './HabitDetail';
 export { HabitsTodayCard, useHabitsLine } from './HabitsTodayCard';
 export { autoMark } from './auto';
 export { SlotHabits, SlotHabitsProvider } from './SlotHabits';
+export { onHabitTicked } from './ticked';
 
 export const habitsRoutes: { path: string; element: JSX.Element }[] = [
   { path: '/habits', element: createElement(HabitsList) },

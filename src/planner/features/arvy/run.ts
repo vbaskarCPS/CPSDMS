@@ -1,8 +1,11 @@
 // src/planner/features/arvy/run.ts — Arvy's tools, run in the app with the same functions the screens use.
 // Each returns a compact summary (what Claude reads); open_screen also asks the panel to navigate.
 // The tool list itself (names, descriptions) is in supabase/functions/planner-arvy/tools.ts, shared with the server.
-// One tool reads something outside the planner: gym_classes asks the server for GoodLife's class timetable (a browser
-// can't read GoodLife's site) and makes the answer here (supabase/functions/planner-arvy/gym.ts).
+// Two tools read something outside the planner, through the server: gym_classes asks it for GoodLife's class
+// timetable (a browser can't read GoodLife's site) and find_place asks it for places from Google Maps (the Google key
+// is the server's). The answers are made here (supabase/functions/planner-arvy/gym.ts, places.ts); a place comes with
+// the links for its buttons under Arvy's reply.
+// our_chat reads the chat between the two of them (ourchat.ts): only when they ask about it.
 import { dayKey, getDoc, getDocs } from '../../lib/docs';
 import { addMemory } from '../../lib/memory';
 import { getPass } from '../../lib/auth';
@@ -25,10 +28,14 @@ import { today as cycleToday } from '../cycle/predict';
 import type { Template, Workout } from '../workout/types';
 import { SCREENS, type Source } from '../../../../supabase/functions/planner-arvy/tools';
 import { GYM_CLUBS, gymAnswer, gymClubsFor, gymPageUrl, type GymClubClasses } from '../../../../supabase/functions/planner-arvy/gym';
+import { PLACES_MAX, placeAnswer, placeLinks, placesAsk, placesPageUrl, type Place, type PlaceLinks } from '../../../../supabase/functions/planner-arvy/places';
+import { CHAT_KIND, type ChatMsg } from '../../../../supabase/functions/planner-chat/chat';
+import { chatAnswer, chatDays, chatSince } from './ourchat';
 
 type AnyDoc = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-/** `sources` = where an answer from outside the planner came from: a link shown under Arvy's reply. */
-export interface ToolOut { result: unknown; navigate?: string; error?: boolean; sources?: Source[] }
+/** `sources` = where an answer from outside the planner came from: a link shown under Arvy's reply.
+ *  `links` = the buttons of the places a look-up found (Call, Website, Directions): shown for the ones the reply names. */
+export interface ToolOut { result: unknown; navigate?: string; error?: boolean; sources?: Source[]; links?: PlaceLinks[] }
 
 const isDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 const shift = (key: string, n: number) => { const [y, m, d] = key.split('-').map(Number); const dt = new Date(y, m - 1, d + n); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`; };
@@ -236,6 +243,30 @@ async function gymClasses(input: AnyDoc): Promise<ToolOut> {
     ...(read ? { sources: [{ title: `GoodLife class schedule: ${read.name}`, url: gymPageUrl(read.id) }] } : {}) };
 }
 
+/** A business or a place, from Google Maps. The server asks Google (it has the key); the answer and the links for the
+ *  buttons are made here, from what the server read out of Google's answer and nothing else. Google not answering (no
+ *  key, refused, too slow) is an error: Arvy says it couldn't reach Google Maps, and it goes in the improvements log. */
+async function findPlace(input: AnyDoc): Promise<ToolOut> {
+  const ask = placesAsk(input);
+  if (!ask) return { result: { error: 'Nothing to look for: say what, and where if they named a place.' }, error: true };
+  const r = await invoke<{ places?: Place[]; problem?: string; why?: string }>({ action: 'places', query: ask.query, near: ask.near, open_now: ask.openNow }, 'planner-arvy');
+  if (!Array.isArray(r?.places)) {
+    return { result: { problem: r?.problem || 'Google Maps couldn’t be reached.', ...(r?.why ? { why: r.why } : {}),
+      note: 'Nothing was looked up. Tell them plainly that you couldn’t reach Google Maps just now, and don’t guess a phone number, an address or hours.' }, error: true };
+  }
+  const places = r.places.filter(p => p && typeof p.name === 'string').slice(0, PLACES_MAX);
+  const links = places.map(placeLinks);   // every place, also one with nothing to tap: its name tells which place a reply is about
+  return { result: placeAnswer(places, ask), ...(links.length ? { links } : {}), sources: [{ title: `Google Maps: ${ask.text}`, url: placesPageUrl(ask.text) }] };
+}
+
+/** The chat between the two of them, for the days asked for (ourchat.ts). Read fresh each time, straight from the
+ *  messages as they're kept. */
+async function ourChat(input: AnyDoc) {
+  const now = new Date(), days = chatDays(input.days);
+  const docs = await getDocs<ChatMsg>(CHAT_KIND, chatSince(now, days));
+  return chatAnswer(docs.map(d => d.data), { days, search: typeof input.search === 'string' ? input.search : undefined, now });
+}
+
 /** Run one tool. Never throws: an error comes back as the result, for Arvy to explain. */
 export async function runTool(name: string, input: Record<string, unknown>, about?: { question?: string; path?: string }): Promise<ToolOut> {
   try {
@@ -249,6 +280,8 @@ export async function runTool(name: string, input: Record<string, unknown>, abou
       case 'money': return { result: await money(input) };
       case 'cycle': return { result: await cycle() };
       case 'gym_classes': return await gymClasses(input);
+      case 'find_place': return await findPlace(input);
+      case 'our_chat': return { result: await ourChat(input) };
       case 'remember': {
         const note = String(input.note || '').trim().slice(0, 300);
         if (!note) return { result: { error: 'empty note' }, error: true };

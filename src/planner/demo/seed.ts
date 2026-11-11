@@ -131,7 +131,7 @@ export function demoSeed(): SeedDoc[] {
   meal(y1, '23:02', 'm2', 'Protein shake', 240, 40, 12, 4);
   meal(today, '18:12', 'm3', 'Butter chicken, basmati, cucumber', 860, 48, 92, 30);
 
-  // ── calendar, shopping, memory
+  // ── calendar, shopping, wish lists, memory
   put('event', `${t1}~e1`, { id: 'e1', title: "Kiaan's swim lesson", date: t1, time: '10:30', who: 'kiaan', createdAt: iso(today, '09:00') });
   put('event', `${t3}~e2`, { id: 'e2', title: "Dinner at Mum's", date: t3, time: '18:00', who: 'both', notes: 'Bring the dessert', createdAt: iso(today, '09:00') });
   put('event', `${addDays(today, -13)}~e3`, { id: 'e3', title: 'Gym with the boys', date: addDays(today, -13), time: '21:00', who: 'vijay', repeat: 'weekly', createdAt: iso(today, '09:00') });
@@ -152,6 +152,24 @@ export function demoSeed(): SeedDoc[] {
   shop('s5', 'Plantain', 'rosh', 'Produce', [], { suggestedStore: 'Caribbean grocer', reason: 'always in stock, ripe' });
   shop('s6', 'Dish soap', 'vijay', 'Household & Cleaning', [{ merchant: 'Walmart', name: 'Dawn Ultra 479 mL', price: 3.47, kind: 'regular' }]);
   put('shopprefs', 'prefs', { postal: 'L8E', stores: ['Walmart', 'Fortinos', 'No Frills', 'Food Basics', 'Canadian Tire'], specialty: [{ name: "Lococo's", note: 'produce & meat, cheap' }, { name: 'Indian grocer', note: 'basmati, atta, dal, spices' }, { name: 'Caribbean grocer', note: 'plantain, scotch bonnet, saltfish' }, { name: 'Middle Eastern grocer', note: 'pita, tahini, halal meat' }] });
+  // ── wish lists (features/shop/wish.ts): a list each. One of Rosh's is quietly got already; one of Vijay's has been given
+  const pic = (inside: string, bg: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160"><rect width="160" height="160" fill="${bg}"/>${inside}</svg>`)}`;
+  const headphones = pic('<path d="M44 96V80a36 36 0 0 1 72 0v16" fill="none" stroke="#1d2436" stroke-width="9" stroke-linecap="round"/><rect x="34" y="88" width="22" height="38" rx="9" fill="#1d2436"/><rect x="104" y="88" width="22" height="38" rx="9" fill="#1d2436"/>', '#e9edf5');
+  const hoops = pic('<circle cx="58" cy="86" r="24" fill="none" stroke="#c9a227" stroke-width="7"/><circle cx="106" cy="78" r="24" fill="none" stroke="#c9a227" stroke-width="7"/>', '#f6efe6');
+  const wish = (id: string, of: string, what: string, daysAgo: number, more: Record<string, unknown> = {}, picture?: string) => {
+    put('wish', id, { id, of, what, when: 'anytime', hearts: 2, pics: picture ? [{ id: 'p1', thumb: picture }] : [], addedAt: iso(addDays(today, -daysAgo), '20:15'), ...more });
+    if (picture) put('wishimg', `${id}~p1`, { dataUrl: picture });
+  };
+  wish('w1', 'demo', 'Noise-cancelling headphones', 9, { price: 449, shop: 'Best Buy', note: 'The over-ear ones, in black.', when: 'christmas', hearts: 3 }, headphones);
+  wish('w2', 'demo', 'Cast iron Dutch oven, 5.5 qt', 6, { price: 139.99, shop: 'Canadian Tire' });
+  wish('w3', 'demo', 'Running shoes', 2, { note: 'Size 10.5, the grey pair.', when: 'birthday' });
+  wish('w4', 'demo', 'Leather card wallet', 40, { price: 65, hearts: 1 });
+  put('wish', 'w4~got', { wish: 'w4', by: 'rosh', at: iso(addDays(today, -30), '12:00'), givenAt: iso(addDays(today, -21), '19:30') });
+  wish('w5', 'rosh', 'Small gold hoop earrings', 8, { price: 185, shop: 'Mejuri', note: 'The small ones, 14k.', when: 'christmas', hearts: 3 }, hoops);
+  wish('w6', 'rosh', 'Stand mixer, sage green', 12, { price: 499.99, shop: 'KitchenAid', when: 'christmas', hearts: 3 });
+  wish('w7', 'rosh', 'Pottery class for two', 5, { price: 120, note: 'The Saturday morning one downtown.' });
+  wish('w8', 'rosh', 'Silk pillowcase', 15, { price: 59, shop: 'Simons', when: 'birthday', hearts: 1 });
+  put('wish', 'w8~got', { wish: 'w8', by: 'demo', at: iso(addDays(today, -3), '13:40'), note: 'Ordered online. In the hall closet, top shelf.', paid: 49 });
   put('memo', 'coach', { notes: [
     { date: addDays(today, -20), by: 'app', text: 'Routine: up ~8:30 with Kiaan, Bed Brief from bed, fast until dinner at 6, gym at 9 pm with friends, sauna, day review, shake at 11, unwind, hard stop 12:45, lights out 1 am.' },
     { date: addDays(today, -20), by: 'you', text: 'Training goals: an everyday habit without overtraining — strength a couple of days a week, beginner HIIT to reclaim my lungs, mobility. Approaching 40, light hip and knee pain. 40–70 min sessions.' },

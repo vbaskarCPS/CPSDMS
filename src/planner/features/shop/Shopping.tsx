@@ -1,11 +1,14 @@
 // src/planner/features/shop/Shopping.tsx — /shop: the household's shopping list, grouped by the store with the best
 // flyer deal this week (or by section, in store-walk order). Add, tick, remove. Adding opens Build it (type, size,
 // price per kg / each, how many); tapping an item reopens it.
-import { useEffect, useMemo, useState } from 'react';
+// A switch under the title goes to the wish lists (WishLists.tsx), a special part of Shopping: /shop?list=wishes.
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Check, X, RefreshCw, Store, Map, Tag, Settings2 } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
-import { Page, Header, Card, Button, Sheet, Field, Input, useToast, uid } from '../../ui/primitives';
+import { Page, Header, Card, Button, Sheet, Field, Input, Segmented, useToast, uid } from '../../ui/primitives';
 import { BuildSheet } from './BuildSheet';
+import { WishLists } from './WishLists';
 import { loadList, loadPrefs, refreshDeals, removeItem, saveItem, savePrefs } from './store';
 import { useDocsChanged } from '../../lib/useDocsChanged';
 import { ANYWHERE, bestDeal, DEFAULT_PREFS, isFlyer, liveDeals, perLabel, saleNote, sectionRank, storeOf, type ShopItem, type ShopPrefs } from './types';
@@ -13,7 +16,20 @@ import { ANYWHERE, bestDeal, DEFAULT_PREFS, isFlyer, liveDeals, perLabel, saleNo
 const money = (n: number | null | undefined) => (typeof n === 'number' ? `$${n.toFixed(2)}` : '');
 const until = (iso?: string) => (iso ? `until ${new Date(iso).toLocaleDateString([], { weekday: 'short' })}` : '');
 
+/** /shop: the shopping list, or the wish lists. Which one is in the address, so going back (or a link) lands on the
+ *  same side; the switch itself is handed to whichever is showing, to sit under its title. */
 export function Shopping({ pass }: { pass: PlannerPass }) {
+  const [params, setParams] = useSearchParams();
+  const part = params.get('list') === 'wishes' ? 'wishes' : 'shopping';
+  const top = (
+    <div className="wish-switch">
+      <Segmented value={part} onChange={v => setParams(v === 'wishes' ? { list: 'wishes' } : {}, { replace: true })} options={[{ value: 'shopping', label: 'Shopping' }, { value: 'wishes', label: 'Wish lists' }]} />
+    </div>
+  );
+  return part === 'wishes' ? <WishLists pass={pass} top={top} /> : <ShoppingList pass={pass} top={top} />;
+}
+
+function ShoppingList({ pass, top }: { pass: PlannerPass; top?: ReactNode }) {
   const [items, setItems] = useState<ShopItem[]>([]);
   const [prefs, setPrefs] = useState<ShopPrefs>(DEFAULT_PREFS);
   const [loading, setLoading] = useState(true);
@@ -75,6 +91,7 @@ export function Shopping({ pass }: { pass: PlannerPass }) {
   return (
     <Page>
       <Header back="/" eyebrow="Vijay & Rosh" title="Shopping" right={<Button small ghost onClick={() => setShowPrefs(true)} aria-label="Stores"><Settings2 size={16} /></Button>} />
+      {top}
 
       <div className="shop__add">
         <Input placeholder="Add… e.g. 2 milk, AA batteries, chicken thighs" value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void add(); } }} />
