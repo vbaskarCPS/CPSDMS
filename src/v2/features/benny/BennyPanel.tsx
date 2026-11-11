@@ -11,9 +11,10 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Check, Mic, Send, Sparkles, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { askBenny, canListen, demoDue, listen, primeVoice, readDemo, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
-import { describe, doProposal, emailsPreset, payoutsStart, type BennyProposal } from '../../lib/bennyActions';
+import { describe, doProposal, emailsPreset, payoutsStart, textOpened, type BennyProposal } from '../../lib/bennyActions';
 import { bonusReplaced } from '../../lib/bennyBonus';
 import { BennyMapCard } from './BennyMap';
+import { TextsCard } from './BennyTexts';
 import './benny.css';
 
 const MUTE = 'benny.mute';
@@ -67,6 +68,7 @@ export const Benny: React.FC<{
   const rec = useRef<ReturnType<typeof listen> | null>(null);
   const held = useRef<number | null>(null);
   const list = useRef<HTMLDivElement>(null);
+  const still = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const mic = canListen();
   const allowed = variant === 'bar' ? !!profile?.is_super_admin : !!profile && (profile.is_super_admin || can('route_manager') || can('rm_floater'));
@@ -77,7 +79,8 @@ export const Benny: React.FC<{
   const centerName = centerLabel || (center && center.id === cid ? center.display_name : undefined);
   const followKey = (following || []).map(f => f.id).join(',');
 
-  useEffect(() => { save(KEY, msgs); list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' }); }, [msgs, KEY]);
+  // a tap on a texts card (a Text button, a changed text) is kept with the chat but mustn't move the list: the row tapped stays where it is
+  useEffect(() => { save(KEY, msgs); if (still.current) still.current = false; else list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' }); }, [msgs, KEY]);
   useEffect(() => { try { localStorage.setItem(MUTE, mute ? '1' : '0'); } catch { /* none */ } if (mute) stopSpeaking(); }, [mute]);
   useEffect(() => {
     if (!open) return;
@@ -256,7 +259,11 @@ export const Benny: React.FC<{
               <div key={i} className={`benny-msg ${m.role}${m.error ? ' err' : ''}`}>
                 <div className="benny-bubble"><Rich text={m.text} /></div>
                 {m.map && <BennyMapCard spec={m.map} centerId={cid} />}
-                {m.proposal && <ProposalCard p={m.proposal} busy={doing === i} onDo={() => void confirm(i)}
+                {m.proposal?.kind === 'texts' && <TextsCard check={m.proposal.check} state={m.texts} outcome={m.outcome}
+                  // a Text button opens Messages by itself (it is a link); here the tap is marked, and the text kept for that worker
+                  onState={(texts, opened) => { still.current = true; setMsgs(all => all.map((x, j) => j === i ? { ...x, texts } : x)); if (opened && cid && m.proposal?.kind === 'texts') textOpened(cid, m.proposal.check, opened, texts); }}
+                  onClose={o => settle(i, o)} />}
+                {m.proposal && m.proposal.kind !== 'texts' && <ProposalCard p={m.proposal} busy={doing === i} onDo={() => void confirm(i)}
                   // a bonus card overtaken by a newer one for the same place is shown, but no longer the one to tap
                   outcome={m.outcome || (bonusReplaced(msgs.map(x => x.proposal), i) ? { state: 'dismissed', text: 'Replaced by the newer card below.' } : undefined)}
                   onNo={() => settle(i, { state: 'dismissed', text: 'Not done.' })}

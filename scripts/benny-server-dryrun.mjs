@@ -20,6 +20,15 @@ const fakeSb = `
         ? { data: { ok: false, date: '2026-11-10', problems: ['Which place is Kyle Pitt’s Performance EQ bonus: 1st, 2nd …?'] }, error: null }
         : { data: { ok: true, date: args.p_date || '2026-11-10', source: 'live', total: 100, stamp: 'st', ask: args.p_bonuses,
             bonuses: args.p_bonuses.map((b, i) => ({ key: 'sess_' + i, cns: [b.worker], workers: [b.worker], team_size: 1, type: 'Performance EQ', placing: b.place, label: 'Performance EQ', amount: b.amount, shares: [] })) }, error: null };
+      if (fn === 'benny_maps_pcl') return { data: { ranked_by: args.p_service ? args.p_service + ' past clients per route' : null,
+        maps: [{ map: 'SOUTHEAST SURREY #3', city: 'Surrey', routes: 18, past_clients: 160, past_clients_by_service: { aeration: 31, lawn_rejuv: 112, sealing: 17 }, counted: 112, per_route: 6.2 }] }, error: null };
+      if (fn === 'benny_text_people') return { data: { ok: true, date: args.p_date, day_state: 'live', who: args.p_who.workers ? 'named' : args.p_who.group, on_list: 14,
+        people: [{ cn: 'I1169', name: 'Steven Doherty', first: 'Steven', days_worked: 3, days_on_list: 10, last_worked: '2026-11-04', has_cell: true }, { cn: 'B1003', name: 'Tim Chan', first: 'Tim', days_worked: 7, days_on_list: 10, has_cell: false }] }, error: null };
+      if (fn === 'benny_check_texts') return !args.p_template && !(args.p_texts || []).length
+        ? { data: { ok: false, date: args.p_date, problems: ['What should the text say?'] }, error: null }
+        : { data: { ok: true, date: args.p_date, who: 'no_shows', own_words: !!args.p_template, ...(args.p_tone ? { tone: args.p_tone } : {}), no_cell: ['Tim Chan'],
+            people: [{ hire_id: 'h1', cn: 'I1169', name: 'Steven Doherty', first: 'Steven', phone: '6045550101', text: args.p_template ? args.p_template.replace('{name}', 'Steven') : args.p_texts[0].text, days_worked: 3, days_on_list: 10 },
+              { hire_id: 'h2', cn: 'B1003', name: 'Tim Chan', first: 'Tim', text: args.p_template ? args.p_template.replace('{name}', 'Tim') : 'Tim, call me.', days_worked: 7, days_on_list: 10 }] }, error: null };
       if (fn === 'benny_crew_stats') return { data: { ok: true, date: args.p_date, ranked_by: 'average equiv per day worked', ranked: [{ rank: 1, name: 'Tim Hale', cn: 'I1001', days: 9, avg_equiv: 23.17 }, { rank: 2, name: 'Kyle Pitt', cn: 'I1065', days: 7, avg_equiv: 15.99 }],
         no_days_yet: [], no_shows: [], counts: { booked: 2, showed: 2, ranked: 2, no_days_yet: 0 } }, error: null };
       if (fn === 'benny_plan_day' && (args.p_assign || []).some(e => e.workers)) return { data: { ok: true, crews: true, notes: [], date: args.p_date, maps: ['MISSION #1'], booked: 2, showed: 2,
@@ -86,7 +95,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 27); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 29); assert(!('roles' in state.lastAsk.tools[0]));
 // the Benny drew the maps itself and picked no routes out: the plan's routes are highlighted all the same
 state.script = [turn(use('show_map', { maps: ['NORTH VANCOUVER #1'], title: 'Tomorrow' })),
   turn(use('propose_start_day', { date: '2026-11-11', assign: [{ managers: ['me'], maps: ['NORTH VANCOUVER #1'] }] })), say('Tap Start the day to do it.')];
@@ -312,6 +321,42 @@ a = await ask('who gets the bonus today', { screen: 'rm', rm_manager: 'rm_me' })
 assert(!state.lastAsk.tools.some(t => ['bonus_ranking', 'propose_bonuses'].includes(t.name)));
 state.role = 'admin';
 console.log('5k bonuses: ranked for the open day, one card for all of them, nothing added by the server ✓');
+
+// 5l. texts to workers: looked up without numbers, set up on a card that has them, never sent by the server
+state.role = 'admin';
+const wording = '{name} if you dont get out of bed right now you can start packing';
+const toolResults = () => state.lastAsk.messages.flatMap(m => Array.isArray(m.content) ? m.content.filter(c => c.type === 'tool_result').map(c => typeof c.content === 'string' ? c.content : JSON.stringify(c.content)) : []);
+state.script = [turn(use('text_people', {})), turn(use('propose_texts', { template: wording })), say('2 texts are set up; Tim Chan has no cell number. Tap Text on each one; you press send.')];
+a = await ask('text the guys that didnt show: <name> if you dont get out of bed right now you can start packing', { cards: ['texts'] });
+assert.deepEqual(fns().filter(f => /text/.test(f)), ['benny_text_people', 'benny_check_texts'], 'the server looks up and checks: it has nothing that sends or records a text');
+assert.deepEqual(state.rpc.find(x => x[0] === 'benny_check_texts')[1], { p_center: 'c1', p_date: '2026-11-10', p_who: { group: 'no_shows' }, p_template: wording, p_texts: null, p_tone: null });
+assert.equal(a.body.proposal.kind, 'texts'); assert.equal(a.body.proposal.check.people[0].phone, '6045550101', 'the card has the number for its link');
+assert.equal(a.body.proposal.check.people[0].text, 'Steven if you dont get out of bed right now you can start packing'); assert.equal(a.body.map, null);
+assert(toolResults().length === 2 && toolResults().every(t => !t.includes('604')), 'no phone number ever reaches the model');
+assert(/"has_cell":true/.test(toolResults()[1]) && /"has_cell":false/.test(toolResults()[1]));
+assert(!state.http.some(([u]) => !u.includes('api.anthropic.com')), 'nothing is sent anywhere but the model');
+state.script = [turn(use('text_people', {})), turn(use('propose_texts', { texts: [{ worker: 'I1169', text: 'Steven, a week since your last day. Call me now.' }, { worker: 'B1003', text: 'Tim, call me.' }], tone: 'firm, last warning' })), say('Tap Text on each one; you press send.')];
+a = await ask('write a firm last warning text to each no show', { cards: ['texts'] });
+assert.equal(a.body.proposal.check.tone, 'firm, last warning'); assert.equal(a.body.proposal.check.own_words, false);
+state.script = [turn(use('propose_texts', { template: wording })), say('Tap Text on each one; you press send.')];
+a = await ask('text the no shows', {});   // a tab opened before texts were a card
+assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
+state.script = [turn(use('propose_texts', {})), say('What should the text say?')];
+a = await ask('text the no shows', { cards: ['texts'] });
+assert.equal(a.body.proposal, null, 'a problem makes no card');
+state.role = 'rm';
+state.script = [say('That is for the office.')];
+a = await ask('text my no shows', { screen: 'rm', rm_manager: 'rm_me' });
+assert(!state.lastAsk.tools.some(t => ['text_people', 'propose_texts'].includes(t.name)));
+state.role = 'admin';
+console.log('5l texts: no number reaches the model, the card carries them, nothing is sent or recorded by the server ✓');
+
+// 5m. maps: past clients by service, ranked when a service is named
+state.script = [turn(use('maps', { q: 'Surrey', service: 'lawn_rejuv' })), say('Southeast Surrey #3 is highest: 6.2 rejuv past clients per route.')];
+a = await ask('which surrey map has the highest rejuv pcl density');
+assert.deepEqual(state.rpc.find(x => x[0] === 'benny_maps_pcl')[1], { p_center: 'c1', p_q: 'Surrey', p_service: 'lawn_rejuv' });
+assert.equal(a.body.proposal, null); assert(/per_route/.test(toolResults()[0]));
+console.log('5m maps: past clients by service, ranked for the one asked ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

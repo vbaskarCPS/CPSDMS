@@ -1,6 +1,6 @@
 // The Benny's tools (supabase/functions/benny-assist/tools.ts): who gets which, and that each one goes somewhere.
 import { describe, it, expect } from 'vitest';
-import { TOOLS, dayOpen, heardRight, openMap, system, toolCall, toolsFor } from '../../../supabase/functions/benny-assist/tools';
+import { TOOLS, dayOpen, forModel, heardRight, openMap, system, toolCall, toolsFor } from '../../../supabase/functions/benny-assist/tools';
 
 const ctx = { center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-10', rm_manager: 'rm_x' };
 
@@ -16,13 +16,13 @@ describe('the Benny’s tools', () => {
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);
     expect(rm).toEqual(expect.arrayContaining(['live_team', 'logsheet', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'propose_job_change', 'propose_pin', 'propose_stops', 'report_bug', 'log_request', 'show_map']));
-    for (const no of ['find_people', 'day', 'maps', 'crew_stats', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails', 'payouts', 'propose_payouts', 'bonus_ranking', 'propose_bonuses']) expect(rm).not.toContain(no);
+    for (const no of ['find_people', 'day', 'maps', 'crew_stats', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails', 'payouts', 'propose_payouts', 'bonus_ranking', 'propose_bonuses', 'text_people', 'propose_texts']) expect(rm).not.toContain(no);
     expect(toolsFor('admin').map(t => t.name)).toEqual(TOOLS.map(t => t.name));
     expect(toolsFor('rm')[0]).not.toHaveProperty('roles');   // only what the model's API accepts is sent
   });
   it('changes become cards; lookups don’t', () => {
     const kinds = TOOLS.map(t => { const c = toolCall(t.name, {}, ctx); return c && 'fn' in c && c.card ? c.card.kind : null; }).filter(Boolean);
-    expect(kinds.sort()).toEqual(['bonus', 'booking', 'booking_emails', 'give_route', 'job', 'partner', 'payouts', 'pin', 'solo', 'start_day', 'stops']);
+    expect(kinds.sort()).toEqual(['bonus', 'booking', 'booking_emails', 'give_route', 'job', 'partner', 'payouts', 'pin', 'solo', 'start_day', 'stops', 'texts']);
     const start = toolCall('propose_start_day', { assign: [], team_mode: 'whatever' }, ctx);
     expect(start && 'fn' in start && start.card?.team_mode).toBe('roster');
     expect(toolCall('propose_start_day', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
@@ -45,6 +45,33 @@ describe('the Benny’s tools', () => {
     expect(sys).toContain('adding bonuses to paid-out carts');
     expect(system(ctx, 'admin')).not.toContain('They have the workerbook day');
     expect(system(onDay, 'rm')).not.toContain('bonus_ranking');
+  });
+  it('maps: past clients by service, ranked when a service is named', () => {
+    expect(toolCall('maps', {}, ctx)).toEqual({ fn: 'benny_maps_pcl', args: { p_center: 'c1', p_q: null, p_service: null } });
+    expect(toolCall('maps', { q: 'Surrey', service: ' lawn_rejuv ' }, ctx)).toEqual({ fn: 'benny_maps_pcl', args: { p_center: 'c1', p_q: 'Surrey', p_service: 'lawn_rejuv' } });
+    expect(toolCall('maps', { service: 7 }, ctx)).toMatchObject({ args: { p_service: null } });
+    expect(system(ctx, 'admin')).toContain('PCL density (past client density): past clients per route');
+  });
+  it('texts to workers: set up on a card for the person’s own phone, never sent, and the model never sees a number', () => {
+    expect(toolCall('text_people', {}, ctx)).toEqual({ fn: 'benny_text_people', args: { p_center: 'c1', p_date: '2026-11-10', p_who: { group: 'no_shows' } } });
+    expect(toolCall('text_people', { who: 'everyone', workers: [' Tim ', '', 5], date: '2026-11-09' }, ctx)).toMatchObject({ args: { p_date: '2026-11-09', p_who: { group: 'no_shows', workers: ['Tim'] } } });
+    expect(toolCall('text_people', { who: 'showed', date: 'tomorrow' }, ctx)).toMatchObject({ args: { p_date: '2026-11-10', p_who: { group: 'showed' } } });
+    // their own wording is passed as it is, and nothing written (or a tone) rides along with it
+    const own = toolCall('propose_texts', { template: ' {name} if you dont get out of bed right now you can start packing ', texts: [{ worker: 'I1169', text: 'softer' }], tone: 'kind' }, ctx);
+    expect(own).toEqual({ fn: 'benny_check_texts', card: { kind: 'texts' }, args: { p_center: 'c1', p_date: '2026-11-10', p_who: { group: 'no_shows' },
+      p_template: '{name} if you dont get out of bed right now you can start packing', p_texts: null, p_tone: null } });
+    const written = toolCall('propose_texts', { texts: [{ worker: ' I1169 ', text: ' Steven, call me. ', phone: '604' }, { worker: 'I2002' }, 'junk'], tone: 'firm' }, ctx);
+    expect(written).toMatchObject({ args: { p_template: null, p_texts: [{ worker: 'I1169', text: 'Steven, call me.' }], p_tone: 'firm' } });
+    // the card gets the numbers for its links; what goes back to the model has none
+    const checked = { ok: true, date: '2026-11-10', people: [{ cn: 'I1169', name: 'Steven Doherty', phone: '6045550101', text: 'x' }, { cn: 'B1003', name: 'Tim Chan', text: 'y' }] };
+    const told = forModel('texts', checked) as { people: Record<string, unknown>[] };
+    expect(told.people).toEqual([{ cn: 'I1169', name: 'Steven Doherty', text: 'x', has_cell: true }, { cn: 'B1003', name: 'Tim Chan', text: 'y', has_cell: false }]);
+    expect(JSON.stringify(told)).not.toContain('604');
+    expect(forModel('bonus', checked)).toBe(checked); expect(forModel('texts', { ok: false, problems: ['x'] })).toEqual({ ok: false, problems: ['x'] });
+    const sys = system(ctx, 'admin');
+    expect(sys).toContain('you never send a text'); expect(sys).toContain('pass it as template EXACTLY as they said it');
+    expect(sys).toContain('Never say a text was sent'); expect(sys).toContain('setting up texts to workers');
+    expect(system(ctx, 'rm')).not.toContain('propose_texts'); expect(system(ctx, 'rm')).not.toContain('setting up texts to workers');
   });
   it('crews: the season’s averages are looked up for the day, and the start-day plan carries who goes with whom', () => {
     expect(toolCall('crew_stats', { date: '2026-11-11' }, ctx)).toEqual({ fn: 'benny_crew_stats', args: { p_center: 'c1', p_date: '2026-11-11' } });

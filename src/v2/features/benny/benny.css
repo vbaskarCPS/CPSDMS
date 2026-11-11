@@ -84,6 +84,28 @@
 .benny-root .benny-go:focus-visible,.benny-root .benny-alt:focus-visible{outline:2px solid #fb923c;outline-offset:2px}
 .benny-root .benny-card-out{display:flex;gap:6px;align-items:flex-start;font-size:13px;line-height:1.45}
 .benny-root .benny-card-out.done{color:#166534}.benny-root .benny-card-out.failed{color:#b91c1c}.benny-root .benny-card-out.dismissed{color:#475569}
+/* the texts card: one row per worker, the Text button beside the text it opens Messages with */
+.benny-root .benny-texts{display:flex;flex-direction:column;gap:8px}
+.benny-root .benny-text{border:1px solid #e2e8f0;border-radius:10px;padding:9px 10px;display:flex;gap:10px;align-items:center;background:#fff}
+.benny-root .benny-text.opened{background:#f8fafc}
+.benny-root .benny-text-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.benny-root .benny-text-who{font-size:13px;line-height:1.35;color:#0f172a}
+.benny-root .benny-text-who span{display:block;color:#64748b;font-size:12px}
+.benny-root .benny-text-body{display:block;width:100%;text-align:left;border:0;background:none;padding:0;margin:0;font-family:inherit;font-size:13px;line-height:1.4;color:#334155;overflow-wrap:anywhere}
+.benny-root button.benny-text-body{cursor:pointer;border-radius:4px}
+.benny-root button.benny-text-body:focus-visible,.benny-root .benny-text-again:focus-visible{outline:2px solid #fb923c;outline-offset:2px}
+.benny-root .benny-text-change{color:#c2410c;font-size:12px;white-space:nowrap}
+.benny-root .benny-text-change svg{vertical-align:-1px}
+.benny-root .benny-text-edit{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-family:inherit;font-size:16px;line-height:1.4;color:#0f172a;resize:vertical}
+.benny-root .benny-text-edit:focus{outline:2px solid #fb923c;outline-offset:0;border-color:#fb923c}
+.benny-root .benny-text-editb{display:flex;gap:6px;flex-wrap:wrap}
+.benny-root .benny-text-editb .benny-alt{height:36px}
+.benny-root .benny-text-act{flex:none;width:72px;display:flex;flex-direction:column;align-items:center;gap:2px;text-align:center}
+.benny-root .benny-text-go{flex:none;min-width:0;width:72px;height:44px;display:flex;align-items:center;justify-content:center;text-decoration:none;box-sizing:border-box}
+.benny-root .benny-text-ok{display:inline-flex;align-items:center;gap:3px;font-size:12px;font-weight:600;color:#166534}
+.benny-root .benny-text-again{font-size:12px;color:#475569;text-decoration:underline;padding:8px 10px;margin:-4px 0}
+.benny-root .benny-text-none{font-size:12px;line-height:1.3;color:#b45309}
+.benny-root .benny-text-foot{color:#64748b;line-height:1.45}
 .benny-root .v2-spacer{flex:1}
 .benny-root .v2-small{font-size:12px}
 
