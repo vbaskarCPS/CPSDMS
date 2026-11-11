@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-11-arrange-today", "date": "2026-11-11", "title": "Arrange your Today page",
+    "lines": ["Settings › Arrange Today: put the blocks on Today in your own order, switch off the ones you don’t use, and make some smaller. The day’s plan always stays.", "Add widgets: a countdown to a day you pick, a sticky note, a mini calendar and a habit tracker for the week.", "“Put it back as it was” restores the original page."] },
   { "id": "2026-11-11-arvy-places-chat", "date": "2026-11-11", "title": "Arvy finds places, and reads your chat when you ask",
     "lines": ["Ask Arvy for a dentist, a physio or any place: it looks it up on Google Maps and tells you if it’s open.", "Under its reply are buttons to call, open the website or book online, and get directions.", "Arvy can’t book for you. Once you’ve booked, tell it the day and time and it puts it on the calendar.", "Ask “what did we say about dinner?” and Arvy reads your chat with each other. It only looks when you ask."] },
   { "id": "2026-11-11-wish-lists", "date": "2026-11-11", "title": "Wish lists, with a secret “got it”",
