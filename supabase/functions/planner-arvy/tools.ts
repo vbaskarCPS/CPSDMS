@@ -8,7 +8,10 @@
 // src/planner/features/arvy/act.ts): small everyday ones straight away with an Undo, bigger ones (calendar, removing
 // anything, money, new habits, targets, a planned workout) only after a Confirm tap.
 // Arvy is also the coach (what "Coach Claude" was): coaching_context is the whole planner as the coach reads it, COACHING
-// is how to reason about training, and plan_workout puts a session on the Train page.
+// is how to reason about training, and plan_workout puts a session on the Train page. Sessions aren't only straight
+// sets: EXERCISE is the shape of one planned exercise (per side, no weight, superset / circuit / EMOM / AMRAP blocks,
+// pyramids, countdowns, drop sets, intervals) and FORMATS is when to use which. The plan written after each workout
+// (action 'dayplan': DAYPLAN_SCHEMA, dayplanSystem) uses the same shape.
 // What it can't do, gets wrong or is told about the app goes in its improvements log (src/planner/features/arvy/log.ts).
 
 export type Profile = 'night' | 'morning';
@@ -30,6 +33,32 @@ export interface ArvyTool { name: string; description: string; input_schema: Rec
 const date = (d: string) => ({ type: 'string', description: `${d} (YYYY-MM-DD)` });
 const strs = (d: string) => ({ type: 'array', items: { type: 'string' }, description: d });
 const WHO = { type: 'string', enum: ['vijay', 'rosh', 'both', 'kiaan'], description: 'whose event it is' };
+
+/** One exercise of a session Arvy plans: plan_workout and the after-workout plan both use it, and the app reads it
+ *  with planExercisesFrom (src/planner/features/workout/format.ts). */
+export const EXERCISE = {
+  type: 'object',
+  properties: {
+    name: { type: 'string', description: 'the exercise, by the name they already use when they have done it before' },
+    sets: { type: 'number', description: 'working sets, or rounds of a superset / circuit / intervals (a light warm-up set is not its own exercise). 1 inside an EMOM or AMRAP.' },
+    reps: { type: 'string', description: 'reps per set, e.g. "8-10" or "12" (per side when per_side); inside an EMOM / AMRAP the reps each minute / round. Leave out for timed work.' },
+    seconds: { type: 'number', description: 'timed work only (a hold, a carry, cardio, a stretch): seconds per set, per side when per_side. For intervals: the work time.' },
+    weight: { type: 'number', description: 'starting weight in their units, when you’re prescribing one' },
+    rest_seconds: { type: 'number', description: 'rest after each set; in a superset or circuit, give it on the LAST exercise of the block (the rest after the round) and 0 on the others; for intervals, the easy time between rounds' },
+    cue: { type: 'string', description: 'one short form or effort cue' },
+    per_side: { type: 'boolean', description: 'done one side or one direction at a time (rows, lunges, chops, windmills, halos, carries, side planks, most stretches): logged left / right' },
+    no_weight: { type: 'boolean', description: 'nothing to load (bodyweight, mobility drills): no weight box' },
+    group: { type: 'string', description: 'a letter ("A", "B"): consecutive exercises with the same letter are one block done together' },
+    group_style: { type: 'string', enum: ['superset', 'circuit', 'emom', 'amrap'], description: 'how the block runs; same on every exercise of the block. Default superset (2) / circuit (3+).' },
+    group_minutes: { type: 'number', description: 'EMOM / AMRAP only: how long the block runs, in minutes' },
+    reps_by_set: { type: 'array', items: { type: 'number' }, description: 'pyramid / countdown / ladder: the reps of each set in order, e.g. [12,10,8,6] or [10,9,8,7,6,5,4,3,2,1]. Replaces sets and reps.' },
+    weight_by_set: { type: 'array', items: { type: 'number' }, description: 'the weight of each set in order (a pyramid going up, a drop set going down), when you know their numbers' },
+    style: { type: 'string', enum: ['pyramid', 'countdown', 'ladder', 'drop', 'intervals'], description: 'the shape of this exercise’s sets, when it isn’t straight sets. intervals = timed rounds the app runs hands-free (seconds on, rest_seconds off).' },
+    muscle: { type: 'string', enum: ['chest', 'back', 'shoulders', 'biceps', 'triceps', 'quads', 'hamstrings', 'glutes', 'calves', 'core', 'cardio', 'full'], description: 'for an exercise they haven’t done before: the main muscle' },
+    equipment: { type: 'string', enum: ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight', 'kettlebell', 'band', 'cardio'], description: 'for an exercise they haven’t done before' },
+  },
+  required: ['name', 'sets'],
+} as const;
 
 /** Where Arvy can take you (open_screen). */
 export const SCREENS: Record<string, string> = {
@@ -106,9 +135,9 @@ export const TOOLS: ArvyTool[] = [
     input_schema: { type: 'object', properties: { kcal: { type: 'number' }, protein: { type: 'number', description: 'grams' }, carbs: { type: 'number', description: 'grams' }, fat: { type: 'number', description: 'grams' } } } },
   { name: 'set_budget', change: 'confirm', description: 'Set the monthly budget for one spending category (0 removes it). Shared with the household.',
     input_schema: { type: 'object', properties: { category: { type: 'string' }, amount: { type: 'number', description: 'dollars a month' } }, required: ['category', 'amount'] } },
-  { name: 'plan_workout', change: 'confirm', description: 'Put a training session you planned on their Train page. Write the session out in your reply too (one line per exercise). when: "today" or "tomorrow" makes it that day’s session (replacing one already planned for that day); leave it out and it goes to today, or tomorrow if today’s workout is already done or under way; "now" starts it straight away; "template" saves it as a reusable template (replace = the name of a template to overwrite). Use the exercise names they already use (see workout_templates and recent workouts) so their history carries over.',
+  { name: 'plan_workout', change: 'confirm', description: 'Put a training session you planned on their Train page. Write the session out in your reply too (one line per exercise, blocks named). when: "today" or "tomorrow" makes it that day’s session (replacing one already planned for that day); leave it out and it goes to today, or tomorrow if today’s workout is already done or under way; "now" starts it straight away; "template" saves it as a reusable template (replace = the name of a template to overwrite). Use the exercise names they already use (see workout_templates and recent workouts) so their history carries over. Sessions can be more than straight sets: supersets, circuits, EMOMs, AMRAPs, pyramids, countdowns, drop sets and intervals each get their own tracker (see the exercise fields).',
     input_schema: { type: 'object', properties: { name: { type: 'string', description: 'short session name, e.g. "Upper pull + core"' }, when: { type: 'string', enum: ['today', 'tomorrow', 'now', 'template'] }, replace: { type: 'string', description: 'with when "template": the template to overwrite' },
-      exercises: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, sets: { type: 'number', description: 'working sets (a light warm-up set is not its own exercise)' }, reps: { type: 'string', description: 'reps per set, e.g. "8-10" or "12"; leave out for timed work' }, seconds: { type: 'number', description: 'timed work only (a plank, cardio): seconds per set' }, weight: { type: 'number', description: 'starting weight in their units, when you’re prescribing one' }, rest_seconds: { type: 'number' }, cue: { type: 'string', description: 'one short form or effort cue' } }, required: ['name', 'sets'] } } }, required: ['name', 'exercises'] } },
+      exercises: { type: 'array', items: EXERCISE } }, required: ['name', 'exercises'] } },
   { name: 'remove_shopping_items', change: 'confirm', description: 'Remove items from the shopping list altogether (not ticking them off).',
     input_schema: { type: 'object', properties: { items: strs('item names') }, required: ['items'] } },
   { name: 'remove_todos', change: 'confirm', description: 'Remove to-dos from a day’s plan altogether (not marking them done).',
@@ -167,6 +196,75 @@ weights are in their units. When they ask you to plan, change or adjust a sessio
 plan_workout with it in the same step (today's session is still ahead unless a recent workout is dated today or one is in
 progress), then ask them to tap Confirm.`;
 
+// Which session formats exist, when each fits, and which tracker an exercise needs. Part of coaching (the chat and
+// the after-workout plan both get it).
+export const FORMATS = `
+SESSION FORMATS (shake the sessions up; the app has a tracker for each):
+- Straight sets stay the default for the main strength lift, where steady progression matters. Around it, change the
+  format from session to session. workout_templates and the recent workouts show the formats used lately: don't run
+  the same one two sessions in a row, and say in the one-line why which format you chose.
+- Superset: two exercises with the same group letter, done back to back, rest after the pair (rest_seconds on the last
+  one, 0 on the first). Pair moves that don't compete: push + pull, lower + core, a lift + a mobility drill. Circuit:
+  three or more with the same letter. Kettlebell, core and accessory work is almost always better paired or circuited
+  than done as lone straight sets.
+- EMOM (group_style "emom", group_minutes 6-12): one move at the top of every minute; with two or three moves they take
+  the minutes in turn. Pick reps that take 20-40 seconds so there is rest in each minute. AMRAP (group_style "amrap",
+  group_minutes 5-12): two to four moves, low reps each, a pace they can hold. In both: sets 1, reps = the reps each
+  minute or round. Good for kettlebell swings, goblet squats, push-ups, rows, carries.
+- Pyramid: reps_by_set like [12,10,8,6] with the weight going up as the reps come down (weight_by_set when you know
+  their numbers), or up and back down. Countdown / ladder: reps_by_set like [10,9,8,7,6,5,4,3,2,1] or [10,8,6,4,2],
+  best as a superset of two moves sharing the ladder, short or no rest. Drop set (style "drop", weight_by_set going
+  down): the last set of an isolation move only, when recovery is good.
+- Intervals (style "intervals"): seconds = the work, rest_seconds = the easy part, sets = the rounds; the app runs the
+  clock hands-free with a beep. For the bike, treadmill, rower, or swings for time.
+TRACKERS (what gets logged has to fit the move):
+- per_side for anything done one side or one direction at a time: one-arm rows, lunges, split squats, step-ups, chops,
+  windmills, halos (each direction), suitcase carries, side planks, most stretches. The reps or seconds are then per side.
+- no_weight for bodyweight and mobility drills (cat-cow, 90/90s, dead bugs, bridges, stretches, breathing).
+- seconds, not reps, for holds, carries, cardio and stretches.
+- For a move they haven't done before, give muscle and equipment (a kettlebell move is "kettlebell", not "dumbbell").
+KEEP IT SANE: one or two format changes a session, not everything at once. Their joints and notes come first (see
+about_me and pain_or_niggles). No heavy barbell lift inside a circuit, EMOM or AMRAP. When readiness is poor, choose the
+gentler formats (supersets with mobility, easy intervals) over the dense ones (AMRAP, drop sets).`;
+
+// ── the plan written after each workout (action 'dayplan'): a review of today, two questions, tomorrow's session ──
+/** What Arvy is told for the after-workout plan. */
+export const dayplanSystem = () => `You are Arvy, the assistant and coach inside this planner. The person just completed today's workout (it is in the context with every set and note,
+along with recent sessions, habits, meals, days and the about_me notes — read the about_me notes first: they hold the
+training goals, health limits and session length). Produce:
+1. review: one or two short paragraphs (120-200 words total, no lists/headings) reviewing today's session using the real
+   numbers and notes, then what tomorrow's session is and why it fits the goals (everyday habit, no overtraining, strength
+   a couple of days a week, beginner HIIT for the lungs, mobility, hips/knees). Speak to the person directly.
+2. questions: exactly 2 short multiple-choice questions whose answers would change tomorrow's plan (e.g. how the hips/knees
+   feel, energy/sleep, time available, what they feel like). 3-4 choices each, a few words per choice. When answers are
+   provided in the message, return an empty questions list and fold the answers into the plan.
+3. tomorrow: a complete session for tomorrow, 40-70 minutes: name (short, with the focus), focus (strength | hiit |
+   mobility | mixed | active-recovery), minutes, why (one line: the numbers that decided it AND the format you chose),
+   exercises in order. Use exercise names from the library list exactly when one fits, so their history carries over.
+   Beginner HIIT = short work intervals with generous rest (e.g. 20s on / 40s off, 8-10 rounds) on bike/rower/walk-run;
+   mobility = hip/knee-friendly flows and holds; never load painful joints. Keep the person's session length.
+   Use training_state to pick tomorrow's focus: muscles with the most days_since_trained and the fewest hard sets this week
+   first, respect 48-72 h recovery, and lower the dose when readiness is poor.` + COACHING + FORMATS;
+export const DAYPLAN_SCHEMA = {
+  type: 'object', properties: {
+    review: { type: 'string' },
+    questions: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' }, choices: { type: 'array', items: { type: 'string' } } }, required: ['id', 'text', 'choices'] } },
+    tomorrow: { type: 'object', properties: {
+      name: { type: 'string' }, focus: { type: 'string', enum: ['strength', 'hiit', 'mobility', 'mixed', 'active-recovery'] }, minutes: { type: 'integer' }, why: { type: 'string' },
+      exercises: { type: 'array', items: EXERCISE },
+    }, required: ['name', 'focus', 'minutes', 'why', 'exercises'] },
+  }, required: ['review', 'questions', 'tomorrow'],
+} as const;
+/** The planner context as text, the worked-out training numbers and their notes first (long contexts are cut from the end). */
+export function contextText(c: unknown, max: number): string {
+  if (!c || typeof c !== 'object') return JSON.stringify(c ?? {}).slice(0, max);
+  const o = c as Record<string, unknown>;
+  const ordered: Record<string, unknown> = {};
+  for (const k of ['today', 'weekday', 'now', 'units', 'training_state', 'about_me_notes_oldest_first', 'workout_in_progress', 'routine']) if (k in o) ordered[k] = o[k];
+  for (const k of Object.keys(o)) if (!(k in ordered)) ordered[k] = o[k];
+  return JSON.stringify(ordered).slice(0, max);
+}
+
 /** True once the conversation has pulled the coaching context: Arvy then gets COACHING and room for a longer answer. */
 export const isCoaching = (messages: Msg[]): boolean => messages.some(m => Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use' && (b.name === 'coaching_context' || b.name === 'plan_workout')));
 
@@ -189,11 +287,11 @@ export function system(ctx: ArvyCtx, coaching = false): string {
     '- After a change, confirm it in one short sentence ("Added milk and eggs to the list!"). Don’t repeat the details shown under your reply.',
     '- When something would be easier to see on its screen, offer to open it (or just open it if they asked to see it).',
     '- Money: talk about spending and budgets; you never move money, pay anything, or see account numbers.',
-    '- You are their coach too: strength and conditioning first, but also the whole day (routine, habits, food, sleep, priorities, reviews). For anything about training, a session, soreness or pain, recovery, a stuck lift, or how they’re really doing, call coaching_context first and coach from the real numbers. Planning or changing a session: write it out and call plan_workout.',
+    '- You are their coach too: strength and conditioning first, but also the whole day (routine, habits, food, sleep, priorities, reviews). For anything about training, a session, soreness or pain, recovery, a stuck lift, or how they’re really doing, call coaching_context first and coach from the real numbers. Planning or changing a session: write it out and call plan_workout. You make the sessions up yourself, and they needn’t be plain sets: supersets, circuits, EMOMs, AMRAPs, pyramids, countdowns and intervals all have trackers.',
     '- Food and training: encourage, don’t lecture. Health questions beyond the planner: keep it general and suggest a professional when it matters.',
     '- When they tell you something in the app is broken or could be better, or give you feedback on yourself, save it with log_feedback and say it’s in the log (Settings, Arvy’s log).',
     ctx.spoken ? '- This message was spoken and turned into text, so names and words may be misheard: go with the closest sensible meaning. Your reply will be read out loud, so keep it to two or three sentences, no lists, no symbols (for a session plan, say the gist and that the full plan is on screen).' : '',
-    coaching ? COACHING : '',
+    coaching ? COACHING + FORMATS : '',
   ].filter(Boolean).join('\n');
 }
 

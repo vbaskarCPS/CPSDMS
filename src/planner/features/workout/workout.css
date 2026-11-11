@@ -127,3 +127,43 @@
 .today-gym-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px; color: var(--ink-2); }
 small.today-gym-status { display: block; }
 .today-gym-status.is-good { color: var(--good); }
+
+/* session formats: blocks (superset, circuit, EMOM, AMRAP), trackers without a weight, clocks that run themselves */
+.wo-set--bare { grid-template-columns: 18px 1fr 44px; }
+.wo-set--bare .wo-set__prev { grid-column: 2 / 3; }
+.wo-set--bare .wo-rpe { grid-column: 2 / 4; }
+.wo-set--setup { grid-template-columns: 18px 1fr 1fr; }
+.wo-set--setup.wo-set--bare { grid-template-columns: 18px 1fr; }
+.wo-set--setup .wo-set__prev { grid-column: 2 / -1; }
+.wo-chip { display: inline-block; font: 700 11px var(--sans); letter-spacing: .04em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); margin-bottom: 5px; }
+.wo-tag { display: inline-grid; place-items: center; min-width: 26px; height: 20px; padding: 0 5px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 14%, var(--bg-2)); font: 700 11.5px var(--sans); color: var(--ink); }
+.wo-block .wo-set__n { font-size: 11.5px; font-weight: 700; }
+.wo-block .wo-set { grid-template-columns: 26px 1fr 1fr 44px; }
+.wo-block .wo-set--bare { grid-template-columns: 26px 1fr 44px; }
+.wo-block .wo-set--setup { grid-template-columns: 26px 1fr 1fr; }
+.wo-block .wo-set--setup.wo-set--bare { grid-template-columns: 26px 1fr; }
+.wo-lineup { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.wo-lineup b { font-size: 15px; } .wo-lineup small { display: block; color: var(--ink-2); font-size: 13px; }
+.wo-lineup .wo-lastnote { margin: 4px 0 0; }
+.wo-lineup > button { border: 0; background: none; color: var(--ink-2); padding: 6px; cursor: pointer; flex: none; }
+.wo-round { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 14px; background: color-mix(in srgb, var(--accent) 5%, var(--bg-2)); border: 1px solid var(--line); }
+.wo-round__n { display: flex; justify-content: space-between; align-items: center; font: 700 12px var(--sans); text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
+.wo-round__n button { border: 0; background: none; color: var(--ink-2); padding: 0; cursor: pointer; }
+.wo-clock { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--bg-2); }
+.wo-clock > div:first-child { flex: 1; min-width: 0; }
+.wo-clock .wo-timed__start { flex: none; padding: 0 20px; }
+.wo-clock.is-done { opacity: .7; justify-content: space-between; }
+.wo-clock.is-running { flex-wrap: wrap; }
+.wo-clock__what { font: 700 15px var(--sans); text-transform: uppercase; letter-spacing: .03em; }
+.wo-clock__what small { display: block; font: 600 13px var(--sans); text-transform: none; letter-spacing: 0; color: var(--ink-2); margin-top: 2px; }
+.wo-clock__time { font-family: var(--serif); font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wo-clock.is-work { border-color: var(--good); background: color-mix(in srgb, var(--good) 10%, var(--bg-2)); }
+.wo-clock.is-work .wo-clock__time { color: var(--good); }
+.wo-clock.is-rest, .wo-clock.is-ready { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, var(--bg-2)); }
+.wo-clock .wo-timed__btns { width: 100%; margin-left: 0; flex-wrap: wrap; }
+.wo-clock__plus { flex: 1; background: var(--accent) !important; color: var(--accent-ink); border-color: transparent !important; justify-content: center; }
+.wo-timed__side { font: 700 12px var(--sans); text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); white-space: nowrap; }
+.wo-logged { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; }
+.wo-logged svg { color: var(--good); flex: none; }
+.wo-hero__fmt { font: 700 10.5px var(--sans); letter-spacing: .05em; text-transform: uppercase; opacity: .75; margin: 6px 0 -2px; }
+.wo-addload { border: 0; background: none; padding: 0; color: var(--ink-2); font: inherit; text-decoration: underline; cursor: pointer; }

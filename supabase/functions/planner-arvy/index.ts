@@ -5,6 +5,8 @@
 //        One step of the conversation. When Claude wants a tool, the app runs it (the planner's data and the code that
 //        reads it live in the app), sends the results back as the next turn, and so on until there's an answer.
 //   POST { token, action: 'speak', text } → { audio }   MP3, base64: Arvy's voice (a woman's for Rosh, a man's for Vijay)
+//   POST { token, action: 'dayplan', context, units, library: [exercise names], answers? } → { review, questions, tomorrow }
+//        After a workout: a review of it, two questions, and tomorrow's session in Arvy's exercise shape (tools.ts EXERCISE).
 //
 // The planner token (planner_sign_in) is checked with planner_me; nothing runs without it. Deployed without JWT
 // verification because planner users have no Supabase account. Whose voice and which tools come from the account
@@ -13,7 +15,7 @@
 // answer and the COACH_MODEL secret's model if set. Model otherwise: ARVY_MODEL secret, else a Sonnet-class model. Claude key: ANTHROPIC_API_KEY. Voice: GOOGLE_TTS_KEY
 // (else GOOGLE_API_KEY), voices ARVY_VOICE_MORNING / ARVY_VOICE_NIGHT.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { cleanMessages, isCoaching, speakable, system, toolsFor, voiceFor, type ArvyCtx, type Profile } from './tools.ts';
+import { cleanMessages, contextText, DAYPLAN_SCHEMA, dayplanSystem, isCoaching, speakable, system, toolsFor, voiceFor, type ArvyCtx, type Profile } from './tools.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
 const FALLBACK = 'claude-sonnet-5-5';
@@ -53,6 +55,36 @@ async function claude(sys: string, messages: unknown[], tools: unknown[], coachi
   return { content: Array.isArray(d.content) ? d.content : [], stop_reason: d.stop_reason || 'end_turn' };
 }
 
+/** A structured answer through a forced tool call (the API makes it match the schema). Forced tools can't be used
+ *  with thinking, so it's switched off; a model that rejects the switch is asked again without it. */
+let thinkingParamOk = true;
+async function claudeForced<T>(sys: string, user: string, schema: unknown, maxTokens: number): Promise<T> {
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
+  let model = COACH_MODEL; let res: Response | null = null; let data: Record<string, unknown> = {};
+  for (let attempt = 0; attempt < 4; attempt++) {
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
+      body: JSON.stringify({ model, max_tokens: maxTokens, system: sys, messages: [{ role: 'user', content: user }], ...(thinkingParamOk ? { thinking: { type: 'disabled' } } : {}),
+        tools: [{ name: 'answer', description: 'The structured answer.', input_schema: schema }], tool_choice: { type: 'tool', name: 'answer' } }),
+      signal: AbortSignal.timeout(110000),
+    });
+    data = await res.json().catch(() => ({}));
+    if (res.ok) break;
+    const msg = String((data as { error?: { message?: string } }).error?.message || '');
+    if (res.status === 400 && thinkingParamOk && /thinking/i.test(msg)) { thinkingParamOk = false; continue; }
+    if (res.status === 404 || /model/i.test(msg) && res.status === 400) { if (model !== FALLBACK) { model = FALLBACK; continue; } }
+    if (!(res.status === 429 || res.status === 529 || res.status >= 500)) break;
+    await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+  }
+  if (!res || !res.ok) throw new Error((data as { error?: { message?: string } }).error?.message || `Anthropic ${res?.status}`);
+  if (data.stop_reason === 'max_tokens') throw new Error('That plan ran too long. Try again.');
+  const use = ((data.content || []) as { type: string; input?: unknown }[]).find(c => c.type === 'tool_use');
+  if (!use) throw new Error('Arvy didn’t answer. Try again.');
+  return use.input as T;
+}
+
 async function voice(text: string, profile: Profile): Promise<Response> {
   const line = speakable(text).slice(0, 700);
   if (!line) return json({ error: 'Nothing to say' }, 400);
@@ -89,6 +121,20 @@ Deno.serve(async req => {
     const profile = profileOf(user);
 
     if (b.action === 'speak') return await voice(String(b.text || ''), profile);
+    if (b.action === 'dayplan') {
+      const d = b as unknown as { context?: unknown; units?: string; library?: unknown; answers?: unknown };
+      const units = d.units === 'kg' ? 'kg' : 'lb';
+      const names = (Array.isArray(d.library) ? d.library : []).map(x => String((x as { name?: unknown })?.name ?? x).slice(0, 60)).filter(Boolean).slice(0, 220);
+      const answers = d.answers && typeof d.answers === 'object' ? d.answers : null;
+      const r = await claudeForced<Record<string, unknown>>(dayplanSystem(),
+        `Units: ${units}\n\nExercise names they already have (use these exactly when one fits):\n${names.join('; ')}\n\n${answers ? `My answers to your questions: ${JSON.stringify(answers).slice(0, 1500)}\n\n` : ''}Planner (JSON):\n${contextText(d.context ?? {}, 40000)}`,
+        DAYPLAN_SCHEMA, 5000);
+      // a tomorrow that isn't a session with exercises is dropped (the model has answered with a string once)
+      const t = r.tomorrow as { exercises?: unknown } | string | null | undefined;
+      if (!t || typeof t !== 'object' || !Array.isArray(t.exercises) || !t.exercises.length) r.tomorrow = null;
+      if (!Array.isArray(r.questions)) r.questions = [];
+      return json(r);
+    }
     if (b.action !== 'turn') return json({ error: 'Unknown action' }, 400);
 
     const messages = cleanMessages(b.messages, profile);

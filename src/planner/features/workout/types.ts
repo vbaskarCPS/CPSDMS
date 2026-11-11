@@ -13,13 +13,32 @@ export const isUnilateral = (e?: { name?: string; unilateral?: boolean } | null)
 /** 'reps' = weight × reps sets; 'time' = a countdown (walks, bike, planks). */
 export type SetMode = 'reps' | 'time';
 
-export interface TemplateExercise { exerciseId: string; name: string; targetSets: number; targetReps: string; restSec: number; note?: string; mode?: SetMode; targetSec?: number }
+/** How a block of exercises is run together: back to back each round (superset = 2, circuit = 3+), one exercise
+ *  at the top of every minute for a set number of minutes (emom), or as many rounds as possible in a set time (amrap). */
+export type GroupKind = 'superset' | 'circuit' | 'emom' | 'amrap';
+/** The shape of one exercise's sets. The numbers are in repsBySet / weightBySet (or the seconds and rest for intervals). */
+export type SetStyle = 'pyramid' | 'countdown' | 'ladder' | 'drop' | 'intervals';
+/** What makes a session more than "N sets of M reps", and what its tracker shows. All optional: without them an
+ *  exercise is straight sets (format.ts works out sides / noLoad for older sessions from the name and the target). */
+export interface Format {
+  sides?: boolean;          // one side (or direction) at a time: reps are logged left / right, a timer runs each side in turn
+  noLoad?: boolean;         // nothing to load (bodyweight, mobility): no weight box
+  style?: SetStyle;
+  repsBySet?: number[];     // pyramid / countdown / ladder: the reps of each set, in order
+  weightBySet?: number[];   // pyramid / drop set: the weight of each set, in order
+  group?: string;           // 'A', 'B'…: neighbours with the same letter are one block
+  groupKind?: GroupKind;    // how the block runs (when left out: superset for two, circuit for more)
+  groupSec?: number;        // emom / amrap: how long the block runs
+}
+
+// startWeight = the weight the plan prescribed: it fills the sets of a one-off planned session, or a first time
+export interface TemplateExercise extends Format { exerciseId: string; name: string; targetSets: number; targetReps: string; restSec: number; note?: string; mode?: SetMode; targetSec?: number; startWeight?: number }
 // plannedFor = a one-off session Arvy set up for that date (YYYY-MM-DD); it's today's pick on that day
 export interface Template { id: string; name: string; days?: number[]; exercises: TemplateExercise[]; order: number; archived?: boolean; plannedFor?: string; focus?: string; minutes?: number }
 
 export interface SetLog { weight: number; reps: number; rpe?: number; done: boolean; prev?: { weight: number; reps: number; repsR?: number }; seconds?: number; repsR?: number }
 // Unilateral exercises (one-arm row, split squat…): reps = left side, repsR = right side, one weight.
-export interface WorkoutExercise { exerciseId: string; name: string; restSec: number; targetReps?: string; sets: SetLog[]; mode?: SetMode; note?: string; comment?: string; lastComment?: string; coachCue?: string }
+export interface WorkoutExercise extends Format { exerciseId: string; name: string; restSec: number; targetReps?: string; sets: SetLog[]; mode?: SetMode; note?: string; comment?: string; lastComment?: string; coachCue?: string }
 // coachCue = what the coach prescribed for this exercise when the previous session was completed (the numbers are already prefilled)
 // note = the plan's cue (from the template / coach); comment = what you wrote after doing it; lastComment = the previous session's comment, shown next time
 /** What the coach prescribed for next time, per exercise, when a session was completed. Numbers prefill the next session. */

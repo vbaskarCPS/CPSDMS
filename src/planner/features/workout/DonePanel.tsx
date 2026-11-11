@@ -68,7 +68,7 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
   // is what tomorrow is: show it, and keep this panel's earlier idea one tap away instead of on top
   const other = planned && (!t || planned.name !== t.name) ? planned : null;
   const [showIdea, setShowIdea] = useState(false);
-  const exLine = (e: NonNullable<typeof t>['exercises'][number]) => `${e.name} — ${e.mode === 'time' ? `${e.sets} × ${fmtSec(e.seconds || 60)}` : `${e.sets} × ${e.reps || '8-12'}${e.weight ? ` @ ${e.weight} ${units}` : ''}`}`;
+  const exLine = (e: NonNullable<typeof t>['exercises'][number]) => `${e.group ? `${e.group.toUpperCase()} · ` : ''}${e.name} — ${e.repsBySet?.length ? `${e.style || 'pyramid'} ${e.repsBySet.join('-')}` : e.mode === 'time' ? `${e.sets} × ${fmtSec(e.seconds || 60)}${e.style === 'intervals' && e.restSec ? ` / rest ${fmtSec(e.restSec)}` : ''}` : `${e.sets} × ${e.reps || '8-12'}${e.weight ? ` @ ${e.weight} ${units}` : ''}`}${e.perSide ? ' per side' : ''}${e.group && e.groupKind && e.groupKind !== 'superset' ? ` (${e.groupKind}${e.groupMinutes ? ` ${e.groupMinutes} min` : ''})` : ''}`;
 
   return (
     <Card accent>

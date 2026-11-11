@@ -1,7 +1,10 @@
 // src/planner/features/workout/LiveWorkout.tsx — /workout/live/:id: log sets one thumb at a time. Finished sessions open read-only.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// The session is shown as blocks (format.ts): an exercise on its own, a superset or circuit logged round by round,
+// or an EMOM / AMRAP run against a clock. Each exercise gets the tracker that fits it: weight × reps, reps only,
+// left / right, a countdown (each side in turn when it's a per-side hold), or intervals that run themselves.
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ChevronDown, ChevronUp, Plus, Trophy, Trash2, Repeat2, Clock, Sparkles, Flame, PlayCircle } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus, Trophy, Trash2, Repeat2, Clock, Sparkles, Flame, PlayCircle, Check, RotateCcw } from 'lucide-react';
 import { ExerciseSheet } from './ExerciseSheet';
 import type { PlannerPass } from '../../lib/auth';
 import { Page, Header, Card, Button, Sheet, Stat, TextArea, useToast } from '../../ui/primitives';
@@ -45,8 +48,9 @@ function parsePlan(jsonText: string, w: Workout): Record<string, NextRx> | undef
     return Object.keys(out).length ? out : undefined;
   } catch { return undefined; }
 }
-import { durationMin, fmtNum, fmtSec, isAssisted, isUnilateral, setsDone, volumeOf, type Exercise, type NextRx, type SetLog, type Workout, type WorkoutExercise } from './types';
-import { CheckBig, ExercisePicker, RestTimer, Stepper, TimedSet } from './parts';
+import { durationMin, fmtNum, fmtSec, isAssisted, setsDone, volumeOf, type Exercise, type NextRx, type SetLog, type Workout, type WorkoutExercise } from './types';
+import { BlockClock, CheckBig, ExercisePicker, IntervalRunner, RestTimer, Stepper, TimedSet } from './parts';
+import { blockHow, blocksOf, blockTitle, hasSides, isIntervals, isNoLoad, repsTarget, styleLabel, targetLine, type Block } from './format';
 import { useUnits } from './WorkoutHome';
 
 const RPES = [7, 8, 9, 10];
@@ -77,7 +81,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       const found = raw ? normalizeModes(raw) : null;
       setW(found); latest.current = found; setHistory(all.filter(x => x.id !== id)); setCustom(c);
       if (!found) setMissing(true);
-      else { const i = found.exercises.findIndex(e => e.sets.some(s => !s.done)); setOpen(i < 0 ? 0 : i); }
+      else { const i = found.exercises.findIndex(e => e.sets.some(s => !s.done)); setOpen(i < 0 ? 0 : Math.max(0, blocksOf(found.exercises).findIndex(b => b.at.includes(i)))); }
     });
     return () => { on = false; };
   }, [id]);
@@ -96,6 +100,8 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     const assisted = isAssisted(ex) || isAssisted(findExercise(ex.exerciseId, custom));
     const fmt = (x: SetLog) => `${x.weight} ${units}${assisted ? ' assist' : ''} × ${x.reps}${x.repsR !== undefined ? ` L / ${x.repsR} R` : ''}${x.rpe ? ` @RPE ${x.rpe}` : ''}`;
     const msg = `I just finished set ${si + 1} of ${ex.sets.length} of ${ex.name}: ${fmt(s)}.${assisted ? ' (This is an assisted move: the weight is the counterweight, so less assist is harder and progress means taking assist away.)' : ''} Target ${ex.sets.length} × ${ex.targetReps || '8-12'}, rest ${ex.restSec}s.` +
+      (ex.style ? ` The sets are a ${ex.style} (${styleLabel(ex)}), so the reps change set to set on purpose.` : '') +
+      (ex.group ? ` It is one move of a ${ex.groupKind || 'superset'}: no rest between its exercises, rest after the round.` : '') +
       (si > 0 ? ` Earlier sets today: ${ex.sets.slice(0, si).filter(x => x.done).map(fmt).join(', ')}.` : '') +
       (last ? ` Last session: ${last.sets.map(fmt).join(', ')}${last.comment ? ` (my note: "${last.comment}")` : ''}.` : '') +
       (ex.note ? ` Plan cue: ${ex.note}.` : '') +
@@ -113,46 +119,64 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   }, [say]);
   useEffect(() => () => { window.clearTimeout(timer.current); if (latest.current) void saveWorkout(latest.current); }, []);
 
-  const patchSet = (ei: number, si: number, p: Partial<SetLog>) => {
-    if (!w) return;
-    const exercises = w.exercises.map((e, i) => i !== ei ? e : { ...e, sets: e.sets.map((s, j) => (j === si ? { ...s, ...p } : s)) });
-    persist({ ...w, exercises });
+  // every change starts from the newest copy (a clock that runs on its own reports rounds between renders)
+  const patchEx = (ei: number, fn: (e: WorkoutExercise) => WorkoutExercise): Workout | null => {
+    const cur = latest.current; if (!cur) return null;
+    const next = { ...cur, exercises: cur.exercises.map((e, i) => (i === ei ? fn(e) : e)) };
+    persist(next); return next;
   };
-  const afterSet = (ei: number, si: number) => {
-    if (!w) return;
-    const restSec = w.exercises[ei].mode === 'time' ? (w.exercises[ei].restSec || 0) : (w.exercises[ei].restSec || 90);
-    if (restSec > 0) setRest({ endsAt: Date.now() + restSec * 1000, total: restSec });
-    const ex = w.exercises[ei];
-    if (ex.sets.every((x, j) => (j === si ? true : x.done)) && ei < w.exercises.length - 1) window.setTimeout(() => setOpen(ei + 1), 400);
-  };
-  const timedDone = (ei: number, si: number, seconds: number) => { patchSet(ei, si, { done: true, seconds }); afterSet(ei, si); if (w) coachSet({ ...w, exercises: w.exercises.map((e, i) => i !== ei ? e : { ...e, sets: e.sets.map((x, j) => (j === si ? { ...x, done: true, seconds } : x)) }) }, ei, si); };
-  const setRestSec = (ei: number, restSec: number) => { if (!w) return; persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, restSec } : e)) }); };
-  const setComment = (ei: number, comment: string) => { if (!w) return; persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, comment } : e)) }); };
-  const toggleDone = (ei: number, si: number) => {
-    if (!w) return;
-    const s = w.exercises[ei].sets[si];
-    const done = !s.done;
-    patchSet(ei, si, { done });
-    if (done) {
-      coachSet({ ...w, exercises: w.exercises.map((e, i) => i !== ei ? e : { ...e, sets: e.sets.map((x, j) => (j === si ? { ...x, done: true } : x)) }) }, ei, si);
-      const restSec = w.exercises[ei].restSec || 90;
-      setRest({ endsAt: Date.now() + restSec * 1000, total: restSec });
-      // move on when the exercise is complete
-      const ex = w.exercises[ei];
-      if (ex.sets.every((x, j) => (j === si ? true : x.done)) && ei < w.exercises.length - 1) window.setTimeout(() => setOpen(ei + 1), 400);
+  const patchSet = (ei: number, si: number, p: Partial<SetLog>) => patchEx(ei, e => ({ ...e, sets: e.sets.map((s, j) => (j === si ? { ...s, ...p } : s)) }));
+  /** After a set is done: the rest clock, and on to the next block when this one is finished. In a superset or
+   *  circuit the rest comes after the round (one set of each), not between its exercises. */
+  const afterDone = (next: Workout, ei: number, si: number, rest = true) => {
+    const bs = blocksOf(next.exercises); const bi = bs.findIndex(b => b.at.includes(ei)); const b = bs[bi]; if (!b) return;
+    const ex = next.exercises[ei];
+    if (rest) {
+      if (b.kind === 'single') { const sec = ex.mode === 'time' ? (ex.restSec || 0) : (ex.restSec || 90); if (sec > 0) setRest({ endsAt: Date.now() + sec * 1000, total: sec }); }
+      else if (b.at.every(i => !next.exercises[i].sets[si] || next.exercises[i].sets[si].done)) {
+        const sec = Math.max(0, ...b.at.map(i => next.exercises[i].restSec || 0));
+        if (sec > 0) setRest({ endsAt: Date.now() + sec * 1000, total: sec });
+      }
     }
+    if (b.at.every(i => next.exercises[i].sets.every(x => x.done)) && bi < bs.length - 1) window.setTimeout(() => setOpen(bi + 1), 400);
   };
-  const addSet = (ei: number) => {
-    if (!w) return;
-    const ex = w.exercises[ei]; const lastSet = ex.sets[ex.sets.length - 1];
-    const sets = [...ex.sets, ex.mode === 'time' ? { weight: 0, reps: 0, seconds: lastSet?.seconds ?? 60, done: false } : { weight: lastSet?.weight ?? 0, reps: lastSet?.reps ?? 8, done: false }];
-    persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, sets } : e)) });
+  const timedDone = (ei: number, si: number, seconds: number) => { const next = patchSet(ei, si, { done: true, seconds }); if (next) { afterDone(next, ei, si); coachSet(next, ei, si); } };
+  /** A round of self-running intervals just ended (the runner keeps its own rest). */
+  const intervalRound = (ei: number, si: number, seconds: number) => { const next = patchSet(ei, si, { done: true, seconds }); if (next) afterDone(next, ei, si, false); };
+  const setRestSec = (ei: number, restSec: number) => { patchEx(ei, e => ({ ...e, restSec })); };
+  const setComment = (ei: number, comment: string) => { patchEx(ei, e => ({ ...e, comment })); };
+  const toggleDone = (ei: number, si: number) => {
+    const s = latest.current?.exercises[ei]?.sets[si]; if (!s) return;
+    const done = !s.done;
+    const next = patchSet(ei, si, { done });
+    if (done && next) { coachSet(next, ei, si); afterDone(next, ei, si); }
   };
-  const removeSet = (ei: number, si: number) => {
-    if (!w) return;
-    persist({ ...w, exercises: w.exercises.map((e, i) => (i === ei ? { ...e, sets: e.sets.filter((_, j) => j !== si) } : e)) });
+  const blankSet = (ex: WorkoutExercise): SetLog => {
+    const lastSet = ex.sets[ex.sets.length - 1];
+    return ex.mode === 'time' ? { weight: 0, reps: 0, seconds: lastSet?.seconds ?? 60, done: false } : { weight: lastSet?.weight ?? 0, reps: lastSet?.reps ?? 8, ...(lastSet?.repsR !== undefined ? { repsR: lastSet.repsR } : {}), done: false };
   };
-  const removeExercise = (ei: number) => { if (!w) return; persist({ ...w, exercises: w.exercises.filter((_, i) => i !== ei) }); setOpen(Math.max(0, ei - 1)); };
+  const addSet = (ei: number) => { patchEx(ei, e => ({ ...e, sets: [...e.sets, blankSet(e)] })); };
+  /** One more round of a superset or circuit: a set of each. */
+  const addRound = (b: Block) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.map((e, i) => (b.at.includes(i) ? { ...e, sets: [...e.sets, blankSet(e)] } : e)) }); };
+  const removeRound = (b: Block, si: number) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.map((e, i) => (b.at.includes(i) ? { ...e, sets: e.sets.filter((_, j) => j !== si) } : e)) }); };
+  const removeSet = (ei: number, si: number) => { patchEx(ei, e => ({ ...e, sets: e.sets.filter((_, j) => j !== si) })); };
+  const removeExercise = (ei: number) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.filter((_, i) => i !== ei) }); };
+  /** The clock of an EMOM or AMRAP stopped: log what was done as sets (so volume, history and the review count it).
+   *  AMRAP: every exercise did `count` rounds. EMOM: the minutes go round the exercises in turn. */
+  const clockDone = (b: Block, count: number) => {
+    const cur = latest.current; if (!cur || count <= 0) return;
+    const exercises = cur.exercises.map((e, i) => {
+      const k = b.at.indexOf(i); if (k < 0) return e;
+      const n = b.kind === 'emom' ? Math.ceil((count - k) / b.at.length) : count;
+      if (n <= 0) return e;
+      const first = e.sets[0] || blankSet(e);
+      return { ...e, sets: Array.from({ length: Math.min(n, 60) }, () => ({ ...first, done: true })) };
+    });
+    const next = { ...cur, exercises }; persist(next, true);
+    afterDone(next, b.at[0], 0, false);
+  };
+  /** Run a clocked block again: back to its one set-up row. */
+  const clockRedo = (b: Block) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.map((e, i) => (b.at.includes(i) ? { ...e, sets: [{ ...(e.sets[0] || blankSet(e)), done: false }] } : e)) }); };
 
   const exerciseFrom = (e: Exercise, prevEx?: WorkoutExercise): WorkoutExercise => {
     if (isTimed(e)) {
@@ -165,10 +189,12 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     const sets: SetLog[] = Array.from({ length: n }, (_, i) => ({ weight: last[i]?.weight ?? last[0]?.weight ?? 0, reps: last[i]?.reps ?? 8, done: false, prev: last[i] ? { weight: last[i].weight, reps: last[i].reps } : undefined }));
     return { exerciseId: e.id, name: e.name, restSec: prevEx?.restSec || (isLower(e) ? 150 : 90), targetReps: prevEx?.targetReps, sets };
   };
+  /** A swapped-in exercise takes the old one's place in its block (same letter, same clock). */
+  const inPlace = (e: WorkoutExercise, old: WorkoutExercise): WorkoutExercise => ({ ...e, ...(old.group ? { group: old.group, groupKind: old.groupKind, groupSec: old.groupSec } : {}) });
   const onPick = (e: Exercise) => {
     if (!w || !picker) return;
-    if (picker.mode === 'add') { persist({ ...w, exercises: [...w.exercises, exerciseFrom(e)] }); setOpen(w.exercises.length); }
-    else persist({ ...w, exercises: w.exercises.map((x, i) => (i === picker.index ? exerciseFrom(e, x) : x)) });
+    if (picker.mode === 'add') { persist({ ...w, exercises: [...w.exercises, exerciseFrom(e)] }); setOpen(blocksOf(w.exercises).length); }
+    else persist({ ...w, exercises: w.exercises.map((x, i) => (i === picker.index ? inPlace(exerciseFrom(e, x), x) : x)) });
     setPicker(null);
   };
 
@@ -180,7 +206,8 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       name: done.name, minutes: durationMin(done), units, prs: done.prs, overall_note: done.notes || undefined,
       exercises: done.exercises.map(e => {
         const last = exerciseHistory(history, e.exerciseId, 1)[0];
-        return { name: e.name, plan_cue: e.note, target: e.mode === 'time' ? `${e.sets.length} × ${fmtSec(e.sets[0]?.seconds || 0)}` : `${e.sets.length} × ${e.targetReps || '8-12'}`, sets: e.sets.map(fmt), my_note: e.comment?.trim() || undefined, last_session: last ? { sets: last.sets.map(fmt), note: last.comment || undefined } : undefined };
+        const fmtOf = [e.group ? `${e.groupKind || 'superset'} ${e.group}` : '', hasSides(e, findExercise(e.exerciseId, custom)) ? 'per side' : ''].filter(Boolean).join(', ');
+        return { name: e.name, plan_cue: e.note, target: targetLine(e, findExercise(e.exerciseId, custom)), format: fmtOf || undefined, sets: e.sets.map(fmt), my_note: e.comment?.trim() || undefined, last_session: last ? { sets: last.sets.map(fmt), note: last.comment || undefined } : undefined };
       }),
     };
     const ask = 'I just completed this workout. Read every set, my note on each exercise and the overall note. Reply in two parts.\n' +
@@ -239,6 +266,186 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   if (missing) return <Page><Header back="/workout" title="Not found" /><p className="pl-muted">That session isn't here.</p></Page>;
   if (!w) return <Page><Header back="/workout" title="Loading…" /></Page>;
 
+  const blocks = blocksOf(w.exercises);
+  const libOf = (ex: WorkoutExercise) => findExercise(ex.exerciseId, custom);
+  const howToBtn = (ex: WorkoutExercise, label?: ReactNode) => (
+    <button type="button" className="wo-ex__howto" aria-label={`How to do ${ex.name}`} onClick={e => { e.stopPropagation(); setHowTo({ id: ex.exerciseId, name: ex.name, note: ex.note }); }}>{label}{ex.name} <PlayCircle size={15} /></button>);
+  const cues = (ex: WorkoutExercise) => (<>
+    {ex.coachCue && <p className="wo-lastnote wo-lastnote--coach"><Sparkles size={12} aria-hidden /> Arvy: {ex.coachCue}</p>}
+    {ex.lastComment && <p className="wo-lastnote">Last time: {ex.lastComment}</p>}
+  </>);
+  const noteBox = (ex: WorkoutExercise, ei: number, named = false) => (readOnly
+    ? (ex.comment ? <p className="wo-lastnote" key={`n${ei}`}>{named ? `${ex.name}: ` : 'Note: '}{ex.comment}</p> : null)
+    : <TextArea key={`n${ei}`} rows={1} className="wo-comment" placeholder={named ? `Note on ${ex.name}…` : 'Note for next time (felt easy, go up 5 lb; left shoulder pinched…)'} value={ex.comment || ''} onChange={e => setComment(ei, e.target.value)} />);
+
+  /** One set of one exercise, with the tracker that fits it. `tag` replaces the set number (A1, B2…) inside a block. */
+  const setRow = (ex: WorkoutExercise, ei: number, si: number, o: { tag?: string; onRemove?: () => void; rpe?: boolean } = {}) => {
+    const s = ex.sets[si]; if (!s) return null;
+    const lib = libOf(ex);
+    const uni = hasSides(ex, lib);
+    const remove = !readOnly && o.onRemove && <button type="button" onClick={o.onRemove} style={{ border: 0, background: 'none', color: 'var(--ink-2)', padding: 0, marginLeft: 'auto' }} aria-label="Remove"><Trash2 size={14} /></button>;
+    if (ex.mode === 'time') {
+      return (
+        <div key={`${ei}-${si}`} className={`wo-set ${s.done ? 'is-done' : ''}`}>
+          <div className="wo-set__n">{o.tag ?? si + 1}</div>
+          <TimedSet target={s.seconds || 60} done={s.done} disabled={readOnly} sides={uni} onTarget={sec => patchSet(ei, si, { seconds: sec })} onDone={sec => timedDone(ei, si, sec)} />
+          {remove && <div className="wo-set__prev">{remove}</div>}
+        </div>
+      );
+    }
+    const bare = isNoLoad(ex, lib);
+    const assisted = isAssisted(lib) || isAssisted(ex);   // the weight is the counterweight: less is harder
+    const step = stepFor({ units, lower: isLower(lib || LIBRARY[0]), defaultStep: lib?.defaultStep });
+    const aim = repsTarget(ex, si);
+    return (
+      <div key={`${ei}-${si}`} className={`wo-set ${bare ? 'wo-set--bare' : ''} ${s.done ? 'is-done' : ''}`}>
+        <div className="wo-set__n">{o.tag ?? si + 1}</div>
+        {!bare && <Stepper value={s.weight} step={step} onChange={v => patchSet(ei, si, { weight: v })} disabled={readOnly} />}
+        {uni
+          ? <div className="wo-sides"><Stepper value={s.reps} step={1} onChange={v => patchSet(ei, si, { reps: Math.round(v) })} disabled={readOnly} /><Stepper value={s.repsR ?? s.reps} step={1} onChange={v => patchSet(ei, si, { repsR: Math.round(v) })} disabled={readOnly} /></div>
+          : <Stepper value={s.reps} step={1} onChange={v => patchSet(ei, si, { reps: Math.round(v) })} disabled={readOnly} />}
+        <CheckBig on={s.done} onClick={() => toggleDone(ei, si)} disabled={readOnly} />
+        <div className="wo-set__prev">
+          <span>{bare ? '' : `${assisted ? `${units} assist` : units} × `}{uni ? 'left / right reps' : 'reps'}{aim ? ` · aim ${aim}` : ''}</span>
+          {s.prev && <span>last: {bare ? '' : `${s.prev.weight} × `}{s.prev.reps}{uni && s.prev.repsR !== undefined ? ` / ${s.prev.repsR}` : ''}</span>}
+          {bare && !readOnly && si === 0 && <button type="button" className="wo-addload" onClick={() => patchEx(ei, e => ({ ...e, noLoad: false }))}>+ weight</button>}
+          {remove}
+        </div>
+        {o.rpe !== false && (!readOnly || s.rpe) && (
+          <div className="wo-rpe">RPE {RPES.map(r => <button key={r} type="button" className={s.rpe === r ? 'is-on' : ''} disabled={readOnly} onClick={() => patchSet(ei, si, { rpe: s.rpe === r ? undefined : r })}>{r}</button>)}</div>
+        )}
+      </div>
+    );
+  };
+  const tipFor = (at: number[]) => (tip && at.includes(tip.ei) && tip.text ? <div className={`wo-tip ${tip.ai ? 'is-ai' : ''}`}><Sparkles size={14} aria-hidden /> <span>{tip.text}</span></div> : null);
+  const head = (bi: number, isOpen: boolean, inner: ReactNode) => (
+    <div className="wo-ex__head" onClick={() => setOpen(isOpen && !readOnly ? -1 : bi)}>
+      <div className="pl-grow">{inner}</div>
+      {!readOnly && (isOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />)}
+    </div>);
+
+  /** An exercise on its own. */
+  const singleCard = (ei: number, bi: number) => {
+    const ex = w.exercises[ei]; const lib = libOf(ex);
+    const isOpen = open === bi || readOnly;
+    const doneN = ex.sets.filter(s => s.done).length;
+    const auto = isIntervals(ex, lib);
+    const style = styleLabel(ex, lib);
+    const uni = hasSides(ex, lib);
+    return (
+      <Card key={`${ex.exerciseId}-${ei}`} className="wo-ex">
+        {head(bi, isOpen, <>
+          <b className="wo-ex__name">{howToBtn(ex)}</b>
+          <small>{doneN}/{ex.sets.length} {ex.mode === 'time' ? 'rounds' : 'sets'}{style ? ` · ${style}` : `${ex.targetReps ? ` · ${ex.targetReps}${/[a-z]/i.test(ex.targetReps) ? '' : ' reps'}` : ''}${ex.mode === 'time' && ex.sets[0]?.seconds ? ` · ${fmtSec(ex.sets[0].seconds)}` : ''}`}{uni && !/side|direction|way|leg|arm/i.test(ex.targetReps || '') ? ' · each side' : ''}{auto ? '' : ` · rest ${ex.restSec}s`}{ex.note ? ` · ${ex.note}` : ''}</small>
+        </>)}
+        {isOpen && (
+          <div className="wo-ex__body">
+            {cues(ex)}
+            {tipFor([ei])}
+            {!readOnly && !auto && <div className="wo-restchips">rest {RESTS.map(r => <button key={r} type="button" className={ex.restSec === r ? 'is-on' : ''} onClick={() => setRestSec(ei, r)}>{r}s</button>)}{ex.mode === 'time' && <button type="button" className={ex.restSec === 0 ? 'is-on' : ''} onClick={() => setRestSec(ei, 0)}>none</button>}</div>}
+            {auto
+              ? <IntervalRunner rounds={ex.sets.length} work={ex.sets[0]?.seconds || 20} rest={ex.restSec || 0} doneCount={doneN} disabled={readOnly} onRound={(i, sec) => intervalRound(ei, i, sec)} />
+              : ex.sets.map((_, si) => setRow(ex, ei, si, { onRemove: ex.sets.length > 1 ? () => removeSet(ei, si) : undefined }))}
+            {!readOnly && (
+              <div className="wo-ex__actions">
+                <Button small onClick={() => addSet(ei)}><Plus size={16} /> {ex.mode === 'time' ? 'Round' : 'Set'}</Button>
+                <Button small ghost onClick={() => setPicker({ mode: 'swap', index: ei })}><Repeat2 size={16} /> Swap</Button>
+                <Button small ghost danger onClick={() => { removeExercise(ei); setOpen(Math.max(0, bi - 1)); }}><Trash2 size={16} /></Button>
+              </div>
+            )}
+            {noteBox(ex, ei)}
+          </div>
+        )}
+      </Card>
+    );
+  };
+
+  /** The exercises of a block, listed with their targets and cues (and Swap / remove while training). */
+  const lineup = (b: Block, tags: string[]) => b.at.map((ei, k) => {
+    const ex = w.exercises[ei];
+    return (
+      <div key={ei} className="wo-lineup">
+        <div className="pl-grow"><b>{howToBtn(ex, <span className="wo-tag">{tags[k]}</span>)}</b><small>{b.kind === 'emom' || b.kind === 'amrap' ? (ex.mode === 'time' ? fmtSec(ex.sets[0]?.seconds || 30) : `${ex.sets[0]?.reps ?? ex.targetReps} reps${hasSides(ex, libOf(ex)) ? ' each side' : ''} ${b.kind === 'emom' ? 'a minute' : 'a round'}`) : targetLine(ex, libOf(ex))}{ex.note ? ` · ${ex.note}` : ''}</small>{cues(ex)}</div>
+        {!readOnly && <button type="button" aria-label={`Swap ${ex.name}`} onClick={() => setPicker({ mode: 'swap', index: ei })}><Repeat2 size={16} /></button>}
+        {!readOnly && <button type="button" aria-label={`Remove ${ex.name}`} onClick={() => removeExercise(ei)}><Trash2 size={16} /></button>}
+      </div>
+    );
+  });
+
+  /** A superset or circuit: logged round by round, one set of each, rest after the round. */
+  const roundsCard = (b: Block & { letter: string }, bi: number) => {
+    const exs = b.at.map(i => w.exercises[i]);
+    const isOpen = open === bi || readOnly;
+    const rounds = Math.max(0, ...exs.map(e => e.sets.length));
+    const doneRounds = Array.from({ length: rounds }, (_, r) => exs.every(e => !e.sets[r] || e.sets[r].done)).filter(Boolean).length;
+    const tags = b.at.map((_, k) => `${b.letter}${k + 1}`);
+    return (
+      <Card key={`block-${b.letter}-${b.at[0]}`} className="wo-ex wo-block">
+        {head(bi, isOpen, <>
+          <span className="wo-chip">{blockTitle(b, w.exercises)}</span>
+          <b className="wo-ex__name">{exs.map(e => e.name).join(' + ')}</b>
+          <small>{doneRounds}/{rounds} rounds · {blockHow(b, w.exercises)}</small>
+        </>)}
+        {isOpen && (
+          <div className="wo-ex__body">
+            {lineup(b, tags)}
+            {tipFor(b.at)}
+            {Array.from({ length: rounds }, (_, r) => (
+              <div key={r} className="wo-round">
+                <div className="wo-round__n">Round {r + 1}{!readOnly && rounds > 1 && <button type="button" onClick={() => removeRound(b, r)} aria-label={`Remove round ${r + 1}`}><Trash2 size={13} /></button>}</div>
+                {b.at.map((ei, k) => setRow(w.exercises[ei], ei, r, { tag: tags[k], rpe: false }))}
+              </div>
+            ))}
+            {!readOnly && <div className="wo-ex__actions"><Button small onClick={() => addRound(b)}><Plus size={16} /> Round</Button></div>}
+            {b.at.map(ei => noteBox(w.exercises[ei], ei, true))}
+          </div>
+        )}
+      </Card>
+    );
+  };
+
+  /** An EMOM or AMRAP: set the weights, start the clock, and the rounds are logged when it stops. */
+  const clockCard = (b: Block & { letter: string }, bi: number) => {
+    const exs = b.at.map(i => w.exercises[i]);
+    const isOpen = open === bi || readOnly;
+    const finished = exs.every(e => e.sets.length > 0 && e.sets.every(s => s.done));
+    const total = exs[0]?.groupSec || (b.kind === 'emom' ? 600 : 480);
+    const tags = b.at.map((_, k) => String(k + 1));
+    const what = (e: WorkoutExercise) => { const s = e.sets[0]; const uni = hasSides(e, libOf(e)); return e.mode === 'time' ? `${fmtSec(s?.seconds || 30)} ${e.name}` : `${s?.reps ?? e.targetReps ?? ''}${uni ? ' each side' : ''} ${e.name}`; };
+    return (
+      <Card key={`block-${b.letter}-${b.at[0]}`} className="wo-ex wo-block">
+        {head(bi, isOpen, <>
+          <span className="wo-chip">{blockTitle(b, w.exercises)}</span>
+          <b className="wo-ex__name">{exs.map(e => e.name).join(' + ')}</b>
+          <small>{finished ? `${Math.max(...exs.map(e => e.sets.length))} round${Math.max(...exs.map(e => e.sets.length)) === 1 ? '' : 's'} logged` : blockHow(b, w.exercises)}</small>
+        </>)}
+        {isOpen && (
+          <div className="wo-ex__body">
+            {lineup(b, tags)}
+            {finished
+              ? <>
+                  {exs.map((e, k) => <p key={k} className="wo-logged"><Check size={15} aria-hidden /> {e.name}: {e.sets.length} × {e.mode === 'time' ? fmtSec(e.sets[0]?.seconds || 0) : `${e.sets[0]?.reps}${e.sets[0]?.weight ? ` at ${e.sets[0].weight} ${units}` : ''}`}</p>)}
+                  {!readOnly && <div className="wo-ex__actions"><Button small ghost onClick={() => clockRedo(b)}><RotateCcw size={15} /> Go again</Button></div>}
+                </>
+              : <>
+                  <p className="pl-muted" style={{ fontSize: 13, margin: 0 }}>Set what you’ll use, then start the clock.</p>
+                  {b.at.map((ei, k) => { const e = w.exercises[ei]; const bare = isNoLoad(e, libOf(e)) || e.mode === 'time'; const s = e.sets[0]; if (!s) return null;
+                    return (
+                      <div key={ei} className={`wo-set wo-set--setup ${bare ? 'wo-set--bare' : ''}`}>
+                        <div className="wo-set__n">{tags[k]}</div>
+                        {!bare && <Stepper value={s.weight} onChange={v => patchSet(ei, 0, { weight: v })} disabled={readOnly} />}
+                        {e.mode === 'time' ? <Stepper value={s.seconds || 30} suffix="s" onChange={v => patchSet(ei, 0, { seconds: Math.round(v) })} disabled={readOnly} /> : <Stepper value={s.reps} onChange={v => patchSet(ei, 0, { reps: Math.round(v), ...(s.repsR !== undefined ? { repsR: Math.round(v) } : {}) })} disabled={readOnly} />}
+                        <div className="wo-set__prev"><span>{e.name}: {bare ? '' : `${units} × `}{e.mode === 'time' ? 'seconds' : hasSides(e, libOf(e)) ? 'reps each side' : 'reps'}</span></div>
+                      </div>); })}
+                  <BlockClock kind={b.kind === 'emom' ? 'emom' : 'amrap'} totalSec={total} moves={exs.map(what)} disabled={readOnly} onFinish={n => clockDone(b, n)} />
+                </>}
+            {b.at.map(ei => noteBox(w.exercises[ei], ei, true))}
+          </div>
+        )}
+      </Card>
+    );
+  };
+
   return (
     <Page className={rest ? 'wo-has-rest' : ''}>
       <Header back="/workout" eyebrow={readOnly ? `${new Date(w.startedAt).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} · ${durationMin(w)} min` : <span className="pl-row" style={{ gap: 4 }}><Clock size={12} /> {elapsed} min · {setsDone(w)} sets</span>}
@@ -248,64 +455,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       {readOnly && w.review && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>Arvy's review</b><p>{w.review}</p></div></div>}
       {lastReview && <div className="wo-review"><Sparkles size={16} aria-hidden /><div><b>From your last session ({new Date(lastReview.startedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })})</b><p>{lastReview.review}</p></div></div>}
 
-      {w.exercises.map((ex, ei) => {
-        const lib = findExercise(ex.exerciseId, custom) || LIBRARY[0];
-        const step = stepFor({ units, lower: isLower(lib), defaultStep: lib.defaultStep });
-        const uni = isUnilateral(lib) || isUnilateral(ex);
-        const assisted = isAssisted(lib) || isAssisted(ex);   // the weight is the counterweight: less is harder
-        const isOpen = open === ei || readOnly;
-        const doneN = ex.sets.filter(s => s.done).length;
-        return (
-          <Card key={`${ex.exerciseId}-${ei}`} className="wo-ex">
-            <div className="wo-ex__head" onClick={() => setOpen(isOpen && !readOnly ? -1 : ei)}>
-              <div className="pl-grow"><b className="wo-ex__name"><button type="button" className="wo-ex__howto" aria-label={`How to do ${ex.name}`} onClick={e => { e.stopPropagation(); setHowTo({ id: ex.exerciseId, name: ex.name, note: ex.note }); }}>{ex.name} <PlayCircle size={15} /></button></b><small>{doneN}/{ex.sets.length} {ex.mode === 'time' ? 'rounds' : 'sets'}{ex.targetReps ? ` · ${ex.targetReps} reps` : ''}{ex.mode === 'time' && ex.sets[0]?.seconds ? ` · ${fmtSec(ex.sets[0].seconds)}` : ''} · rest {ex.restSec}s{ex.note ? ` · ${ex.note}` : ''}</small></div>
-              {!readOnly && (isOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />)}
-            </div>
-            {isOpen && (
-              <div className="wo-ex__body">
-                {ex.coachCue && <p className="wo-lastnote wo-lastnote--coach"><Sparkles size={12} aria-hidden /> Coach: {ex.coachCue}</p>}
-                {ex.lastComment && <p className="wo-lastnote">Last time: {ex.lastComment}</p>}
-                {tip && tip.ei === ei && tip.text && <div className={`wo-tip ${tip.ai ? 'is-ai' : ''}`}><Sparkles size={14} aria-hidden /> <span>{tip.text}</span></div>}
-                {!readOnly && <div className="wo-restchips">rest {RESTS.map(r => <button key={r} type="button" className={ex.restSec === r ? 'is-on' : ''} onClick={() => setRestSec(ei, r)}>{r}s</button>)}{ex.mode === 'time' && <button type="button" className={ex.restSec === 0 ? 'is-on' : ''} onClick={() => setRestSec(ei, 0)}>none</button>}</div>}
-                {ex.mode === 'time' ? ex.sets.map((s, si) => (
-                  <div key={si} className={`wo-set ${s.done ? 'is-done' : ''}`}>
-                    <div className="wo-set__n">{si + 1}</div>
-                    <TimedSet target={s.seconds || 60} done={s.done} disabled={readOnly} onTarget={sec => patchSet(ei, si, { seconds: sec })} onDone={sec => timedDone(ei, si, sec)} />
-                    {!readOnly && ex.sets.length > 1 && <div className="wo-set__prev"><button type="button" onClick={() => removeSet(ei, si)} style={{ border: 0, background: 'none', color: 'var(--ink-2)', padding: 0, marginLeft: 'auto' }} aria-label="Remove round"><Trash2 size={14} /></button></div>}
-                  </div>
-                )) : ex.sets.map((s, si) => (
-                  <div key={si} className={`wo-set ${s.done ? 'is-done' : ''}`}>
-                    <div className="wo-set__n">{si + 1}</div>
-                    <Stepper value={s.weight} step={step} onChange={v => patchSet(ei, si, { weight: v })} disabled={readOnly} />
-                    {uni
-                      ? <div className="wo-sides"><Stepper value={s.reps} step={1} onChange={v => patchSet(ei, si, { reps: Math.round(v) })} disabled={readOnly} /><Stepper value={s.repsR ?? s.reps} step={1} onChange={v => patchSet(ei, si, { repsR: Math.round(v) })} disabled={readOnly} /></div>
-                      : <Stepper value={s.reps} step={1} onChange={v => patchSet(ei, si, { reps: Math.round(v) })} disabled={readOnly} />}
-                    <CheckBig on={s.done} onClick={() => toggleDone(ei, si)} disabled={readOnly} />
-                    <div className="wo-set__prev">
-                      <span>{assisted ? `${units} assist` : units} × {uni ? 'L / R reps' : 'reps'}</span>
-                      {s.prev && <span>last: {s.prev.weight} × {s.prev.reps}{uni && s.prev.repsR !== undefined ? ` / ${s.prev.repsR}` : ''}</span>}
-                      {!readOnly && ex.sets.length > 1 && <button type="button" onClick={() => removeSet(ei, si)} style={{ border: 0, background: 'none', color: 'var(--ink-2)', padding: 0, marginLeft: 'auto' }} aria-label="Remove set"><Trash2 size={14} /></button>}
-                    </div>
-                    {(!readOnly || s.rpe) && (
-                      <div className="wo-rpe">RPE {RPES.map(r => <button key={r} type="button" className={s.rpe === r ? 'is-on' : ''} disabled={readOnly} onClick={() => patchSet(ei, si, { rpe: s.rpe === r ? undefined : r })}>{r}</button>)}</div>
-                    )}
-                  </div>
-                ))}
-                {!readOnly && (
-                  <div className="wo-ex__actions">
-                    <Button small onClick={() => addSet(ei)}><Plus size={16} /> {ex.mode === 'time' ? 'Round' : 'Set'}</Button>
-                    <Button small ghost onClick={() => setPicker({ mode: 'swap', index: ei })}><Repeat2 size={16} /> Swap</Button>
-                    <Button small ghost danger onClick={() => removeExercise(ei)}><Trash2 size={16} /></Button>
-                  </div>
-                )}
-                {readOnly
-                  ? (ex.comment ? <p className="wo-lastnote">Note: {ex.comment}</p> : null)
-                  : <TextArea rows={1} className="wo-comment" placeholder="Note for next time (felt easy, go up 5 lb; left shoulder pinched…)" value={ex.comment || ''} onChange={e => setComment(ei, e.target.value)} />}
-              </div>
-            )}
-          </Card>
-        );
-      })}
+      {blocks.map((b, bi) => (b.kind === 'single' ? singleCard(b.at[0], bi) : b.kind === 'emom' || b.kind === 'amrap' ? clockCard(b, bi) : roundsCard(b, bi)))}
 
       {!readOnly && <Button block onClick={() => setPicker({ mode: 'add' })}><Plus size={18} /> Add exercise</Button>}
 

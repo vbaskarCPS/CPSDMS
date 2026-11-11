@@ -4,7 +4,8 @@ import { planFromText, type PlanResult } from '../../lib/ai';
 import { uid } from '../../ui/primitives';
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
 import { suggest, type Suggestion } from './progression';
-import { e1rm, isAssisted, type BodyWeight, type Exercise, type NextRx, type SetLog, type Template, type TemplateExercise, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
+import { e1rm, isAssisted, type BodyWeight, type Equipment, type Exercise, type Format, type Muscle, type NextRx, type SetLog, type Template, type TemplateExercise, type Units, type Workout, type WorkoutExercise, workoutKey } from './types';
+import { blocksOf, cleanFormat, hasSides, isNoLoad, settleGroups } from './format';
 
 const DEFAULT_TEMPLATES: Omit<Template, 'id' | 'order'>[] = [
   { name: 'Upper body', days: [1, 4], exercises: [
@@ -95,27 +96,52 @@ export function nextRx(workouts: Workout[], exerciseId: string): NextRx | undefi
 
 /** Build a session from a template: the coach's prescription from last time when there is one, else the
  *  progression rule's suggestion; last time's numbers alongside. */
+/** The format fields an exercise carries from the template into the session. */
+const formatOf = (t: Format): Format => {
+  const f: Format = {};
+  for (const k of ['sides', 'noLoad', 'style', 'repsBySet', 'weightBySet', 'group', 'groupKind', 'groupSec'] as const) if (t[k] !== undefined) (f as Record<string, unknown>)[k] = t[k];
+  return f;
+};
+
 export function startFromTemplate(tpl: Template, workouts: Workout[], units: Units, custom: Exercise[] = []): Workout {
   const now = new Date();
-  const exercises: WorkoutExercise[] = tpl.exercises.map(t => {
-    const mode = t.mode || (isTimed(findExercise(t.exerciseId, custom)) ? 'time' : 'reps');
+  const clocked = new Set(blocksOf(tpl.exercises).filter(b => b.kind === 'emom' || b.kind === 'amrap').flatMap(b => b.at));
+  const exercises: WorkoutExercise[] = tpl.exercises.map((t, ti) => {
+    const lib = findExercise(t.exerciseId, custom);
+    const mode = t.mode || (isTimed(lib) ? 'time' : 'reps');
+    const fmt = formatOf(t);
     const lastComment = exerciseHistory(workouts, t.exerciseId, 1)[0]?.comment?.trim() || undefined;
     const rx = nextRx(workouts, t.exerciseId);
-    const n = Math.max(1, rx?.sets || t.targetSets);
-    const restSec = rx?.restSec || t.restSec;
     const coachCue = rx?.cue?.trim() || undefined;
     if (mode === 'time') {
-      const sec = rx?.seconds || t.targetSec || 60;
+      const n = clocked.has(ti) ? 1 : Math.max(1, t.style === 'intervals' ? t.targetSets : rx?.sets || t.targetSets);
+      const sec = (t.style === 'intervals' ? undefined : rx?.seconds) || t.targetSec || 60;
       const sets: SetLog[] = Array.from({ length: n }, () => ({ weight: 0, reps: 0, seconds: sec, done: false }));
-      return { exerciseId: t.exerciseId, name: t.name, restSec, mode, note: t.note, lastComment, coachCue, sets };
+      return { exerciseId: t.exerciseId, name: t.name, restSec: (t.style === 'intervals' ? undefined : rx?.restSec) ?? t.restSec, mode, note: t.note, lastComment, coachCue, sets, ...fmt };
     }
     const sug = nextTarget(workouts, t, units, custom);
     const last = exerciseHistory(workouts, t.exerciseId, 1)[0]?.sets || [];
-    const weight = rx?.weight ?? sug.weight, reps = rx?.reps ?? sug.reps;
-    const sets: SetLog[] = Array.from({ length: n }, (_, i) => ({
-      weight, reps, repsR: rx?.repsR, done: false, prev: last[i] ? { weight: last[i].weight, reps: last[i].reps, repsR: last[i].repsR } : undefined,
-    }));
-    return { exerciseId: t.exerciseId, name: t.name, restSec, targetReps: rx?.reps ? String(rx.reps) : t.targetReps, note: t.note, lastComment, coachCue, sets };
+    const prev = (i: number) => (last[i] ? { weight: last[i].weight, reps: last[i].reps, repsR: last[i].repsR } : undefined);
+    const sides = hasSides({ ...t, mode }, lib);
+    const bare = isNoLoad({ ...t, mode }, lib) && !last.some(s => s.weight > 0);
+    // a plan with its own shape (pyramid, countdown, drop set) or a clocked block keeps the plan's numbers: last
+    // time's prescription was for straight sets
+    const shaped = !!t.repsBySet?.length || !!t.weightBySet?.length || clocked.has(ti);
+    // the plan's own weight leads in a session planned for a date (Arvy chose it from the same history) and the first time a move is done
+    const planned = t.startWeight && (tpl.plannedFor || !last.length) ? t.startWeight : undefined;
+    const base = bare ? 0 : planned ?? (shaped ? undefined : rx?.weight) ?? sug.weight;
+    if (t.repsBySet?.length || t.weightBySet?.length) {
+      const n = Math.max(t.repsBySet?.length || 0, t.weightBySet?.length || 0);
+      const sets: SetLog[] = Array.from({ length: n }, (_, i) => {
+        const reps = t.repsBySet?.[i] ?? t.repsBySet?.[t.repsBySet.length - 1] ?? sug.reps;
+        return { weight: bare ? 0 : t.weightBySet?.[i] ?? base ?? 0, reps, ...(sides ? { repsR: reps } : {}), done: false, prev: prev(i) };
+      });
+      return { exerciseId: t.exerciseId, name: t.name, restSec: t.restSec, targetReps: t.repsBySet?.join('-') || t.targetReps, note: t.note, lastComment, coachCue, sets, ...fmt };
+    }
+    const n = clocked.has(ti) ? 1 : Math.max(1, (shaped ? undefined : rx?.sets) || t.targetSets);   // a clocked block logs its rounds when the clock stops
+    const reps = (shaped ? undefined : rx?.reps) ?? sug.reps;
+    const sets: SetLog[] = Array.from({ length: n }, (_, i) => ({ weight: base ?? 0, reps, ...(sides ? { repsR: rx?.repsR ?? reps } : rx?.repsR !== undefined ? { repsR: rx.repsR } : {}), done: false, prev: prev(i) }));
+    return { exerciseId: t.exerciseId, name: t.name, restSec: (shaped ? undefined : rx?.restSec) || t.restSec, targetReps: !shaped && rx?.reps ? String(rx.reps) : t.targetReps, note: t.note, lastComment, coachCue, sets, ...fmt };
   });
   return { id: uid(), date: dayKey(now), startedAt: now.toISOString(), templateId: tpl.id, name: tpl.name, exercises };
 }
@@ -132,15 +158,29 @@ export function templateFromPlan(r: PlanResult, units: Units, custom: Exercise[]
   const created: Exercise[] = [];
   const exercises: TemplateExercise[] = r.exercises.map(e => {
     let lib = e.exerciseId ? all.find(x => x.id === e.exerciseId) : undefined;
-    if (!lib) lib = all.find(x => x.name.toLowerCase() === e.name.toLowerCase());
-    if (!lib) {
-      lib = { id: `custom-${uid()}`, name: e.name, muscles: [e.mode === 'time' ? 'cardio' : 'full'], equipment: e.mode === 'time' ? 'cardio' : 'dumbbell', type: e.mode === 'time' ? 'cardio' : 'strength', defaultStep: 5, custom: true, timed: e.mode === 'time' };
-      created.push(lib);
-    }
-    const mode = e.mode === 'time' || (lib.timed && !e.reps) ? 'time' : 'reps';
-    return { exerciseId: lib.id, name: lib.name, targetSets: Math.max(1, e.sets || 1), targetReps: mode === 'reps' ? (e.reps || '8-12') : '', restSec: Math.max(0, e.restSec ?? (mode === 'time' ? 0 : 90)), mode, targetSec: mode === 'time' ? Math.max(10, e.seconds || 60) : undefined, note: [e.note, e.weight ? `start ${e.weight} ${units}` : ''].filter(Boolean).join(' · ') || undefined };
+    if (!lib) lib = [...all, ...created].find(x => x.name.toLowerCase() === e.name.toLowerCase());
+    const timed = e.mode === 'time';
+    if (!lib) { lib = newExercise(e.name, { timed, sides: !!e.perSide, noWeight: !!e.noWeight, muscle: e.muscle, equipment: e.equipment }); created.push(lib); }
+    const mode = timed || (lib.timed && !e.reps && !e.repsBySet?.length) ? 'time' : 'reps';
+    const fmt = cleanFormat({ sides: e.perSide || undefined, noLoad: e.noWeight || undefined, style: e.style, repsBySet: e.repsBySet, weightBySet: e.weightBySet, group: e.group, groupKind: e.groupKind, groupSec: e.groupMinutes ? e.groupMinutes * 60 : undefined }, mode);
+    const sets = fmt.repsBySet?.length || fmt.weightBySet?.length || Math.max(1, e.sets || 1);
+    return { exerciseId: lib.id, name: lib.name, targetSets: sets, targetReps: mode === 'reps' ? (fmt.repsBySet?.join('-') || e.reps || '8-12') : '', restSec: Math.max(0, e.restSec ?? (mode === 'time' ? 0 : 90)), mode, targetSec: mode === 'time' ? Math.max(5, e.seconds || 60) : undefined,
+      note: [e.note, e.weight && !fmt.weightBySet ? `start ${e.weight} ${units}` : ''].filter(Boolean).join(' · ') || undefined, ...(e.weight && mode === 'reps' && !fmt.weightBySet && !fmt.noLoad ? { startWeight: e.weight } : {}), ...fmt };
   });
-  return { template: { id: uid(), name: r.name || 'Coach plan', exercises: foldWarmups(exercises), order: 99 }, created };
+  return { template: { id: uid(), name: r.name || 'Arvy’s plan', exercises: settleGroups(foldWarmups(exercises)), order: 99 }, created };
+}
+
+const MUSCLE_IDS: Muscle[] = ['chest', 'back', 'shoulders', 'biceps', 'triceps', 'quads', 'hamstrings', 'glutes', 'calves', 'core', 'cardio', 'full'];
+const EQUIPMENT_IDS: Equipment[] = ['barbell', 'dumbbell', 'machine', 'cable', 'bodyweight', 'kettlebell', 'band', 'cardio'];
+/** An exercise the library doesn't have, described as well as the plan and its name allow (a kettlebell move is a
+ *  kettlebell move, a stretch has no weight, a chop is done one side at a time). */
+export function newExercise(name: string, o: { timed?: boolean; sides?: boolean; noWeight?: boolean; muscle?: string; equipment?: string } = {}): Exercise {
+  const n = name.toLowerCase();
+  const said = EQUIPMENT_IDS.find(x => x === o.equipment);
+  const equipment: Equipment = said || (/kettlebell|\bkb\b/.test(n) ? 'kettlebell' : /barbell|ez[- ]bar/.test(n) ? 'barbell' : /dumbbell|\bdb\b/.test(n) ? 'dumbbell' : /cable|pulldown|pushdown/.test(n) ? 'cable' : /\bband/.test(n) ? 'band' : /machine|leg press|smith/.test(n) ? 'machine'
+    : /treadmill|bike|rower|row erg|elliptical|run\b|walk|jog|sprint|stair|skip/.test(n) ? 'cardio' : o.noWeight || o.timed || isNoLoad({ name }) ? 'bodyweight' : 'dumbbell');
+  const muscle = MUSCLE_IDS.find(x => x === o.muscle) || (equipment === 'cardio' ? 'cardio' : /plank|dead bug|crunch|chop|pallof|hollow|carry|twist|rotation|halo|windmill/.test(n) ? 'core' : 'full');
+  return { id: `custom-${uid()}`, name, muscles: [muscle], equipment, type: equipment === 'cardio' ? 'cardio' : 'strength', defaultStep: 5, custom: true, ...(o.timed ? { timed: true } : {}), ...(o.sides || hasSides({ name }) ? { unilateral: true } : {}) };
 }
 
 /** A lift's light warm-up set written as its own item ("1 light set of one-arm row") folds into the working sets
@@ -152,9 +192,9 @@ export function foldWarmups(list: TemplateExercise[]): TemplateExercise[] {
     const e = list[i];
     // the same lift coming back soon with working sets (a pull-up or a stretch may sit between)
     const next = list.slice(i + 1, i + 4).find(x => x.exerciseId === e.exerciseId && x.mode !== 'time' && x.targetSets > 1);
-    const light = e.mode !== 'time' && e.targetSets === 1 && !!next;
+    const light = e.mode !== 'time' && e.targetSets === 1 && !e.group && !e.repsBySet && !!next && !next.group;
     if (light && next) {
-      next.note = ['1 light set first (~50%)', next.note].filter(Boolean).join(' · ');
+      if (!/1 light set first/.test(next.note || '')) next.note = ['1 light set first (~50%)', next.note].filter(Boolean).join(' · ');   // said once, however many warm-up lines there were
       continue;
     }
     out.push(e);

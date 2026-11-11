@@ -20,9 +20,10 @@ import { loadEvents } from '../calendar/store';
 import { addCashRow, removeCashRow } from '../money/receipts';
 import { loadAccounts, loadMonths, monthKey, recategorize, visibleMonths } from '../money/lib';
 import { CATEGORIES } from '../money/categories';
-import type { PlanExercise } from '../../lib/ai';
 import { daysAgo, loadCustomExercises, loadTemplates, loadWorkouts, startFromTemplate, templateFromPlan } from '../workout/store';
-import { fmtSec, workoutKey, type Template } from '../workout/types';
+import { workoutKey, type Template } from '../workout/types';
+import { planExercisesFrom, sessionLines } from '../workout/format';
+import { findExercise } from '../workout/library';
 import type { Budget } from '../money/types';
 
 type AnyIn = Record<string, unknown>;
@@ -470,22 +471,14 @@ async function logPeriod(input: AnyIn): Promise<Change> {
 // ───────────── training: a session Arvy planned (what the Coach chat's buttons did) ─────────────
 async function planWorkout(input: AnyIn): Promise<Change> {
   const units = (getPass()?.user.settings?.units as string) === 'kg' ? 'kg' : 'lb';
-  const num = (v: unknown, lo: number, hi: number) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= lo ? Math.min(n, hi) : undefined; };
-  const exs: PlanExercise[] = (Array.isArray(input.exercises) ? input.exercises : []).map(x => x as AnyIn).map(e => {
-    const seconds = num(e.seconds, 5, 7200);
-    const reps = typeof e.reps === 'number' ? String(e.reps) : str(e.reps, 12);
-    const mode: PlanExercise['mode'] = seconds && !reps ? 'time' : 'reps';
-    const weight = Number(e.weight) > 0 ? Math.round(Number(e.weight) * 10) / 10 : undefined;
-    return { name: str(e.name, 80), mode, sets: num(e.sets, 1, 12) ?? 1, reps: reps || undefined, seconds, restSec: num(e.rest_seconds, 0, 600) ?? (mode === 'time' ? 0 : 90), note: str(e.cue, 140) || undefined, weight };
-  }).filter(e => e.name).slice(0, 24);
+  const exs = planExercisesFrom(input.exercises);
   if (!exs.length) throw new Refuse('The session has no exercises.');
   const [custom, templates, workouts] = await Promise.all([loadCustomExercises(), loadTemplates(), loadWorkouts(daysAgo(28))]);
   const { template, created } = templateFromPlan({ name: str(input.name, 60) || 'Arvy’s plan', exercises: exs }, units, custom);
   const todayKey = dayKey();
   const doneToday = workouts.some(w => w.date === todayKey && (w.endedAt || !w.discarded));
   const when = ['today', 'tomorrow', 'template', 'now'].includes(String(input.when)) ? String(input.when) : doneToday ? 'tomorrow' : 'today';
-  const shown = template.exercises.slice(0, 14).map(e => `  ${e.name}: ${e.targetSets} × ${e.mode === 'time' ? fmtSec(e.targetSec || 60) : e.targetReps}${e.note ? ` (${e.note})` : ''}`);
-  if (template.exercises.length > 14) shown.push(`  …and ${template.exercises.length - 14} more`);
+  const shown = sessionLines(template.exercises, id => [...custom, ...created].find(e => e.id === id) || findExercise(id || ''));
   if (created.length) shown.push(`  New exercises: ${created.map(e => e.name).join(', ')}`);
   const newExercises = created.map(e => ({ kind: 'exercise', key: e.id, data: { ...e, custom: true } }));
   const snap = async (kind: string, keys: string[]) => (keys.length ? snapshot(kind, keys) : (async () => undefined) as Undo);

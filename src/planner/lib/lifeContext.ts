@@ -16,6 +16,12 @@ const calDate = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n
 const pick = <T extends object, K extends keyof T>(o: T, keys: K[]): Partial<T> => { const out: Partial<T> = {}; for (const k of keys) if (o[k] !== undefined && o[k] !== '' && o[k] !== null) out[k] = o[k]; return out; };
 
 type AnyDoc = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+/** The formats a session used ("superset", "pyramid", "intervals"…), or ["straight sets"]: what Arvy rotates between. */
+const formatsOf = (exercises: AnyDoc[]): string[] => {
+  const f = new Set<string>();
+  for (const e of exercises) { if (e.group) f.add(e.groupKind || 'superset'); if (e.style) f.add(e.style); }
+  return f.size ? [...f] : ['straight sets'];
+};
 
 export interface LifeContext { today: string; weekday: string; units: string; [k: string]: unknown }
 
@@ -50,7 +56,8 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
   const sessions = ws.map((w, i) => i < fullSessions
     ? { date: w.date, name: w.name, minutes: w.endedAt ? Math.round((new Date(w.endedAt).getTime() - new Date(w.startedAt).getTime()) / 60000) : undefined, notes: w.notes || undefined, prs: w.prs?.length ? w.prs : undefined,
         coach_review: w.review || undefined, next_prescription: w.next || undefined,
-        exercises: (w.exercises || []).map((e: AnyDoc) => ({ name: e.name, ...(/assist|counter[- ]?weight/i.test(e.name || '') ? { weight_means: 'assistance (counterweight): less is harder, progress = less assist' } : {}), target: e.targetReps, rest: e.restSec, sets: (e.sets || []).filter((s: AnyDoc) => s.done).map(fmtSet), my_note: e.comment || undefined, plan_cue: e.note || undefined })) }
+        formats: formatsOf(w.exercises || []),
+        exercises: (w.exercises || []).map((e: AnyDoc) => ({ name: e.name, ...(e.group ? { block: `${e.groupKind || 'superset'} ${e.group}` } : {}), ...(e.style ? { style: e.style } : {}), ...(/assist|counter[- ]?weight/i.test(e.name || '') ? { weight_means: 'assistance (counterweight): less is harder, progress = less assist' } : {}), target: e.targetReps, rest: e.restSec, sets: (e.sets || []).filter((s: AnyDoc) => s.done).map(fmtSet), my_note: e.comment || undefined, plan_cue: e.note || undefined })) }
     : { date: w.date, name: w.name, exercises: (w.exercises || []).map((e: AnyDoc) => `${e.name}: ${(e.sets || []).filter((s: AnyDoc) => s.done).map(fmtSet).join(', ')}${e.comment ? ` ("${e.comment}")` : ''}`) });
   const inProgress = workouts.map(d => d.data).find(w => w && !w.endedAt && !w.discarded);
 
@@ -76,7 +83,7 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
     habit_marks_last_14_days: Object.fromEntries(habitLogs.map(l => [l.key, Object.fromEntries(Object.entries(l.data || {}).map(([id, m]) => [habitNames[id] || id, m]))])),
     meals_recent: meals.map(d => d.data).filter(Boolean).map((m: AnyDoc) => ({ date: m.date, time: m.time, name: m.name, kcal: m.totals?.kcal, protein: m.totals?.protein, note: m.note || undefined })),
     calendar_next_14_days: (() => { const evs = events.map(d => d.data as CalEvent).filter(e => e && e.title); const out: Record<string, string[]> = {}; for (let i = 0; i < 14; i++) { const date = calDate(i); const on = eventsOn(evs, date); if (on.length) out[date] = on.map(e => `${e.time ? e.time + ' ' : 'all day: '}${e.title} (${e.who})`); } return out; })(),
-    workout_templates: templates.map(d => d.data).filter(t => t && !t.archived).map((t: AnyDoc) => ({ name: t.name, days: t.days, planned_for_date: t.plannedFor, focus: t.focus, minutes: t.minutes, exercises: (t.exercises || []).map((e: AnyDoc) => `${e.name} ${e.targetSets}x${e.targetReps || e.targetSec + 's'}`) })),
+    workout_templates: templates.map(d => d.data).filter(t => t && !t.archived).map((t: AnyDoc) => ({ name: t.name, days: t.days, planned_for_date: t.plannedFor, focus: t.focus, minutes: t.minutes, formats: formatsOf(t.exercises || []), exercises: (t.exercises || []).map((e: AnyDoc) => `${e.group ? `[${e.groupKind || 'superset'} ${e.group}] ` : ''}${e.name} ${e.style && e.repsBySet ? `${e.style} ${e.repsBySet.join('-')}` : `${e.targetSets}x${e.targetReps || e.targetSec + 's'}`}${e.style === 'intervals' ? ` intervals, rest ${e.restSec}s` : ''}`) })),
     workout_in_progress: inProgress ? { name: inProgress.name, started: inProgress.startedAt, exercises: (inProgress.exercises || []).map((e: AnyDoc) => ({ name: e.name, sets: (e.sets || []).map((s: AnyDoc) => `${fmtSet(s)}${s.done ? '' : ' (not done)'}`), my_note: e.comment || undefined })) } : undefined,
     training_state,
     workouts_recent_full_then_condensed: sessions,

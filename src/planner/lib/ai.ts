@@ -5,6 +5,7 @@ import { memoryContext } from './memory';
 import { lifeContext } from './lifeContext';
 import { isDemo } from './app';
 import { demoInvoke } from '../demo/store';
+import { planExercisesFrom } from '../features/workout/format';
 
 // `sway` is set by the food feature's sway guide (features/food/sway), not by the food estimate itself.
 export interface FoodItem { name: string; portion: string; grams?: number; kcal: number; protein: number; carbs: number; fat: number; confidence?: 'high' | 'medium' | 'low'; sway?: 'go' | 'ease' | 'neutral' }
@@ -126,7 +127,10 @@ export async function parseStatement(text: string, hint?: string): Promise<State
   return { rows: Array.isArray(r.rows) ? r.rows : [], period: r.period, account_type: r.account_type, opening_balance: typeof r.opening_balance === 'number' ? r.opening_balance : undefined };
 }
 
-export interface PlanExercise { name: string; exerciseId?: string; mode: 'reps' | 'time'; sets: number; reps?: string; seconds?: number; restSec: number; note?: string; weight?: number }
+/** One exercise of a planned session. The last line is its format (features/workout/format.ts): per side, no weight,
+ *  a superset / circuit / EMOM / AMRAP block, a pyramid or countdown, and what a brand-new exercise is. */
+export interface PlanExercise { name: string; exerciseId?: string; mode: 'reps' | 'time'; sets: number; reps?: string; seconds?: number; restSec: number; note?: string; weight?: number;
+  perSide?: boolean; noWeight?: boolean; group?: string; groupKind?: 'superset' | 'circuit' | 'emom' | 'amrap'; groupMinutes?: number; repsBySet?: number[]; weightBySet?: number[]; style?: 'pyramid' | 'countdown' | 'ladder' | 'drop' | 'intervals'; muscle?: string; equipment?: string }
 export interface PlanResult { name: string; exercises: PlanExercise[]; warmup_note?: string }
 /** A coach's written plan → structured exercises (ids from the library when they match). */
 export async function planFromText(text: string, library: { id: string; name: string }[], units: string): Promise<PlanResult> {
@@ -145,8 +149,14 @@ export interface DayPlan { review: string; questions: DayPlanQuestion[]; tomorro
 /** After a session: Arvy's review, two questions, and tomorrow's session (with the whole planner as context). */
 export async function dayPlan(library: { id: string; name: string }[], units: string, answers?: Record<string, string>): Promise<DayPlan> {
   const context = await lifeContext(units);
-  const r = await invoke<DayPlan>({ action: 'dayplan', context, library: library.slice(0, 200), units, answers });
-  return { review: String(r.review || ''), questions: Array.isArray(r.questions) ? r.questions.filter(q => q && q.id && Array.isArray(q.choices)) : [], tomorrow: { ...(r.tomorrow && typeof r.tomorrow === 'object' ? r.tomorrow : { name: '', focus: '', minutes: 0, why: '' }), exercises: Array.isArray(r.tomorrow?.exercises) ? r.tomorrow.exercises : [] }, answers, madeAt: new Date().toISOString() };
+  // Arvy writes the session in its own exercise shape (supersets, pyramids, intervals…); here it becomes the planner's
+  type Raw = { review?: string; questions?: DayPlanQuestion[]; tomorrow?: { name?: string; focus?: string; minutes?: number; why?: string; exercises?: unknown } | null };
+  const r = await invoke<Raw>({ action: 'dayplan', context, library: library.slice(0, 220).map(l => l.name), units, answers }, 'planner-arvy');
+  const t = r.tomorrow && typeof r.tomorrow === 'object' ? r.tomorrow : null;
+  // the demo's canned plan is already in the planner's shape
+  const exercises = Array.isArray(t?.exercises) && t.exercises.some(e => e && typeof e === 'object' && 'mode' in e) ? t.exercises as PlanExercise[] : planExercisesFrom(t?.exercises);
+  return { review: String(r.review || ''), questions: Array.isArray(r.questions) ? r.questions.filter(q => q && q.id && Array.isArray(q.choices)) : [],
+    tomorrow: { name: String(t?.name || ''), focus: String(t?.focus || ''), minutes: Number(t?.minutes) || 0, why: String(t?.why || ''), exercises }, answers, madeAt: new Date().toISOString() };
 }
 
 export interface BriefHints { words: string[]; priorities: string[]; aGame: string; stress: string; stressResponse: string; excited: string; noticed?: string; madeAt?: string }
