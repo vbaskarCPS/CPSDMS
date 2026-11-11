@@ -1,11 +1,11 @@
 // supabase/functions/planner-arvy/index.ts — Arvy, the planner's assistant (said "AR-vee").
 //
 //   POST { token, action: 'turn', messages: [Claude messages], context: ArvyCtx }
-//        → { content: [text | tool_use blocks], stop_reason, web?: { searches, sources }, raw? }
+//        → { content: [text | tool_use blocks], stop_reason, web?: { searches, sources, found }, raw? }
 //        One step of the conversation. When Claude wants a tool, the app runs it (the planner's data and the code that
 //        reads it live in the app), sends the results back as the next turn, and so on until there's an answer.
 //        The web is the one tool that runs here (Anthropic searches, inside the same call): `web` says what was
-//        searched and which pages the answer cites, and `raw` is the step as Claude wrote it, for the app to send back
+//        searched, which pages the answer cites and which the search found, and `raw` is the step as Claude wrote it, for the app to send back
 //        when the question isn't finished (tools.ts webOut).
 //   POST { token, action: 'speak', text } → { audio }   MP3, base64: Arvy's voice (a woman's for Rosh, a man's for Vijay)
 //   POST { token, action: 'dayplan', context, units, library: [exercise names], answers? } → { review, questions, tomorrow }
@@ -193,8 +193,8 @@ Deno.serve(async req => {
     }
     if (!web) return json(out);
     const shown = webOut(out.content);
-    if (!shown.searches.length) return json({ content: shown.content, stop_reason: out.stop_reason });
-    return json({ content: shown.content, stop_reason: out.stop_reason, web: { searches: shown.searches, sources: shown.sources },
+    if (!shown.searched) return json({ content: shown.content, stop_reason: out.stop_reason });
+    return json({ content: shown.content, stop_reason: out.stop_reason, web: { searches: shown.searches, sources: shown.sources, found: shown.found },
       ...(out.stop_reason === 'tool_use' ? { raw: webRaw(out.content) } : {}) });
   } catch (e) {
     console.error('planner-arvy:', action, e instanceof Error ? e.message : String(e));

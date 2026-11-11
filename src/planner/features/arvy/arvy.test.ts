@@ -168,19 +168,52 @@ describe('Arvy and the web', () => {
       { type: 'text', text: 'Physios suggest gentle movement over rest, and knee-to-chest stretches. Which one?' },
       ANSWER[9],
     ]);
+    expect(out.searched).toBe(true);
     expect(out.searches).toEqual(['lower back pain stretches physiotherapy']);
     expect(out.sources).toEqual([{ url: 'https://www.nhs.uk/back', title: 'Back pain - NHS' }, { url: 'https://www.csp.org.uk/back', title: 'Back exercises | CSP' }]);
   });
   it('an answer that didn’t search is passed on as it came', () => {
     const plain = [{ type: 'text', text: 'Added eggs!' }, { type: 'tool_use', id: 't1', name: 'add_shopping_items', input: {} }];
-    expect(webOut(plain)).toEqual({ content: plain, searches: [], sources: [] });
-    expect(webOut([])).toEqual({ content: [], searches: [], sources: [] });
+    expect(webOut(plain)).toEqual({ content: plain, searched: false, searches: [], sources: [], found: [] });
+    expect(webOut([])).toEqual({ content: [], searched: false, searches: [], sources: [], found: [] });
   });
   it('keeps what was said before the search when nothing came after it', () => {
     const out = webOut([{ type: 'text', text: 'Checking your training first.' }, SEARCH, RESULT, { type: 'tool_use', id: 't1', name: 'coaching_context', input: {} }]);
     expect(out.content[0]).toEqual({ type: 'text', text: 'Checking your training first.' });
     expect(out.content).toHaveLength(2);
     expect(out.sources).toEqual([]);
+    expect(out.found).toEqual([{ url: 'https://www.nhs.uk/back', title: 'Back pain - NHS' }]);   // nothing cited: the page the search found
+  });
+  it('results that arrive a step after their search still count as a search (asked for alongside one of the app’s tools)', () => {
+    // step 1: the search is asked for with coaching_context, and not run yet
+    const asked = webOut([SEARCH, { type: 'tool_use', id: 't1', name: 'coaching_context', input: {} }]);
+    expect(asked).toMatchObject({ searched: true, searches: ['lower back pain stretches physiotherapy'], sources: [] });
+    // step 2: only the results, then the answer
+    const answered = webOut([RESULT, { type: 'thinking', thinking: '' }, { type: 'text', text: 'Start gently', citations: [cite('https://www.nhs.uk/back', 'Back pain - NHS')] }, { type: 'text', text: '.' }]);
+    expect(answered).toEqual({ content: [{ type: 'text', text: 'Start gently.' }], searched: true, searches: [], sources: [{ url: 'https://www.nhs.uk/back', title: 'Back pain - NHS' }], found: [{ url: 'https://www.nhs.uk/back', title: 'Back pain - NHS' }] });
+    expect(webRaw([RESULT, { type: 'thinking', thinking: '' }, { type: 'tool_use', id: 't2', name: 'offer_choices', input: {} }]).map(b => b.type)).toEqual(['web_search_tool_result', 'tool_use']);
+  });
+  it('…and those results go back to Claude with the search they belong to, two messages apart', () => {
+    const turn = [
+      { role: 'user', content: 'look up back stretches' },
+      { role: 'assistant', content: [SEARCH, { type: 'tool_use', id: 't1', name: 'coaching_context', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '{}' }] },
+      { role: 'assistant', content: [RESULT, { type: 'tool_use', id: 't2', name: 'offer_choices', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: '{"shown":true}' }] },
+    ];
+    const kept = cleanMessages(turn, 'night', true)!;
+    expect((kept[1].content as unknown[])[0]).toBe(SEARCH);
+    expect((kept[3].content as unknown[])[0]).toBe(RESULT);
+  });
+  it('a later step that cites the earlier search, with no search of its own, is put together the same way', () => {
+    const out = webOut([{ type: 'thinking', thinking: '' }, { type: 'text', text: 'Option 1 is ' }, { type: 'text', text: 'knee rolls and pelvic tilts', citations: [cite('https://www.nhs.uk/back', 'Back pain - NHS')] }, { type: 'text', text: '. Which one?' }]);
+    expect(out).toEqual({ content: [{ type: 'text', text: 'Option 1 is knee rolls and pelvic tilts. Which one?' }], searched: true, searches: [], sources: [{ url: 'https://www.nhs.uk/back', title: 'Back pain - NHS' }], found: [] });
+  });
+  it('the pages found come from every search in turn, not only the first', () => {
+    const res = (id: string, site: string) => ({ type: 'web_search_tool_result', tool_use_id: id, content: [1, 2, 3, 4, 5].map(i => ({ type: 'web_search_result', url: `https://${site}/p${i}`, title: `${site} ${i}`, encrypted_content: 'x' })) });
+    const out = webOut([res('a', 'webmd.example'), res('b', 'nhs.example'), { type: 'tool_use', id: 't1', name: 'offer_choices', input: {} }]);
+    expect(out.found.map(s => s.url)).toEqual(['https://webmd.example/p1', 'https://nhs.example/p1', 'https://webmd.example/p2', 'https://nhs.example/p2', 'https://webmd.example/p3', 'https://nhs.example/p3']);
+    expect(webOut([{ type: 'web_search_tool_result', tool_use_id: 'a', content: { type: 'web_search_tool_result_error', error_code: 'max_uses_exceeded' } }]).found).toEqual([]);   // a failed search found nothing
   });
   it('lists at most six sources', () => {
     const many = [SEARCH, RESULT, { type: 'text', text: 'x', citations: Array.from({ length: 9 }, (_, i) => cite(`https://site${i}.example/p`, `Site ${i}`)) }];

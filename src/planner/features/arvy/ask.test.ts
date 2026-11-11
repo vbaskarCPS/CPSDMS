@@ -37,6 +37,25 @@ describe('asking Arvy', () => {
     expect(t.used).toEqual(['web_search']);
     expect(invoke.mock.calls[0][0].context.v).toBe(4);
   });
+  it('a reply that cites nothing still shows the pages the search found; cited pages win when there are any', async () => {
+    const FOUND = [1, 2, 3, 4, 5].map(i => ({ title: `Page ${i}`, url: `https://site${i}.example/` }));
+    // two pages of one site are one link
+    invoke.mockResolvedValueOnce({ stop_reason: 'end_turn', web: { searches: ['x'], sources: [], found: [{ title: 'A', url: 'https://www.spine.example/a' }, { title: 'B', url: 'https://spine.example/b' }, FOUND[0]] }, content: [{ type: 'text', text: 'Here.' }] });
+    expect((await ask([], 'look it up', '/', false)).sources).toEqual([{ title: 'A', url: 'https://www.spine.example/a' }, FOUND[0]]);
+    invoke.mockResolvedValueOnce({ stop_reason: 'end_turn', web: { searches: ['x'], sources: [], found: FOUND }, content: [{ type: 'text', text: 'Here you go.' }] });
+    expect((await ask([], 'look it up', '/', false)).sources).toEqual(FOUND.slice(0, 4));
+    invoke.mockResolvedValueOnce({ stop_reason: 'end_turn', web: { searches: ['x'], sources: [FOUND[4]], found: FOUND }, content: [{ type: 'text', text: 'Here you go.' }] });
+    expect((await ask([], 'look it up', '/', false)).sources).toEqual([FOUND[4]]);
+  });
+  it('says it’s checking the web while a search asked for alongside a look-up runs', async () => {
+    const steps: string[][] = [];
+    invoke.mockResolvedValueOnce({ stop_reason: 'tool_use', web: { searches: ['x'], sources: [], found: [] }, raw: [SEARCH, { type: 'tool_use', id: 't0', name: 'shopping_list', input: {} }], content: [{ type: 'tool_use', id: 't0', name: 'shopping_list', input: {} }] })
+      .mockResolvedValueOnce({ stop_reason: 'end_turn', web: { searches: [], sources: [WEB.sources[0]], found: [] }, content: [{ type: 'text', text: 'Found it.' }] });
+    const t = await ask([], 'find a recipe', '/shop', false, s => steps.push(s));
+    expect(steps).toEqual([['web_search', 'shopping_list']]);
+    expect(t.used).toEqual(['web_search', 'shopping_list']);
+    expect(t.sources).toEqual([WEB.sources[0]]);
+  });
   it('buttons asked for before the reply was written: Arvy is asked to write it', async () => {
     invoke.mockResolvedValueOnce({ stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't1', name: 'offer_choices', input: { options: [{ label: 'A' }, { label: 'B' }] } }] })
       .mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'A or B?' }] });

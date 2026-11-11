@@ -191,16 +191,21 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   const used: string[] = [];
   let navigate: string | undefined;
   const sources: Source[] = [];   // the web pages the answer cites, shown under it
+  const found: Source[] = [];     // the pages the searches turned up: shown when the answer cites none
   let choices: Choice[] = [];     // buttons to pick from (offer_choices)
   let searched = false;           // the web was searched in this question: from then on every change waits for Confirm
-  const extras = () => ({ ...(sources.length ? { sources } : {}), ...(choices.length ? { choices } : {}) });
+  // one link a site (two pages of the same site would show as the same name twice); found pages only when none is cited
+  const site = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
+  const pages = () => { const list = sources.length ? sources : found; return list.filter((s, i) => list.findIndex(x => site(x.url) === site(s.url)) === i).slice(0, sources.length ? 6 : 4); };
+  const extras = () => ({ ...(pages().length ? { sources: pages() } : {}), ...(choices.length ? { choices } : {}) });
   for (let step = 0; step < MAX_STEPS; step++) {
-    const r = await invoke<{ content: Block[]; stop_reason: string; raw?: Block[]; web?: { searches?: string[]; sources?: Source[] } }>({ action: 'turn', messages: msgs, context: ctx }, 'planner-arvy');
+    const r = await invoke<{ content: Block[]; stop_reason: string; raw?: Block[]; web?: { searches?: string[]; sources?: Source[]; found?: Source[] } }>({ action: 'turn', messages: msgs, context: ctx }, 'planner-arvy');
     const content = Array.isArray(r.content) ? r.content : [];
     if (r.web) {
       if (!searched) used.push('web_search');
       searched = true;
-      for (const s of r.web.sources || []) if (/^https?:\/\//i.test(s?.url || '') && !sources.some(x => x.url === s.url) && sources.length < 6) sources.push({ url: s.url, title: String(s.title || '') });
+      const keep = (to: Source[], from?: Source[]) => { for (const s of from || []) if (/^https?:\/\//i.test(s?.url || '') && !to.some(x => x.url === s.url) && to.length < 6) to.push({ url: s.url, title: String(s.title || '') }); };
+      keep(sources, r.web.sources); keep(found, r.web.found);
     }
     const calls = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
     const text = content.filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text').map(b => b.text).join('\n').trim();
@@ -208,7 +213,7 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
     if (r.stop_reason !== 'tool_use' || !calls.length) return { reply: text || (changes.length ? 'Done!' : 'Hmm, I lost my train of thought there. Try asking again?'), navigate, used, changes, ...extras() };
     // the reply came with its buttons and nothing else to run: that's the answer, no need to go back to Claude
     if (text && choices.length && calls.every(c => c.name === 'offer_choices')) return { reply: text, navigate, used, changes, ...extras() };
-    onStep?.(calls.map(c => c.name));
+    onStep?.([...(r.web ? ['web_search'] : []), ...calls.map(c => c.name).filter(n => n !== 'offer_choices')]);   // a search asked for alongside a look-up runs during the next step
     const res = new Map<string, { result: unknown; error?: boolean; navigate?: string }>();
     const about = { question, path };
     // look-ups together; changes one at a time, in order (each one's Undo snapshot is taken just before it)
