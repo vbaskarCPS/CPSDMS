@@ -37,6 +37,11 @@ const fakeSb = `
         ? { data: { ok: false, problems: ['It’s an office flat (AFSL): its value is set by the office. Change it on the edit screen if it is really wrong.'] }, error: null }
         : { data: { ok: true, date: '2026-11-10', worker: { cn: 'I1479', name: 'Kevontae Ragguette' }, cart: { id: 's7', workers: ['Kevontae Ragguette'] }, job: { id: 't1', client: 'Ron Gee', type: 'Sale', amount: 180, paid_by: 'Cash' },
             change: { amount: { from: 180, to: 250 }, paid_by: { from: 'Cash', to: 'Prepaid' } }, ask: args.p_change, patch: { price: 250, display_price: 'RJ250.00', payment_method: 'Prepaid', payment_breakdown: { Prepaid: 250 } }, stamp: 's', notes: [] }, error: null };
+      if (fn === 'benny_payouts') return { data: { live: true, date: '2026-11-10', carts: [{ cart_id: 's1', cn: 'I1167', workers: ['David Nsapu'], paid_out: false, jobs: 1, gross: 210, collected: { cash: 0, cheque: 0, prepaid: 210 } }], summary: { open: 1, paid_out: 4 } }, error: null };
+      if (fn === 'benny_check_payouts') return s.noPayouts
+        ? { data: { ok: false, problems: ['No open payout is free of cash and cheque: 6 are already paid out, Kevontae has $180.00 cash to count.'] }, error: null }
+        : { data: { ok: true, date: '2026-11-10', carts: [{ cart_id: 's1', cn: 'I1167', workers: ['David Nsapu'], jobs: 1, gross: 210, collected: { prepaid: 210 } }, { cart_id: 's2', cn: 'I1013', workers: ['Michael Asiegbunam'], jobs: 2, gross: 602, collected: { card: 392, prepaid: 210 } }],
+            to_count: [{ workers: ['Kevontae Ragguette'], cash: 180, cheque: 0 }], no_jobs: [['Favour Anugawo']], paid_out: 4 }, error: null };
       if (fn === 'benny_map') return { data: { maps: ['SURREY #1'], highlight: ['SRY01'], pins: [{ lat: 1, lng: 2, label: 'x', route: 'SRY01' }] }, error: null };
       return { data: null, error: { message: 'no such function ' + fn } }; } }; }`;
 const r = await build({ entryPoints: ['supabase/functions/benny-assist/index.ts'], bundle: true, format: 'esm', write: false, logLevel: 'silent',
@@ -69,7 +74,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 22); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 24); assert(!('roles' in state.lastAsk.tools[0]));
 console.log('1 start the day: card + map ✓');
 
 // 2. a change with a problem makes no card
@@ -226,6 +231,26 @@ state.script = [turn(use('propose_job_change', { worker: 'Kevontae', job: 't1', 
 a = await ask('make rons 250', {});   // a tab opened before this card existed
 assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
 console.log('5h logsheet jobs: looked up and checked, a card for admins and route managers, nothing saved by the server ✓');
+
+// 5i. payouts: looked up and lined up for a super admin; the server pays nobody; route managers don't get the tools
+state.role = 'admin';
+state.script = [turn(use('propose_payouts', {})), say('2 payouts are lined up. Kevontae has $180 cash to count. Tap Open to go through them.')];
+a = await ask('close all the payouts that dont have cash or cheque', { cards: ['payouts'] });
+assert.equal(a.body.proposal.kind, 'payouts'); assert.deepEqual(a.body.proposal.check.carts.map(c => c.cn), ['I1167', 'I1013']); assert.equal(a.body.map, null);
+assert.deepEqual(fns().filter(f => /payout/.test(f)), ['benny_check_payouts'], 'the server only checks: it has nothing that pays out');
+state.noPayouts = true;
+state.script = [turn(use('propose_payouts', {})), say('None to line up: 6 are paid out and Kevontae has cash to count.')];
+a = await ask('close the no cash payouts', { cards: ['payouts'] });
+assert.equal(a.body.proposal, null); state.noPayouts = false;
+state.script = [turn(use('propose_payouts', {})), say('Tap Open.')];
+a = await ask('close the no cash payouts', {});   // a tab opened before this card existed
+assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
+state.role = 'rm';
+state.script = [turn(use('propose_payouts', {})), say('I can’t do that.')];
+a = await ask('close the payouts', { screen: 'rm', rm_manager: 'rm_me', cards: ['payouts'] });
+assert(!state.lastAsk.tools.some(t => ['payouts', 'propose_payouts'].includes(t.name))); assert.equal(a.body.proposal, null); assert(!fns().includes('benny_check_payouts'));
+state.role = 'admin';
+console.log('5i payouts: lined up on a card for super admins, nobody paid out by the server ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

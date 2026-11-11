@@ -11,7 +11,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Check, Mic, Send, Sparkles, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { askBenny, canListen, demoDue, listen, primeVoice, readDemo, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
-import { describe, doProposal, emailsPreset, type BennyProposal } from '../../lib/bennyActions';
+import { describe, doProposal, emailsPreset, payoutsStart, type BennyProposal } from '../../lib/bennyActions';
 import { BennyMapCard } from './BennyMap';
 import './benny.css';
 
@@ -139,6 +139,16 @@ export const Benny: React.FC<{
       settle(i, { state: 'dismissed', text: 'Opened Send booking emails with these routes. Nothing is sent until you press Send there.' });
       stopSpeaking(); setOpen(false);
       nav('/app/bookings/emails', { state: { benny: emailsPreset(p.check) } });
+      return;
+    }
+    // payouts: nothing is paid out here either. The payout screen opens at the first one; the person presses Finalize on
+    // each and it moves to the next.
+    if (p.kind === 'payouts') {
+      const href = payoutsStart(p.check);
+      if (!href) { settle(i, { state: 'failed', text: 'There’s no payout to open. Ask me again.' }); return; }
+      settle(i, { state: 'dismissed', text: `Opened the first of ${p.check.carts.length}. Nobody is paid out until you press Finalize there.` });
+      stopSpeaking(); setOpen(false);
+      nav(href);
       return;
     }
     setDoing(i);

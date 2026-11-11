@@ -1,5 +1,5 @@
 import { describe as d, it, expect } from 'vitest';
-import { bookingSaved, buildBennyPlan, describe, dollars, emailsPreset, jobUpdates, stopPin, type JobCheck, type StartDayCheck } from './bennyActions';
+import { bookingSaved, buildBennyPlan, describe, dollars, emailsPreset, jobUpdates, payoutsStart, stopPin, type JobCheck, type PayoutsCheck, type StartDayCheck } from './bennyActions';
 import { planProblems } from './startSession';
 import { defaultRateCard } from './rateCard';
 import type { RosterRow } from './workerbook';
@@ -138,6 +138,21 @@ d('describe', () => {
     expect(Object.keys(jobUpdates({ ...job.patch, items: undefined, ...({ cc_full_number: 'x', customer_phone: 'y' } as object) }))).toEqual(['price', 'displayPrice', 'paymentMethod', 'paymentBreakdown']);
     expect(dollars(210)).toBe('$210.00');
   });
+  it('the payouts card lists who is lined up and who is left, and says nobody is paid out from it', () => {
+    const pay: PayoutsCheck = { ok: true, date: '2026-11-10', paid_out: 4,
+      carts: [{ cart_id: 's1', cn: 'I1167', workers: ['David Nsapu'], jobs: 1, gross: 210, collected: { card: 0, cash: 0, billed: 0, cheque: 0, prepaid: 210, e_transfer: 0 } },
+        { cart_id: 's2', cn: 'I1013', workers: ['Michael Asiegbunam', 'Kyle Pitt'], jobs: 2, gross: 602, collected: { card: 392, cash: 0, billed: 0, cheque: 0, prepaid: 210, e_transfer: 0 } }],
+      to_count: [{ workers: ['Kevontae Ragguette'], cash: 180, cheque: 0 }, { workers: ['Nathan Clark'], cash: 20, cheque: 75.5 }], no_jobs: [['Favour Anugawo']] };
+    expect(describe({ kind: 'payouts', check: pay })).toEqual({ title: 'Go through 2 payouts with no cash or cheque', action: 'Open', lines: [
+      'David · 1 job · $210.00 prepaid', 'Michael + Kyle · 2 jobs · $392.00 card, $210.00 prepaid',
+      'Left for a hand count: Kevontae ($180.00 cash); Nathan ($20.00 cash, $75.50 in cheques)', 'No jobs, left open: Favour',
+      'Nothing is paid out from here: each one opens on the payout screen and you press Finalize. It then moves to the next.'] });
+    const one = describe({ kind: 'payouts', check: { ...pay, carts: [pay.carts[0]], to_count: undefined, no_jobs: undefined } });
+    expect(one.title).toBe('Go through 1 payout with no cash or cheque'); expect(one.lines).toHaveLength(2);
+    // the card opens the payout screen at the first, with the rest behind it
+    expect(payoutsStart(pay)).toBe('/app/workerbook/days/2026-11-10/payouts/I1167?queue=I1013&at=1&of=2');
+    expect(payoutsStart({ ...pay, carts: [] })).toBeNull();
+  });
   it('an order card lists the stops in order, with how each was found, and what it replaces', () => {
     const c = describe({ kind: 'stops', check: order });
     expect(c.title).toBe('Pickup order: 3 stops');
@@ -167,6 +182,7 @@ d('describe', () => {
       booking: { kind: 'booking', check: { ok: true, booking, change: { status: { from: 'open', to: 'done' } }, patch: { status: 'done' }, ask: { status: 'done' }, stamp: 't' } },
       booking_emails: { kind: 'booking_emails', check: emails },
       pin: { kind: 'pin', check: pin }, stops: { kind: 'stops', check: order },
+      payouts: { kind: 'payouts', check: { ok: true, date: '2026-11-10', carts: [{ cart_id: 's1', cn: 'I1', workers: ['A B'], jobs: 1, gross: 10, collected: { prepaid: 10 } }] } },
       job: { kind: 'job', check: { ok: true, date: '2026-11-10', worker: { cn: 'I1', name: 'A B' }, cart: { id: 's1', workers: ['A B'] }, job: { id: 't1', type: 'Sale', amount: 10, paid_by: 'Cash' },
         change: { amount: { from: 10, to: 20 } }, ask: { amount: 20 }, patch: { price: 20, display_price: '20.00', payment_method: 'Cash', payment_breakdown: { Cash: 20 } }, stamp: 't' } },
     };

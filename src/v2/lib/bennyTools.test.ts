@@ -16,13 +16,13 @@ describe('the Benny’s tools', () => {
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);
     expect(rm).toEqual(expect.arrayContaining(['live_team', 'logsheet', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'propose_job_change', 'propose_pin', 'propose_stops', 'report_bug', 'log_request', 'show_map']));
-    for (const no of ['find_people', 'day', 'maps', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails']) expect(rm).not.toContain(no);
+    for (const no of ['find_people', 'day', 'maps', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails', 'payouts', 'propose_payouts']) expect(rm).not.toContain(no);
     expect(toolsFor('admin').map(t => t.name)).toEqual(TOOLS.map(t => t.name));
     expect(toolsFor('rm')[0]).not.toHaveProperty('roles');   // only what the model's API accepts is sent
   });
   it('changes become cards; lookups don’t', () => {
     const kinds = TOOLS.map(t => { const c = toolCall(t.name, {}, ctx); return c && 'fn' in c && c.card ? c.card.kind : null; }).filter(Boolean);
-    expect(kinds.sort()).toEqual(['booking', 'booking_emails', 'give_route', 'job', 'partner', 'pin', 'solo', 'start_day', 'stops']);
+    expect(kinds.sort()).toEqual(['booking', 'booking_emails', 'give_route', 'job', 'partner', 'payouts', 'pin', 'solo', 'start_day', 'stops']);
     const start = toolCall('propose_start_day', { assign: [], team_mode: 'whatever' }, ctx);
     expect(start && 'fn' in start && start.card?.team_mode).toBe('roster');
     expect(toolCall('propose_start_day', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
@@ -57,6 +57,13 @@ describe('the Benny’s tools', () => {
     }
     const t = TOOLS.find(x => x.name === 'propose_job_change')!;
     expect((t.input_schema as { properties: { paid_by: { enum: string[] } } }).properties.paid_by.enum).toEqual(['cash', 'cheque', 'e-transfer', 'prepaid', 'billed']);   // never a card or a split
+  });
+  it('payouts are looked up and lined up for the center, by super admins only; nobody is paid out by the Benny', () => {
+    expect(toolCall('payouts', {}, ctx)).toEqual({ fn: 'benny_payouts', args: { p_center: 'c1' } });
+    expect(toolCall('propose_payouts', { pay: 100, worker: 'x' }, ctx)).toEqual({ fn: 'benny_check_payouts', args: { p_center: 'c1' }, card: { kind: 'payouts' } });   // nothing to pass: no amount, no worker
+    expect(system(ctx, 'admin')).toContain('You never pay anyone out and never mark a logsheet paid');
+    expect(system(ctx, 'admin')).toContain('lining up payouts to finalize');
+    expect(system(ctx, 'rm')).not.toContain('propose_payouts');
   });
   it('pins and orders belong to the map that is open, and a pin has exactly one place', () => {
     expect(toolCall('propose_pin', { label: ' Lunch ', route: 'NDEL32', worker: 'Kyle', here: true }, ctx))
