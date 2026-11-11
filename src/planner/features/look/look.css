@@ -1,0 +1,112 @@
+/* src/planner/features/look/look.css — what a look changes besides the colours (those are the planner's own
+   variables, set on <html> by apply.ts): the background behind every screen, the shape and edge of cards and
+   buttons, how headings and the small labels are set, and the cut edge of the bottom bar.
+   Every rule here waits for a mark on <html> that apply.ts only puts there when a look, a hand choice or a picture
+   is on, so with nothing chosen the planner is exactly as planner.css draws it:
+     html[data-look="…"]   a look is on             html[data-look-hand]  shapes or type chosen by hand, no look
+     html[data-look-bg]    there is a background    html[data-look-bar]   the bar has a cut edge
+     html[data-look-dark]  the look is a dark one, whatever the phone is set to
+   The marks sit inside :where(), which gives them no weight: these rules win over planner.css only by coming after
+   it (main.tsx loads this file last), and a screen's own, more particular rules still win over these. */
+
+/* ── the background: a real element fixed behind everything, its layers inside (apply.ts fills them) ── */
+.look-bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; contain: strict; }
+.look-bg__paper, .look-bg__grain, .look-bg__veil { position: absolute; inset: 0; }
+.look-bg__veil { background: var(--bg); }
+/* the corner scene stands on the bottom bar; the strip hangs from the top of the screen */
+.look-bg__corner { position: absolute; right: 2px; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--look-bar-edge-h, 0px) - 1px); width: 170px; height: 120px; }
+.look-bg__top { position: absolute; left: 0; right: 0; top: 0; opacity: .92; }
+/* <html> keeps the page colour; <body> lets the background show through */
+html[data-look-bg] body { background: transparent; }
+
+/* room for the strip above the first heading, and for the corner scene under the last card */
+:where(html[data-look-bg]) .pl-page { padding-top: calc(env(safe-area-inset-top) + 16px + var(--look-top-h, 0px)); padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 24px + var(--look-corner-h, 0px) * .88); }
+:where(html[data-look-bg]) .pl-page--bare { padding-bottom: 24px; }
+/* words that sit straight on the page (the greeting, a page's title, a line under it) get a soft halo of the page
+   colour, so a leaf or a star passing behind them never gets in the way of reading */
+:where(html[data-look-bg]) .pl-page > :is(header, h1, h2, h3, p, .pl-eyebrow, .pl-muted, .pl-hint) { text-shadow: 0 0 1px var(--bg), 0 0 4px var(--bg), 0 0 9px var(--bg), 0 0 14px var(--bg); }
+:where(html[data-look-bg]) .pl-page > header :is(.pl-btn, .pl-chip) { text-shadow: none; }
+/* the small boxes that used to be a tint of the page become paper, so what's on them is read against paper */
+:where(html[data-look-bg]) .pl-stat { background: var(--bg-2); border: 1px solid var(--line); }
+:where(html[data-look-bg]) .pl-seg { background: color-mix(in srgb, var(--ink) 7%, var(--bg-2)); }
+
+/* ── cards: corner (--radius does that already), edge and shadow ── */
+:where(html[data-look], html[data-look-hand]) :is(.pl-card, .hub-tile, .pl-tile) { border: var(--look-card-border, 1px solid var(--line)); box-shadow: var(--look-card-shadow, none); outline: var(--look-card-outline, none); outline-offset: var(--look-card-outline-offset, 0); }
+/* a filled card keeps its own colour to the edge; its stitches and its frame are drawn in its own ink */
+:where(html[data-look], html[data-look-hand]) .pl-card--accent { border-color: transparent; box-shadow: var(--look-card-shadow-accent, none); outline-color: color-mix(in srgb, var(--accent-ink) 45%, transparent); }
+/* the quieter words on a filled card: a look's button colour is often a mid tone, where the planner's usual 70% of
+   the ink would be too faint to read */
+:where(html[data-look]) .pl-card--accent :is(.pl-muted, .pl-eyebrow) { color: color-mix(in srgb, var(--accent-ink) 86%, transparent); }
+:where(html[data-look], html[data-look-hand]) :is(.hub-tile, .pl-tile):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:where(html[data-look], html[data-look-hand]) .hub-tile__icon { border-radius: var(--look-inner-radius, 15px); }
+:where(html[data-look], html[data-look-hand]) .pl-stat { border-radius: var(--look-inner-radius, 12px); }
+:where(html[data-look], html[data-look-hand]) .pl-sheet > div { border-radius: var(--look-sheet-radius, 20px) var(--look-sheet-radius, 20px) 0 0; }
+:where(html[data-look], html[data-look-hand]) .arvy-sheet { border-radius: var(--look-sheet-radius, 20px); }
+
+/* ── buttons and the boxes you type in ── */
+:where(html[data-look], html[data-look-hand]) .pl-btn { border-radius: var(--look-btn-radius, 14px); border-width: var(--look-btn-border, 1px); }
+:where(html[data-look], html[data-look-hand]) .pl-btn--small { border-radius: var(--look-btn-radius-sm, 10px); }
+:where(html[data-look], html[data-look-hand]) .pl-btn--primary { border-color: var(--look-btn-edge, transparent); }
+:where(html[data-look], html[data-look-hand]) .pl-btn:where(:not(.pl-btn--ghost)) { box-shadow: var(--look-btn-shadow, none); }
+:where(html[data-look], html[data-look-hand]) .pl-card--accent .pl-btn { box-shadow: none; }
+:where(html[data-look], html[data-look-hand]) .pl-input { border-radius: var(--look-field-radius, 14px); }
+:where(html[data-look], html[data-look-hand]) .pl-chip { border-radius: var(--look-chip-radius, 999px); }
+:where(html[data-look], html[data-look-hand]) .pl-seg { border-radius: var(--look-seg-radius, 12px); }
+:where(html[data-look], html[data-look-hand]) .pl-seg button { border-radius: max(1px, calc(var(--look-seg-radius, 12px) - 3px)); }
+:where(html[data-look], html[data-look-hand]) .pl-score__btn { border-radius: var(--look-btn-radius-sm, 10px); }
+
+/* ── type ── */
+/* a face that comes in one weight is shown as it was drawn, never thickened by the browser */
+:where(html[data-look], html[data-look-hand]) { font-synthesis: style; font-variant-ligatures: var(--look-liga, normal); }
+:where(html[data-look], html[data-look-hand]) :is(h1, h2, h3) { font-weight: var(--look-head-weight, 700); letter-spacing: var(--look-head-spacing, -0.01em); text-transform: var(--look-head-caps, none); }
+:where(html[data-look], html[data-look-hand]) h1 { font-size: calc(28px * var(--look-head-scale, 1)); }
+:where(html[data-look], html[data-look-hand]) h2 { font-size: calc(20px * var(--look-head-scale, 1)); }
+:where(html[data-look], html[data-look-hand]) h3 { font-size: calc(16px * var(--look-head-scale, 1)); }
+:where(html[data-look], html[data-look-hand]) .hub-tile__text b { font-weight: var(--look-head-weight, 700); letter-spacing: var(--look-head-spacing, -0.01em); text-transform: var(--look-head-caps, none); font-size: calc(21px * var(--look-head-scale, 1)); }
+/* big figures that stand on their own (a streak, a timer, the day's calories: here and in the sections' own
+   stylesheets) line up and stand on the line; a heading face whose numbers dip or dance hands them to the text face */
+:where(html[data-look], html[data-look-hand]) :is(.pl-stat__value, .pl-bigtimer, .pl-ring__text b, .plan-avg b, .night-unwind__time, .fd-hero__big, .fd-kcal, .fd-totals b, .wo-rest__time, .wo-timed__time, .wo-clock__time, .hb-law__n) { font-family: var(--look-num-font, var(--serif)); font-variant-numeric: lining-nums tabular-nums; }
+/* the small labels above headings: written by hand in the looks that have a handwriting face */
+:where(html[data-look]) .pl-eyebrow { font-family: var(--look-label-font, inherit); font-size: var(--look-label-size, 12px); font-weight: var(--look-label-weight, 600); letter-spacing: var(--look-label-spacing, 0.08em); text-transform: var(--look-label-caps, uppercase); color: var(--look-label-ink, var(--ink-2)); }
+
+/* ── the bottom bar: its upper edge cut into scallops, a zigzag or a wave ── */
+:where(html[data-look-bar]) .pl-nav { border-top-color: transparent; }
+:where(html[data-look-bar]) .pl-nav::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: var(--look-bar-edge-h, 0px); background: var(--look-bar-edge) left bottom / var(--look-bar-edge-size) repeat-x; pointer-events: none; }
+
+/* ── the chat's little drawings keep their hairline of light on a dark look, and lose it on a light one, whatever
+   the phone itself is set to (us.css goes by the phone) ── */
+:where(html[data-look]:not([data-look-dark])) .st { filter: none; }
+:where(html[data-look-dark]) .st { filter: drop-shadow(0 0 .7px rgba(255, 255, 255, .6)); }
+
+/* ── the Theme Studio (Studio.tsx) ── */
+.lk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 520px) { .lk-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* one look, drawn small in its own colours, type and shapes (the tile carries that look's variables) */
+.lk-tile { position: relative; display: flex; flex-direction: column; min-height: 148px; padding: 0; border: 2px solid var(--lk-ring, transparent); border-radius: 16px; overflow: hidden; background: var(--bg); color: var(--ink); cursor: pointer; text-align: left; font-family: var(--sans); box-shadow: 0 0 0 1px color-mix(in srgb, #808080 30%, transparent); -webkit-tap-highlight-color: transparent; }
+.lk-tile.is-on { --lk-ring: var(--lk-on); box-shadow: 0 0 0 2px var(--lk-on); }
+.lk-tile__paper { position: absolute; inset: 0; }
+.lk-tile__body { position: relative; flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; padding: 10px; }
+.lk-tile__card { background: var(--bg-2); border: var(--look-card-border, 1px solid var(--line)); border-radius: min(var(--radius), 18px); box-shadow: var(--look-card-shadow, none); outline: var(--look-card-outline, none); outline-offset: -4px; padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+.lk-tile__name { font-family: var(--serif); font-weight: var(--look-head-weight, 700); letter-spacing: var(--look-head-spacing, -0.01em); text-transform: var(--look-head-caps, none); font-size: calc(17px * var(--look-head-scale, 1)); line-height: 1.12; overflow-wrap: anywhere; }
+.lk-tile__line { font-size: 11.5px; line-height: 1.25; color: var(--ink-2); }
+.lk-tile__btn { align-self: flex-start; padding: 4px 11px; font-size: 11.5px; font-weight: 700; background: var(--accent); color: var(--accent-ink); border-radius: min(var(--look-btn-radius, 14px), 12px); box-shadow: var(--look-btn-shadow, none); }
+.lk-tile__mark { position: absolute; top: 7px; right: 7px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--lk-on); color: var(--lk-on-ink); box-shadow: 0 1px 4px rgba(0, 0, 0, .3); }
+.lk-tile__mark svg { width: 15px; height: 15px; }
+.lk-more { border: 0; padding: 0; }
+.lk-more > summary { display: flex; align-items: center; justify-content: space-between; min-height: 48px; cursor: pointer; font-weight: 700; list-style: none; }
+.lk-more > summary::-webkit-details-marker { display: none; }
+.lk-more[open] > summary svg { transform: rotate(180deg); }
+.lk-row { display: flex; align-items: center; gap: 10px; min-height: 48px; }
+.lk-row > span { flex: 1; min-width: 0; font-weight: 600; }
+.lk-row select.pl-input { flex: 0 0 min(218px, 64%); width: auto; min-width: 0; padding: 0 10px; font-size: 15px; text-overflow: ellipsis; }
+.lk-row small { display: block; font-weight: 400; color: var(--ink-2); font-size: 12.5px; }
+.lk-slider { display: flex; flex-direction: column; gap: 2px; }
+.lk-slider > span { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.lk-slider input[type=range] { width: 100%; height: 44px; margin: 0; accent-color: var(--accent); background: transparent; }
+.lk-check { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.lk-check input { flex: none; width: 22px; height: 22px; accent-color: var(--accent); }
+.lk-pic { display: flex; align-items: center; gap: 12px; }
+.lk-pic__thumb { flex: none; width: 64px; height: 88px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg) center / cover no-repeat; display: grid; place-items: center; color: var(--ink-2); }
+.lk-pic__thumb svg { width: 24px; height: 24px; }
+.lk-pic__btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.lk-next { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }

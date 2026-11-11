@@ -27,6 +27,7 @@ import { cycleRoutes } from './features/cycle';
 import { Calendar } from './features/calendar/Calendar';
 import { Shopping } from './features/shop/Shopping';
 import { ArvyLog } from './features/arvy/ArvyLog';
+import { Studio, useLook } from './features/look';
 import './features/shop/shop.css';
 import './features/calendar/calendar.css';
 
@@ -73,6 +74,8 @@ export function PlannerApp() {
   useEffect(() => { if (pass) void refreshMe(); }, [pass?.token]); // eslint-disable-line react-hooks/exhaustive-deps
   // new page → top of it
   useEffect(() => { window.scrollTo(0, 0); }, [location.pathname]);
+  // …and in the look that page wears: the whole planner's, or its section's own (features/look)
+  useLook(location.pathname);
 
   if (!pass) {
     return (
@@ -108,6 +111,7 @@ export function PlannerApp() {
         <Route path="/shop" element={<Shopping pass={pass} />} />
         <Route path="/settings" element={<Settings pass={pass} />} />
         <Route path="/settings/arvy-log" element={<ArvyLog />} />
+        <Route path="/settings/look" element={<Studio pass={pass} />} />
         <Route path="/us" element={<OpenUs />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
