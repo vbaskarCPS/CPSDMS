@@ -38,6 +38,7 @@ describe('the Benny’s tools', () => {
     expect(system(ctx, 'admin')).toContain('call crew_stats for that day first');
     expect(system(ctx, 'admin')).toContain('snake order');
     expect(system(ctx, 'admin')).toContain('prebook-heavy maps');
+    expect(system(ctx, 'admin')).toContain('you.can_manage is false');   // "me" who can't take a crew is said first, not after three questions
     expect(system(ctx, 'rm')).not.toContain('crew_stats');   // route managers don't have it, so they aren't told about it
   });
   it('a booking change sends only what was asked, and only super admins are told they can', () => {

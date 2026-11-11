@@ -46,6 +46,7 @@ const fakeSb = `
         ? { data: { ok: false, problems: ['No open payout is free of cash and cheque: 6 are already paid out, Kevontae has $180.00 cash to count.'] }, error: null }
         : { data: { ok: true, date: '2026-11-10', carts: [{ cart_id: 's1', cn: 'I1167', workers: ['David Nsapu'], jobs: 1, gross: 210, collected: { prepaid: 210 } }, { cart_id: 's2', cn: 'I1013', workers: ['Michael Asiegbunam'], jobs: 2, gross: 602, collected: { card: 392, prepaid: 210 } }],
             to_count: [{ workers: ['Kevontae Ragguette'], cash: 180, cheque: 0 }], paid_out: 4 }, error: null };
+      if (fn === 'benny_map' && !args.p_prebooks && !args.p_routes) return { data: { maps: args.p_maps, highlight: [], pins: [] }, error: null };   // maps only: nothing picked out
       if (fn === 'benny_map') return { data: { maps: ['SURREY #1'], highlight: ['SRY01'], pins: [{ lat: 1, lng: 2, label: 'x', route: 'SRY01' }] }, error: null };
       return { data: null, error: { message: 'no such function ' + fn } }; } }; }`;
 const r = await build({ entryPoints: ['supabase/functions/benny-assist/index.ts'], bundle: true, format: 'esm', write: false, logLevel: 'silent',
@@ -79,6 +80,11 @@ assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
 assert.equal(state.lastAsk.tools.length, 25); assert(!('roles' in state.lastAsk.tools[0]));
+// the Benny drew the maps itself and picked no routes out: the plan's routes are highlighted all the same
+state.script = [turn(use('show_map', { maps: ['NORTH VANCOUVER #1'], title: 'Tomorrow' })),
+  turn(use('propose_start_day', { date: '2026-11-11', assign: [{ managers: ['me'], maps: ['NORTH VANCOUVER #1'] }] })), say('Tap Start the day to do it.')];
+a = await ask('start tomorrow with me on north van 1');
+assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19'], 'the plan’s routes'); assert.equal(a.body.map.title, 'Tomorrow');
 console.log('1 start the day: card + map ✓');
 
 // 2. a change with a problem makes no card

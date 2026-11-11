@@ -6,7 +6,19 @@ vi.mock('../bookings/mbMap', () => ({ BLANK_STYLE: {} }));
 vi.mock('../../../lib/rmMapStyle', () => ({ RM_STYLE: '', tidyRmBaseMap: () => undefined }));
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { bennyFeatures, hullOutline, MapFrame, outlinesFor } from './BennyMap';
+import { bennyFeatures, hullOutline, mapCaption, MapFrame, outlinesFor } from './BennyMap';
+
+describe('mapCaption', () => {
+  const pin = { lat: 49, lng: -123, label: 'x', route: null };
+  it('says what is on the map, and never "0 routes highlighted"', () => {
+    expect(mapCaption({ maps: ['A'], highlight: ['R1', 'R2'], pins: [] })).toBe('2 routes highlighted');
+    expect(mapCaption({ maps: ['A'], highlight: ['R1'], pins: [pin] })).toBe('1 route highlighted · 1 pin');
+    expect(mapCaption({ maps: ['A'], highlight: [], pins: [pin, pin] })).toBe('2 pins');
+    expect(mapCaption({ maps: ['A'], highlight: [], pins: [{ ...pin, n: 1 }, { ...pin, n: 2 }] })).toBe('2 stops in order');
+    expect(mapCaption({ maps: ['A', 'B'], highlight: [], pins: [] })).toBe('2 maps');     // maps only: nothing picked out
+    expect(mapCaption({ maps: ['A'], highlight: [], pins: [] })).toBe('1 map');
+  });
+});
 
 describe('bennyFeatures', () => {
   const shapes = [

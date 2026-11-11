@@ -144,6 +144,9 @@ Deno.serve(async req => {
       // (the same for a start-day card that splits the crew between managers: an older tab would start the day without the crews)
       const old = proposal && (!shows.has(proposal.kind) || (proposal.kind === 'start_day' && (proposal.check as { crews?: boolean })?.crews === true && !shows.has('crews')));
       if (old) return json({ reply: 'I can do that, but this screen is on an older version of the app. Refresh the page, then ask me again.', map: null, proposal: null });
+      // a plan's map shows the plan's routes, also when the Benny drew the maps and picked no routes out
+      const plan = proposal?.kind === 'start_day' ? mapOf(proposal) as { maps: unknown; highlight: unknown[] } : null;
+      if (map && plan?.highlight.length && !((map as { highlight?: unknown[] }).highlight || []).length) map = { ...(map as object), maps: plan.maps, highlight: plan.highlight };
       return json({ reply, map: map ? { ...(map as object), title: mapTitle } : mapOf(proposal), proposal });
     };
     for (let round = 0; round < 8; round++) {
