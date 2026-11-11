@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-11-rv-bevel", "date": "2026-11-11", "title": "A gold bevelled edge on the RV button",
+    "lines": ["The big button now has an embossed gold rim, like the edge of a coin."] },
   { "id": "2026-11-11-rv-button", "date": "2026-11-11", "title": "The big button wears the RV logo",
     "lines": ["The word under it is gone and the button is bigger: it now carries the RV-and-sparkle mark, the same drawing as your notification icon.", "It works as before: tap for Arvy, hold to talk, drag up and right for your chat."] },
   { "id": "2026-11-11-pictures", "date": "2026-11-11", "title": "Send Arvy a screenshot of an appointment",
