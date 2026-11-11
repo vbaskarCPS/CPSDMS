@@ -37,6 +37,8 @@ describe('the Benny’s tools', () => {
     expect(Object.keys((t.input_schema as { properties: { assign: { items: { properties: object } } } }).properties.assign.items.properties)).toEqual(['managers', 'maps', 'routes', 'workers']);
     expect(system(ctx, 'admin')).toContain('call crew_stats for that day first');
     expect(system(ctx, 'admin')).toContain('snake order');
+    expect(system(ctx, 'admin')).toContain('halves.worse');   // the split comes ready-made from the database, not from the model's counting
+    expect(system(ctx, 'admin')).toContain('don’t count the split out yourself'.replace('’', "'"));
     expect(system(ctx, 'admin')).toContain('prebook-heavy maps');
     expect(system(ctx, 'admin')).toContain('you.can_manage is false');   // "me" who can't take a crew is said first, not after three questions
     expect(system(ctx, 'rm')).not.toContain('crew_stats');   // route managers don't have it, so they aren't told about it
