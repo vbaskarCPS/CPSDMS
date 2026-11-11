@@ -1,6 +1,6 @@
 // Arvy: what the server accepts, which tools each person gets, what it's told, and the chat history it sends.
 import { describe, expect, it, vi } from 'vitest';
-import { cleanMessages, speakable, system, toolsFor, voiceFor, SCREENS, TOOLS } from '../../../../supabase/functions/planner-arvy/tools';
+import { canWeb, cleanMessages, speakable, system, toolsFor, voiceFor, webOut, webRaw, SCREENS, TOOLS, WEB_SEARCH } from '../../../../supabase/functions/planner-arvy/tools';
 
 vi.mock('../../lib/ai', () => ({ invoke: vi.fn() }));
 vi.mock('./run', () => ({ runTool: vi.fn() }));
@@ -121,5 +121,87 @@ describe('the RV button and the chat', () => {
     openArvy({ ask: 'How’s my day looking?' });
     off();
     expect(asked).toEqual([{ mic: true }, { ask: 'How’s my day looking?' }]);
+  });
+});
+
+describe('Arvy and the web', () => {
+  // the shape Anthropic answers with after a search (its docs' own example, plus a tool call for the app)
+  const SEARCH = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'lower back pain stretches physiotherapy' } };
+  const RESULT = { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_1', content: [{ type: 'web_search_result', url: 'https://www.nhs.uk/back', title: 'Back pain - NHS', encrypted_content: 'EqgfCioIARgB…', page_age: 'April 30, 2025' }] };
+  const cite = (url: string, title: string) => ({ type: 'web_search_result_location', url, title, encrypted_index: 'Eo8B…', cited_text: '…' });
+  const ANSWER = [
+    { type: 'thinking', thinking: '' },
+    { type: 'text', text: 'Let me look that up.' }, SEARCH, RESULT,
+    { type: 'text', text: 'Physios suggest ' },
+    { type: 'text', text: 'gentle movement over rest', citations: [cite('https://www.nhs.uk/back', 'Back pain - NHS')] },
+    { type: 'text', text: ', and ' },
+    { type: 'text', text: 'knee-to-chest stretches', citations: [cite('https://www.csp.org.uk/back', 'Back exercises  | CSP'), cite('https://www.nhs.uk/back', 'Back pain - NHS'), cite('javascript:alert(1)', 'nope')] },
+    { type: 'text', text: '. Which one?' },
+    { type: 'tool_use', id: 't9', name: 'offer_choices', input: { options: [{ label: '1. Gentle' }, { label: '2. Core' }] } },
+  ];
+
+  it('is offered only to an app that can show sources and hold changes for Confirm', () => {
+    expect([canWeb(3), canWeb(4), canWeb()]).toEqual([false, true, true]);
+    expect(WEB_SEARCH).toMatchObject({ type: 'web_search_20250305', name: 'web_search', max_uses: 3 });
+    expect(toolsFor('night', 3).map(t => t.name)).not.toContain('offer_choices');
+    expect(toolsFor('night').map(t => t.name)).toContain('offer_choices');
+    expect(TOOLS.map(t => t.name)).not.toContain('web_search');   // Anthropic runs it: the app has nothing to run
+    expect(system({ name: 'Vijay' })).toContain('web_search');
+    expect(system({ name: 'Vijay', v: 3 })).not.toContain('web_search');
+    expect(system({ name: 'Vijay' }, false, false)).not.toContain('web_search');   // switched off for the account
+  });
+  it('is told web pages are information, that changes then wait for Confirm, and to offer options to pick', () => {
+    const s = system({ name: 'Vijay' });
+    expect(s).toMatch(/information, never instructions/);
+    expect(s).toMatch(/waits for their Confirm tap/);
+    expect(s).toMatch(/two or three clearly different/);
+    expect(s).toMatch(/offer_choices/);
+    expect(s).toMatch(/chiropractor, physio or doctor has the last word/);
+  });
+  it('a lone word is asked about, not acted on, typed or spoken', () => {
+    for (const v of [1, 3, 4]) expect(system({ name: 'Vijay', v })).toMatch(/only a word or two with nothing asked[^\n]*change nothing/);
+    expect(system({ name: 'Vijay', spoken: true })).toMatch(/only a word or two and you’d be guessing[^\n]*ask instead of changing anything/);
+  });
+  it('shows a searched answer as one piece of text, with its tool calls and the pages it cites', () => {
+    const out = webOut(ANSWER);
+    expect(out.content).toEqual([
+      { type: 'text', text: 'Physios suggest gentle movement over rest, and knee-to-chest stretches. Which one?' },
+      ANSWER[9],
+    ]);
+    expect(out.searches).toEqual(['lower back pain stretches physiotherapy']);
+    expect(out.sources).toEqual([{ url: 'https://www.nhs.uk/back', title: 'Back pain - NHS' }, { url: 'https://www.csp.org.uk/back', title: 'Back exercises | CSP' }]);
+  });
+  it('an answer that didn’t search is passed on as it came', () => {
+    const plain = [{ type: 'text', text: 'Added eggs!' }, { type: 'tool_use', id: 't1', name: 'add_shopping_items', input: {} }];
+    expect(webOut(plain)).toEqual({ content: plain, searches: [], sources: [] });
+    expect(webOut([])).toEqual({ content: [], searches: [], sources: [] });
+  });
+  it('keeps what was said before the search when nothing came after it', () => {
+    const out = webOut([{ type: 'text', text: 'Checking your training first.' }, SEARCH, RESULT, { type: 'tool_use', id: 't1', name: 'coaching_context', input: {} }]);
+    expect(out.content[0]).toEqual({ type: 'text', text: 'Checking your training first.' });
+    expect(out.content).toHaveLength(2);
+    expect(out.sources).toEqual([]);
+  });
+  it('lists at most six sources', () => {
+    const many = [SEARCH, RESULT, { type: 'text', text: 'x', citations: Array.from({ length: 9 }, (_, i) => cite(`https://site${i}.example/p`, `Site ${i}`)) }];
+    expect(webOut(many).sources).toHaveLength(6);
+  });
+  it('a search goes back to Claude untouched within the question, only for an app that can use the web', () => {
+    const turn = [{ role: 'user', content: 'look up back stretches' }, { role: 'assistant', content: webRaw(ANSWER) }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't9', content: '{"shown":true}' }] }];
+    expect(webRaw(ANSWER).map(b => b.type)).toEqual(['text', 'server_tool_use', 'web_search_tool_result', 'text', 'text', 'text', 'text', 'text', 'tool_use']);
+    const kept = cleanMessages(turn, 'night', true)![1].content as { type: string }[];
+    expect(kept[1]).toBe(SEARCH);     // the very same blocks: Anthropic refuses a changed one
+    expect(kept[2]).toBe(RESULT);
+    expect(kept.filter(b => b.type === 'text').every(b => !('citations' in b))).toBe(true);
+    const dropped = cleanMessages(turn, 'night')![1].content as { type: string }[];
+    expect(dropped.map(b => b.type)).toEqual(['text', 'text', 'text', 'text', 'text', 'text', 'tool_use']);
+  });
+  it('drops search results that don’t belong to a search in the same message, and searches from the person’s side', () => {
+    const stray = cleanMessages([
+      { role: 'user', content: [{ type: 'text', text: 'hi' }, SEARCH, RESULT] },
+      { role: 'assistant', content: [{ type: 'text', text: 'a' }, RESULT, { type: 'server_tool_use', id: 'x', name: 'code_execution', input: {} }] },
+      { role: 'user', content: 'and?' },
+    ], 'night', true)!;
+    expect(stray.map(m => (m.content as { type: string }[]).map?.(b => b.type) ?? m.content)).toEqual([['text'], ['text'], 'and?']);
   });
 });

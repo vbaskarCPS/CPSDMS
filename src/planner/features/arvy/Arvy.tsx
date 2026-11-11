@@ -31,6 +31,9 @@ function Rich({ text }: { text: string }) {
     : l.trim() ? <p key={i}>{parts(l)}</p> : null)}</>;
 }
 
+/** A page's site, for its link under a reply: "nhs.uk". */
+const siteOf = (url: string): string => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return 'source'; } };
+
 const NOTE: Partial<Record<ChangeState, string>> = { cancelled: 'Cancelled', undone: 'Undone', failed: 'Didn’t work', expired: 'Not confirmed' };
 
 /** One change under a reply: what it does, and Undo or Confirm/Cancel. */
@@ -114,7 +117,7 @@ export function Arvy() {
     setLines([...before, asked]);
     try {
       const t = await ask(before, question, loc.pathname, spoken, tools => setStep(tools.map(n => TOOL_LABEL[n] || n).join(', ')));
-      setLines(cur => [...cur, { role: 'assistant', text: t.reply, at: new Date().toISOString(), used: t.used, ...(t.changes.length ? { changes: t.changes } : {}) }]);
+      setLines(cur => [...cur, { role: 'assistant', text: t.reply, at: new Date().toISOString(), used: t.used, ...(t.changes.length ? { changes: t.changes } : {}), ...(t.sources?.length ? { sources: t.sources } : {}), ...(t.choices?.length ? { choices: t.choices } : {}) }]);
       if (t.navigate && t.navigate !== loc.pathname) nav(t.navigate);
       if (spoken && !muted) speak(t.reply).catch(e => setError(`Couldn’t speak: ${e instanceof Error ? e.message : e}`));
     } catch (e) {
@@ -204,6 +207,13 @@ export function Arvy() {
               <div key={i} className={`arvy-msg ${l.role}`}>
                 {l.role === 'assistant' ? <Rich text={l.text} /> : l.text}
                 {l.changes?.map(c => <ChangeCard key={c.id} c={c} onAct={onAct} />)}
+                {!!l.sources?.length && (
+                  <div className="arvy-sources"><span>From the web</span>
+                    {l.sources.map(s => <a key={s.url} href={s.url} target="_blank" rel="noopener noreferrer" title={s.title}>{siteOf(s.url)}</a>)}
+                  </div>)}
+                {/* buttons to pick from, until they've answered */}
+                {!!l.choices?.length && i === lines.length - 1 && !busy && (
+                  <div className="arvy-chips arvy-choices">{l.choices.map(c => <button key={c.label} type="button" onClick={() => send(c.send || c.label, false)}>{c.label}</button>)}</div>)}
                 {l.role === 'assistant' && !l.old && (l.down
                   ? <div className="arvy-down-note">Thanks, noted in my log.</div>
                   : <button type="button" className="arvy-down" onClick={() => thumbsDown(i)} aria-label="This wasn’t helpful" title="Not helpful"><ThumbsDown aria-hidden /></button>)}

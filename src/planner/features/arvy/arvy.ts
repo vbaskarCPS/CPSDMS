@@ -10,14 +10,17 @@ import { runTool } from './run';
 import { prepare, Refuse, type Change, type Undo } from './act';
 import { logArvy } from './log';
 import { memoryContext } from '../../lib/memory';
-import { changeOf, speakable, TOOLS_VERSION, type Block, type Msg } from '../../../../supabase/functions/planner-arvy/tools';
+import { changeOf, speakable, TOOLS_VERSION, type Block, type Msg, type Source } from '../../../../supabase/functions/planner-arvy/tools';
 
 /** A change shown under Arvy's reply. done: made (Undo while this visit lasts); waiting: Confirm/Cancel. */
 export type ChangeState = 'done' | 'waiting' | 'cancelled' | 'undone' | 'failed' | 'expired';
 export interface ChangeView { id: string; lines: string[]; state: ChangeState; error?: string }
+/** A button under a reply: tapping it sends `send` (or the label) as their next message. */
+export interface Choice { label: string; send?: string }
 export interface ChatLine { role: 'user' | 'assistant'; text: string; at: string; used?: string[]; changes?: ChangeView[]; down?: boolean /* thumbs-down given */;
-  old?: boolean /* carried over from the Coach chat (chat.ts) */ }
-export interface Turn { reply: string; navigate?: string; used: string[]; changes: ChangeView[] }
+  old?: boolean /* carried over from the Coach chat (chat.ts) */;
+  sources?: Source[] /* the web pages the reply cites */; choices?: Choice[] /* buttons to pick from */ }
+export interface Turn { reply: string; navigate?: string; used: string[]; changes: ChangeView[]; sources?: Source[]; choices?: Choice[] }
 
 // What the panel can still do with a change: the Undo for a made one, or the worked-out change waiting for Confirm.
 // Kept for this visit only (they're functions); after a reload, waiting cards show as expired.
@@ -87,8 +90,10 @@ export async function undoChange(id: string, why?: { lines?: string[]; question?
   await u();
 }
 
-/** Run a change tool: work it out, then make it now or hold it for Confirm. What Claude is told back. */
-async function runChange(name: string, input: Record<string, unknown>, out: ChangeView[], about: { question?: string; path?: string } = {}): Promise<{ result: unknown; error?: boolean }> {
+/** Run a change tool: work it out, then make it now or hold it for Confirm. What Claude is told back.
+ *  `hold` = make it wait for Confirm whatever the tool: the question searched the web, and nothing a web page says may
+ *  change the planner without their tap. */
+async function runChange(name: string, input: Record<string, unknown>, out: ChangeView[], about: { question?: string; path?: string } = {}, hold = false): Promise<{ result: unknown; error?: boolean }> {
   let c: Change | null;
   try { c = await prepare(name, input); } catch (e) {
     if (e instanceof Refuse) {
@@ -99,7 +104,7 @@ async function runChange(name: string, input: Record<string, unknown>, out: Chan
   }
   if (!c) return { result: { error: `unknown tool ${name}` }, error: true };
   const id = newId();
-  if (c.confirm || changeOf(name) === 'confirm') {
+  if (c.confirm || hold || changeOf(name) === 'confirm') {
     waiting.set(id, c);
     out.push({ id, lines: c.lines, state: 'waiting' });
     return { result: { waiting_for_confirm: c.lines, note: 'Not done yet: a Confirm button is showing under your reply. Ask them to tap it.' } };
@@ -134,7 +139,7 @@ export const TOOL_LABEL: Record<string, string> = {
   add_cash_expense: 'the cash wallet', recategorize: 'the transactions',
   set_must: 'your must-dos', log_favourite_meal: 'your favourites', save_favourite: 'your favourites', set_food_targets: 'your food targets',
   create_habit: 'your habits', pause_habit: 'your habits', set_budget: 'the budget', log_cycle_day: 'your cycle', log_period: 'your cycle',
-  adjust_day: 'your day', change_routine: 'your routine',
+  adjust_day: 'your day', change_routine: 'your routine', offer_choices: 'your options', web_search: 'the web',
 };
 
 export function context(path: string, spoken: boolean) {
@@ -163,6 +168,20 @@ export function history(lines: ChatLine[]): Msg[] {
   return out.filter((m, i) => !(out[i + 1] && out[i + 1].role === m.role));
 }
 
+/** The buttons Arvy asked for (offer_choices), checked: 2 to 4, short, no repeats. Fewer than 2 = none. */
+export function choicesFrom(input: unknown): Choice[] {
+  const raw = (input as { options?: unknown })?.options;
+  const out: Choice[] = [];
+  for (const o of Array.isArray(raw) ? raw : []) {
+    const label = String((o as { label?: unknown })?.label ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    const send = String((o as { send?: unknown })?.send ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!label || out.some(c => c.label === label)) continue;
+    out.push({ label, ...(send && send !== label ? { send } : {}) });
+    if (out.length >= 4) break;
+  }
+  return out.length >= 2 ? out : [];
+}
+
 /** Ask Arvy. `onStep` says which tools are running, for the "looking at…" line. */
 export async function ask(lines: ChatLine[], question: string, path: string, spoken: boolean, onStep?: (tools: string[]) => void): Promise<Turn> {
   const changes: ChangeView[] = [];
@@ -171,18 +190,30 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   const ctx = { ...context(path, spoken), about: await aboutMe() };
   const used: string[] = [];
   let navigate: string | undefined;
+  const sources: Source[] = [];   // the web pages the answer cites, shown under it
+  let choices: Choice[] = [];     // buttons to pick from (offer_choices)
+  let searched = false;           // the web was searched in this question: from then on every change waits for Confirm
+  const extras = () => ({ ...(sources.length ? { sources } : {}), ...(choices.length ? { choices } : {}) });
   for (let step = 0; step < MAX_STEPS; step++) {
-    const r = await invoke<{ content: Block[]; stop_reason: string }>({ action: 'turn', messages: msgs, context: ctx }, 'planner-arvy');
+    const r = await invoke<{ content: Block[]; stop_reason: string; raw?: Block[]; web?: { searches?: string[]; sources?: Source[] } }>({ action: 'turn', messages: msgs, context: ctx }, 'planner-arvy');
     const content = Array.isArray(r.content) ? r.content : [];
+    if (r.web) {
+      if (!searched) used.push('web_search');
+      searched = true;
+      for (const s of r.web.sources || []) if (/^https?:\/\//i.test(s?.url || '') && !sources.some(x => x.url === s.url) && sources.length < 6) sources.push({ url: s.url, title: String(s.title || '') });
+    }
     const calls = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
     const text = content.filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text').map(b => b.text).join('\n').trim();
-    if (r.stop_reason !== 'tool_use' || !calls.length) return { reply: text || (changes.length ? 'Done!' : 'Hmm, I lost my train of thought there. Try asking again?'), navigate, used, changes };
+    for (const c of calls) if (c.name === 'offer_choices') choices = choicesFrom(c.input);
+    if (r.stop_reason !== 'tool_use' || !calls.length) return { reply: text || (changes.length ? 'Done!' : 'Hmm, I lost my train of thought there. Try asking again?'), navigate, used, changes, ...extras() };
+    // the reply came with its buttons and nothing else to run: that's the answer, no need to go back to Claude
+    if (text && choices.length && calls.every(c => c.name === 'offer_choices')) return { reply: text, navigate, used, changes, ...extras() };
     onStep?.(calls.map(c => c.name));
     const res = new Map<string, { result: unknown; error?: boolean; navigate?: string }>();
     const about = { question, path };
     // look-ups together; changes one at a time, in order (each one's Undo snapshot is taken just before it)
     await Promise.all(calls.filter(c => !changeOf(c.name)).map(async c => { res.set(c.id, await runTool(c.name, c.input || {}, about)); }));
-    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, await runChange(c.name, c.input || {}, changes, about));
+    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, await runChange(c.name, c.input || {}, changes, about, searched));
     const results = calls.map(c => {
       used.push(c.name);
       const out = res.get(c.id)!;
@@ -190,10 +221,11 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
       if (out.error) void logArvy({ type: 'error', title: `${c.name} didn’t work`, detail: JSON.stringify(out.result).slice(0, 600), tools: [c.name], ...about });
       return { type: 'tool_result' as const, tool_use_id: c.id, content: JSON.stringify(out.result).slice(0, RESULT_CAP[c.name] || 13000), ...(out.error ? { is_error: true } : {}) };
     });
-    msgs.push({ role: 'assistant', content }, { role: 'user', content: results });
+    // a step that searched goes back as Claude wrote it (`raw`: the search and its results too), or it would search again
+    msgs.push({ role: 'assistant', content: r.raw?.length ? r.raw : content }, { role: 'user', content: results });
   }
   void logArvy({ type: 'error', title: 'Arvy ran out of steps on a question', question, path, tools: used });
-  return { reply: 'That one took me too many steps. Could you ask it a simpler way?', navigate, used, changes };
+  return { reply: 'That one took me too many steps. Could you ask it a simpler way?', navigate, used, changes, ...extras() };
 }
 
 // ── demo (/demo): canned answers, nothing sent anywhere. Changes are real, on the demo's own data. ──
@@ -215,6 +247,13 @@ async function demoTurn(q: string, changes: ChangeView[]): Promise<Turn> {
       { name: 'Child’s Pose', sets: 1, seconds: 45, no_weight: true, muscle: 'back', equipment: 'bodyweight' },
     ] }, changes);
     return { reply: 'Sorry you’re feeling rough. Today’s plan is changed: no gym, no sauna, up at 7, breakfast at 7:30. The stretch is set up as today’s session on Train: tap Confirm and the 7:00 block opens it. Your gym session waits for tomorrow.', used: ['adjust_day', 'plan_workout'], changes };
+  }
+  // looked up on the web: options to pick from, with where they came from (the demo's are made up; nothing is searched)
+  if (/look ?up|search|online|on the web|google/i.test(q)) {
+    return { reply: 'I looked at what physios and health services suggest for a sore lower back. Three ways to go:\n\n1. **Gentle mobility flow (15 min):** pelvic tilts, cat-cow, knees to chest, child’s pose. The calmest one.\n2. **Core stability (20 min):** bird dog, dead bug, side plank on knees, glute bridge. The usual pick when discs are involved.\n3. **Hips and hamstrings (20 min):** hip flexor, figure-4 and hamstring stretches. Tight hips load the lower back.\n\nI’d start with 1 today. Stop on any pain down the leg, and your chiropractor has the last word. Which one?',
+      used: ['coaching_context', 'web_search'], changes,
+      sources: [{ title: 'Back pain (demo source)', url: 'https://www.nhs.uk/' }, { title: 'Low back pain (demo source)', url: 'https://www.mayoclinic.org/' }, { title: 'Exercises for your back (demo source)', url: 'https://www.csp.org.uk/' }],
+      choices: [{ label: '1. Gentle mobility', send: 'Build me the gentle mobility session' }, { label: '2. Core stability', send: 'Build me the core stability session' }, { label: '3. Hips and hamstrings', send: 'Build me the hips and hamstrings session' }] };
   }
   if (/session|workout|sore|bench|train/i.test(q)) {
     await runChange('plan_workout', { name: 'Kettlebell shake-up', exercises: [
