@@ -2,15 +2,17 @@
 //   Bugs: something in the app is broken (what happened, the steps, the screen, the browser, the page's recent errors).
 //   Couldn't do yet: something they asked the Benny for that it has no tool for, so it's clear what to build next.
 // Mark one done when it's dealt with; it moves to Done and can be reopened.
+//   AI logs: every question asked to the Benny, who asked, the tools it used and roughly what it cost (AiLog.tsx).
 import React, { useState } from 'react';
 import { Check, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { listBugs, resolveBug, type BugReport } from '../../lib/benny';
 import { Btn, ErrorBox, Loading, Tabs, Tag } from '../../ui';
+import { AiLog } from './AiLog';
 
 const when = (iso: string) => new Date(iso).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const TONE: Record<string, 'r' | 'a' | undefined> = { blocking: 'r', annoying: 'a', minor: undefined };
-type Tab = 'bugs' | 'requests' | 'done';
+type Tab = 'bugs' | 'requests' | 'done' | 'ai';
 const isRequest = (b: BugReport) => b.kind === 'request';
 
 /** What the scheduled check found: shown first, since it's what to act on. */
@@ -76,9 +78,10 @@ export const BugLog: React.FC = () => {
   return (
     <div className="v2-main">
       <div className="v2-head"><span className="v2-h1">Bug log</span>
-        <span className="v2-spacer" /><span className="v2-mut v2-small">What people told the Benny: what’s broken, and what it couldn’t do for them yet</span></div>
-      <Tabs items={[{ key: 'bugs', label: 'Bugs', count: log.data?.open_bugs }, { key: 'requests', label: 'Couldn’t do yet', count: log.data?.open_requests }, { key: 'done', label: 'Done', count: log.data?.done }]}
+        <span className="v2-spacer" /><span className="v2-mut v2-small">What people told the Benny: what’s broken, what it couldn’t do for them yet, and everything they asked</span></div>
+      <Tabs items={[{ key: 'bugs', label: 'Bugs', count: log.data?.open_bugs }, { key: 'requests', label: 'Couldn’t do yet', count: log.data?.open_requests }, { key: 'done', label: 'Done', count: log.data?.done }, { key: 'ai', label: 'AI logs' }]}
         value={tab} onChange={t => { setTab(t); setOpenId(null); }} />
+      {tab === 'ai' ? <AiLog /> : <>
       <ErrorBox error={log.error || error} />
       {log.loading && !log.data ? <Loading /> : bugs.length === 0 ? <div className="v2-card">{empty}</div> : (
         <div className="v2-card" style={{ padding: 0 }}>
@@ -105,6 +108,7 @@ export const BugLog: React.FC = () => {
           })}
         </div>
       )}
+      </>}
     </div>
   );
 };
