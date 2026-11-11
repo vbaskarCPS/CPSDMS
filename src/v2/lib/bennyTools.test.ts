@@ -53,6 +53,7 @@ describe('the Benny’s tools', () => {
     expect(toolCall('propose_stops', { kind: 'pickup', only: ['Kyle', 'Nathan'] }, ctx)).toMatchObject({ fn: 'benny_plan_stops', args: { p_manager: 'rm_x', p_kind: 'pickup', p_only: ['Kyle', 'Nathan'] }, card: { kind: 'stops' } });
     expect(toolCall('propose_stops', { kind: 'drop' }, ctx)).toMatchObject({ args: { p_only: null } });
     for (const role of ['admin', 'rm'] as const) expect(system(ctx, role)).toContain('Plan my drop order');
+    expect(system(ctx, 'rm')).toContain('unless the result has start_far');   // the answer and the card say the same thing about where the order starts
   });
   it('“my team” on the RM map is the map that’s open', () => {
     expect(toolCall('live_team', {}, ctx)).toMatchObject({ args: { p_manager: 'rm_x' } });
