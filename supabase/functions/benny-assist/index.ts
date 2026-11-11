@@ -3,7 +3,7 @@
 //   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, following, user_name, spoken, diag } }
 //     → { reply, map?, proposal? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
-//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | payouts.
+//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | payouts | bonus.
 //              The Benny never makes the change itself: the app does, with the same code as its screens, after the person taps
 //              Confirm. booking_emails changes nothing at all: its card opens the Send booking emails screen, where the person sends.
 //              payouts changes nothing either: its card opens the payout screen, where the person finalizes each payout.

@@ -32,7 +32,7 @@ export function forServer(messages: BennyMsg[]) {
 
 /** The change cards this build of the app can show. Sent with every question, so the server never sends a card that an
  *  older open tab can't draw (it says "refresh" instead). Add a kind here when describe() and doProposal() handle it. */
-export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts'];
+export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts', 'bonus'];
 
 /** What else this build can do with a card it already shows. 'crews' = a start-day card that says who goes with which
  *  manager (an older tab would start the day and ignore the crews, so the server holds that card back from it). */

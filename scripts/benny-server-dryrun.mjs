@@ -13,6 +13,13 @@ const fakeSb = `
       if (fn === 'benny_ok_any') return s.role ? { data: s.role, error: null } : { data: null, error: { message: 'Not allowed' } };
       if (fn === 'benny_my_rm_ids') return { data: s.role === 'rm' ? ['rm_me', 'rm_buddy'] : null, error: null };
       if (fn === 'benny_side') return { data: { codes: ['NVN19', 'NVN24'], of: 19 }, error: null };
+      if (fn === 'benny_bonus_rank') return { data: { ok: true, date: args.p_date || '2026-11-10', kept_as: 'the live day',
+        winners: [{ place: 1, workers: ['Michael Asiegbunam'], cns: ['I1013'], bonus_eq: 19.95 }, { place: 2, workers: ['Kyle Pitt'], cns: ['I1065'], bonus_eq: 8 }],
+        ranked: [{ rank: 1, workers: ['Michael Asiegbunam'], qualifies: true, bonus_eq: 19.95 }, { rank: 2, workers: ['Mugove Chipfurutse'], qualifies: false, why_not: 'a phone and an email on 0 of 2 (needs 80%)', bonus_eq: 12.57 }] }, error: null };
+      if (fn === 'benny_check_bonus') return (args.p_bonuses || []).some(b => !b.place)
+        ? { data: { ok: false, date: '2026-11-10', problems: ['Which place is Kyle Pitt’s Performance EQ bonus: 1st, 2nd …?'] }, error: null }
+        : { data: { ok: true, date: args.p_date || '2026-11-10', source: 'live', total: 100, stamp: 'st', ask: args.p_bonuses,
+            bonuses: args.p_bonuses.map((b, i) => ({ key: 'sess_' + i, cns: [b.worker], workers: [b.worker], team_size: 1, type: 'Performance EQ', placing: b.place, label: 'Performance EQ', amount: b.amount, shares: [] })) }, error: null };
       if (fn === 'benny_crew_stats') return { data: { ok: true, date: args.p_date, ranked_by: 'average equiv per day worked', ranked: [{ rank: 1, name: 'Tim Hale', cn: 'I1001', days: 9, avg_equiv: 23.17 }, { rank: 2, name: 'Kyle Pitt', cn: 'I1065', days: 7, avg_equiv: 15.99 }],
         no_days_yet: [], no_shows: [], counts: { booked: 2, showed: 2, ranked: 2, no_days_yet: 0 } }, error: null };
       if (fn === 'benny_plan_day' && (args.p_assign || []).some(e => e.workers)) return { data: { ok: true, crews: true, notes: [], date: args.p_date, maps: ['MISSION #1'], booked: 2, showed: 2,
@@ -79,7 +86,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 25); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 27); assert(!('roles' in state.lastAsk.tools[0]));
 // the Benny drew the maps itself and picked no routes out: the plan's routes are highlighted all the same
 state.script = [turn(use('show_map', { maps: ['NORTH VANCOUVER #1'], title: 'Tomorrow' })),
   turn(use('propose_start_day', { date: '2026-11-11', assign: [{ managers: ['me'], maps: ['NORTH VANCOUVER #1'] }] })), say('Tap Start the day to do it.')];
@@ -282,6 +289,29 @@ a = await ask('who are my best workers', { screen: 'rm', rm_manager: 'rm_me' });
 assert(!state.lastAsk.tools.some(t => t.name === 'crew_stats'));
 state.role = 'admin';
 console.log('5j crews: averages looked up, the plan carries each manager’s crew, older tabs are told to refresh ✓');
+
+// 5k. bonuses: ranked for the day on the screen, every bonus on one card, the server adds nothing; older tabs and route managers
+state.role = 'admin';
+const two = { bonuses: [{ worker: 'I1013', place: 1, amount: 50 }, { worker: 'I1065', place: 2, amount: 50 }] };
+state.script = [turn(use('bonus_ranking', {})), turn(use('propose_bonuses', two)), say('1st Michael, 2nd Kyle (Mugove is higher but doesn’t qualify). Tap Add the bonuses to do it.')];
+a = await ask('give the top two bonus equiv carts 50 each', { cards: ['bonus'], path: '/app/workerbook/days/2026-11-10' });
+assert.deepEqual(fns().filter(f => /bonus/.test(f)), ['benny_bonus_rank', 'benny_check_bonus'], 'the server only ranks and checks: it has nothing that adds a bonus');
+assert.deepEqual(state.rpc.find(x => x[0] === 'benny_bonus_rank')[1], { p_center: 'c1', p_date: '2026-11-10' }, 'the day on the screen');
+assert.deepEqual(state.rpc.find(x => x[0] === 'benny_check_bonus')[1], { p_center: 'c1', p_date: '2026-11-10', p_bonuses: two.bonuses });
+assert.equal(a.body.proposal.kind, 'bonus'); assert.equal(a.body.proposal.check.bonuses.length, 2); assert.equal(a.body.map, null);
+assert(/They have the workerbook day 2026-11-10 open/.test(state.lastAsk.system));
+state.script = [turn(use('bonus_ranking', {})), turn(use('propose_bonuses', two)), say('Tap Add the bonuses to do it.')];
+a = await ask('give the top two bonus equiv carts 50 each', {});   // a tab opened before bonuses were a card
+assert.equal(a.body.proposal, null); assert(/Refresh the page/.test(a.body.reply));
+state.script = [turn(use('propose_bonuses', { bonuses: [{ worker: 'Kyle', amount: 50 }] })), say('Which place is Kyle’s bonus: 1st or 2nd?')];
+a = await ask('give kyle a 50 bonus', { cards: ['bonus'] });
+assert.equal(a.body.proposal, null, 'a problem makes no card');
+state.role = 'rm';
+state.script = [say('That is for the office.')];
+a = await ask('who gets the bonus today', { screen: 'rm', rm_manager: 'rm_me' });
+assert(!state.lastAsk.tools.some(t => ['bonus_ranking', 'propose_bonuses'].includes(t.name)));
+state.role = 'admin';
+console.log('5k bonuses: ranked for the open day, one card for all of them, nothing added by the server ✓');
 
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;

@@ -1,5 +1,6 @@
 import { describe as d, it, expect } from 'vitest';
 import { bookingSaved, buildBennyPlan, crewProblems, describe, dollars, emailsPreset, jobUpdates, payoutsStart, stopPin, type JobCheck, type PayoutsCheck, type StartDayCheck } from './bennyActions';
+import type { BonusCheck } from './bennyBonus';
 import { planProblems } from './startSession';
 import { defaultRateCard } from './rateCard';
 import type { RosterRow } from './workerbook';
@@ -107,6 +108,17 @@ d('buildBennyPlan', () => {
   });
 });
 
+const bonus = (): BonusCheck => ({
+  ok: true, date: '2026-11-10', source: 'live', total: 100, stamp: 's', ask: [{ worker: 'I1013', place: 1, amount: 50 }, { worker: 'I1002', place: 2, amount: 50 }],
+  cautions: ['Not paid out yet, with jobs: Kevontae Ragguette. The ranking can change once they are.'],
+  bonuses: [
+    { key: 'sess_1', cns: ['I1013'], workers: ['Michael Asiegbunam'], team_size: 1, type: 'Performance EQ', placing: 1, label: 'Performance EQ - 1st Place', amount: 50,
+      shares: [{ cn: 'I1013', name: 'Michael Asiegbunam', percent: 100, amount: 50 }], pay_now: 149.57, pay_after: 199.57 },
+    { key: 'sess_2', cns: ['I1002', 'I1169'], workers: ['Nathan Clark', 'Steven Doherty'], team_size: 2, type: 'Performance EQ', placing: 2, label: 'Performance EQ - 2nd Place', amount: 50,
+      shares: [{ cn: 'I1002', name: 'Nathan Clark', percent: 50, amount: 25 }, { cn: 'I1169', name: 'Steven Doherty', percent: 50, amount: 25 }], split: { I1002: 50, I1169: 50 }, pay_now: 120, pay_after: 170 },
+  ],
+});
+
 d('describe', () => {
   it('start day card', () => {
     const c = describe({ kind: 'start_day', check: check(), team_mode: 'roster' });
@@ -129,6 +141,18 @@ d('describe', () => {
     expect(lines.find(l => l.startsWith('Workers:'))).toBe('Workers: 4 of 5 booked, paired two to a cart within each crew (3 carts)');   // 2 + 3 workers: 1 + 2 carts
     expect(describe({ kind: 'start_day', check: check(), team_mode: 'pairs' }).lines[2]).toBe('Workers: 4 of 5 booked, paired two to a cart (2 carts)');
     expect(describe({ kind: 'start_day', check: check(false, true), team_mode: 'pairs' }).lines.some(l => /crew/.test(l))).toBe(false);   // no crews, no crew lines
+  });
+  it('bonus card: what each bonus is, who gets it, the pay before and after, and what to know first', () => {
+    const one = describe({ kind: 'bonus', check: { ...bonus(), bonuses: [bonus().bonuses[0]], cautions: undefined } });
+    expect(one.title).toBe('Add a bonus for Tue, Nov 10'); expect(one.action).toBe('Add the bonus');
+    expect(one.lines).toEqual(['1st place · Performance EQ: Michael Asiegbunam, $50.00 · pay $149.57 → $199.57']);
+    const two = describe({ kind: 'bonus', check: bonus() });
+    expect(two.title).toBe('Add 2 bonuses for Tue, Nov 10'); expect(two.action).toBe('Add the bonuses');
+    expect(two.lines[1]).toBe('2nd place · Performance EQ: Nathan Clark + Steven Doherty, $50.00 (Nathan $25.00, Steven $25.00) · pay $120.00 → $170.00');
+    expect(two.lines[2]).toBe('Not paid out yet, with jobs: Kevontae Ragguette. The ranking can change once they are.');
+    expect(two.lines).toHaveLength(3);                                         // the live day: nothing else is worked out again
+    const saved = describe({ kind: 'bonus', check: { ...bonus(), source: 'saved' } });
+    expect(saved.lines[saved.lines.length - 1]).toBe('That day is saved, so adding a bonus works its pay out again (every cart), the same as on its payout list.');
   });
   it('give route and partner cards', () => {
     const g = describe({ kind: 'give_route', check: { ok: true, date: '2026-11-10', route: 'NDEL33', map: 'NORTH DELTA #2', open_prebooks: 1,
@@ -255,6 +279,7 @@ d('describe', () => {
       job: { kind: 'job', check: { ok: true, date: '2026-11-10', worker: { cn: 'I1', name: 'A B' }, cart: { id: 's1', workers: ['A B'] }, job: { id: 't1', type: 'Sale', amount: 10, paid_by: 'Cash' },
         change: { amount: { from: 10, to: 20 } }, ask: { amount: 20 }, patch: { price: 20, display_price: '20.00', payment_method: 'Cash', payment_breakdown: { Cash: 20 } }, stamp: 't' } },
     };
+    samples.bonus = { kind: 'bonus', check: bonus() };
     for (const k of CARDS) { expect(samples[k], k).toBeTruthy(); expect(describe(samples[k]).title, k).toBeTruthy(); }
   });
   it('what a saved booking change says', () => {

@@ -83,6 +83,18 @@ export const TOOLS: Tool[] = [
   { name: 'propose_payouts', roles: ['admin'], description: 'Line up the open payouts that have nothing to count by hand (no cash and no cheque: card, e-transfer, prepaid and billed are already in the system) for the person to finalize one after another. '
       + 'It pays nobody and marks nothing paid: the card opens the payout screen at the first one, and pressing Finalize there moves to the next. A cart with no jobs has nothing to count either, so it is lined up too, after the ones with jobs. Carts with cash or cheque to count are left out and named.',
     input_schema: { type: 'object', properties: {} } },
+  { name: 'bonus_ranking', roles: ['admin'], description: "The Bonus EQ ranking of a day's payouts, the way the payout list's Bonus EQ sort ranks them: each paid-out cart with its equiv, its Bonus EQ (equiv ÷ the team-size factor), whether it meets the bonus rule and why not, its pay and the bonuses already on it; "
+      + 'the winners (the top carts among those that qualify, ties marked); what has been given already; and the carts not paid out yet (not ranked). Use it for "who gets the bonus", "who are the top two carts", "who qualifies", and before preparing a bonus.',
+    input_schema: { type: 'object', properties: { date: { type: 'string', description: 'YYYY-MM-DD; leave out for the day they have open, else the live day' } } } },
+  { name: 'propose_bonuses', roles: ['admin'], description: 'Prepare one or more bonuses on a day\'s paid-out carts for the person to confirm on ONE card (e.g. $50 each for 1st and 2nd place). '
+      + 'It refuses a cart that isn\'t paid out, a place already given that day, and a day on a paid payslip. It warns (cautions) when a cart doesn\'t meet the bonus rule, when the place doesn\'t match the ranking, on a tie, and when carts are still open. A team cart splits its bonus evenly.',
+    input_schema: { type: 'object', properties: { date: { type: 'string', description: 'YYYY-MM-DD; leave out for the day they have open, else the live day' },
+      bonuses: { type: 'array', items: { type: 'object', properties: {
+        worker: { type: 'string', description: 'a worker on the cart: CN (best, from bonus_ranking) or name' },
+        place: { type: 'integer', description: '1 for 1st place, 2 for 2nd … (leave out only for type Other)' },
+        amount: { type: 'number', description: 'dollars for the cart' },
+        type: { type: 'string', enum: ['Performance EQ', 'Total Upsell', 'Rookie', 'Other'], description: 'default Performance EQ (the Bonus EQ ranking)' },
+        note: { type: 'string', description: 'what it is for, when type is Other' } }, required: ['worker', 'amount'] } } }, required: ['bonuses'] } },
   { name: 'propose_booking', roles: ['admin'], description: 'Prepare a change to one Master Booking (prebook / job / service ticket) for the person to confirm on a card: mark it done, cancelled or open again; '
       + 'add to or replace its field note (what the crew reads at the door) or its office note; move it to another route. One booking per call; several changes to the same booking go in one call. '
       + 'It finds the booking by address itself, so call it directly; when it answers "Which one", ask, then call again with that booking\'s id.',
@@ -134,6 +146,7 @@ CPS words (use them the way the crew does, and answer in them):
 - Equiv (EQ, equivs, equivalents): the pay unit. Payable production ÷ 25. Payable = production after tax, with prepaid and billed jobs counted at part weight, less the product cost %; office flats count at their set value. Workers are paid per equiv.
 - Gross: production dollars before any of that. Upsell: an add-on sold at the door (paid as commission, not equiv). IOS: a small per-item bonus.
 - Payout rate: dollars per equiv = the season's base (one rate solo, a higher one in a team of 2 or more) + the worker's alumni rate + silver rate. Alumni rate: extra per equiv for returning contractors. Silver rate: extra per equiv from hats. Hats: a worker's experience count per service (AER, RJ, SE, CL).
+- Bonus EQ: a cart's equiv ÷ its team-size factor (1 solo, 1.5 for two, 2 for three), so carts of different sizes can be ranked for the daily bonus. The bonus rule (who qualifies): at least as many sales as prebooks, and a phone and an email on at least 80% of the sales. Performance EQ bonus: the daily bonus for the top Bonus EQ carts that qualify (1st place, 2nd place).
 - Logsheet: a cart's list of the day's jobs. A logsheet job (an entry): one line on it. Paid out: the logsheet has been checked and the pay worked out; after that a job is changed in Payout, not here.
 - Cart: the workers sharing one logsheet (a team); a solo cart is one worker. Ramp crew (RC1, RC2): the asphalt crew in sealing. Equiv split / upsell split: how a cart shares its equiv and its upsell commission.
 - Booking emails (service notification emails): the emails to customers about their booking. Day before = the crew is coming tomorrow. Next try = we missed you, we're coming back.
@@ -154,6 +167,13 @@ The last message was SPOKEN and turned into text by the phone, which doesn't kno
 - If two real names could fit, ask which. If nothing sounds close, say what you heard and ask who they mean. Never guess a person for a change.
 - A route code is a place's prefix + the number (two digits under 10: "NVN 7" = NVN07). A map is the place + #number.${list('Workers today', vocab?.workers)}${list('Route managers', vocab?.managers)}${list('Places (route prefix) and how many maps', vocab?.places)}`;
 }
+
+/** The workerbook day that is open on the screen (…/workerbook/days/2026-11-10…), if one is. */
+export function dayOpen(ctx: Ctx): string | null {
+  const m = /\/workerbook\/days\/(\d{4}-\d{2}-\d{2})(?:\/|$|\?)/.exec(ctx.path || '');
+  return m ? m[1] : null;
+}
+const isoDay = (v: unknown): string | null => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? v.trim() : null);
 
 const isFloaterId = (id?: string | null) => /^floater_/.test((id || '').trim());
 const ID = /^[A-Za-z0-9_.-]{1,80}$/;
@@ -178,14 +198,16 @@ export function system(ctx: Ctx, role: Role, vocab?: Vocab | null): string {
   const where = !onRm ? '' : floating
     ? ` They are on the floater map, following ${names.length ? names.join(', ') : 'the managers they picked'}: "my team", "my carts", "my routes", "me" mean those managers' teams together. A pin or an order they make is their own, for those managers' carts.`
     : ` They are on the route manager map${ctx.rm_manager ? `, open for ${ctx.rm_manager}` : ''}: "my team", "my routes", "me" mean that map's team.`;
+  const open = dayOpen(ctx);
+  const looking = open ? ` They have the workerbook day ${open} open: "the payouts", "the bonuses", "the top carts" mean that day unless they name another.` : '';
   return `You are The Benny, the assistant inside the Property Stars DMS app (lawn and property services: aeration, lawn rejuv, sealing).
 You help ${who}${ctx.user_name ? ` (${ctx.user_name})` : ''} with the app's own data and work.
-Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown'}".${where}
+Today is ${ctx.today || 'unknown'}. The center is "${ctx.center_name || 'unknown'}".${where}${looking}
 
 Rules:
 - Answer from the tools, never from memory or guesses. If the tools can't answer it, say so and name the screen that can.
 - Only the app's data and work. Anything else: "I can only help with the DMS."
-- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, changing a job on a logsheet (amount, how it was paid), changing a booking (status, notes, route), setting up the booking emails to customers, and lining up payouts to finalize' : 'giving a route to a cart, partnering workers, solo carts and changing a job on a logsheet (amount, how it was paid)'} with the propose_ tools, and on the route manager map dropping a pin and planning a drop, pickup or check order. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
+- Changes: you can prepare ${role === 'admin' ? 'starting the day, giving a route to a cart, partnering workers, solo carts, changing a job on a logsheet (amount, how it was paid), changing a booking (status, notes, route), setting up the booking emails to customers, lining up payouts to finalize, and adding bonuses to paid-out carts' : 'giving a route to a cart, partnering workers, solo carts and changing a job on a logsheet (amount, how it was paid)'} with the propose_ tools, and on the route manager map dropping a pin and planning a drop, pickup or check order. You never make a change yourself: the person confirms it on the card under your answer. After a propose_ tool says ok, say in one line what the card will do and that they tap it to do it ("Tap Assign to do it."). Never say it is done. If it returns problems, say them plainly and what would fix it; don't make a card.
 - One change per answer. If they ask for several, prepare the first and say you'll do the next after.
 - Names: if a tool says "Which one", ask which, listing the names. "Michael A" = Michael with a last name starting A.
 - Starting the day: work out each manager's maps and routes first (whole maps by name; map_side for "the side of 2 connected to 1"; bookings.by_route for "only the routes with prebooks in Surrey"), show them with show_map (routes = every route in the plan), then propose_start_day. If they don't say the date, it is today. If they don't say who, the manager is "me".
@@ -194,6 +216,7 @@ ${role === 'admin' ? `- Crews ("give Franklyn the worst half and me the good guy
 - "The prebook-heavy maps in North Van" (or any city): bookings with where = the city, and take the maps with the most open prebooks; say which maps you took and how many prebooks each has. If none of its maps has an open prebook, say so and ask which maps they want instead.
 - Booking emails ("service notification emails", "day-before emails", "let the customers know we're coming"): use propose_booking_emails with the kind, the day and that day's routes or whole maps. If they don't say which routes or maps, ask; "the routes with prebooks in Surrey" = bookings.by_route first. After ok, say how many customers get one, how many have no email and how many already got it, then "Tap Open to read and send." Never say an email was sent: the person reads them and sends them on that screen.
 - Payouts: "which payouts are open", "who has cash to count", "what did Kyle get paid" = payouts. "Close / finalize / do the payouts with no cash or cheque" = propose_payouts. You never pay anyone out and never mark a logsheet paid: the card opens the payout screen and the person presses Finalize on each one. After ok, say how many are lined up (and which of them have no jobs), and who is left for a hand count and why, then "Tap Open to go through them." Never say a payout is closed.
+- Bonuses ("give the top two carts $50 each", "who gets the bonus", "who qualifies"): call bonus_ranking for the day first. The winners are the top carts by Bonus EQ AMONG THE CARTS THAT QUALIFY (bonus_ranking.winners): a higher cart that doesn't meet the bonus rule is skipped, and you say who was skipped and why (its why_not). "The top two" = winners place 1 and 2; a bonus with no type = Performance EQ. Then propose_bonuses with every bonus they asked for in ONE call (the cart's CN, the place, the amount): they go on one card. Never pick between tied carts: say who is tied and ask. If a place was already given, say who has it and prepare only what is left. If they name the cart themselves ("give Mugove second"), use it as they said and say the card's cautions. After ok: one short line per bonus (place, who, amount, pay now and after), the cautions in a few words, then "Tap Add the bonuses to do it." ("Add the bonus" for one). Never say a bonus was added. If nothing is ranked (no cart is paid out yet that day), say so and ask whether they mean another day, such as yesterday. Just asking who is on top or who qualifies is an answer from bonus_ranking, not a card.
 - Bookings: to change a booking (a "service ticket") use propose_booking with the address as they said it, house number first in digits ("thirty five seventy five Latimer" = "3575 Latimer"). "Close", "complete", "finish" = done; "reopen" = open. A note with no kind: field note when it is for the crew (gate code, dog, where to start), office note otherwise; ask if you can't tell. "Add a note" = add; "change the note to" = replace. Say the card's cautions in a few words. Then "Tap Save to do it." Address, people, phone, services and price change in Bookings › List, not here.
 ` : ''}- Pins and orders (the route manager map): "drop a pin at/on …" = propose_pin with one place (a route code, a worker, an address, or here = where they are) and the name they gave it, if any. Only they see it unless they say everyone, name a manager, or say it is a stop for a driver. "Plan my drop order / pickup order / check order" = propose_stops. After ok, say how many stops there are, anyone left out and why, and that it replaces their earlier pins of that kind when it says so. Do NOT list the order or give a distance: the app works the order out by driving time and adds it under your answer. Say nothing about where they are either, unless the result has start_far: then say their location is too far from the carts, so the order starts at its first stop. Then "Tap Drop the pins to do it." ("Drop the pin" for one). Never say a pin is on the map before they tap.
 - Logsheet jobs: "what has Kyle logged", "how much cash should Nathan have" = logsheet for that worker. To change a job ("change Ron's job on Mugove's cart to 250 prepaid") call logsheet first and find the job by client, address or service; if more than one fits, ask which, giving each one's client and amount. Then propose_job_change with that job's id and only what they asked to change. This changes what the worker is paid, so never guess: if the amount or the payment type wasn't clear, ask. After ok, say what it reads now and what it will read ("$180 cash becomes $250 prepaid") and any caution on the card, then "Tap Save to do it." If it says no (a logsheet already paid out, a card or split payment, an office flat), say why and where to change it instead; that is an answer, not something to log.
@@ -209,7 +232,7 @@ ${role === 'admin' ? `- Crews ("give Franklyn the worst half and me the good guy
 ` + CPS_WORDS + (ctx.spoken ? heardRight(vocab) : '');
 }
 
-export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts';
+export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus';
 /** What a tool does: a database function to call (as the signed-in person), and for a change the card it becomes. */
 export type ToolCall =
   | { fn: string; args: Record<string, unknown>; card?: { kind: ProposalKind; team_mode?: string } }
@@ -248,6 +271,22 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     }
     case 'payouts': return { fn: 'benny_payouts', args: { p_center: c } };
     case 'propose_payouts': return { fn: 'benny_check_payouts', args: { p_center: c }, card: { kind: 'payouts' } };
+    case 'bonus_ranking': return { fn: 'benny_bonus_rank', args: { p_center: c, p_date: isoDay(input.date) || dayOpen(ctx) } };
+    case 'propose_bonuses': {
+      // only what a bonus is made of: who, which place, how much, what kind (the database checks every part)
+      const list = (Array.isArray(input.bonuses) ? input.bonuses : []).slice(0, 12).map(raw => {
+        const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>; const out: Record<string, unknown> = {};
+        if (typeof b.worker === 'string' && b.worker.trim()) out.worker = b.worker.trim();
+        if (typeof b.place === 'number' && Number.isInteger(b.place)) out.place = b.place;
+        else if (typeof b.place === 'string' && /^\d{1,2}$/.test(b.place.trim())) out.place = Number(b.place.trim());
+        if (typeof b.amount === 'number' && Number.isFinite(b.amount)) out.amount = b.amount;
+        else if (typeof b.amount === 'string' && b.amount.trim()) out.amount = b.amount.trim().replace(/^\$/, '');
+        if (typeof b.type === 'string' && b.type.trim()) out.type = b.type.trim();
+        if (typeof b.note === 'string' && b.note.trim()) out.note = b.note.trim().slice(0, 80);
+        return out;
+      });
+      return { fn: 'benny_check_bonus', args: { p_center: c, p_date: isoDay(input.date) || dayOpen(ctx), p_bonuses: list }, card: { kind: 'bonus' } };
+    }
     case 'propose_booking': {
       const change: Record<string, unknown> = {};
       for (const k of ['status', 'route', 'field_note', 'office_note', 'note_mode']) if (typeof input[k] === 'string') change[k] = input[k];

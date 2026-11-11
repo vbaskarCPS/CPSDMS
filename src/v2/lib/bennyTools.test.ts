@@ -1,6 +1,6 @@
 // The Benny's tools (supabase/functions/benny-assist/tools.ts): who gets which, and that each one goes somewhere.
 import { describe, it, expect } from 'vitest';
-import { TOOLS, heardRight, openMap, system, toolCall, toolsFor } from '../../../supabase/functions/benny-assist/tools';
+import { TOOLS, dayOpen, heardRight, openMap, system, toolCall, toolsFor } from '../../../supabase/functions/benny-assist/tools';
 
 const ctx = { center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-10', rm_manager: 'rm_x' };
 
@@ -16,16 +16,35 @@ describe('the Benny’s tools', () => {
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);
     expect(rm).toEqual(expect.arrayContaining(['live_team', 'logsheet', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'propose_job_change', 'propose_pin', 'propose_stops', 'report_bug', 'log_request', 'show_map']));
-    for (const no of ['find_people', 'day', 'maps', 'crew_stats', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails', 'payouts', 'propose_payouts']) expect(rm).not.toContain(no);
+    for (const no of ['find_people', 'day', 'maps', 'crew_stats', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails', 'payouts', 'propose_payouts', 'bonus_ranking', 'propose_bonuses']) expect(rm).not.toContain(no);
     expect(toolsFor('admin').map(t => t.name)).toEqual(TOOLS.map(t => t.name));
     expect(toolsFor('rm')[0]).not.toHaveProperty('roles');   // only what the model's API accepts is sent
   });
   it('changes become cards; lookups don’t', () => {
     const kinds = TOOLS.map(t => { const c = toolCall(t.name, {}, ctx); return c && 'fn' in c && c.card ? c.card.kind : null; }).filter(Boolean);
-    expect(kinds.sort()).toEqual(['booking', 'booking_emails', 'give_route', 'job', 'partner', 'payouts', 'pin', 'solo', 'start_day', 'stops']);
+    expect(kinds.sort()).toEqual(['bonus', 'booking', 'booking_emails', 'give_route', 'job', 'partner', 'payouts', 'pin', 'solo', 'start_day', 'stops']);
     const start = toolCall('propose_start_day', { assign: [], team_mode: 'whatever' }, ctx);
     expect(start && 'fn' in start && start.card?.team_mode).toBe('roster');
     expect(toolCall('propose_start_day', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
+  });
+  it('bonuses: ranked for the day that is open, and one card for all of them', () => {
+    const onDay = { ...ctx, path: '/app/workerbook/days/2026-11-09' };
+    expect(dayOpen(onDay)).toBe('2026-11-09'); expect(dayOpen({ ...ctx, path: '/app/workerbook/days/2026-11-09/payouts/I1013' })).toBe('2026-11-09');
+    expect(dayOpen(ctx)).toBeNull(); expect(dayOpen({ ...ctx, path: '/app/workerbook/days/today' })).toBeNull();
+    // the day they named, else the day on the screen, else the database's own pick (the live day)
+    expect(toolCall('bonus_ranking', {}, onDay)).toEqual({ fn: 'benny_bonus_rank', args: { p_center: 'c1', p_date: '2026-11-09' } });
+    expect(toolCall('bonus_ranking', { date: '2026-11-07' }, onDay)).toMatchObject({ args: { p_date: '2026-11-07' } });
+    expect(toolCall('bonus_ranking', { date: 'yesterday' }, ctx)).toMatchObject({ args: { p_date: null } });
+    const c = toolCall('propose_bonuses', { bonuses: [{ worker: ' I1013 ', place: 1, amount: 50, extra: 'x' }, { worker: 'Kyle', place: '2', amount: '$50' }, { worker: 'Tim', type: 'Other', note: 'Best attitude', amount: 20 }, 'junk'] }, onDay);
+    expect(c).toEqual({ fn: 'benny_check_bonus', card: { kind: 'bonus' }, args: { p_center: 'c1', p_date: '2026-11-09',
+      p_bonuses: [{ worker: 'I1013', place: 1, amount: 50 }, { worker: 'Kyle', place: 2, amount: '50' }, { worker: 'Tim', type: 'Other', note: 'Best attitude', amount: 20 }, {}] } });
+    expect(toolCall('propose_bonuses', {}, ctx)).toMatchObject({ args: { p_bonuses: [], p_date: null } });
+    const sys = system(onDay, 'admin');
+    expect(sys).toContain('They have the workerbook day 2026-11-09 open');
+    expect(sys).toContain('AMONG THE CARTS THAT QUALIFY'); expect(sys).toContain('Never pick between tied carts');
+    expect(sys).toContain('adding bonuses to paid-out carts');
+    expect(system(ctx, 'admin')).not.toContain('They have the workerbook day');
+    expect(system(onDay, 'rm')).not.toContain('bonus_ranking');
   });
   it('crews: the season’s averages are looked up for the day, and the start-day plan carries who goes with whom', () => {
     expect(toolCall('crew_stats', { date: '2026-11-11' }, ctx)).toEqual({ fn: 'benny_crew_stats', args: { p_center: 'c1', p_date: '2026-11-11' } });

@@ -10,6 +10,9 @@
 //   stops      → RM map › Pins: one numbered pin per cart, in the planned order; an earlier order of the same kind is replaced
 //   job        → RM map › a worker's jobs › edit a job: its amount and how it was paid (the edit screen's own save, which
 //                works the cart's equiv and totals out again). The database keeps a record of each one (benny_job_changes).
+//   bonus      → the day's payout list › Add bonus, on one or more paid-out carts: the live day saves it on the logsheet
+//                (bonuses and the pay it was closed at); a saved day saves it on the cart and works the day's pay out
+//                again. The database keeps a record of each one (benny_bonus_changes).
 // Two cards change nothing. booking_emails opens Bookings › Send booking emails with the day and routes picked: the person
 // reads the emails there and sends them; the Benny never sends. payouts opens the payout screen at the first open payout
 // with no cash or cheque to count: the person presses Finalize on each and the screen moves to the next; the Benny never
@@ -26,6 +29,8 @@ import { saveBooking, type BookingPatch, type BookingStatus } from './bookings';
 import type { BookingEmailKind, EmailPreset } from './bookingEmails';
 import { STOP_WORD } from './bennyDrive';
 import { queueHref } from './payoutQueue';
+import { cartContext, dayLines, listCarts, saveDay } from './payoutCarts';
+import { bonusName, bonusesSaid, liveBonusPatch, withBonuses, type BonusCheck, type LiveNow } from './bennyBonus';
 
 export type TeamMode = 'roster' | 'solo' | 'pairs';
 /** A worker in a manager's crew, with their season so far (no days yet = no average). */
@@ -125,6 +130,7 @@ const PAID_AS: [string, string][] = [['card', 'card'], ['e_transfer', 'e-transfe
 export const payoutsStart = (c: PayoutsCheck): string | null => queueHref(c.date, c.carts.map(x => x.cn));
 
 export type BennyProposal =
+  | { kind: 'bonus'; check: BonusCheck }
   | { kind: 'payouts'; check: PayoutsCheck }
   | { kind: 'job'; check: JobCheck }
   | { kind: 'pin'; check: PinCheck }
@@ -267,6 +273,22 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
           'Nothing is paid out from here: each one opens on the payout screen and you press Finalize. It then moves to the next.',
         ],
         action: 'Open',
+      };
+    }
+    case 'bonus': {
+      const c = p.check; const n = c.bonuses.length;
+      const pretty = new Date(c.date + 'T12:00').toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
+      return {
+        title: n === 1 ? `Add a bonus for ${pretty}` : `Add ${n} bonuses for ${pretty}`,
+        lines: [
+          // each bonus: what it is, who gets it (a team: each one's share), and the cart's pay before and after
+          ...c.bonuses.map(b => `${bonusName(b)}: ${b.workers.join(' + ')}, ${dollars(b.amount)}`
+            + (b.cns.length > 1 ? ` (${b.shares.map(s => `${s.name.split(' ')[0]} ${dollars(s.amount)}`).join(', ')})` : '')
+            + (b.pay_now != null && b.pay_after != null ? ` · pay ${dollars(b.pay_now)} → ${dollars(b.pay_after)}` : '')),
+          ...(c.cautions || []),
+          ...(c.source === 'saved' ? ['That day is saved, so adding a bonus works its pay out again (every cart), the same as on its payout list.'] : []),
+        ],
+        action: n === 1 ? 'Add the bonus' : 'Add the bonuses',
       };
     }
     case 'job': {
@@ -470,6 +492,48 @@ export async function jobFromBenny(p: Extract<BennyProposal, { kind: 'job' }>, c
   return `${c.job.client ? `${c.job.client.split(' ')[0]}’s job` : 'The job'} on ${first}’s logsheet now reads ${dollars(begun.patch.price)}, ${begun.patch.payment_method}. The totals are worked out again.`;
 }
 
+/**
+ * The day's payout list › Add bonus, for each bonus on the card. The database checks once more and starts a record of
+ * each; the app saves the way that day's payout list does; the carts are read back, so "added" is only said when they are.
+ */
+export async function bonusesFromBenny(p: Extract<BennyProposal, { kind: 'bonus' }>, center: CenterLite): Promise<string> {
+  const c = p.check; const many = c.bonuses.length > 1;
+  const begun = must(await db.rpc('benny_bonus_begin', { p_center: center.id, p_date: c.date, p_bonuses: c.ask, p_stamp: c.stamp })) as BonusCheck & { change_ids?: string[]; now?: Record<string, LiveNow> };
+  if (!begun?.ok || !begun.change_ids?.length || !begun.bonuses?.length) throw new Error(begun?.problems?.[0] || `${many ? 'Those bonuses' : 'That bonus'} can’t be added now. Ask me again.`);
+  let failed: unknown = null;
+  try {
+    const firstId = Date.now();
+    if (begun.source === 'live') {
+      const { sessionService, date } = await legacy(center.id);
+      if (date !== c.date) throw new Error('The live day changed since I checked. Ask me again.');
+      const now: Record<string, LiveNow> = { ...(begun.now || {}) };
+      for (const [i, b] of begun.bonuses.entries()) {
+        if (!now[b.key]) throw new Error(`${b.workers.join(' + ')}’s logsheet isn’t there any more. Ask me again.`);
+        const patch = liveBonusPatch(now[b.key], b, firstId + i);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await sessionService.updateLogsheetSession(b.key, patch as any);
+        now[b.key] = { bonuses: patch.bonuses, validation: patch.validation ?? now[b.key].validation };   // a second bonus on the same cart builds on the first
+      }
+    } else {
+      const next = withBonuses(await listCarts(center.id, c.date), begun.bonuses, firstId);
+      // the center's own region (its tax, when the season has no rate card): never a guess, this works pay out
+      const region = center.region || ((await db.from('command_centers').select('region').eq('id', center.id).maybeSingle()).data as { region?: string } | null)?.region;
+      if (!region) throw new Error('I couldn’t read this center’s region to work the pay out');
+      const ctx = await cartContext(center.id, region, c.date, next);
+      await saveDay(center.id, c.date, next, await dayLines(next, ctx));
+    }
+  } catch (e) { failed = e; }
+  // read the carts back whatever happened, so the record says what they read now
+  type Done = { state?: string; bonuses?: { state: string; workers: string; label: string; amount: number }[] };
+  const done: Done | null = await (async () => { try { return (await db.rpc('benny_bonus_done', { p_ids: begun.change_ids })).data as Done | null; } catch { return null; /* no signal: not confirmed */ } })();
+  const list = `the payout list for ${c.date}`;
+  const saved = (done?.bonuses || []).filter(x => x.state === 'done'); const missed = (done?.bonuses || []).filter(x => x.state !== 'done');
+  if (done?.state === 'done') return `Added: ${bonusesSaid(saved, dollars)}. ${begun.source === 'saved' ? 'That day’s pay is worked out again.' : 'It’s on the payout list.'}`;
+  if (done?.state === 'partly') throw new Error(`Only part of it saved. Added: ${bonusesSaid(saved, dollars)}. Not added: ${bonusesSaid(missed, dollars)}. Check ${list} before trying again.`);
+  if (done?.state === 'not_saved') throw new Error(`${many ? 'The bonuses' : 'The bonus'} didn’t save${failed instanceof Error && failed.message ? ` (${failed.message.replace(/\.$/, '')})` : ''}. Nothing changed. Try again, or add ${many ? 'them' : 'it'} on ${list}.`);
+  throw new Error(`I couldn’t read the payouts back to confirm it. Check ${list} before trying again.`);
+}
+
 /** RM map › Pins › drop a pin: the map's own save, on the day and manager the check was made for. */
 export async function pinFromBenny(p: Extract<BennyProposal, { kind: 'pin' }>, centerId: string): Promise<string> {
   const c = p.check;
@@ -500,6 +564,7 @@ export async function doProposal(p: BennyProposal, center: CenterLite): Promise<
   if (p.kind === 'give_route') return giveRouteFromBenny(p, center.id);
   if (p.kind === 'booking') return bookingFromBenny(p, center.id);
   if (p.kind === 'job') return jobFromBenny(p, center.id);
+  if (p.kind === 'bonus') return bonusesFromBenny(p, center);
   if (p.kind === 'pin') return pinFromBenny(p, center.id);
   if (p.kind === 'stops') return stopsFromBenny(p, center.id);
   // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)
