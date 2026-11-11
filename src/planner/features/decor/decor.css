@@ -1,0 +1,106 @@
+/* src/planner/features/decor/decor.css — stickers on a planner page (Layer.tsx), decorating a page (Decorate.tsx)
+   and the list of pages to decorate (Stickers.tsx). The stickers themselves keep their own colours on every theme;
+   everything around them (the frame, the handles, the tray) uses the planner's variables. */
+
+/* ── a page's stickers: two sheets slipped into the page, one under its cards and one over ──
+   Only a page that has stickers gets them, and only then does the page become what they are placed from
+   (Layer.tsx marks its <main> with data-dk). */
+.pl-page[data-dk] { position: relative; }
+/* A sheet covers the page (or the screen, on a page shorter than it). It lets every touch through, and cuts off what
+   hangs over the page's edge: a sticker half off the side must not make the page scroll sideways.
+   --dk-p*: the page's own padding (Layer.tsx reads the real ones; these are planner.css's .pl-page). */
+.dk-layer { position: absolute; left: 0; right: 0; top: 0; height: max(100%, 100vh); height: max(100%, 100dvh); overflow: hidden; pointer-events: none; animation: dkIn .3s ease-out;
+  --dk-pl: 16px; --dk-pr: 16px; --dk-pt: calc(env(safe-area-inset-top) + 16px); --dk-pb: calc(var(--nav-h) + env(safe-area-inset-bottom) + 24px); }
+.dk-layer--over { z-index: 1; }   /* over the cards, under the bottom bar, sheets and buttons that float (10 and up) */
+/* Stickers tucked behind the cards: the lower sheet comes first in the page, and everything after it is lifted just
+   enough to be drawn over it. :where() keeps this weaker than any rule a screen has of its own (a sheet or a round
+   button that is fixed to the screen stays fixed). */
+:where(.pl-page[data-dk="under"] > :not(.dk-layer)) { position: relative; }
+/* where a thing sits on a sheet: --x = across, a share of the page's content; --y = px down from the content's top,
+   never past the end of the page (a page that is shorter today shows its last stickers at its end) */
+.dk-at { position: absolute; left: calc(var(--dk-pl) + var(--x) * (100% - var(--dk-pl) - var(--dk-pr))); top: min(calc(var(--dk-pt) + var(--y)), calc(100% - var(--dk-pb) - 8px)); }
+.dk-s { display: block; max-width: none; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }
+@keyframes dkIn { from { opacity: 0; } to { opacity: 1; } }   /* a page's stickers arrive softly, a moment after the page */
+
+/* ── decorating a page ── */
+/* the bottom bar and the demo's card go; the page gets room to scroll clear of the tray */
+body.dk-on .pl-nav, body.dk-on .pl-tour { display: none; }
+body.dk-on #root::after { content: ''; display: block; height: var(--dk-tray, 320px); }
+body.dk-on .dk-layer--over { z-index: 15; }   /* over the page's floating buttons too, under sheets (20) */
+/* The stage takes every touch on the page. A finger on it scrolls the page up and down as usual (pan-y); a finger on
+   a sticker or a handle moves that and nothing else (none). */
+.dk-stage { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: auto; touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+.dk-grip { padding: 0; border: 0; background: none; border-radius: 6px; cursor: grab; touch-action: none; outline: none; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
+.dk-grip:active { cursor: grabbing; }
+/* a small sticker is still as easy to take hold of as a fingertip needs */
+.dk-grip::before { content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+.dk-grip img { position: relative; display: block; width: 100%; height: 100%; pointer-events: none; -webkit-user-drag: none; }
+.dk-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* tucked behind the cards: the real one is drawn under them; here, a faint copy in a dashed outline to find it by */
+.dk-grip.is-under { outline: 1.5px dashed color-mix(in srgb, var(--ink) 60%, transparent); outline-offset: 2px; }
+.dk-grip.is-under img { opacity: .3; }
+/* the chosen sticker's frame: a handle on each corner to resize it, one below to turn it */
+.dk-frame { pointer-events: none; border: 1.5px solid var(--accent); border-radius: 8px; box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--bg-2) 80%, transparent), inset 0 0 0 1.5px color-mix(in srgb, var(--bg-2) 80%, transparent); }
+.dk-frame::after { content: ''; position: absolute; left: 50%; top: 100%; width: 2px; height: 18px; margin-left: -1px; background: var(--accent); }
+.dk-handle { position: absolute; width: 44px; height: 44px; margin: -22px; display: grid; place-items: center; pointer-events: auto; touch-action: none; cursor: nwse-resize; }
+.dk-handle::before { content: ''; width: 16px; height: 16px; border-radius: 50%; background: var(--bg-2); border: 2px solid var(--accent); box-shadow: 0 1px 4px rgba(0, 0, 0, .3); }
+.dk-handle--nw { left: 0; top: 0; }
+.dk-handle--ne { left: 100%; top: 0; cursor: nesw-resize; }
+.dk-handle--se { left: 100%; top: 100%; }
+.dk-handle--sw { left: 0; top: 100%; cursor: nesw-resize; }
+.dk-handle--turn { left: 50%; top: calc(100% + 32px); cursor: grab; }
+.dk-handle--turn::before { width: 30px; height: 30px; background: var(--accent); border-color: var(--bg-2); }
+.dk-handle--turn svg { position: absolute; left: 0; top: 0; right: 0; bottom: 0; margin: auto; width: 16px; height: 16px; color: var(--accent-ink); }
+
+/* the tray: over the bottom bar's place. Top row: undo, what is being decorated, fold, Done. */
+.dk-tray { position: fixed; left: 0; right: 0; bottom: 0; z-index: 16; max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--bg-2); border-top: 1px solid var(--line); border-radius: 18px 18px 0 0; box-shadow: 0 -8px 28px rgba(0, 0, 0, .18); animation: dkUp .28s ease-out; }
+@keyframes dkUp { from { transform: translateY(100%); } to { transform: none; } }
+.dk-tray__head { display: flex; align-items: center; gap: 8px; }
+.dk-tray__title { flex: 1; min-width: 0; }
+.dk-tray__title b { display: block; font-family: var(--serif); font-size: 17px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dk-tray__title small { display: block; font-size: 12px; color: var(--ink-2); }
+.dk-icon { flex: none; width: 44px; height: 44px; padding: 0; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-2); display: grid; place-items: center; cursor: pointer; }
+.dk-icon svg { width: 20px; height: 20px; }
+.dk-icon:disabled { opacity: .4; cursor: default; }
+.dk-done { flex: none; min-height: 44px; padding: 0 20px; }
+.dk-note { font-size: 13px; line-height: 1.35; color: var(--bad); }
+.dk-hint { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 13px; color: var(--ink-2); }
+.dk-hint button { flex: none; margin: -8px -6px -8px auto; min-height: 44px; padding: 0 8px; border: 0; background: none; color: var(--bad); font-size: 13px; font-weight: 600; cursor: pointer; }
+/* what can be done with the chosen sticker */
+.dk-acts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.dk-acts button { min-height: 52px; padding: 4px 2px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); font-size: 11px; font-weight: 600; line-height: 1.15; text-align: center; cursor: pointer; }   /* two words go on two lines on a small phone */
+.dk-acts svg { width: 18px; height: 18px; }
+.dk-acts button:disabled { opacity: .4; cursor: default; }
+.dk-acts button.is-bad { color: var(--bad); }
+.dk-acts button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 14%, var(--bg-2)); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+/* the groups, across; they scroll sideways inside the tray, never the page */
+.dk-tabs { display: flex; gap: 6px; margin: 0 -12px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.dk-tabs::-webkit-scrollbar { display: none; }
+.dk-tabs .pl-chip { flex: none; min-height: 44px; padding: 0 14px; white-space: nowrap; }
+/* a group's stickers; a soft tile behind each so a white one shows */
+.dk-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); grid-auto-flow: dense; gap: 6px; align-content: start; height: 152px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.dk-cell { min-width: 0; height: 60px; padding: 6px; border: 0; border-radius: 12px; background: color-mix(in srgb, var(--ink) 7%, transparent); display: grid; place-items: center; cursor: pointer; }
+.dk-cell.is-wide { grid-column: span 3; padding: 6px 12px; }   /* tape and other long ones: two to a row */
+.dk-cell img { display: block; width: 100%; height: 48px; object-fit: contain; pointer-events: none; }
+.dk-cell:disabled { opacity: .45; cursor: default; }
+.dk-cell:active:not(:disabled) { transform: scale(.94); }
+/* Mine: add one, and each of the person's own with its delete button beside it */
+.dk-cell--add, .dk-cell--mine { grid-column: span 3; height: 76px; }
+.dk-cell--add { grid-auto-flow: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--accent); border: 1.5px dashed color-mix(in srgb, var(--accent) 45%, transparent); background: none; }
+.dk-cell--add svg { width: 20px; height: 20px; }
+.dk-cell--mine { display: flex; align-items: stretch; padding: 0; cursor: default; overflow: hidden; }
+.dk-cell__pick { flex: 1; min-width: 0; padding: 6px; border: 0; background: none; cursor: pointer; }
+.dk-cell__pick img { height: 64px; }
+.dk-cell__pick:disabled { opacity: .45; cursor: default; }
+.dk-cell__x { flex: none; width: 44px; border: 0; border-left: 1px solid color-mix(in srgb, var(--ink) 10%, transparent); background: none; color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
+.dk-cell__x svg { width: 18px; height: 18px; }
+.dk-mine-hint { grid-column: 1 / -1; font-size: 13px; line-height: 1.4; color: var(--ink-2); }
+
+/* ── Settings › Stickers ── */
+.dk-samples { display: flex; align-items: center; justify-content: space-between; gap: 8px; overflow: hidden; }
+.dk-samples img { flex: none; display: block; height: 42px; width: auto; }
+
+/* a wide window: more to a row */
+@media (min-width: 560px) { .dk-grid { grid-template-columns: repeat(9, minmax(0, 1fr)); } }
+
+@media (prefers-reduced-motion: reduce) { .dk-layer, .dk-tray { animation: none; } .dk-cell:active:not(:disabled) { transform: none; } }
