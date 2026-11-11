@@ -1,16 +1,17 @@
 // src/planner/features/workout/DonePanel.tsx — the Train hero after today's session is completed, until the
 // day rolls over: Arvy's review (a paragraph or two), two questions with choices, and tomorrow's
 // session, which one tap saves as a one-off template planned for tomorrow. Cached in doc kind 'dayplan'.
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles, CalendarCheck, Play } from 'lucide-react';
 import { dayPlan, type DayPlan } from '../../lib/ai';
 import { dayKey, getDoc, putDoc } from '../../lib/docs';
 import { Button, Card } from '../../ui/primitives';
 import { COACH_ASKS, openArvy } from '../arvy/arvy';
-import { LIBRARY } from './library';
+import { blocksOf, blockTitle, targetLine } from './format';
+import { LIBRARY, findExercise } from './library';
 import { saveCustomExercise, saveTemplate, saveWorkout, startFromTemplate, templateFromPlan } from './store';
-import { durationMin, fmtSec, workoutKey, type Exercise, type Template, type Units, type Workout } from './types';
+import { durationMin, fmtSec, workoutKey, type Exercise, type Template, type TemplateExercise, type Units, type Workout } from './types';
 
 const tomorrowKey = () => { const d = new Date(); d.setDate(d.getDate() + 1); return dayKey(d); };
 
@@ -68,7 +69,26 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
   // is what tomorrow is: show it, and keep this panel's earlier idea one tap away instead of on top
   const other = planned && (!t || planned.name !== t.name) ? planned : null;
   const [showIdea, setShowIdea] = useState(false);
-  const exLine = (e: NonNullable<typeof t>['exercises'][number]) => `${e.group ? `${e.group.toUpperCase()} · ` : ''}${e.name} — ${e.repsBySet?.length ? `${e.style || 'pyramid'} ${e.repsBySet.join('-')}` : e.mode === 'time' ? `${e.sets} × ${fmtSec(e.seconds || 60)}${e.style === 'intervals' && e.restSec ? ` / rest ${fmtSec(e.restSec)}` : ''}` : `${e.sets} × ${e.reps || '8-12'}${e.weight ? ` @ ${e.weight} ${units}` : ''}`}${e.perSide ? ' per side' : ''}${e.group && e.groupKind && e.groupKind !== 'superset' ? ` (${e.groupKind}${e.groupMinutes ? ` ${e.groupMinutes} min` : ''})` : ''}`;
+  // Arvy's idea as the session it would become, so both lists below read the same way (blocks, shaped sets, per side)
+  const idea = useMemo(() => (t && t.exercises.length ? templateFromPlan(t, units, custom) : null), [t, units, custom]);
+  /** A session as the Train page lists it: a superset, circuit, EMOM or AMRAP under its name; a pyramid, countdown
+   *  or intervals spelled out; "per side" where it's logged left and right. */
+  const sessionList = (exs: TemplateExercise[], made: Exercise[] = []) => (
+    <div className="wo-hero__list">
+      {blocksOf(exs).map((b, bi) => (
+        <div key={bi} style={{ display: 'contents' }}>
+          {b.kind !== 'single' && <div className="wo-hero__fmt">{blockTitle(b, exs)}</div>}
+          {b.at.map(i => {
+            const e = exs[i]; const lib = made.find(x => x.id === e.exerciseId) || findExercise(e.exerciseId, custom);
+            const clocked = b.kind === 'emom' || b.kind === 'amrap';
+            const w = e.weightBySet?.length ? e.weightBySet : null;
+            const load = clocked || e.mode === 'time' ? '' : w ? ` · ${w[0] === w[w.length - 1] ? w[0] : `${w[0]}→${w[w.length - 1]}`}\u00a0${units}` : !e.style && e.startWeight ? ` @ ${e.startWeight}\u00a0${units}` : '';
+            return <div className={`wo-hero__row${b.kind !== 'single' ? ' wo-hero__row--in' : ''}`} key={i}><span>{e.name} — {clocked ? (e.mode === 'time' ? fmtSec(e.targetSec || 30) : `${e.targetReps} reps`) : targetLine(e, lib)}{load}</span></div>;
+          })}
+        </div>
+      ))}
+    </div>
+  );
 
   return (
     <Card accent>
@@ -99,7 +119,7 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
               <p className="pl-eyebrow" style={{ marginBottom: 2 }}>Tomorrow{other.focus ? ` · ${other.focus}` : ''}{other.minutes ? ` · ~${other.minutes} min` : ''}</p>
               <b style={{ fontSize: 16 }}>{other.name}</b>
               <p style={{ fontSize: 13, margin: '2px 0 6px', opacity: .85 }}><CalendarCheck size={14} aria-hidden style={{ verticalAlign: -2 }} /> Set up for tomorrow. It'll be waiting on this page.</p>
-              <div className="wo-hero__list">{other.exercises.map((e, i) => <div className="wo-hero__row" key={i}><span>{e.name} — {e.mode === 'time' ? `${e.targetSets} × ${fmtSec(e.targetSec || 60)}` : `${e.targetSets} × ${e.targetReps || '8-12'}`}</span></div>)}</div>
+              {sessionList(other.exercises)}
               <div className="pl-row" style={{ gap: 8, marginTop: 8 }}>
                 <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} onClick={startPlanned}><Play size={14} /> Start it now</Button>
                 {t && t.exercises.length > 0 && <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} onClick={() => setShowIdea(v => !v)}>{showIdea ? 'Hide' : 'See'} this morning's idea</Button>}
@@ -112,7 +132,7 @@ export function DonePanel({ done, units, custom, templates, workouts, onTemplate
               <p className="pl-eyebrow" style={{ marginBottom: 2 }}>{other ? 'Earlier idea' : 'Tomorrow'} · {t.focus} · ~{t.minutes} min</p>
               <b style={{ fontSize: 16 }}>{t.name}</b>
               <p style={{ fontSize: 13, margin: '2px 0 6px', opacity: .85 }}>{t.why}</p>
-              <div className="wo-hero__list">{t.exercises.map((e, i) => <div className="wo-hero__row" key={i}><span>{exLine(e)}</span></div>)}</div>
+              {idea && sessionList(idea.template.exercises, idea.created)}
               {other
                 ? <Button small ghost style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)', marginTop: 8 }} disabled={busy === 'save'} onClick={saveTomorrow}>Use this instead of “{other.name}”</Button>
                 : planned

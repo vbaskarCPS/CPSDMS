@@ -6,6 +6,7 @@ import { isDemo, profileOf } from './lib/app';
 import { Tour } from './demo/Tour';
 import { setProfile } from './lib/routine';
 import { Shell } from './ui/Shell';
+import { UpdateReady } from './ui/UpdateReady';
 import { Login } from './screens/Login';
 import { Today } from './screens/Today';
 import { Settings } from './screens/Settings';
@@ -37,10 +38,13 @@ export function PlannerApp() {
 
   if (!pass) {
     return (
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="*" element={<Navigate to="/login" replace state={{ from: location.pathname }} />} />
-      </Routes>
+      <>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="*" element={<Navigate to="/login" replace state={{ from: location.pathname }} />} />
+        </Routes>
+        <UpdateReady />
+      </>
     );
   }
   return (
@@ -56,6 +60,7 @@ export function PlannerApp() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       {isDemo() && <Tour />}
+      <UpdateReady />
     </Shell>
   );
 }

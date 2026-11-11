@@ -166,4 +166,5 @@ small.today-gym-status { display: block; }
 .wo-logged { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; }
 .wo-logged svg { color: var(--good); flex: none; }
 .wo-hero__fmt { font: 700 10.5px var(--sans); letter-spacing: .05em; text-transform: uppercase; opacity: .75; margin: 6px 0 -2px; }
+.wo-hero__row--in { padding-left: 10px; border-left: 2px solid color-mix(in srgb, currentColor 40%, transparent); }
 .wo-addload { border: 0; background: none; padding: 0; color: var(--ink-2); font: inherit; text-decoration: underline; cursor: pointer; }

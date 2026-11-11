@@ -77,7 +77,7 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
               <div key={bi} style={{ display: 'contents' }}>
                 {b.kind !== 'single' && <div className="wo-hero__fmt">{blockTitle(b, tpl.exercises)}</div>}
                 {b.at.map(i => { const { e, s } = targets[i]; const lib = findExercise(e.exerciseId, custom); const shaped = !!e.style || e.mode === 'time' || isNoLoad(e, lib) || b.kind === 'emom' || b.kind === 'amrap';
-                  return <div className="wo-hero__row" key={`${e.exerciseId}-${i}`}><button type="button" className="wo-ex__howto" onClick={() => setHowTo({ id: e.exerciseId, name: e.name, note: e.note })}>{e.name}</button><span>{b.kind === 'emom' || b.kind === 'amrap' ? (e.mode === 'time' ? fmtSec(e.targetSec || 30) : `${e.targetReps} reps`) : targetLine(e, lib)}{!shaped && s.weight > 0 ? ` @ ${s.weight} ${units}` : ''}</span></div>; })}
+                  return <div className={`wo-hero__row${b.kind !== 'single' ? ' wo-hero__row--in' : ''}`} key={`${e.exerciseId}-${i}`}><button type="button" className="wo-ex__howto" onClick={() => setHowTo({ id: e.exerciseId, name: e.name, note: e.note })}>{e.name}</button><span>{b.kind === 'emom' || b.kind === 'amrap' ? (e.mode === 'time' ? fmtSec(e.targetSec || 30) : `${e.targetReps} reps`) : targetLine(e, lib)}{!shaped && s.weight > 0 ? ` @ ${s.weight} ${units}` : ''}</span></div>; })}
               </div>
             ))}
           </div>
