@@ -1,9 +1,12 @@
 // supabase/functions/planner-arvy/index.ts — Arvy, the planner's assistant (said "AR-vee").
 //
 //   POST { token, action: 'turn', messages: [Claude messages], context: ArvyCtx }
-//        → { content: [text | tool_use blocks], stop_reason }
+//        → { content: [text | tool_use blocks], stop_reason, web?: { searches, sources, found }, raw? }
 //        One step of the conversation. When Claude wants a tool, the app runs it (the planner's data and the code that
 //        reads it live in the app), sends the results back as the next turn, and so on until there's an answer.
+//        The web is the one tool that runs here (Anthropic searches, inside the same call): `web` says what was
+//        searched, which pages the answer cites and which the search found, and `raw` is the step as Claude wrote it, for the app to send back
+//        when the question isn't finished (tools.ts webOut).
 //   POST { token, action: 'speak', text } → { audio }   MP3, base64: Arvy's voice (a woman's for Rosh, a man's for Vijay)
 //   POST { token, action: 'dayplan', context, units, library: [exercise names], answers? } → { review, questions, tomorrow }
 //        After a workout: a review of it, two questions, and tomorrow's session in Arvy's exercise shape (tools.ts EXERCISE).
@@ -15,7 +18,7 @@
 // answer and the COACH_MODEL secret's model if set. Model otherwise: ARVY_MODEL secret, else a Sonnet-class model. Claude key: ANTHROPIC_API_KEY. Voice: GOOGLE_TTS_KEY
 // (else GOOGLE_API_KEY), voices ARVY_VOICE_MORNING / ARVY_VOICE_NIGHT.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { cleanMessages, contextText, DAYPLAN_SCHEMA, dayplanSystem, isCoaching, speakable, system, toolsFor, voiceFor, type ArvyCtx, type Profile } from './tools.ts';
+import { canWeb, cleanMessages, contextText, DAYPLAN_SCHEMA, dayplanSystem, isCoaching, speakable, system, toolsFor, voiceFor, webOut, webRaw, WEB_SEARCH, type ArvyCtx, type Profile } from './tools.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
 const FALLBACK = 'claude-sonnet-5-5';
@@ -32,27 +35,40 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 interface Me { id: string; username: string; display_name: string; settings?: Record<string, unknown> }
 const profileOf = (me: Me): Profile => (me.settings?.profile === 'morning' || (!me.settings?.profile && me.username === 'rosh') ? 'morning' : 'night');
 
-async function claude(sys: string, messages: unknown[], tools: unknown[], coaching = false): Promise<{ content: unknown[]; stop_reason: string }> {
+/** Anthropic refused a request over the web search: the question is answered without it. `off` = the account has web
+ *  search switched off (an admin setting), rather than something being wrong with this one request. */
+class WebOff extends Error { constructor(msg: string, readonly off: boolean) { super(msg); } }
+let webOff = false;   // found switched off once: not offered again until this function restarts
+
+/** `web` = the web search tool is in `tools`: searching and reading take longer, and a long search can come back
+ *  paused (stop_reason pause_turn), which is carried on here until there's an answer or a tool for the app. */
+async function claude(sys: string, messages: unknown[], tools: unknown[], coaching = false, web = false): Promise<{ content: unknown[]; stop_reason: string }> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
-  let model = coaching ? COACH_MODEL : MODEL; let res: Response | null = null; let data: Record<string, unknown> = {};
-  for (let attempt = 0; attempt < 3; attempt++) {
-    res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-      body: JSON.stringify({ model, max_tokens: coaching ? 3000 : 1200, system: sys, messages, tools }),
-      signal: AbortSignal.timeout(coaching ? 110000 : 60000),
-    });
-    data = await res.json().catch(() => ({}));
-    if (res.ok) break;
-    const msg = String((data as { error?: { message?: string } }).error?.message || '');
-    if (res.status === 404 || /model/i.test(msg) && res.status === 400) { if (model !== FALLBACK) { model = FALLBACK; continue; } }
-    if (!(res.status === 429 || res.status === 529 || res.status >= 500)) break;
-    await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+  let model = coaching ? COACH_MODEL : MODEL;
+  const said: unknown[] = [];   // what Claude has written so far in this step (more than one call when a search pauses)
+  for (let part = 0; ; part++) {
+    let res: Response | null = null; let data: Record<string, unknown> = {};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
+        body: JSON.stringify({ model, max_tokens: coaching ? 3000 : web ? 1800 : 1200, system: sys, messages: said.length ? [...messages, { role: 'assistant', content: said }] : messages, tools }),
+        signal: AbortSignal.timeout(coaching || web ? 110000 : 60000),
+      });
+      data = await res.json().catch(() => ({}));
+      if (res.ok) break;
+      const msg = String((data as { error?: { message?: string } }).error?.message || '');
+      if (web && res.status === 400 && /web[ _]?search|server_tool_use|encrypted/i.test(msg)) throw new WebOff(msg, /not enabled|disabled|not available|not supported|not allowed/i.test(msg));
+      if (res.status === 404 || /model/i.test(msg) && res.status === 400) { if (model !== FALLBACK) { model = FALLBACK; continue; } }
+      if (!(res.status === 429 || res.status === 529 || res.status >= 500)) break;
+      await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+    }
+    if (!res || !res.ok) throw new Error((data as { error?: { message?: string } }).error?.message || `Anthropic ${res?.status}`);
+    const d = data as { content?: unknown[]; stop_reason?: string };
+    said.push(...(Array.isArray(d.content) ? d.content : []));
+    if (d.stop_reason !== 'pause_turn' || part >= 3) return { content: said, stop_reason: d.stop_reason === 'pause_turn' ? 'end_turn' : d.stop_reason || 'end_turn' };
   }
-  if (!res || !res.ok) throw new Error((data as { error?: { message?: string } }).error?.message || `Anthropic ${res?.status}`);
-  const d = data as { content?: unknown[]; stop_reason?: string };
-  return { content: Array.isArray(d.content) ? d.content : [], stop_reason: d.stop_reason || 'end_turn' };
 }
 
 /** A structured answer through a tool call named `answer`. Best is forcing the call (the API then makes it match the
@@ -151,8 +167,6 @@ Deno.serve(async req => {
     }
     if (b.action !== 'turn') return json({ error: 'Unknown action' }, 400);
 
-    const messages = cleanMessages(b.messages, profile);
-    if (!messages) return json({ error: 'Nothing to answer' }, 400);
     const c = b.context || {};
     const ctx: ArvyCtx = {
       name: (user.display_name || user.username).split(/\s+/)[0], username: user.username, profile,
@@ -161,9 +175,27 @@ Deno.serve(async req => {
       about: Array.isArray(c.about) ? c.about.slice(-25).map(n => String(n).replace(/\s+/g, ' ').slice(0, 300)).filter(Boolean) : undefined,
       v: Math.max(1, Math.min(99, Math.floor(Number(c.v)) || 1)),   // an app from before the number was sent only has the first tools
     };
+    // the web, for an app that can show the sources and holds changes for Confirm after a search (tools.ts WEB_SEARCH)
+    let web = canWeb(ctx.v) && !webOff;
+    let messages = cleanMessages(b.messages, profile, web);
+    if (!messages) return json({ error: 'Nothing to answer' }, 400);
     const coaching = isCoaching(messages);
-    const out = await claude(system(ctx, coaching), messages, toolsFor(profile, ctx.v), coaching);
-    return json(out);
+    let out: { content: unknown[]; stop_reason: string };
+    try {
+      out = await claude(system(ctx, coaching, web), messages, web ? [...toolsFor(profile, ctx.v), WEB_SEARCH] : toolsFor(profile, ctx.v), coaching, web);
+    } catch (e) {
+      if (!(e instanceof WebOff)) throw e;
+      console.error(`planner-arvy: answering without the web (${e.off ? 'switched off for this Anthropic account' : 'this request was refused'}):`, e.message);
+      if (e.off) webOff = true;
+      web = false;
+      messages = cleanMessages(b.messages, profile, false) || messages;
+      out = await claude(system(ctx, coaching, false), messages, toolsFor(profile, ctx.v), coaching);
+    }
+    if (!web) return json(out);
+    const shown = webOut(out.content);
+    if (!shown.searched) return json({ content: shown.content, stop_reason: out.stop_reason });
+    return json({ content: shown.content, stop_reason: out.stop_reason, web: { searches: shown.searches, sources: shown.sources, found: shown.found },
+      ...(out.stop_reason === 'tool_use' ? { raw: webRaw(out.content) } : {}) });
   } catch (e) {
     console.error('planner-arvy:', action, e instanceof Error ? e.message : String(e));
     return json({ error: e instanceof Error ? e.message : 'Something went wrong' }, 500);

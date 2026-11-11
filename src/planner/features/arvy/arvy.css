@@ -64,6 +64,13 @@
 .arvy-change-note { margin-top: 5px; font-size: 12px; font-weight: 700; color: var(--ink-2); }
 
 /* thumbs-down under a reply (goes in Arvy's improvements log) */
+/* the web pages a reply cites, and the buttons to pick an option with */
+.arvy-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--ink-2); }
+.arvy-sources span { font-weight: 600; margin-right: 2px; }
+.arvy-sources a { color: var(--ink); text-decoration: none; border: 1px solid var(--line); background: var(--bg-2); border-radius: 12px; padding: 3px 9px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arvy-sources a:hover, .arvy-sources a:focus-visible { border-color: var(--accent); }
+.arvy-choices { margin-top: 10px; }
+.arvy-choices button { background: var(--bg-2); border-color: var(--accent); }
 .arvy-down { display: block; margin: 6px 0 -4px auto; width: 28px; height: 24px; border: 0; background: transparent; color: var(--ink-2); opacity: .45; cursor: pointer; padding: 0; }
 .arvy-down svg { width: 14px; height: 14px; }
 .arvy-down:hover, .arvy-down:focus-visible { opacity: 1; }

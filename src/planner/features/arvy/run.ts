@@ -235,6 +235,8 @@ export async function runTool(name: string, input: Record<string, unknown>, abou
         if (!(path in SCREENS)) return { result: { error: `no screen ${path}` }, error: true };
         return { result: { opened: SCREENS[path] }, navigate: path };
       }
+      // the buttons themselves are picked up by the chat (arvy.ts ask): this only answers Claude when it called for them before writing its reply
+      case 'offer_choices': return { result: { shown: true, note: 'The buttons are under your reply. Now write the reply itself: the options, a line or two each, and ask which one.' } };
       case 'cant_do_yet': {
         await logArvy({ type: 'request', title: String(input.request || 'Something Arvy can’t do yet'), area: String(input.area || 'other'), question: about?.question, path: about?.path });
         return { result: { noted: true } };
