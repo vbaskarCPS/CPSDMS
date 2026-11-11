@@ -141,16 +141,18 @@ d('describe', () => {
   it('the payouts card lists who is lined up and who is left, and says nobody is paid out from it', () => {
     const pay: PayoutsCheck = { ok: true, date: '2026-11-10', paid_out: 4,
       carts: [{ cart_id: 's1', cn: 'I1167', workers: ['David Nsapu'], jobs: 1, gross: 210, collected: { card: 0, cash: 0, billed: 0, cheque: 0, prepaid: 210, e_transfer: 0 } },
-        { cart_id: 's2', cn: 'I1013', workers: ['Michael Asiegbunam', 'Kyle Pitt'], jobs: 2, gross: 602, collected: { card: 392, cash: 0, billed: 0, cheque: 0, prepaid: 210, e_transfer: 0 } }],
-      to_count: [{ workers: ['Kevontae Ragguette'], cash: 180, cheque: 0 }, { workers: ['Nathan Clark'], cash: 20, cheque: 75.5 }], no_jobs: [['Favour Anugawo']] };
-    expect(describe({ kind: 'payouts', check: pay })).toEqual({ title: 'Go through 2 payouts with no cash or cheque', action: 'Open', lines: [
-      'David · 1 job · $210.00 prepaid', 'Michael + Kyle · 2 jobs · $392.00 card, $210.00 prepaid',
-      'Left for a hand count: Kevontae ($180.00 cash); Nathan ($20.00 cash, $75.50 in cheques)', 'No jobs, left open: Favour',
+        { cart_id: 's2', cn: 'I1013', workers: ['Michael Asiegbunam', 'Kyle Pitt'], jobs: 2, gross: 602, collected: { card: 392, cash: 0, billed: 0, cheque: 0, prepaid: 210, e_transfer: 0 } },
+        // a cart with no jobs has nothing to count either: it is lined up too, after the ones with jobs
+        { cart_id: 's3', cn: 'I1188', workers: ['Favour Anugawo'], jobs: 0, gross: 0, collected: { card: 0, cash: 0, billed: 0, cheque: 0, prepaid: 0, e_transfer: 0 } }],
+      to_count: [{ workers: ['Kevontae Ragguette'], cash: 180, cheque: 0 }, { workers: ['Nathan Clark'], cash: 20, cheque: 75.5 }] };
+    expect(describe({ kind: 'payouts', check: pay })).toEqual({ title: 'Go through 3 payouts with no cash or cheque', action: 'Open', lines: [
+      'David · 1 job · $210.00 prepaid', 'Michael + Kyle · 2 jobs · $392.00 card, $210.00 prepaid', 'Favour · no jobs',
+      'Left for a hand count: Kevontae ($180.00 cash); Nathan ($20.00 cash, $75.50 in cheques)',
       'Nothing is paid out from here: each one opens on the payout screen and you press Finalize. It then moves to the next.'] });
-    const one = describe({ kind: 'payouts', check: { ...pay, carts: [pay.carts[0]], to_count: undefined, no_jobs: undefined } });
+    const one = describe({ kind: 'payouts', check: { ...pay, carts: [pay.carts[0]], to_count: undefined } });
     expect(one.title).toBe('Go through 1 payout with no cash or cheque'); expect(one.lines).toHaveLength(2);
     // the card opens the payout screen at the first, with the rest behind it
-    expect(payoutsStart(pay)).toBe('/app/workerbook/days/2026-11-10/payouts/I1167?queue=I1013&at=1&of=2');
+    expect(payoutsStart(pay)).toBe('/app/workerbook/days/2026-11-10/payouts/I1167?queue=I1013,I1188&at=1&of=3');
     expect(payoutsStart({ ...pay, carts: [] })).toBeNull();
   });
   it('an order card lists the stops in order, with how each was found, and what it replaces', () => {

@@ -41,7 +41,7 @@ const fakeSb = `
       if (fn === 'benny_check_payouts') return s.noPayouts
         ? { data: { ok: false, problems: ['No open payout is free of cash and cheque: 6 are already paid out, Kevontae has $180.00 cash to count.'] }, error: null }
         : { data: { ok: true, date: '2026-11-10', carts: [{ cart_id: 's1', cn: 'I1167', workers: ['David Nsapu'], jobs: 1, gross: 210, collected: { prepaid: 210 } }, { cart_id: 's2', cn: 'I1013', workers: ['Michael Asiegbunam'], jobs: 2, gross: 602, collected: { card: 392, prepaid: 210 } }],
-            to_count: [{ workers: ['Kevontae Ragguette'], cash: 180, cheque: 0 }], no_jobs: [['Favour Anugawo']], paid_out: 4 }, error: null };
+            to_count: [{ workers: ['Kevontae Ragguette'], cash: 180, cheque: 0 }], paid_out: 4 }, error: null };
       if (fn === 'benny_map') return { data: { maps: ['SURREY #1'], highlight: ['SRY01'], pins: [{ lat: 1, lng: 2, label: 'x', route: 'SRY01' }] }, error: null };
       return { data: null, error: { message: 'no such function ' + fn } }; } }; }`;
 const r = await build({ entryPoints: ['supabase/functions/benny-assist/index.ts'], bundle: true, format: 'esm', write: false, logLevel: 'silent',
