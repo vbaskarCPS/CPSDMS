@@ -243,6 +243,14 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
           void autoMark('gym', true, k, 'mini');
           return;
         }
+        // a day with no gym (sick, a rest day set with Arvy): what was done instead is the day's session block, and the
+        // gym habit gets the small version, like the home challenge
+        if (d.adjust?.skip?.includes('gym')) {
+          const added = d.adjust.added?.map(x => (x.session && !x.done ? { ...x, done: nowHM() } : x));
+          await putDoc('day', k, { ...d, adjust: { ...d.adjust, ...(added ? { added } : {}) } });
+          void autoMark('gym', true, k, 'mini');
+          return;
+        }
         if (!d.ticks.gym) await putDoc('day', k, { ...d, ticks: { ...d.ticks, gym: nowHM() } });
         void autoMark('gym', true, k);
       } catch { /* the Today screen can be ticked by hand */ }

@@ -34,7 +34,8 @@ export interface Format {
 // startWeight = the weight the plan prescribed: it fills the sets of a one-off planned session, or a first time
 export interface TemplateExercise extends Format { exerciseId: string; name: string; targetSets: number; targetReps: string; restSec: number; note?: string; mode?: SetMode; targetSec?: number; startWeight?: number }
 // plannedFor = a one-off session Arvy set up for that date (YYYY-MM-DD); it's today's pick on that day
-export interface Template { id: string; name: string; days?: number[]; exercises: TemplateExercise[]; order: number; archived?: boolean; plannedFor?: string; focus?: string; minutes?: number }
+export interface Template { id: string; name: string; days?: number[]; exercises: TemplateExercise[]; order: number; archived?: boolean; plannedFor?: string; focus?: string; minutes?: number;
+  /** done away from the gym (a stretch routine, mobility, a bodyweight session at home): it's the day's session on a day with no gym */ home?: boolean }
 
 export interface SetLog { weight: number; reps: number; rpe?: number; done: boolean; prev?: { weight: number; reps: number; repsR?: number }; seconds?: number; repsR?: number }
 // Unilateral exercises (one-arm row, split squat…): reps = left side, repsR = right side, one weight.

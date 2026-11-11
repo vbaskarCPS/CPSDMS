@@ -6,7 +6,7 @@ import type { PlannerPass } from '../../lib/auth';
 import { clock, routineMin, routineMinutes } from '../../lib/routine';
 import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Page, Header, Card, Button, Bars, Stat, Empty } from '../../ui/primitives';
-import { daysAgo, emptyWorkout, fmtDate, loadCustomExercises, loadTemplates, loadWorkouts, nextTarget, saveWorkout, startFromTemplate, todaysTemplate, weekSessions } from './store';
+import { daysAgo, emptyWorkout, fmtDate, loadCustomExercises, loadTemplates, loadWorkouts, nextTarget, saveWorkout, sessionToday, startFromTemplate, weekSessions } from './store';
 import { durationMin, fmtNum, fmtSec, volumeOf, workoutKey, type Exercise, type Template, type Units, type Workout } from './types';
 import { blocksOf, blockTitle, isNoLoad, targetLine } from './format';
 import { findExercise } from './library';
@@ -42,7 +42,11 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
   const [howTo, setHowTo] = useState<{ id: string; name: string; note?: string } | null>(null);
 
   const unfinished = workouts.find(w => !w.endedAt);
-  const tpl = useMemo(() => todaysTemplate(templates, workouts), [templates, workouts]);
+  // on a day with no gym (Arvy changed the day: sick, a rest day) only what's planned for today is offered
+  const { adjust } = useTodayRoutine();
+  const noGym = !!adjust?.skip?.includes('gym');
+  const tpl = useMemo(() => sessionToday(templates, workouts, noGym), [templates, workouts, noGym]);
+  const waiting = noGym && adjust?.held ? templates.find(t => t.id === adjust.held!.id && !t.archived && t.plannedFor === adjust.held!.to) : undefined;
   const targets = useMemo(() => (tpl ? tpl.exercises.map(e => ({ e, s: nextTarget(workouts, e, units, custom) })) : []), [tpl, workouts, units, custom]);
   const week = weekSessions(workouts);
   const finished = workouts.filter(w => w.endedAt);
@@ -87,6 +91,14 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
             <Button ghost className="pl-grow" style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} disabled={starting} onClick={() => openArvy({ ask: `Shake up today's session (${tpl.name}): keep the focus, change the format.` })}><Shuffle size={16} /> Shake it up</Button>
             <Button ghost className="pl-grow" style={{ color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} disabled={starting} onClick={() => void start()}>Blank session</Button>
           </div>
+        </Card>
+      ) : noGym && !loading ? (
+        <Card accent>
+          <p className="pl-eyebrow">{gymLine}</p>
+          <h2>Rest up</h2>
+          <p style={{ margin: '6px 0 12px' }}>Nothing planned for today.{waiting ? ` “${waiting.name}” is waiting for ${waiting.plannedFor === daysAgo(-1) ? 'tomorrow' : new Date(`${waiting.plannedFor}T12:00:00`).toLocaleDateString([], { weekday: 'long' })}.` : ''}</p>
+          <Button block style={{ background: 'var(--accent-ink)', color: 'var(--accent)', border: 0 }} onClick={() => openArvy({ ask: 'Plan me an easy session I can do at home today.' })}>Ask Arvy for something easy at home</Button>
+          <Button ghost block style={{ marginTop: 8, color: 'inherit', borderColor: 'color-mix(in srgb, var(--accent-ink) 35%, transparent)' }} disabled={starting} onClick={() => void start()}>Blank session</Button>
         </Card>
       ) : !loading ? (
         <Card><Empty icon={<Dumbbell />} title="No templates yet" blurb="Make one and it'll show up here." action={<Link className="pl-btn pl-btn--primary" to="/workout/templates">Templates</Link>} /></Card>
@@ -143,12 +155,14 @@ export function WorkoutTodayCard({ pass }: { pass: PlannerPass }) {
   const units = useUnits(pass);
   const { templates, workouts, custom, loading } = useWorkoutData(30);
   const unfinished = workouts.find(w => !w.endedAt);
-  const tpl = useMemo(() => todaysTemplate(templates, workouts), [templates, workouts]);
+  const { adjust } = useTodayRoutine();
+  const tpl = useMemo(() => sessionToday(templates, workouts, !!adjust?.skip?.includes('gym')), [templates, workouts, adjust]);
   const week = weekSessions(workouts).reduce((a, b) => a + b, 0);
   const doneToday = workouts.find(w => w.endedAt && w.date === daysAgo(0));
   const cardGymLine = useGymLine(!!doneToday, !!unfinished);
   const last = workouts.find(w => w.endedAt);
-  const planned = tpl?.days?.includes(new Date().getDay());
+  // a session set for today's date (Arvy plans them by date) or for this weekday
+  const planned = !!tpl && (tpl.plannedFor === daysAgo(0) || !!tpl.days?.includes(new Date().getDay()));
   if (loading) return <Card><p className="pl-eyebrow">Train</p><p className="pl-muted">Loading…</p></Card>;
 
   const start = async () => {

@@ -33,7 +33,7 @@ export interface ArvyCtx {
 /** Goes up when a tool is added. The app sends the number it was built with along with every question (context.v):
  *  a phone still running an older version of the app is offered only the tools it can run, so Arvy never sets up a
  *  change that phone would drop. No number = an app from before this (1). */
-export const TOOLS_VERSION = 2;
+export const TOOLS_VERSION = 3;   // 2: adjust_day, change_routine · 3: a session at home (plan_workout home, a day block that is the session)
 /** change: 'now' = done straight away with an Undo; 'confirm' = waits for them to tap Confirm. */
 export interface ArvyTool { name: string; description: string; input_schema: Record<string, unknown>; morningOnly?: boolean; change?: 'now' | 'confirm';
   /** the TOOLS_VERSION this tool arrived with (1 when left out) */ since?: number }
@@ -146,7 +146,8 @@ export const TOOLS: ArvyTool[] = [
       dinner: { type: 'string', description: 'dinner at, HH:MM 24-hour' },
       lights_out: { type: 'string', description: 'lights out that night, HH:MM 24-hour' },
       sauna_minutes: { type: 'number', description: 'a shorter or longer sauna that day' },
-      add: { type: 'array', items: { type: 'object', properties: { title: { type: 'string', description: 'short, e.g. "Home stretch"' }, time: { type: 'string', description: 'HH:MM 24-hour' }, end_time: { type: 'string', description: 'HH:MM 24-hour' }, note: { type: 'string', description: 'one short line' } }, required: ['title', 'time'] }, description: 'blocks to add that day' },
+      add: { type: 'array', items: { type: 'object', properties: { title: { type: 'string', description: 'short, e.g. "Home stretch"' }, time: { type: 'string', description: 'HH:MM 24-hour' }, end_time: { type: 'string', description: 'HH:MM 24-hour' }, note: { type: 'string', description: 'one short line' },
+        session: { type: 'boolean', description: 'true when this block is that day’s training session (the stretch routine or home workout you plan with plan_workout, home true): the Today block then opens it on the Train page and is ticked when the session is finished' } }, required: ['title', 'time'] }, description: 'blocks to add that day' },
       remove: strs('titles of blocks added earlier to take out again'),
       reset: { type: 'boolean', description: 'true = back to the normal routine for that day' },
     } } },
@@ -173,6 +174,7 @@ export const TOOLS: ArvyTool[] = [
     } } },
   { name: 'plan_workout', change: 'confirm', description: 'Put a training session you planned on their Train page. Write the session out in your reply too (one line per exercise, blocks named). when: "today" or "tomorrow" makes it that day’s session (replacing one already planned for that day); leave it out and it goes to today, or tomorrow if today’s workout is already done or under way; "now" starts it straight away; "template" saves it as a reusable template (replace = the name of a template to overwrite). Use the exercise names they already use (see workout_templates and recent workouts) so their history carries over. Sessions can be more than straight sets: supersets, circuits, EMOMs, AMRAPs, pyramids, countdowns, drop sets and intervals each get their own tracker (see the exercise fields).',
     input_schema: { type: 'object', properties: { name: { type: 'string', description: 'short session name, e.g. "Upper pull + core"' }, when: { type: 'string', enum: ['today', 'tomorrow', 'now', 'template'] }, replace: { type: 'string', description: 'with when "template": the template to overwrite' },
+      home: { type: 'boolean', description: 'true for a session done away from the gym (a stretch routine, mobility, a bodyweight session at home): it becomes that day’s session on the Train page, and the gym session that was planned for the day is kept and waits on the next free day' },
       exercises: { type: 'array', items: EXERCISE } }, required: ['name', 'exercises'] } },
   { name: 'remove_shopping_items', change: 'confirm', description: 'Remove items from the shopping list altogether (not ticking them off).',
     input_schema: { type: 'object', properties: { items: strs('item names') }, required: ['items'] } },
@@ -309,6 +311,7 @@ export function system(ctx: ArvyCtx, coaching = false): string {
   const name = ctx.name || 'there';
   const other = ctx.username === 'rosh' ? 'Vijay' : 'Rosh';
   const schedule = (ctx.v ?? TOOLS_VERSION) >= 2;   // the app can reshape a day and change the routine (adjust_day, change_routine)
+  const homeSession = (ctx.v ?? TOOLS_VERSION) >= 3; // …and take a session done at home as the day's session
   return [
     `You are Arvy (pronounced "AR-vee"), the assistant and coach inside ${name}'s personal planner app. You're helpful and upbeat: warm, quick, a little bit of energy, never cheesy or over the top. You are Arvy; don't describe yourself as an AI model.`,
     `You're talking with ${name}. Their household: ${name}, ${other}, and Kiaan (their son). The calendar, shopping list and money are shared by the household; everything else is ${name}'s own.`,
@@ -321,6 +324,7 @@ export function system(ctx: ArvyCtx, coaching = false): string {
     `- You can make changes for them: shopping list, to-dos and must-dos, meals and favourites, habit marks, body weight${schedule ? ', the shape of one day' : ''}${ctx.profile === 'morning' ? ' and the cycle log' : ''} happen straight away (they get an Undo button). Calendar events, a planned workout,${schedule ? ' the standing routine,' : ''} new or paused habits, food targets, removing anything, and money (cash, categories, budgets) wait for them to tap Confirm: when a tool says waiting_for_confirm, say what you set up in a few words and ask them to tap Confirm. Never say it’s done until it is.`,
     '- Do what they ask without double-checking first, unless something important is missing (like the day for an event): then ask one short question. If a tool says not_done, explain why in a sentence (and ask which one, if several match).',
     !schedule ? '' : '- When their day changes (sick, a rest day, slept in, a late night, travelling, “no sauna today”, “gym tonight instead”), reshape that day with adjust_day so the Today screen and the reminders match what they’ll really do: skip what’s off, move the times, add what they’re doing instead. Don’t leave the old blocks standing and don’t turn the day’s shape into to-dos. If the planned workout no longer fits, plan one that does (or say there’s none). “From now on”, “every day” or new rules for the routine: change_routine.',
+    !homeSession ? '' : '- Something physical they’ll do instead of the gym (a stretch routine, mobility, a home workout) is a training session, not a to-do and not just a block: in the same step, plan it with plan_workout (home true, real exercises with the trackers that fit: timed holds, per side) for that day, and add its block with adjust_day (session true) at the time they said. It then shows on the Train page and the Today block opens it. The gym session that was planned for the day waits on the next free day by itself: say where it went. Take related to-dos you or they added earlier off the list (remove_todos) rather than leaving two of the same thing.',
     '- Earlier messages start with when they were sent, like [Tue Nov 10, 11:28 PM]: “today” and “tomorrow” in them, and in your replies to them, count from that day, not from now. A [Change: …] note under one of your earlier replies says what became of it (made, still waiting for Confirm, cancelled, undone): go by the note, not by what the reply said. Never start your own reply with a time stamp.',
     '- Anything to add, change or delete that no tool covers: call cant_do_yet, say it’s on the way, and open the screen where they can do it.',
     '- After a change, confirm it in one short sentence ("Added milk and eggs to the list!"). Don’t repeat the details shown under your reply.',

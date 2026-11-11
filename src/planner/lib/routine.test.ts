@@ -84,6 +84,10 @@ describe('a changed day', () => {
   it('checks what is stored and adds one change to another', () => {
     expect(cleanAdjust({ skip: ['gym', 'wake', 'nonsense'], times: { wake: '7am', gym: '17:00' }, added: [{ id: 'a', at: 'x', label: 'Nap' }] })).toEqual({ skip: ['gym'], times: { gym: '17:00' } });
     expect(cleanAdjust({ skip: [], times: {} })).toBeUndefined();
+    // a block can be the day's training session, and the gym session moved on is remembered while the gym is off
+    expect(cleanAdjust({ skip: ['gym'], held: { id: 't1', to: '2026-11-12' }, added: [{ id: 'a', at: '08:00', label: 'Home stretch', session: true }] }))
+      .toEqual({ skip: ['gym'], held: { id: 't1', to: '2026-11-12' }, added: [{ id: 'a', at: '08:00', label: 'Home stretch', session: true }] });
+    expect(cleanAdjust({ skip: ['sauna'], held: { id: 't1', to: '2026-11-12' } })).toEqual({ skip: ['sauna'] });   // the gym is on: nothing is held
     const one = mergeAdjust(undefined, { why: 'Sick day', skip: ['gym'], times: { wake: '07:00' } }, new Date('2026-11-11T11:00:00Z'))!;
     expect(one).toEqual({ why: 'Sick day', skip: ['gym'], times: { wake: '07:00' }, at: '2026-11-11T11:00:00.000Z' });
     const two = mergeAdjust(one, { skip: ['sauna'], add: [{ id: 'n1', at: '13:00', label: 'Nap' }] })!;

@@ -9,7 +9,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Settings as Cog, Check, Sunrise, Moon, Flame, ChevronRight } from 'lucide-react';
 import type { PlannerPass } from '../lib/auth';
-import { dayKey, getDocs, putDoc } from '../lib/docs';
+import { dayKey, docsChanged, getDocs, putDoc } from '../lib/docs';
+import { loadTemplates, releaseHeld, saveTemplate } from '../features/workout/store';
 import { useDoc } from '../lib/useDoc';
 import { adjustWords, blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, onRoutineChange, routineFor, routineMin, routineMinutes, routineNow, type Block, type BlockId, type Routine } from '../lib/routine';
 import { InstallHint } from '../ui/InstallHint';
@@ -153,10 +154,12 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const tickAdded = (id: string) => set(d => (d.adjust?.added ? { ...d, adjust: { ...d.adjust, added: d.adjust.added.map(x => (x.id === id ? { ...x, done: x.done ? undefined : nowHM() } : x)) } } : d));
   // "Back to normal": today runs as the routine says again. A rest day that came with the change goes too.
   const backToNormal = () => {
-    const planned = !!day.gym?.planned;
+    const planned = !!day.gym?.planned, held = adj?.held;
     set(d => ({ ...d, adjust: undefined, gym: d.gym?.planned ? undefined : d.gym }));
     if (planned) void autoMark('gym', false, today, 'skip');
     if (adj?.skip?.includes('sauna')) void autoMark('sauna', false, today, 'skip');
+    // the gym session that was moved on when the gym came off today comes back
+    if (held) void loadTemplates().then(ts => { const back = releaseHeld(ts, today, held); return back ? saveTemplate(back).then(() => docsChanged(['template'])) : undefined; }).catch(() => undefined);
   };
   const ticked = (id: BlockId): string | undefined => {
     if (id === 'brief') return day.brief.finishedAt ? 'done' : undefined;
@@ -245,7 +248,8 @@ export function Today({ pass }: { pass: PlannerPass }) {
                   <b className="today-block__label">{b.label}</b>
                   {b.blurb && (isCur || !x.done) && <small className="pl-muted">{b.blurb}</small>}
                   <div className="today-block__actions">
-                    <button type="button" className={`pl-btn pl-btn--small ${x.done ? 'pl-btn--ghost' : isCur ? 'pl-btn--primary' : ''}`} onClick={() => tickAdded(x.id)}>{x.done ? 'Undo' : 'Done'}</button>
+                    {x.session && !x.done && <Link to="/workout" className={`pl-btn pl-btn--small ${isCur ? 'pl-btn--primary' : ''}`}>Open session <ChevronRight /></Link>}
+                    <button type="button" className={`pl-btn pl-btn--small ${x.done || x.session ? 'pl-btn--ghost' : isCur ? 'pl-btn--primary' : ''}`} onClick={() => tickAdded(x.id)}>{x.done ? 'Undo' : 'Done'}</button>
                   </div>
                 </div>
               </div>

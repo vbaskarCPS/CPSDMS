@@ -182,8 +182,15 @@ async function demoTurn(q: string, changes: ChangeView[]): Promise<Turn> {
   }
   if (/sick|sore throat|skip the gym|no sauna|sleep in|rest day/i.test(q)) {
     await runChange('adjust_day', { why: 'Sick day', skip: ['gym', 'sauna'], wake: '07:00',
-      add: [{ title: 'Home stretch', time: '07:00', note: 'easy, about 20 minutes' }, { title: 'Breakfast', time: '07:30', note: 'protein first, something warm' }] }, changes);
-    return { reply: 'Sorry you’re feeling rough. Today’s plan is changed: no gym, no sauna, up at 7, an easy stretch at 7 and breakfast at 7:30. Rest up!', used: ['adjust_day'], changes };
+      add: [{ title: 'Home stretch', time: '07:00', note: 'easy, about 20 minutes', session: true }, { title: 'Breakfast', time: '07:30', note: 'protein first, something warm' }] }, changes);
+    await runChange('plan_workout', { name: 'Home stretch and reset', when: 'today', home: true, exercises: [
+      { name: 'Cat-Cow', sets: 1, reps: '8', no_weight: true, cue: 'slow, with your breath' },
+      { name: '90/90 Hip Rotations', sets: 2, reps: '6', per_side: true, no_weight: true, muscle: 'glutes', equipment: 'bodyweight' },
+      { name: 'Thoracic Open Book', sets: 2, reps: '6', per_side: true, no_weight: true, muscle: 'back', equipment: 'bodyweight' },
+      { name: 'Chest Doorway Stretch', sets: 2, seconds: 30, per_side: true, no_weight: true, muscle: 'chest', equipment: 'bodyweight' },
+      { name: 'Child’s Pose', sets: 1, seconds: 45, no_weight: true, muscle: 'back', equipment: 'bodyweight' },
+    ] }, changes);
+    return { reply: 'Sorry you’re feeling rough. Today’s plan is changed: no gym, no sauna, up at 7, breakfast at 7:30. The stretch is set up as today’s session on Train: tap Confirm and the 7:00 block opens it. Your gym session waits for tomorrow.', used: ['adjust_day', 'plan_workout'], changes };
   }
   if (/session|workout|sore|bench|train/i.test(q)) {
     await runChange('plan_workout', { name: 'Kettlebell shake-up', exercises: [
