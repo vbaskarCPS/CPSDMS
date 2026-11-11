@@ -126,7 +126,8 @@ d('describe', () => {
     expect(lines).toContain('Jovan’s crew (3, average 19.1 equiv a day): Ann 23.2, Bob Y 15.0, Dee (no days yet)');
     expect(lines).toContain(c.notes[0]);
     expect(lines.slice(1, 3)).toEqual(['Franklyn’s routes: NORTH VANCOUVER #1 (1)', 'Jovan’s routes: NORTH VANCOUVER #2 (1)']);   // who goes where, a line each
-    expect(lines.find(l => l.startsWith('Workers:'))).toContain('paired two to a cart within each crew');
+    expect(lines.find(l => l.startsWith('Workers:'))).toBe('Workers: 4 of 5 booked, paired two to a cart within each crew (3 carts)');   // 2 + 3 workers: 1 + 2 carts
+    expect(describe({ kind: 'start_day', check: check(), team_mode: 'pairs' }).lines[2]).toBe('Workers: 4 of 5 booked, paired two to a cart (2 carts)');
     expect(describe({ kind: 'start_day', check: check(false, true), team_mode: 'pairs' }).lines.some(l => /crew/.test(l))).toBe(false);   // no crews, no crew lines
   });
   it('give route and partner cards', () => {

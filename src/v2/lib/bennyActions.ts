@@ -160,13 +160,15 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
       const first = (a: StartDayCheck['assign'][number]) => (a.managers || []).map(m => m.name.split(' ')[0]).join(' + ') || 'Nobody';
       const mgrs = c.assign.map(a => (a.managers || []).map(m => m.name).join(' + ')).filter(Boolean);
       const mode = p.team_mode || 'roster';
+      // two to a cart: how many carts that makes (an odd crew leaves one worker on a cart alone)
+      const pairCarts = c.crews ? c.assign.reduce((n, a) => n + Math.ceil((a.crew?.length || 0) / 2), 0) : Math.ceil(c.showed / 2);
       return {
         title: `Start ${pretty}`,
         lines: [
           `Manager${mgrs.length > 1 || mgrs.some(m => m.includes('+')) ? 's' : ''}: ${mgrs.join(' · ')}${c.pair ? ' (paired)' : mgrs.length === 1 && !mgrs[0].includes('+') ? ', solo' : ''}`,
           // who goes where: one line when there is one manager (or one pair), a line each when they have their own maps
           ...(c.assign.length > 1 ? c.assign.map(a => `${first(a)}’s routes: ${mapsOf(a.routes || [])}`) : [`Routes: ${mapsOf(routes)}`]),
-          `Workers: ${c.showed} of ${c.booked} booked, ${mode === 'solo' || (mode === 'roster' && !c.teams && c.no_team) ? 'each on their own cart' : mode === 'pairs' ? `paired two to a cart${c.crews ? ' within each crew' : ''}` : c.no_team ? `roster carts, ${c.no_team} without one get their own` : 'on their roster carts'}`,
+          `Workers: ${c.showed} of ${c.booked} booked, ${mode === 'solo' || (mode === 'roster' && !c.teams && c.no_team) ? 'each on their own cart' : mode === 'pairs' ? `paired two to a cart${c.crews ? ' within each crew' : ''} (${pairCarts} cart${pairCarts === 1 ? '' : 's'})` : c.no_team ? `roster carts, ${c.no_team} without one get their own` : 'on their roster carts'}`,
           // who goes with whom, when the plan splits the crew: each crew best first, with its average equiv per day worked
           ...(c.crews ? c.assign.filter(a => a.crew?.length).map(a =>
             `${first(a)}’s crew (${a.crew!.length}${a.crew_avg != null ? `, average ${Number(a.crew_avg).toFixed(1)} equiv a day` : ''}): ${crewNames(a.crew!, c.assign.flatMap(x => x.crew || []))}`) : []),
