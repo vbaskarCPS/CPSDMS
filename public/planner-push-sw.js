@@ -27,7 +27,7 @@ async function showPush(d) {
   return self.registration.showNotification(title, {
     body,
     icon: d.icon || '/vijayplanner/icon-192.png',
-    badge: d.badge || '/planner-badge.png',
+    badge: d.badge || '/planner-badge.png?v=2',
     tag: d.tag || undefined,
     renotify: !!d.tag,
     timestamp: Date.now(),
