@@ -2,7 +2,7 @@
 // saved, it looks exactly like the live payout screen (same carts, numbers, Paid / Pending, bonuses);
 // a worker opens the payout editor at their cart. A day closed before carts were kept shows its
 // payout lines as a table.
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Lock, Pencil, RefreshCw } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useLoad } from '../../../lib/data';
@@ -35,6 +35,13 @@ export const PayoutCopy: React.FC<{ centerId: string; region: string; date: stri
     const open = day.state === 'live';
     const pending = (carts.data || []).filter(c => !isFinalized(c) && c.sales.length);
     const reload = () => { lines.reload(); carts.reload(); onChanged?.(); };
+    // a bonus added from the Benny's card: show it
+    const reloadNow = useRef(reload); reloadNow.current = reload;
+    useEffect(() => {
+      const on = (e: Event) => { if ((e as CustomEvent).detail === 'bonus') reloadNow.current(); };
+      window.addEventListener('benny:changed', on);
+      return () => window.removeEventListener('benny:changed', on);
+    }, []);
     const stopEditing = () => { setEditing(false); if (editCn) { params.delete('edit'); setParams(params, { replace: true }); } };
 
     if ((editing || editCn) && canEditDay && carts.data) return <PayoutEditor centerId={centerId} region={region} date={date} initial={carts.data} saved={lines.data || []}

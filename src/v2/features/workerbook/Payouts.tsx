@@ -70,6 +70,13 @@ export const SessionPayouts: React.FC<{ centerId: string; centerName: string; da
   const [sort, setSort] = useState<SortOption>('standard');
   const live = useLoad(() => legacyLiveSession(centerId), [centerId]);
   const session = live.data;
+  // a bonus or a job changed from the Benny's card: read the list again
+  const [fresh, setFresh] = useState(0);
+  useEffect(() => {
+    const on = (e: Event) => { if (['bonus', 'job'].includes(String((e as CustomEvent).detail))) setFresh(n => n + 1); };
+    window.addEventListener('benny:changed', on);
+    return () => window.removeEventListener('benny:changed', on);
+  }, []);
   return (
     <>
       <ErrorBox error={live.error} />
@@ -84,7 +91,7 @@ export const SessionPayouts: React.FC<{ centerId: string; centerName: string; da
           <PayoutBar search={search} setSearch={setSearch} sort={sort} setSort={setSort} />
           <div className="v2-legacy v2-legacy-panel">
             <Suspense fallback={<Loading />}>
-              <PayoutToday consoleProfileId={1} date={session.date} sortOption={sort} searchTerm={search}
+              <PayoutToday key={fresh} consoleProfileId={1} date={session.date} sortOption={sort} searchTerm={search}
                 managers={session.data.managers} workers={session.data.workers}
                 workerHref={id => `/app/workerbook/days/${session.date}/payouts/${encodeURIComponent(id)}`} />
             </Suspense>
