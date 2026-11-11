@@ -5,20 +5,26 @@
 // Mic: tap = listen until you pause, then send; hold = talk while held, let go to send.
 // Answers are read out only when the question was spoken (and the speaker is on).
 // Changes come as a card under the answer: nothing happens until you tap its button.
+// "It's live": when something the person logged (a bug, a request it couldn't do) has been built, the Benny opens with
+// it the next time they open the app, once, and offers a notification on this device for the next time.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Check, Mic, Send, Sparkles, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
-import { askBenny, canListen, demoDue, listen, primeVoice, readDemo, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
+import { askBenny, bennyNews, bennyNewsSeen, canListen, demoDue, listen, primeVoice, readDemo, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
+import { claimNews, newsText } from '../../lib/bennyNews';
 import { describe, doProposal, emailsPreset, payoutsStart, textOpened, type BennyProposal } from '../../lib/bennyActions';
 import { bonusReplaced } from '../../lib/bennyBonus';
 import { BennyMapCard } from './BennyMap';
 import { TextsCard } from './BennyTexts';
+import { NotifyRow } from './BennyNotify';
 import './benny.css';
 
 const MUTE = 'benny.mute';
 const HOLD_MS = 350;
+const NEWS_EVERY_MS = 120000;
+let newsAt = 0;   // when this page last asked what's new (the Benny can be on a page twice)
 const keyFor = (variant: string) => `benny.chat.v2.${variant}`;
 const load = (k: string): BennyMsg[] => { try { return JSON.parse(sessionStorage.getItem(k) || '[]'); } catch { return []; } };
 const save = (k: string, m: BennyMsg[]) => { try { sessionStorage.setItem(k, JSON.stringify(m.slice(-30))); } catch { /* private mode */ } };
@@ -102,6 +108,33 @@ export const Benny: React.FC<{
   }, [allowed, userId]);
   const endDemo = () => { if (userId) writeDemo(userId, { opens: 3, done: true }); setDemo(0); };
 
+  // "it's live": what they logged that has been built since. Asked for when the app opens and when they come back to it;
+  // each notice is put in the chat once, the panel opens with it, and it is marked as seen.
+  useEffect(() => {
+    if (!allowed || !userId) return;
+    let gone = false;
+    const check = async () => {
+      if (Date.now() - newsAt < NEWS_EVERY_MS) return;
+      newsAt = Date.now();
+      const fresh = claimNews(await bennyNews());
+      if (gone || !fresh.length) return;
+      setMsgs(m => [...m, ...fresh.filter(n => !m.some(x => x.news === n.id)).map(n => ({ role: 'assistant' as const, text: newsText(n), news: n.id }))]);
+      setOpen(true);
+      void bennyNewsSeen(fresh.map(n => n.id));
+    };
+    const t = window.setTimeout(() => void check(), 2500);
+    const back = () => { if (document.visibilityState === 'visible') void check(); };
+    document.addEventListener('visibilitychange', back);
+    // the app is open when the notification lands: the notice shows right away (the service worker says a push arrived)
+    const pushed = (e: MessageEvent) => {
+      const d = e.data as { type?: string; tag?: string } | null;
+      if (d?.type === 'push-arrived' && String(d.tag || '').startsWith('benny-live-')) { newsAt = 0; void check(); }
+    };
+    const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+    sw?.addEventListener('message', pushed);
+    return () => { gone = true; window.clearTimeout(t); document.removeEventListener('visibilitychange', back); sw?.removeEventListener('message', pushed); };
+  }, [allowed, userId]);
+
   // The Benny speaks with Google's voice. If that can't be had it stays quiet (never the phone's own voice) and says why, once.
   const voiceTold = useRef(false);
   const say = useCallback((line: string) => {
@@ -122,7 +155,7 @@ export const Benny: React.FC<{
         screen: variant === 'fab' ? 'rm' : undefined, rm_manager: rmManager || undefined, user_name: profile?.full_name,
         ...(floating ? { following: following!.map(f => f.id), following_names: following!.map(f => f.name) } : {}),
       });
-      setMsgs(m => [...m, { role: 'assistant', text: r.reply || 'Done.', map: r.map, proposal: r.proposal }]);
+      setMsgs(m => [...m, { role: 'assistant', text: r.reply || 'Done.', map: r.map, proposal: r.proposal, ...(r.logged ? { logged: true } : {}) }]);
       setDemo(d => (d === 1 || d === 2 ? 3 : d));
       if (spoken && !mute) say(r.reply);
     } catch (e) {
@@ -212,6 +245,8 @@ export const Benny: React.FC<{
     </button>
   ) : null;
   const demoAsk = variant === 'fab' ? ['Who’s on my team today?', 'Which of my routes have prebooks?'] : ['Who’s booked today?', 'How many open prebooks do we have?'];
+  // the offer of a notification sits under the latest answer it belongs to, not under every one
+  const offerAt = msgs.reduce((at, m, i) => (m.news || m.logged ? i : at), -1);
   const whose = floating ? (following!.length === 1 ? `${following![0].name}’s team` : `${following!.length} managers’ teams`) : rmName ? `${rmName}’s team` : 'Your team';
   const suggestions = floating
     ? ['Who’s out today?', 'Plan my check order', 'Drop a pin here called Meet', 'Something’s broken on the map']
@@ -256,8 +291,9 @@ export const Benny: React.FC<{
               </div>
             )}
             {msgs.map((m, i) => (
-              <div key={i} className={`benny-msg ${m.role}${m.error ? ' err' : ''}`}>
+              <div key={i} className={`benny-msg ${m.role}${m.error ? ' err' : ''}${m.news ? ' news' : ''}`}>
                 <div className="benny-bubble"><Rich text={m.text} /></div>
+                {i === offerAt && <NotifyRow when={m.news ? 'news' : 'logged'} />}
                 {m.map && <BennyMapCard spec={m.map} centerId={cid} />}
                 {m.proposal?.kind === 'texts' && <TextsCard check={m.proposal.check} state={m.texts} outcome={m.outcome}
                   // a Text button opens Messages by itself (it is a link); here the tap is marked, and the text kept for that worker

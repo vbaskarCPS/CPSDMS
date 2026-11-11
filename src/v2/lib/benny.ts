@@ -4,6 +4,7 @@ import { db } from './client';
 import type { BennyProposal } from './bennyActions';
 import { byRoad, withOrder } from './bennyDrive';
 import { textsSaid, type TextsState } from './bennyTexts';
+import type { BennyNews } from './bennyNews';
 
 /** pins with n are stops in an order: drawn numbered, joined in that order from start (where the manager is) when given:
  *  along path (the road, as [lng, lat] points) when the road is known, else in straight lines */
@@ -15,6 +16,10 @@ export interface BennyMsg {
   outcome?: { state: 'done' | 'dismissed' | 'failed'; text: string } | null;
   /** a texts card: which Text buttons were tapped, and the texts the person changed */
   texts?: TextsState | null;
+  /** "it's live": the log entry (its id) this message tells them about. The app's own notice, not part of the chat with the server */
+  news?: string;
+  /** this answer logged a bug or a request for them: they are offered a notification for when it's live */
+  logged?: boolean;
 }
 export interface BennyContext {
   center_id?: string; center_name?: string; today: string; path: string; screen?: string;
@@ -29,7 +34,7 @@ export interface BennyContext {
 
 /** What the Benny is told about each message: its words, plus what happened to a card. */
 export function forServer(messages: BennyMsg[]) {
-  return messages.filter(m => !m.error).map(m => ({ role: m.role,
+  return messages.filter(m => !m.error && !m.news).map(m => ({ role: m.role,
     content: m.outcome ? `${m.text}\n\n[The card: ${m.outcome.state === 'done' ? 'confirmed, done' : m.outcome.state}: ${m.outcome.text}]`
       : m.proposal?.kind === 'texts' ? `${m.text}\n\n[The card: ${textsSaid(m.proposal.check.people, m.texts)}]` : m.text }));
 }
@@ -47,7 +52,7 @@ function tryModel(): { model?: 'fast' | 'main' } {
   try { const m = localStorage.getItem('benny.model'); return m === 'fast' || m === 'main' ? { model: m } : {}; } catch { return {}; }
 }
 
-export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null }> {
+export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null; logged?: boolean }> {
   const lastAsk = [...messages].reverse().find(m => m.role === 'user');
   const body = { messages: forServer(messages), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag(), cards: [...CARDS, ...CAN], ...tryModel() } };
   const { data, error } = await db.functions.invoke('benny-assist', { body });
@@ -60,7 +65,7 @@ export async function askBenny(messages: BennyMsg[], context: BennyContext): Pro
   if (data?.error) throw new Error(data.error);
   if (data?.route) console.info('[benny route]', JSON.stringify(data.route));   // only sent to a super admin trying the models out
   const got = (data?.proposal as BennyProposal) || null;
-  const answer = { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: got && CARDS.includes(got.kind) ? got : null };
+  const answer = { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: got && CARDS.includes(got.kind) ? got : null, ...(data?.logged === true ? { logged: true } : {}) };
   // an order comes planned in straight lines: here it is put in driving order by the road's own times, when they can be read
   if (answer.proposal?.kind === 'stops') return withOrder(answer, answer.proposal.check, await byRoad(answer.proposal.check).catch(() => null));
   return answer;
@@ -168,6 +173,25 @@ export function readDemo(user: string): DemoSeen {
 export function writeDemo(user: string, d: DemoSeen): void { try { localStorage.setItem(demoKey(user), JSON.stringify(d)); } catch { /* private window: it shows again */ } }
 export const demoDue = (d: DemoSeen) => !d.done && d.opens < 3;
 
+// ── "it's live": the person who logged something is told when it has been built (bennyNews.ts has the wording) ──
+/** Their own log entries that went live and that they haven't been shown yet. Never in the way: a failure is no news. */
+export async function bennyNews(): Promise<BennyNews[]> {
+  try {
+    const { data, error } = await db.rpc('benny_news');
+    return !error && Array.isArray(data) ? data as BennyNews[] : [];
+  } catch { return []; }
+}
+export async function bennyNewsSeen(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  try { await db.rpc('benny_news_seen', { p_ids: ids }); } catch { /* it shows again next time */ }
+}
+/** The Bug log: mark an entry done and tell the person who logged it. note = what they can do now and what to say. */
+export async function tellLive(id: string, note: string): Promise<{ to?: string; devices?: number }> {
+  const { data, error } = await db.rpc('benny_log_live', { p_id: id, p_note: note });
+  if (error) throw new Error(error.message);
+  return (data as { to?: string; devices?: number }) || {};
+}
+
 // ── the log (Super Admin › Bug log): what people told the Benny was broken, and what they asked for that it couldn't do ──
 export interface BugReport {
   id: string; created_at: string; title: string; status: 'open' | 'done'; resolved_at?: string; resolved_by?: string;
@@ -177,6 +201,10 @@ export interface BugReport {
   /** what the scheduled check found when it looked into this entry */
   findings?: { verdict?: string; summary?: string; cause?: string; fix?: string; size?: string; risk?: string; needs?: string; pr?: string } | null;
   investigated_at?: string;
+  /** there is a person on the entry to tell, and the devices they turned notifications on */
+  can_tell?: boolean; devices?: number;
+  /** what they were told when it went live, whether they have seen it in the Benny, and whether a notification went out */
+  live?: { note: string; at: string; seen_at?: string; pushed_at?: string; sent?: number } | null;
   report: { what_happened?: string; expected?: string; steps?: string[]; where?: string; severity?: 'blocking' | 'annoying' | 'minor';
     asked?: string; why_not?: string; would_need?: string; reply?: string; auto?: boolean; spoken?: boolean;
     screen?: string | null; rm_manager?: string | null; diag?: BennyContext['diag'] | null };

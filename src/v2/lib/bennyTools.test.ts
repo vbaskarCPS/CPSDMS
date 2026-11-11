@@ -85,6 +85,16 @@ describe('the Benny’s tools', () => {
       expect(fastAnswerStop('Today is 2026-11-10 and 2 didn’t show.', [lookup], chat, lengths)).toBeNull();   // today's date is known without a lookup
     });
   });
+  describe('what is logged comes back as “it’s live”', () => {
+    it('the Benny says it will tell them here, for a bug and for a request it couldn’t do', () => {
+      for (const role of ['admin', 'rm'] as const) {
+        expect(rules(role)).toContain('I\'ll tell you here when it\'s fixed.');
+        expect(rules(role)).toContain('that it\'s logged for Vijay, and that you\'ll tell them here when it\'s live');
+      }
+      expect(TOOLS.find(t => t.name === 'log_request')!.description).toContain('you\'ll tell them here when it\'s live');
+    });
+  });
+
   describe('taking a worker off today', () => {
     it('is a card for super admins and route managers, by CN or full name, never run by the small model', () => {
       expect(toolsFor('rm').map(x => x.name)).toContain('propose_remove'); expect(toolsFor('admin').map(x => x.name)).toContain('propose_remove');
@@ -97,6 +107,9 @@ describe('the Benny’s tools', () => {
         expect(rules(role)).toContain('don\'t swap in the one that sounds closest'); expect(rules(role)).toContain('Tap Remove from today to do it.'); expect(rules(role)).toContain('Never say anyone was taken off');
       }
       expect(heardRight({})).toContain('Taking a worker off today is stricter: a name matched by sound is never enough');
+    });
+    it('says whose team a worker is on, not whose cart', () => {
+      expect(rules('rm')).toContain('manager_name is whose team they are on, not whose cart');
     });
     it('a worker has to have been named: a name that sounds close doesn’t name them', () => {
       const kev = { cn: 'I1479', name: 'Kevontae Ragguette' }, kenan = { cn: 'I1012', name: 'Kenan Francis-Bull' };

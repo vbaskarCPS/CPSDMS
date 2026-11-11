@@ -2,11 +2,14 @@
 //   Bugs: something in the app is broken (what happened, the steps, the screen, the browser, the page's recent errors).
 //   Couldn't do yet: something they asked the Benny for that it has no tool for, so it's clear what to build next.
 // Mark one done when it's dealt with; it moves to Done and can be reopened.
+// "Tell them it's live" (inside an entry) marks it done and tells the person who logged it: the Benny opens with it the
+// next time they open the app, and a notification goes to the devices they turned notifications on.
 //   AI logs: every question asked to the Benny, who asked, the tools it used and roughly what it cost (AiLog.tsx).
 import React, { useState } from 'react';
-import { Check, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
+import { BellRing, Check, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
 import { useLoad } from '../../lib/data';
-import { listBugs, resolveBug, type BugReport } from '../../lib/benny';
+import { listBugs, resolveBug, tellLive, type BugReport } from '../../lib/benny';
+import { firstName, toldLine } from '../../lib/bennyNews';
 import { Btn, ErrorBox, Loading, Tabs, Tag } from '../../ui';
 import { AiLog } from './AiLog';
 
@@ -33,7 +36,35 @@ const Findings: React.FC<{ b: BugReport }> = ({ b }) => {
   );
 };
 
-const Detail: React.FC<{ b: BugReport }> = ({ b }) => {
+/** Tell the person who logged it that it's live: what they can do now and what to say. Marks the entry done. */
+const Tell: React.FC<{ b: BugReport; onTold: () => void }> = ({ b, onTold }) => {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  if (!b.can_tell) return null;
+  const who = firstName(b.by);
+  const send = async () => {
+    setBusy(true); setError(null);
+    try { await tellLive(b.id, note); setNote(''); onTold(); } catch (e) { setError(e); } finally { setBusy(false); }
+  };
+  return (
+    <div className="v2-bug-tell">
+      {b.live && <p><b>Told {who}: </b>“{b.live.note}”<br /><span className="v2-mut v2-small">{toldLine(b.live, when)}</span></p>}
+      <label className="v2-label" htmlFor={`tell-${b.id}`}>{b.live ? `Tell ${who} again` : `Tell ${who} it’s live`}</label>
+      <textarea id={`tell-${b.id}`} className="v2-input" rows={2} maxLength={600} value={note} onChange={e => setNote(e.target.value)} disabled={busy}
+        placeholder={isRequest(b) ? 'What they can do now and what to say, e.g. Say “take Kenan off today”, check the card, then tap Remove from today.' : 'What was fixed, in a line, e.g. The houses on RMD143 load again.'} />
+      <ErrorBox error={error} />
+      <div className="v2-bug-tell-b">
+        <Btn kind="o" size="sm" icon={BellRing} disabled={busy || note.trim().length < 5} onClick={() => void send()}>{busy ? 'Telling…' : b.status === 'open' ? `Mark done and tell ${who}` : `Tell ${who}`}</Btn>
+        <span className="v2-mut v2-small">{b.devices
+          ? `The Benny opens with it the next time ${who} opens the app, and a notification goes to ${b.devices === 1 ? 'their device' : `their ${b.devices} devices`}.`
+          : `The Benny opens with it the next time ${who} opens the app. No notification: ${who} hasn’t turned them on.`}</span>
+      </div>
+    </div>
+  );
+};
+
+const Detail: React.FC<{ b: BugReport; onTold: () => void }> = ({ b, onTold }) => {
   const r = b.report || {};
   const row = (label: string, value: React.ReactNode) => value ? <div className="v2-bug-row"><span className="v2-mut">{label}</span><div>{value}</div></div> : null;
   const where = [r.where, b.path && `screen ${b.path}`, r.rm_manager && `RM map for ${r.rm_manager.replace(/^rm_/, '')}`].filter(Boolean).join(' · ');
@@ -56,6 +87,7 @@ const Detail: React.FC<{ b: BugReport }> = ({ b }) => {
         {row('Errors on the page', r.diag?.errors?.length ? <pre>{r.diag.errors.join('\n')}</pre> : null)}
       </>}
       {b.status === 'done' && row('Done', `${b.resolved_at ? when(b.resolved_at) : ''}${b.resolved_by ? ` by ${b.resolved_by}` : ''}`)}
+      <Tell b={b} onTold={onTold} />
     </div>
   );
 };
@@ -97,12 +129,13 @@ export const BugLog: React.FC = () => {
                   </button>
                   {tab === 'done' && <Tag tone={isRequest(b) ? 'b' : undefined}>{isRequest(b) ? 'asked for' : 'bug'}</Tag>}
                   {b.findings && b.status === 'open' && <Tag tone="g">{b.findings.verdict || 'looked into'}</Tag>}
+                  {b.live && <Tag tone="g">{b.live.seen_at ? 'told · seen' : 'told'}</Tag>}
                   {b.report?.severity && <Tag tone={TONE[b.report.severity]}>{b.report.severity}</Tag>}
                   {b.status === 'open'
                     ? <Btn kind="o" size="sm" icon={Check} disabled={busy === b.id} onClick={() => void set(b, true)}>{isRequest(b) ? 'Mark done' : 'Mark fixed'}</Btn>
                     : <Btn kind="o" size="sm" icon={RotateCcw} disabled={busy === b.id} onClick={() => void set(b, false)}>Reopen</Btn>}
                 </div>
-                {isOpen && <Detail b={b} />}
+                {isOpen && <Detail b={b} onTold={() => log.reload()} />}
               </div>
             );
           })}

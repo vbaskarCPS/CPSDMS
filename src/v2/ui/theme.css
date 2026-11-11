@@ -768,6 +768,10 @@
 .v2-bug-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; }
 .v2-bug-row ol { margin: 0; padding-left: 18px; }
 .v2-bug-row pre { margin: 0; padding: 8px 10px; background: var(--soft); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.v2-bug-tell { border-top: 1px solid var(--line-soft); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.v2-bug-tell p { margin: 0; }
+.v2-bug-tell textarea { width: 100%; min-height: 56px; resize: vertical; font: inherit; }
+.v2-bug-tell-b { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* Bug log › AI logs */
 .v2-ai-bar { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; }
 .v2-ai-sum { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
