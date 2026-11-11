@@ -112,9 +112,18 @@ a.pl-btn { text-decoration: none; }   /* links styled as buttons */
 .pl-nav__rv i svg { width: 24px; height: 24px; }
 .pl-nav__rv:active i { transform: scale(.93); }
 .pl-nav__rv.is-open { color: var(--accent); }
+/* held down, RV opens Arvy listening: no scrolling or text-selecting under the held finger, and the ring breathes while it listens */
+.pl-nav__rv { touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.pl-nav__rv.is-hearing i { animation: rvHearing 1.3s ease-in-out infinite; }
+@keyframes rvHearing {
+  0%, 100% { box-shadow: 0 0 0 3px var(--amber), 0 8px 18px rgba(16, 28, 58, .3); }
+  50% { box-shadow: 0 0 0 3px var(--amber), 0 0 0 10px color-mix(in srgb, var(--amber) 35%, transparent), 0 8px 18px rgba(16, 28, 58, .3); }
+}
+@media (prefers-reduced-motion: reduce) { .pl-nav__rv.is-hearing i { animation: none; } }
 /* the rest timer runs along the top of the bar in a live workout: RV sits inside the bar then, so it doesn't cover the countdown */
 body:has(.wo-rest) .pl-nav__rv i { top: 5px; width: 30px; height: 30px; margin-left: -15px; box-shadow: 0 0 0 2px var(--amber); }
 body:has(.wo-rest) .pl-nav__rv i svg { width: 17px; height: 17px; }
+body:has(.wo-rest) .pl-nav__rv.is-hearing i { animation: none; }
 /* Health and Wealth take a drag as well as a tap: press, drag up, let go, and the camera opens (a meal, a receipt).
    touch-action: none keeps the page from scrolling under the finger, so the drag stays the button's. */
 .pl-nav a.pl-nav__shot { position: relative; touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }

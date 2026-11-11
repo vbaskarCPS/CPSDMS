@@ -46,21 +46,32 @@ export async function confirmChange(id: string): Promise<Change['go']> {
 }
 
 // ── opening Arvy from a screen's own button ("Ask Arvy" on Train, after a workout…) ──
-export interface OpenAsk { suggest?: string[]; ask?: string }
+export interface OpenAsk { suggest?: string[]; ask?: string; mic?: boolean }
 const openers = new Set<(o: OpenAsk) => void>();
 export const onOpenArvy = (fn: (o: OpenAsk) => void) => { openers.add(fn); return () => { openers.delete(fn); }; };
-/** Open the chat; `suggest` = the chips to offer, `ask` = a question to send straight away. */
+/** Open the chat; `suggest` = the chips to offer, `ask` = a question to send straight away, `mic` = start listening
+ *  (the RV button held down). */
 export const openArvy = (o: OpenAsk = {}) => { for (const fn of [...openers]) fn(o); };
 
-// ── is the chat open? Shared with the bottom bar's RV button (ui/Shell.tsx), which opens and closes it ──
+// ── is the chat open, and is it listening? Shared with the bottom bar's RV button (ui/Shell.tsx): a tap opens and
+//    closes the chat, a hold opens it listening, and the button shows a mic while it listens ──
 let chatOpen = false;
-const openWatchers = new Set<() => void>();
+let chatHearing = false;
+const barWatchers = new Set<() => void>();
+const tellBar = () => { for (const fn of [...barWatchers]) fn(); };
 export const arvyIsOpen = (): boolean => chatOpen;
-export const onArvyOpenChange = (fn: () => void) => { openWatchers.add(fn); return () => { openWatchers.delete(fn); }; };
+export const arvyIsHearing = (): boolean => chatHearing;
+/** Told when the chat opens or closes, and when it starts or stops listening. */
+export const onArvyChange = (fn: () => void) => { barWatchers.add(fn); return () => { barWatchers.delete(fn); }; };
 export function setArvyOpen(open: boolean): void {
   if (open === chatOpen) return;
   chatOpen = open;
-  for (const fn of [...openWatchers]) fn();
+  tellBar();
+}
+export function setArvyHearing(hearing: boolean): void {
+  if (hearing === chatHearing) return;
+  chatHearing = hearing;
+  tellBar();
 }
 /** The RV button: open the chat, or close it when it's open. Call it from the tap itself: opening unlocks the voice. */
 export function toggleArvy(): void { if (!chatOpen) primeVoice(); setArvyOpen(!chatOpen); }

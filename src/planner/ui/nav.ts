@@ -39,3 +39,7 @@ export function pull(up: number): { lift: number; armed: boolean } {
   const u = Math.max(0, up);
   return { lift: Math.min(1, u / PULL_ARM), armed: u >= PULL_ARM };
 }
+
+/** RV held down this long (ms) opens Arvy listening; a shorter press is a tap. The finger may wander this far (px). */
+export const RV_HOLD_MS = 400;
+export const RV_HOLD_SLOP = 14;

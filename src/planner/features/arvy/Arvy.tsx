@@ -1,5 +1,6 @@
 // src/planner/features/arvy/Arvy.tsx — Arvy's chat panel, on every signed-in screen. The RV button in the bottom bar
-// (ui/Shell.tsx) opens and closes it; type, or tap the mic and talk (it sends when you pause). Spoken questions get a
+// (ui/Shell.tsx) opens and closes it, and held down it opens it listening; type, or tap the mic and talk (it sends
+// when you pause). Spoken questions get a
 // spoken answer (a woman's voice for Rosh, a man's for Vijay) unless the speaker is off. Arvy can open screens for you;
 // the chat stays open over them. The conversation is kept between visits and on every device (chat.ts), and starts
 // with what was in the old Coach chat; "Start over" clears it.
@@ -10,7 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExter
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Check, Mic, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { getPass } from '../../lib/auth';
-import { arvyIsOpen, ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onArvyOpenChange, onOpenArvy, primeVoice, setArvyOpen, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
+import { arvyIsOpen, ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onArvyChange, onOpenArvy, primeVoice, setArvyHearing, setArvyOpen, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
 import { logArvy } from './log';
 import { flushChat, loadChat, newer, saveChat } from './chat';
 import './arvy.css';
@@ -61,7 +62,7 @@ export function Arvy() {
   const first = (pass?.user.display_name || user).split(/\s+/)[0];
   const nav = useNavigate();
   const loc = useLocation();
-  const open = useSyncExternalStore(onArvyOpenChange, arvyIsOpen);   // the bar's RV button opens and closes it
+  const open = useSyncExternalStore(onArvyChange, arvyIsOpen);   // the bar's RV button opens and closes it
   const [lines, setLines] = useState<ChatLine[]>(() => load(keyFor(user)));
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -71,6 +72,7 @@ export function Arvy() {
   const [muted, setMuted] = useState(() => { try { return localStorage.getItem(MUTE) === '1'; } catch { return false; } });
   const [offer, setOffer] = useState<string[] | null>(null);   // chips asked for by the screen that opened the chat
   const [pending, setPending] = useState<string | null>(null);  // a question to send as soon as the chat is open
+  const [wantMic, setWantMic] = useState(false);                // asked to start listening as soon as the chat is open
   const rec = useRef<ReturnType<typeof listen> | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   // the box you type in grows with what's in it and shrinks back once it's sent. How tall it may get is in arvy.css
@@ -94,7 +96,8 @@ export function Arvy() {
   useEffect(() => { save(keyFor(user), lines); if (ready) saveChat(lines); }, [lines, user, ready]);
   useEffect(() => () => { void flushChat(); }, []);
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [lines, busy, step, open]);
-  useEffect(() => () => { rec.current?.cancel(); stopSpeaking(); setArvyOpen(false); }, []);
+  useEffect(() => () => { rec.current?.cancel(); stopSpeaking(); setArvyOpen(false); setArvyHearing(false); }, []);
+  useEffect(() => { setArvyHearing(hearing !== null); }, [hearing]);   // the RV button shows a mic while it listens
   // closed (its X, or the RV button again): stop listening and talking, and save the chat
   const wasOpen = useRef(false);
   useEffect(() => {
@@ -122,17 +125,25 @@ export function Arvy() {
   }, [busy, lines, loc.pathname, muted, nav]);
 
   // a screen's own button opened the chat (Train's "Ask Arvy"): offer its questions, or send one straight away
-  useEffect(() => onOpenArvy(o => { primeVoice(); setArvyOpen(true); setOffer(o.suggest?.length ? o.suggest : null); if (o.ask) setPending(o.ask); }), []);
+  // (the RV button held down opens it listening: `mic`)
+  useEffect(() => onOpenArvy(o => { primeVoice(); setArvyOpen(true); if (o.mic) { setWantMic(true); return; } setOffer(o.suggest?.length ? o.suggest : null); if (o.ask) setPending(o.ask); }), []);
   useEffect(() => { if (pending && open && !busy) { const q = pending; setPending(null); void send(q, false); } }, [pending, open, busy, send]);
 
-  const mic = () => {
-    if (hearing !== null) { rec.current?.stop(); return; }
+  const startMic = () => {
     primeVoice(); stopSpeaking(); setError(null); setHearing('');
     const r = listen(t => setHearing(t));
     rec.current = r;
     r.done.then(said => { setHearing(null); rec.current = null; if (said) void send(said, true); })
       .catch(e => { setHearing(null); rec.current = null; setError(e instanceof Error ? e.message : String(e)); });
   };
+  const mic = () => { if (hearing !== null) rec.current?.stop(); else startMic(); };
+  // asked to listen (RV held): start now, unless it's already listening, mid-answer, or this browser can't. Never later:
+  // a mic that turns itself on after the answer would be a surprise
+  useEffect(() => {
+    if (!wantMic || !open) return;
+    setWantMic(false);
+    if (!busy && hearing === null && canListen()) startMic();
+  });
   const toggleMute = () => {
     const m = !muted; setMuted(m);
     try { localStorage.setItem(MUTE, m ? '1' : '0'); } catch { /* private mode */ }
@@ -185,7 +196,7 @@ export function Arvy() {
               <div className="arvy-hello">
                 <p><b>Hi {first}! I’m Arvy.</b> {training
                   ? 'I’m your coach too: I see every set and note, your sleep, food, habits and days. Ask for a session, a change, a fix for a stuck lift, or how today went.'
-                  : <>Ask me anything about your planner: your day, the calendar, food, training, habits, money{pass.user.settings?.profile === 'morning' ? ', your cycle' : ''} or the shopping list. I can add things too, like to-dos, meals, shopping and events, and I’m your coach for training.</>} Tap the mic to just talk.</p>
+                  : <>Ask me anything about your planner: your day, the calendar, food, training, habits, money{pass.user.settings?.profile === 'morning' ? ', your cycle' : ''} or the shopping list. I can add things too, like to-dos, meals, shopping and events, and I’m your coach for training.</>} {canListen() ? 'Tap the mic to just talk, or hold RV from any screen.' : ''}</p>
                 <div className="arvy-chips">{chips.map(s => <button key={s} type="button" onClick={() => send(s, false)}>{s}</button>)}</div>
               </div>)}
             {lines[0]?.old && <div className="arvy-carried">Carried over from your Coach chat</div>}

@@ -4,7 +4,7 @@ import { cleanMessages, speakable, system, toolsFor, voiceFor, SCREENS, TOOLS } 
 
 vi.mock('../../lib/ai', () => ({ invoke: vi.fn() }));
 vi.mock('./run', () => ({ runTool: vi.fn() }));
-const { history, TOOL_LABEL } = await import('./arvy');
+const { history, TOOL_LABEL, arvyIsHearing, arvyIsOpen, onArvyChange, onOpenArvy, openArvy, setArvyHearing, setArvyOpen } = await import('./arvy');
 
 describe('Arvy tools', () => {
   it('gives the cycle tool only to the morning profile (Rosh)', () => {
@@ -96,5 +96,30 @@ describe('the chat history the app sends', () => {
   });
   it('reads out a short, plain version', () => {
     expect(speakable('**Today:**\n- Gym done\n- 3 todos left. Great work! Extra one. And more.')).toBe('Today: Gym done. 3 todos left. Great work!');
+  });
+});
+
+describe('the RV button and the chat', () => {
+  it('the bar is told when the chat opens or closes and when it starts or stops listening, once per change', () => {
+    let told = 0;
+    const off = onArvyChange(() => { told++; });
+    setArvyOpen(true); setArvyOpen(true);
+    expect(arvyIsOpen()).toBe(true);
+    setArvyHearing(true); setArvyHearing(true);
+    expect(arvyIsHearing()).toBe(true);
+    setArvyHearing(false); setArvyOpen(false);
+    expect([arvyIsOpen(), arvyIsHearing()]).toEqual([false, false]);
+    expect(told).toBe(4);
+    off();
+    setArvyOpen(true); setArvyOpen(false);
+    expect(told).toBe(4);
+  });
+  it('RV held down asks the chat to open listening; a screen’s own button doesn’t', () => {
+    const asked: unknown[] = [];
+    const off = onOpenArvy(o => asked.push(o));
+    openArvy({ mic: true });
+    openArvy({ ask: 'How’s my day looking?' });
+    off();
+    expect(asked).toEqual([{ mic: true }, { ask: 'How’s my day looking?' }]);
   });
 });
