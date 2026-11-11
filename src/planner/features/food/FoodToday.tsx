@@ -5,7 +5,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BookOpen, Camera, ChevronLeft, ChevronRight, Plus, Utensils, X, History, Target, Star } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
 import { dayKey, getDoc } from '../../lib/docs';
-import { clock, fastState, loadRoutine, routineNow, type Routine } from '../../lib/routine';
+import { clock, fastState, type Routine } from '../../lib/routine';
+import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Button, Card, Header, Page, Progress, Ring, useToast } from '../../ui/primitives';
 import { addDays, addTotals, DEFAULT_TARGETS, loadTargets, mealKey, mealsBetween, mealsForDay, nowTime, prettyDay, round, saveMeal, ZERO, type Meal, type Targets, type Totals } from './model';
 import { ensureShakeFavourite, fastStreak, fmtDuration } from './fasting';
@@ -36,10 +37,9 @@ function useDay(day: string) {
 
 /** The routine, re-read once and ticking every 30 s so the fast countdown moves. */
 function useRoutineClock(): { r: Routine; now: Date } {
-  const [r, setR] = useState<Routine>(() => routineNow());
+  const { r } = useTodayRoutine();   // today's times: a kitchen cut-off moved or dropped for the day counts
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
-    void loadRoutine().then(setR);
     const id = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(id);
   }, []);

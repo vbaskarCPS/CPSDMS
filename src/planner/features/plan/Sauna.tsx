@@ -6,7 +6,8 @@ import { Link } from 'react-router-dom';
 import { Check, ChevronRight, Flame, Play, Sunrise } from 'lucide-react';
 import { dayKey } from '../../lib/docs';
 import { useDoc } from '../../lib/useDoc';
-import { clock, loadRoutine, routineNow, type Routine } from '../../lib/routine';
+import { clock } from '../../lib/routine';
+import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Page, Header, Card, Button } from '../../ui/primitives';
 import { addDays, nowHM } from './dates';
 import { beep } from './sound';
@@ -24,10 +25,9 @@ export function Sauna() {
   const day = useMemo(() => normalizeDay(t.data), [t.data]);
   const yday = useMemo(() => normalizeDay(y.data), [y.data]);
   const setDay = (fn: (d: Day) => Day) => t.update(d => fn(normalizeDay(d)));
-  const [routine, setRoutine] = useState<Routine>(routineNow());
+  const { r: routine } = useTodayRoutine();   // today's sauna: none when it's skipped for the day
   const [now, setNow] = useState(() => Date.now());
 
-  useEffect(() => { void loadRoutine().then(setRoutine); }, []);
   useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(id); }, []);
 
   // the timer

@@ -1,4 +1,5 @@
 // src/planner/features/plan/types.ts — the day page (doc kind 'day'), week ('week'), month ('month') and prefs.
+import { cleanAdjust, type DayAdjust } from '../../lib/routine';
 
 export interface Savers { silence: boolean; affirmations: boolean; visualization: boolean; exercise: boolean; reading: boolean; scribing: boolean }
 export interface Victory { wokeAt?: string; move: boolean; reflect: boolean; grow: boolean; savers: Savers }
@@ -48,11 +49,13 @@ export interface Day {
   reflection?: string;
   protein?: ProteinPlan;
   gym?: GymCheck;   // "Did you miss the gym?" answered (features/workout/homeChallenge.ts)
+  adjust?: DayAdjust;   // this day's changes to the routine: blocks skipped, times moved, blocks added (lib/routine.ts)
 }
 
 /** The missed-gym question's answer for a day; `challenge` = the home challenge started (and finished) after a miss. */
 export type GymAnswer = 'missed' | 'went' | 'rest';
-export interface GymCheck { answer: GymAnswer; at: string; challenge?: { id: string; doneAt?: string } }
+/** `planned` = a rest day set ahead by changing the day's plan (the gym block skipped), not answered after a miss. */
+export interface GymCheck { answer: GymAnswer; at: string; challenge?: { id: string; doneAt?: string }; planned?: boolean }
 
 export const briefDone = (d: Day): boolean => !!d.brief.finishedAt;
 
@@ -106,6 +109,7 @@ export function normalizeDay(d: Partial<Day> | null | undefined): Day {
     reflection: d.reflection,
     protein: d.protein && Array.isArray(d.protein.slots) ? { ...d.protein, slots: d.protein.slots.filter(x => x && typeof x.id === 'string') } : undefined,
     gym: d.gym && typeof d.gym.answer === 'string' ? d.gym : undefined,
+    adjust: cleanAdjust(d.adjust),
   };
 }
 

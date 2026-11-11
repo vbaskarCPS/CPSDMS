@@ -1,6 +1,6 @@
 // src/planner/features/plan/dates.ts — day / ISO-week / month keys and the wake streak.
 import { dayKey } from '../../lib/docs';
-import { routineMin, routineNow, type Routine } from '../../lib/routine';
+import { routineFor, routineMin, routineNow, type Routine } from '../../lib/routine';
 import type { Day } from './types';
 
 export const parseDay = (key: string): Date => { const [y, m, d] = key.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -29,12 +29,13 @@ export const shiftMonth = (d: Date, n: number): Date => new Date(d.getFullYear()
 
 export const nowHM = (): string => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
-/** Up by the wake target plus the grace? (ticks.up is the time the "Up" block was ticked.) */
+/** Up by the wake target plus the grace? (ticks.up is the time the "Up" block was ticked.) A day whose plan was
+ *  changed ahead (sick: up at 7) is judged against that day's time. */
 export const wokeOnTime = (day: Day | undefined, r: Routine): boolean =>
-  !!day?.ticks.up && routineMin(day.ticks.up) <= routineMin(r.wake) + r.wakeGrace;
-/** Lights out by the target? 1:00 am sorts after 11 pm on the routine scale (day starts at 4 am). */
+  !!day?.ticks.up && routineMin(day.ticks.up) <= routineMin(routineFor(r, day.adjust).wake) + r.wakeGrace;
+/** Lights out by the target (that day's, if it was moved)? 1:00 am sorts after 11 pm on the routine scale (day starts at 4 am). */
 export const lightsOutOnTime = (day: Day | undefined, r: Routine): boolean =>
-  !!day?.ticks.lightsOut && routineMin(day.ticks.lightsOut) <= routineMin(r.lightsOut);
+  !!day?.ticks.lightsOut && routineMin(day.ticks.lightsOut) <= routineMin(routineFor(r, day.adjust).lightsOut);
 
 /** Consecutive days that pass `ok`, ending today (or yesterday when today isn't logged yet). */
 export function streakOf(days: Record<string, Day>, ok: (d: Day | undefined) => boolean, logged: (d: Day | undefined) => boolean): number {

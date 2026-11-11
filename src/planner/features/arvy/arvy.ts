@@ -10,7 +10,7 @@ import { runTool } from './run';
 import { prepare, Refuse, type Change, type Undo } from './act';
 import { logArvy } from './log';
 import { memoryContext } from '../../lib/memory';
-import { changeOf, speakable, type Block, type Msg } from '../../../../supabase/functions/planner-arvy/tools';
+import { changeOf, speakable, TOOLS_VERSION, type Block, type Msg } from '../../../../supabase/functions/planner-arvy/tools';
 
 /** A change shown under Arvy's reply. done: made (Undo while this visit lasts); waiting: Confirm/Cancel. */
 export type ChangeState = 'done' | 'waiting' | 'cancelled' | 'undone' | 'failed' | 'expired';
@@ -89,7 +89,12 @@ async function runChange(name: string, input: Record<string, unknown>, out: Chan
 }
 
 /** How a change ended, for the next question's history (so Arvy knows if they confirmed or undid it). */
-const stateWords: Record<ChangeState, string> = { done: 'done', waiting: 'waiting for Confirm', cancelled: 'they cancelled it', undone: 'they undid it', failed: 'it failed', expired: 'never confirmed' };
+const stateWords: Record<ChangeState, string> = { done: 'MADE and saved (confirmed, if it needed Confirm)', waiting: 'still waiting for their Confirm tap', cancelled: 'they cancelled it: not made', undone: 'they undid it', failed: 'it failed: not made', expired: 'never confirmed: not made' };
+/** When a message was sent, for the history: "Tue Nov 10, 11:28 PM". Old chats say "tomorrow" about a day that's now today. */
+const sentAt = (iso: string): string => {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : `${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}, ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+};
 
 const MAX_STEPS = 8;
 /** How much of a tool's answer Claude gets (characters). The coaching context is the whole planner, so it gets more. */
@@ -105,6 +110,7 @@ export const TOOL_LABEL: Record<string, string> = {
   add_cash_expense: 'the cash wallet', recategorize: 'the transactions',
   set_must: 'your must-dos', log_favourite_meal: 'your favourites', save_favourite: 'your favourites', set_food_targets: 'your food targets',
   create_habit: 'your habits', pause_habit: 'your habits', set_budget: 'the budget', log_cycle_day: 'your cycle', log_period: 'your cycle',
+  adjust_day: 'your day', change_routine: 'your routine',
 };
 
 export function context(path: string, spoken: boolean) {
@@ -112,6 +118,7 @@ export function context(path: string, spoken: boolean) {
   return {
     today: dayKey(), weekday: new Date().toLocaleDateString('en-CA', { weekday: 'long' }),
     now: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), path, spoken, units,
+    v: TOOLS_VERSION,   // which tools this app can run: Arvy is only offered those
   };
 }
 
@@ -120,10 +127,13 @@ async function aboutMe(): Promise<string[]> {
   try { return (await memoryContext(25)).map(n => `${n.date}: ${n.note}`.slice(0, 300)); } catch { return []; }
 }
 
-/** The earlier conversation as Claude messages: text only, last 12 lines, starting with a question. */
+/** The earlier conversation as Claude messages: text only, last 12 lines, starting with a question. What they asked
+ *  carries when it was sent (so "tomorrow" in an old exchange isn't read as tomorrow from now), and each change Arvy
+ *  set up carries what became of it, the outcome first. */
 export function history(lines: ChatLine[]): Msg[] {
   const out: Msg[] = lines.slice(-12).filter(l => l.text.trim()).map(l => ({ role: l.role,
-    content: (l.text + (l.changes?.length ? `\n[Changes: ${l.changes.map(c => `${c.lines.join(' ')} (${stateWords[c.state]})`).join('; ')}]` : '')).slice(0, 3000) }));
+    content: ((l.role === 'user' && sentAt(l.at) ? `[${sentAt(l.at)}] ` : '') + l.text
+      + (l.changes?.length ? l.changes.map(c => `\n[Change: ${stateWords[c.state]}. ${c.lines.join(' ')}]`).join('') : '')).slice(0, 3000) }));
   while (out.length && out[0].role !== 'user') out.shift();
   // two in a row from the same side (an error left a question unanswered): keep the later one
   return out.filter((m, i) => !(out[i + 1] && out[i + 1].role === m.role));
@@ -169,6 +179,11 @@ async function demoTurn(q: string, changes: ChangeView[]): Promise<Turn> {
   if (add) {
     await runChange('add_shopping_items', { items: add[1].split(/,\s*|\s+and\s+/).map(text => ({ text })) }, changes);
     return { reply: changes[0]?.state === 'done' ? 'Added to the list!' : 'Hmm, that didn’t work.', used: ['add_shopping_items'], changes };
+  }
+  if (/sick|sore throat|skip the gym|no sauna|sleep in|rest day/i.test(q)) {
+    await runChange('adjust_day', { why: 'Sick day', skip: ['gym', 'sauna'], wake: '07:00',
+      add: [{ title: 'Home stretch', time: '07:00', note: 'easy, about 20 minutes' }, { title: 'Breakfast', time: '07:30', note: 'protein first, something warm' }] }, changes);
+    return { reply: 'Sorry you’re feeling rough. Today’s plan is changed: no gym, no sauna, up at 7, an easy stretch at 7 and breakfast at 7:30. Rest up!', used: ['adjust_day'], changes };
   }
   if (/session|workout|sore|bench|train/i.test(q)) {
     await runChange('plan_workout', { name: 'Kettlebell shake-up', exercises: [

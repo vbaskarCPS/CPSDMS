@@ -5,7 +5,8 @@ import { useNavigate } from 'react-router-dom';
 import { Play, Pause, SkipForward, Check, Sunrise } from 'lucide-react';
 import { dayKey } from '../../lib/docs';
 import { useDoc } from '../../lib/useDoc';
-import { clock, loadRoutine, routineNow, type Routine } from '../../lib/routine';
+import { clock } from '../../lib/routine';
+import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Page, Header, Card, Button, useToast } from '../../ui/primitives';
 import { nowHM } from './dates';
 import { beep } from './sound';
@@ -25,9 +26,8 @@ export function Morning() {
   const { data, update, loading, save, flush } = useDoc<Day>('day', today, emptyDay(), 500);
   const day = useMemo(() => normalizeDay(data), [data]);
   const set = (fn: (d: Day) => Day) => update(d => fn(normalizeDay(d)));
-  const [routine, setRoutine] = useState<Routine>(routineNow());
+  const { r: routine } = useTodayRoutine();
   const [toast, say] = useToast();
-  useEffect(() => { void loadRoutine().then(setRoutine); }, []);
 
   const minutes: Record<StageId, number> = { stretch: routine.stretchMin, meditate: routine.meditateMin, workout: routine.workoutMin };
   const stages = STAGES.filter(s => minutes[s.id] > 0);

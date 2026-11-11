@@ -55,7 +55,7 @@ export function MissedGym({ routine, day, set, today, loading }: { routine: Rout
     return () => { on = false; };
   }, [today]);
 
-  const ask = !loading && !!facts && shouldAskMissedGym({ routine, now: new Date(), ticks: day.ticks, answered: !!day.gym, workoutToday: facts.workoutToday, gymDue: facts.gymDue });
+  const ask = !loading && !!facts && shouldAskMissedGym({ routine, adjust: day.adjust, now: new Date(), ticks: day.ticks, answered: !!day.gym, workoutToday: facts.workoutToday, gymDue: facts.gymDue });
   useEffect(() => { if (ask && step === null) setStep('ask'); }, [ask, step]);
 
   const answer = (a: GymAnswer) => {

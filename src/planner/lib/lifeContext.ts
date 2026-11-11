@@ -3,7 +3,7 @@
 // set and note, body weight, and (morning profile) the cycle. Read straight from the docs so any feature's
 // AI box can ask for it. Trimmed to stay well inside the function's context cap.
 import { dayKey, getDocs } from './docs';
-import { loadRoutine, blocks } from './routine';
+import { adjustWords, blocks, cleanAdjust, loadRoutine } from './routine';
 import { memoryContext } from './memory';
 import { eventsOn, type CalEvent } from '../features/calendar/types';
 import { trainingState, type MealLite } from '../features/workout/trainingState';
@@ -73,12 +73,15 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
     });
   } catch { training_state = undefined; }
 
+  const todayAdjust = cleanAdjust(days.find(d => d.key === today)?.data?.adjust);
   return {
     today, weekday: new Date().toLocaleDateString([], { weekday: 'long' }), units,
     now: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-    routine: { profile: routine.profile, fast: routine.fast, blocks: blocks(routine).map(b => `${b.label} ${b.at}${b.until ? `–${b.until}` : ''}`) },
+    routine: { profile: routine.profile, fast: routine.fast, blocks: blocks(routine).map(b => `${b.label} ${b.at}${b.until ? `–${b.until}` : ''}`),
+      // today's plan when it differs from the routine (a sick day, a rest day: set with Arvy)
+      ...(todayAdjust ? { today_is_different: { why: todayAdjust.why, changes: adjustWords(todayAdjust), blocks: blocks(routine, todayAdjust).map(b => `${b.label} ${b.at}${b.until ? `–${b.until}` : ''}`) } } : {}) },
     about_me_notes_oldest_first: memory,
-    days_recent: days.map(d => ({ date: d.key, ...pick(d.data || {}, ['brief', 'priorities', 'ticks', 'night', 'scores', 'reflection', 'morningRoutine']) })),
+    days_recent: days.map(d => ({ date: d.key, ...pick(d.data || {}, ['brief', 'priorities', 'ticks', 'night', 'scores', 'reflection', 'morningRoutine', 'adjust']) })),
     habits: activeHabits.map(h => ({ name: h.name, identity: h.identity || undefined, stack: h.stack || undefined, anchor: h.anchor, auto: h.auto, days: h.days })),
     habit_marks_last_14_days: Object.fromEntries(habitLogs.map(l => [l.key, Object.fromEntries(Object.entries(l.data || {}).map(([id, m]) => [habitNames[id] || id, m]))])),
     meals_recent: meals.map(d => d.data).filter(Boolean).map((m: AnyDoc) => ({ date: m.date, time: m.time, name: m.name, kcal: m.totals?.kcal, protein: m.totals?.protein, note: m.note || undefined })),

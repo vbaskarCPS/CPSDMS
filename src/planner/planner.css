@@ -201,6 +201,11 @@ button.pl-tile { font: inherit; color: inherit; text-align: left; cursor: pointe
 .today-streaks .pl-stat { padding: 10px; }
 .today-streaks .pl-stat__value { font-size: 20px; }
 .today-timeline { padding: 6px 16px; }
+/* the day's plan differs from the routine (Day.adjust): what changed, and the way back */
+.today-adjust { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.today-adjust b { display: block; font-size: 14px; }
+.today-adjust small { display: block; font-size: 12.5px; color: var(--ink-2); line-height: 1.35; }
+.today-adjust .pl-btn { flex: none; }
 .today-block { display: flex; gap: 12px; }
 .today-block__rail { width: 22px; display: flex; flex-direction: column; align-items: center; flex: none; }
 .today-block__rail::after { content: ''; flex: 1; width: 2px; background: var(--line); margin: 2px 0; }

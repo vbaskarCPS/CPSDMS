@@ -159,9 +159,10 @@ Deno.serve(async req => {
       today: /^\d{4}-\d{2}-\d{2}$/.test(String(c.today)) ? c.today : undefined, weekday: String(c.weekday || '').slice(0, 12),
       now: String(c.now || '').slice(0, 12), path: String(c.path || '/').slice(0, 60), spoken: !!c.spoken, units: c.units === 'kg' ? 'kg' : 'lb',
       about: Array.isArray(c.about) ? c.about.slice(-25).map(n => String(n).replace(/\s+/g, ' ').slice(0, 300)).filter(Boolean) : undefined,
+      v: Math.max(1, Math.min(99, Math.floor(Number(c.v)) || 1)),   // an app from before the number was sent only has the first tools
     };
     const coaching = isCoaching(messages);
-    const out = await claude(system(ctx, coaching), messages, toolsFor(profile), coaching);
+    const out = await claude(system(ctx, coaching), messages, toolsFor(profile, ctx.v), coaching);
     return json(out);
   } catch (e) {
     console.error('planner-arvy:', action, e instanceof Error ? e.message : String(e));
