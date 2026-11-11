@@ -1,7 +1,8 @@
 // src/planner/features/arvy/Arvy.tsx — Arvy's floating button (every signed-in screen, above the tabs) and chat panel.
 // Tap the button to open the chat; type, or tap the mic and talk (it sends when you pause). Spoken questions get a
 // spoken answer (a woman's voice for Rosh, a man's for Vijay) unless the speaker is off. Arvy can open screens for you;
-// the chat stays open over them. The conversation is kept for this visit (closing the app starts fresh).
+// the chat stays open over them. The conversation is kept between visits and on every device (chat.ts), and starts
+// with what was in the old Coach chat; "Start over" clears it.
 // Changes Arvy makes show under its reply: small ones are already done (Undo), bigger ones wait for Confirm.
 // Arvy is the coach too: screens open it with openArvy() (Train's "Ask Arvy"), and on the Train screens it offers
 // coaching questions. A thumbs-down under a reply, an Undo, or an error goes in Arvy's improvements log (log.ts).
@@ -11,6 +12,7 @@ import { Check, Mic, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } fr
 import { getPass } from '../../lib/auth';
 import { ask, canListen, canUndo, cancelChange, COACH_ASKS, confirmChange, isWaiting, listen, onOpenArvy, primeVoice, speak, stopSpeaking, undoChange, TOOL_LABEL, type ChangeState, type ChangeView, type ChatLine } from './arvy';
 import { logArvy } from './log';
+import { flushChat, loadChat, newer, saveChat } from './chat';
 import './arvy.css';
 
 const MUTE = 'arvy.mute';
@@ -72,7 +74,16 @@ export function Arvy() {
   const rec = useRef<ReturnType<typeof listen> | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { save(keyFor(user), lines); }, [lines, user]);
+  // the saved chat (other visits, other devices); the first time, the Coach chat comes over and this visit's lines follow it
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let on = true;
+    loadChat().then(r => { if (on) setLines(cur => (r.carried ? [...r.lines, ...cur] : newer(cur, r.lines))); })
+      .catch(() => undefined).finally(() => { if (on) setReady(true); });
+    return () => { on = false; };
+  }, [user]);
+  useEffect(() => { save(keyFor(user), lines); if (ready) saveChat(lines); }, [lines, user, ready]);
+  useEffect(() => () => { void flushChat(); }, []);
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [lines, busy, step, open]);
   useEffect(() => () => { rec.current?.cancel(); stopSpeaking(); }, []);
 
@@ -156,7 +167,7 @@ export function Arvy() {
             <button type="button" className="arvy-icon" onClick={toggleMute} aria-label={muted ? 'Turn Arvy’s voice on' : 'Turn Arvy’s voice off'} title={muted ? 'Voice off' : 'Voice on'}>
               {muted ? <VolumeX /> : <Volume2 />}
             </button>
-            <button type="button" className="arvy-icon" onClick={() => { rec.current?.cancel(); stopSpeaking(); setOpen(false); setOffer(null); }} aria-label="Close"><X /></button>
+            <button type="button" className="arvy-icon" onClick={() => { rec.current?.cancel(); stopSpeaking(); setOpen(false); setOffer(null); void flushChat(); }} aria-label="Close"><X /></button>
           </header>
           <div className="arvy-body">
             {!lines.length && (
@@ -166,11 +177,12 @@ export function Arvy() {
                   : <>Ask me anything about your planner: your day, the calendar, food, training, habits, money{pass.user.settings?.profile === 'morning' ? ', your cycle' : ''} or the shopping list. I can add things too, like to-dos, meals, shopping and events, and I’m your coach for training.</>} Tap the mic to just talk.</p>
                 <div className="arvy-chips">{chips.map(s => <button key={s} type="button" onClick={() => send(s, false)}>{s}</button>)}</div>
               </div>)}
+            {lines[0]?.old && <div className="arvy-carried">Carried over from your Coach chat</div>}
             {lines.map((l, i) => (
               <div key={i} className={`arvy-msg ${l.role}`}>
                 {l.role === 'assistant' ? <Rich text={l.text} /> : l.text}
                 {l.changes?.map(c => <ChangeCard key={c.id} c={c} onAct={onAct} />)}
-                {l.role === 'assistant' && (l.down
+                {l.role === 'assistant' && !l.old && (l.down
                   ? <div className="arvy-down-note">Thanks, noted in my log.</div>
                   : <button type="button" className="arvy-down" onClick={() => thumbsDown(i)} aria-label="This wasn’t helpful" title="Not helpful"><ThumbsDown aria-hidden /></button>)}
               </div>))}

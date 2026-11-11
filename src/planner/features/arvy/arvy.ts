@@ -15,7 +15,8 @@ import { changeOf, speakable, type Block, type Msg } from '../../../../supabase/
 /** A change shown under Arvy's reply. done: made (Undo while this visit lasts); waiting: Confirm/Cancel. */
 export type ChangeState = 'done' | 'waiting' | 'cancelled' | 'undone' | 'failed' | 'expired';
 export interface ChangeView { id: string; lines: string[]; state: ChangeState; error?: string }
-export interface ChatLine { role: 'user' | 'assistant'; text: string; at: string; used?: string[]; changes?: ChangeView[]; down?: boolean /* thumbs-down given */ }
+export interface ChatLine { role: 'user' | 'assistant'; text: string; at: string; used?: string[]; changes?: ChangeView[]; down?: boolean /* thumbs-down given */;
+  old?: boolean /* carried over from the Coach chat (chat.ts) */ }
 export interface Turn { reply: string; navigate?: string; used: string[]; changes: ChangeView[] }
 
 // What the panel can still do with a change: the Undo for a made one, or the worked-out change waiting for Confirm.
