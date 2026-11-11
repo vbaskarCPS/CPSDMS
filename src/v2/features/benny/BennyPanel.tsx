@@ -46,11 +46,16 @@ const ProposalCard: React.FC<{ p: BennyProposal; outcome: BennyMsg['outcome']; b
   );
 };
 
-export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | null; rmName?: string | null; centerId?: string | null }> = ({ variant = 'bar', rmManager, rmName, centerId }) => {
+export const Benny: React.FC<{
+  variant?: 'bar' | 'fab'; rmManager?: string | null; rmName?: string | null; centerId?: string | null;
+  /** the floater map: the managers followed there (rmManager is then the floater's own id), and the center it is open at */
+  following?: { id: string; name: string }[] | null; centerLabel?: string | null;
+}> = ({ variant = 'bar', rmManager, rmName, centerId, following, centerLabel }) => {
   const { profile, center, can } = useAuth();
   const loc = useLocation();
   const nav = useNavigate();
-  const KEY = keyFor(variant);
+  const floating = variant === 'fab' && !!following?.length;
+  const KEY = keyFor(floating ? 'fab.floater' : variant);   // the floater map keeps its own chat: its cards are the floater's, not a manager's
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<BennyMsg[]>(() => load(KEY));
   const [text, setText] = useState('');
@@ -68,7 +73,8 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
   // the first-time demo: 0 = not showing, 1 = meet the Benny, 2 = try a question, 3 = three things to know
   const [demo, setDemo] = useState<0 | 1 | 2 | 3>(0);
   const cid = centerId || center?.id || null;
-  const centerName = center && center.id === cid ? center.display_name : undefined;
+  const centerName = centerLabel || (center && center.id === cid ? center.display_name : undefined);
+  const followKey = (following || []).map(f => f.id).join(',');
 
   useEffect(() => { save(KEY, msgs); list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' }); }, [msgs, KEY]);
   useEffect(() => { try { localStorage.setItem(MUTE, mute ? '1' : '0'); } catch { /* none */ } if (mute) stopSpeaking(); }, [mute]);
@@ -110,6 +116,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
       const r = await askBenny(next.slice(-16), {
         center_id: cid || undefined, center_name: centerName, today: todayLocal(), path: loc.pathname,
         screen: variant === 'fab' ? 'rm' : undefined, rm_manager: rmManager || undefined, user_name: profile?.full_name,
+        ...(floating ? { following: following!.map(f => f.id), following_names: following!.map(f => f.name) } : {}),
       });
       setMsgs(m => [...m, { role: 'assistant', text: r.reply || 'Done.', map: r.map, proposal: r.proposal }]);
       setDemo(d => (d === 1 || d === 2 ? 3 : d));
@@ -117,7 +124,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
     } catch (e) {
       setMsgs(m => [...m, { role: 'assistant', text: e instanceof Error ? e.message : 'Something went wrong', error: true }]);
     } finally { setBusy(false); }
-  }, [msgs, busy, cid, centerName, loc.pathname, mute, variant, rmManager, profile?.full_name, say]);
+  }, [msgs, busy, cid, centerName, loc.pathname, mute, variant, rmManager, followKey, profile?.full_name, say]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // the mic's "done talking" arrives later: it must send with the chat as it is then, not as it was when listening began
   const sendRef = useRef(send);
@@ -191,7 +198,10 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
     </button>
   ) : null;
   const demoAsk = variant === 'fab' ? ['Who’s on my team today?', 'Which of my routes have prebooks?'] : ['Who’s booked today?', 'How many open prebooks do we have?'];
-  const suggestions = variant === 'fab'
+  const whose = floating ? (following!.length === 1 ? `${following![0].name}’s team` : `${following!.length} managers’ teams`) : rmName ? `${rmName}’s team` : 'Your team';
+  const suggestions = floating
+    ? ['Who’s out today?', 'Plan my check order', 'Drop a pin here called Meet', 'Something’s broken on the map']
+    : variant === 'fab'
     ? ['Who’s on my team today?', 'Find a free route connected to Kyle’s', 'Which of my routes have prebooks?', 'Something’s broken on the map']
     : ['Who’s booked today?', 'How many open prebooks in Surrey?', 'Show me where the prebooks in Surrey are', 'Start tomorrow with me, solo, North Van 1'];
 
@@ -214,7 +224,7 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
         <div className="benny-root"><aside className={`benny-panel${variant === 'fab' ? ' sheet' : ''}`} aria-label="The Benny">
           <div className="benny-h">
             <span className="benny-dot" aria-hidden="true"><Sparkles size={14} /></span><b>The Benny</b>
-            {(variant === 'fab' ? <span className="v2-small benny-mut">{rmName ? `${rmName}’s team` : 'Your team'}</span>
+            {(variant === 'fab' ? <span className="v2-small benny-mut" title={floating ? following!.map(f => f.name).join(', ') : undefined}>{whose}</span>
               : centerName && <span className="v2-small benny-mut">{centerName}</span>)}
             <span className="v2-spacer" />
             {mic && <button type="button" className="benny-icon" onClick={() => { if (mute) { primeVoice(); voiceTold.current = false; say('Voice on.'); } setMute(m => !m); }} aria-pressed={!mute} aria-label={mute ? 'Turn spoken answers on' : 'Turn spoken answers off'} title={mute ? 'Voice off' : 'Voice on (spoken questions get spoken answers)'}>
@@ -225,7 +235,8 @@ export const Benny: React.FC<{ variant?: 'bar' | 'fab'; rmManager?: string | nul
           <div className="benny-list" ref={list} aria-live="polite">
             {!msgs.length && demo === 0 && (
               <div className="benny-hello">
-                <p>{variant === 'fab' ? 'Ask about your team and routes, or tell me a change: “partner up Wilson with Michael A”, “give Wilson route 35”. You confirm every change first.'
+                <p>{floating ? `Ask about the team${following!.length === 1 ? '' : 's'} you’re following (${following!.map(f => f.name.split(' ')[0]).join(', ')}), or tell me a change: “give Wilson route 35”, “drop a pin at Wilson”, “plan my pickup order”. You confirm every change first.`
+                  : variant === 'fab' ? 'Ask about your team and routes, or tell me a change: “partner up Wilson with Michael A”, “give Wilson route 35”. You confirm every change first.'
                   : 'Ask about today, people, bookings or maps, or start a day. You confirm every change first. Tell me when something’s broken and I’ll let Vijay know.'}</p>
                 {suggestions.map(s => <button key={s} type="button" className="benny-chip" onClick={() => void send(s, false)}>{s}</button>)}
               </div>

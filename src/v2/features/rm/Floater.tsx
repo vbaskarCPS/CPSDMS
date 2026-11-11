@@ -9,11 +9,12 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Map as MapIcon, RefreshCw, Users } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
-import { actAsLegacyFloater, floaterManagers, rmCenterFor, routeRuns, type FloaterManager } from '../../lib/floater';
+import { actAsLegacyFloater, floaterLegacyId, floaterManagers, rmCenterFor, routeRuns, type FloaterManager } from '../../lib/floater';
 import { hasLiveRouteManagerSeat } from '../../lib/legacy';
 import { legacyManagerId } from '../../lib/startSession';
 import { serviceLabel } from '../../lib/permissions';
 import { Btn, ErrorBox, Loading } from '../../ui';
+import { Benny } from '../benny/BennyPanel';
 
 const RMLogbook = React.lazy(() => import('../../../pages/Management/RMLogbook'));
 const money = (v: number) => `$${Math.round(v).toLocaleString('en-CA')}`;
@@ -119,7 +120,7 @@ export const FloaterPicker: React.FC = () => {
   );
 };
 
-/** /app/rm/floater/map?cc=…&m=… — the floater map for the chosen managers (full screen). */
+/** /app/rm/floater/map?cc=…&m=… — the floater map for the chosen managers (full screen), with the Benny on it. */
 export const FloaterMap: React.FC = () => {
   const { profile } = useAuth();
   const nav = useNavigate();
@@ -132,7 +133,7 @@ export const FloaterMap: React.FC = () => {
     const here = live.filter(r => r.center_id === cc && ids.includes(r.manager_id));
     if (!here.length) return { ok: false as const, why: 'Those managers aren’t on a live session any more.' };
     await actAsLegacyFloater(cc, profile, here.map(r => r.manager_id));
-    return { ok: true as const, names: here.map(r => r.manager_name), center: here[0].center_name };
+    return { ok: true as const, names: here.map(r => r.manager_name), center: here[0].center_name, following: here.map(r => ({ id: r.manager_id, name: r.manager_name })) };
   }, [cc, ids.join(','), profile?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (ready.loading) return <div className="v2"><Loading label="Opening the floater map…" /></div>;
@@ -148,6 +149,8 @@ export const FloaterMap: React.FC = () => {
         title={`Floating for ${ready.data.names.join(', ')} · ${ready.data.center}`}>
         <ArrowLeft size={14} /> {ready.data.names.length === 1 ? ready.data.names[0] : `${ready.data.names.length} managers`}
       </button>
+      {/* the Benny, for the managers followed here: their teams are "my team", and a pin or an order is the floater's own */}
+      {profile && <Benny variant="fab" rmManager={floaterLegacyId(profile.username)} following={ready.data.following} centerId={cc} centerLabel={ready.data.center} />}
     </>
   );
 };

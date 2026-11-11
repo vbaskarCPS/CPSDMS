@@ -188,6 +188,22 @@ a = await ask('drop a pin here', { cards: ['pin', 'stops'] });   // the top bar,
 assert.equal(a.body.proposal, null); assert.equal(state.rpc.at(-1)[1].p_manager, null);
 console.log('5f pins and orders: cards with their maps for the open map, nothing written by the server ✓');
 
+// 5g. the floater map: the floater's own id and the managers followed reach the database together, for it to check
+state.role = 'rm';
+const floater = { screen: 'rm', rm_manager: 'floater_stebe', following: ['rm_franklynmitchell', 'rm_jovanchung'], following_names: ['Franklyn Mitchell', 'Jovan Chung'], cards: ['pin', 'stops'] };
+state.script = [turn(use('propose_stops', { kind: 'check' })), say('Two stops. Tap Drop the pins to do it.')];
+a = await ask('plan my check order', floater);
+assert(!fns().includes('benny_my_rm_ids'), 'the floater map is not swapped for the person’s own manager map');
+assert.equal(state.rpc.at(-1)[1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');
+assert.equal(a.body.proposal.check.manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');   // the stand-in echoes it; the real check answers with the floater's id
+assert(state.lastAsk.system.includes('on the floater map, following Franklyn Mitchell, Jovan Chung'));
+state.script = [turn(use('live_team', {})), say('8 carts out.')];
+a = await ask('who is out', { ...floater, spoken: true });
+assert.deepEqual(fns(), ['benny_ok_any', 'benny_vocab', 'benny_live']);
+assert.equal(state.rpc[1][1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung'); assert.equal(state.rpc[2][1].p_manager, 'floater_stebe,rm_franklynmitchell,rm_jovanchung');
+state.role = 'admin';
+console.log('5g the floater map: "my team" is the managers followed, checked by the database ✓');
+
 // 6. who gets in
 state.user = false; a = await ask('hi'); assert.equal(a.status, 401); state.user = true;
 state.role = null; a = await ask('hi'); assert.equal(a.status, 403); state.role = 'admin';
