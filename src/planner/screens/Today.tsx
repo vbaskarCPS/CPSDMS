@@ -5,6 +5,8 @@
 // the current block highlighted, each one tickable. Streaks on top; the feature cards below.
 // A day can differ from the routine (Day.adjust, set by Arvy from the conversation: sick, so no gym, no sauna, up at 7,
 // a stretch at 7): the timeline shows that day's blocks, a note on top says what changed, "Back to normal" clears it.
+// Below the greeting the blocks (streaks, the plan, the cards) are handed by name to features/widgets, which draws
+// them in the person's own order with the widgets they added (Settings › Arrange Today); untouched, it's this order.
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Settings as Cog, Check, Sunrise, Moon, Flame, ChevronRight } from 'lucide-react';
@@ -26,6 +28,7 @@ import { MoneyTodayCard } from '../features/money';
 import { CycleTodayCard } from '../features/cycle';
 import { CalendarTodayCard } from '../features/calendar';
 import { ShopTodayCard } from '../features/shop';
+import { TodayWidgets, foldsAway, useTodayWidgets } from '../features/widgets';
 
 function greeting(h: number): string {
   if (h < 4) return 'Still up';
@@ -73,6 +76,10 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const isMorning = routine.profile === 'morning';
   const [askBed, setAskBed] = useState(false);   // lights out tapped in the morning: ask for last night's time
   const [yReviewed, setYReviewed] = useState(false);   // 5 am club: yesterday looked back, in the sauna
+  // this person's own arrangement of the page (features/widgets): the order of the blocks below, which show, their
+  // sizes, and the widgets they added. Nothing arranged = the page as it has always been.
+  const widgets = useTodayWidgets(pass, routine.profile);
+  const [unfolded, setUnfolded] = useState(false);   // the compact plan, opened up for now
 
   useEffect(() => { void loadRoutine().then(setRoutine); return onRoutineChange(setRoutine); }, []);   // and when Arvy changes the routine
   useEffect(() => { const id = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(id); }, []);
@@ -171,6 +178,12 @@ export function Today({ pass }: { pass: PlannerPass }) {
     if (id === 'morning') return day.morningRoutine.finishedAt ? 'done' : undefined;
     return t[tickKey(id as TickId)];   // added blocks (x:…) carry their own tick and never get here
   };
+  // the day's plan set to compact (Arrange Today): what's finished from earlier in the day folds into one line, which
+  // opens it again. Anything not done yet stays in sight.
+  const folded = (row: Row): boolean => foldsAway(widgets.compact('plan') && !unfolded, row.s
+    ? { past: routineMin(row.s.time) <= routineMinutes(now), done: !!row.s.eaten }
+    : { past: row.i < curIdx, now: row.b.id === cur, done: !!(row.b.added ? row.b.added.done : ticked(row.b.id)) });
+  const nFolded = rows.filter(folded).length;
 
   return (
     <SlotHabitsProvider><main className="pl-page pl-stack pl-fade" style={{ gap: 14 }}>
@@ -186,6 +199,8 @@ export function Today({ pass }: { pass: PlannerPass }) {
       <MissedGym routine={routine} day={day} set={set} today={today} loading={loading} />
       <GuessMeals routine={eff} today={today} />
       {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
+      {/* the blocks, by name: features/widgets draws them in the person's order (as written here when nothing is arranged) */}
+      <TodayWidgets widgets={widgets} blocks={{ streaks: (
       <div className="pl-stats today-streaks">
         <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Up on time</span>} value={streaks ? streaks.up : '–'} sub={`by ${clock(eff.wake)}`} tone={streaks && streaks.up > 0 ? 'good' : undefined} />
         <Stat label={<span className="pl-row" style={{ gap: 4 }}><Moon aria-hidden style={{ width: 14, height: 14 }} /> {isMorning ? 'In bed' : 'Lights out'}</span>} value={streaks ? streaks.lights : '–'} sub={`by ${clock(eff.lightsOut)}`} tone={streaks && streaks.lights > 0 ? 'good' : undefined} />
@@ -193,7 +208,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
           ? <Stat label={<span className="pl-row" style={{ gap: 4 }}><Flame aria-hidden style={{ width: 14, height: 14 }} /> Fast kept</span>} value={streaks ? (streaks.fast ?? '–') : '–'} sub={fast.eating ? 'eating now' : `${Math.floor(fast.fastedFor / 60)}h ${fast.fastedFor % 60}m fasted`} tone={streaks && (streaks.fast ?? 0) > 0 ? 'good' : undefined} />
           : routine.stretchMin + routine.meditateMin + routine.workoutMin > 0 && <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Morning routine</span>} value={streaks ? streaks.morning : '–'} sub="days in a row" tone={streaks && streaks.morning > 0 ? 'good' : undefined} />}
       </div>
-
+      ), plan: (<>
       <section className="today-timeline pl-card" aria-label="Today's routine">
         {adj && (
           <div className="today-adjust" role="note">
@@ -201,7 +216,9 @@ export function Today({ pass }: { pass: PlannerPass }) {
             <button type="button" className="pl-btn pl-btn--small pl-btn--ghost" onClick={backToNormal}>Back to normal</button>
           </div>
         )}
+        {widgets.compact('plan') && (nFolded > 0 || unfolded) && <button type="button" className="wg-fold" aria-expanded={unfolded} onClick={() => setUnfolded(u => !u)}>{unfolded ? 'Fold away what’s done' : `${nFolded} done earlier · Show`}</button>}
         {rows.map(row => {
+          if (folded(row)) return null;
           if (row.s) {
             const s = row.s, due = routineMin(s.time) <= routineMinutes(now);
             return (
@@ -307,13 +324,15 @@ export function Today({ pass }: { pass: PlannerPass }) {
       </section>
 
       <InstallHint />
-      <CalendarTodayCard />
-      <ShopTodayCard />
-      {routine.profile === 'morning' && <CycleTodayCard pass={pass} />}
-      <HabitsTodayCard pass={pass} />
-      <WorkoutTodayCard pass={pass} />
-      <FoodTodayCard pass={pass} />
-      <MoneyTodayCard pass={pass} />
+      </>),
+      calendar: <CalendarTodayCard />,
+      shop: <ShopTodayCard />,
+      cycle: <CycleTodayCard pass={pass} />,   // the morning planner only (features/widgets leaves it off the other)
+      habits: <HabitsTodayCard pass={pass} />,
+      train: <WorkoutTodayCard pass={pass} />,
+      food: <FoodTodayCard pass={pass} />,
+      money: <MoneyTodayCard pass={pass} />,
+      }} />
     </main></SlotHabitsProvider>
   );
 }

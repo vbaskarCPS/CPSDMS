@@ -15,6 +15,11 @@
 //   POST { token, action: 'classes', clubs?: [club keys], from: 'YYYY-MM-DD' } → { clubs: [{ key, name, classes | problem }] }
 //        The class timetable of their GoodLife clubs for seven days from `from` (gym.ts): the gym_classes tool runs in
 //        the app like every tool, and the app asks here because a browser can't read GoodLife's site itself.
+//   POST { token, action: 'places', query, near?, open_now? } → { places: [{ name, address, phone, … }] } | { problem, broken }
+//        Up to four places from Google Maps for what was asked (places.ts): the find_place tool runs in the app like
+//        every tool, and the app asks here because the Google key is a secret only this function has
+//        (GOOGLE_PLACES_API_KEY; Places API (New), Text Search). No key, or Google not answering: `problem` says so,
+//        and Arvy tells them it couldn't reach Google Maps.
 //
 // The planner token (planner_sign_in) is checked with planner_me; nothing runs without it. Deployed without JWT
 // verification because planner users have no Supabase account. Whose voice and which tools come from the account
@@ -24,6 +29,7 @@
 // (else GOOGLE_API_KEY), voices ARVY_VOICE_MORNING / ARVY_VOICE_NIGHT.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { gymClassesFrom, gymClubsFor, gymFeedUrl, type GymClass, type GymClubClasses } from './gym.ts';
+import { PLACES_FIELDS, PLACES_URL, placesAsk, placesFrom, placesRefusal, placesRequest } from './places.ts';
 import { canWeb, cleanMessages, contextText, DAYPLAN_SCHEMA, dayplanSystem, hasPictures, isCoaching, speakable, system, toolsFor, voiceFor, webOut, webRaw, WEB_SEARCH, type ArvyCtx, type Profile } from './tools.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
@@ -173,6 +179,44 @@ async function gymClasses(q: { clubs?: unknown; from?: unknown }): Promise<Respo
   return json({ clubs });
 }
 
+/** Places from Google Maps for what was asked (places.ts). Google's answer is kept a few minutes, so going back over
+ *  the same place in a conversation asks Google once; whether each place is open is worked out again every time.
+ *  Google bills each look-up: no more than PLACES_LIMIT of them in ten minutes. Never throws and never sends the key
+ *  or Google's own error text to the app: what went wrong is in this function's log. */
+const placesKept = new Map<string, { at: number; body: unknown }>();
+const PLACES_KEEP_MS = 3 * 60 * 1000, PLACES_LIMIT = 30;
+let placesAsked: number[] = [];   // when Google was asked, these last ten minutes
+async function findPlaces(q: unknown): Promise<Response> {
+  const ask = placesAsk(q);
+  if (!ask) return json({ error: 'What should I look for?' }, 400);
+  // what was looked for stays out of the log: it's theirs
+  const down = (why: string, problem = 'Google Maps couldn’t be reached.') => { console.error(`planner-arvy places: ${why}`); return json({ problem, broken: true, why }); };
+  const key = Deno.env.get('GOOGLE_PLACES_API_KEY');
+  if (!key) return down('the Google key isn’t set (GOOGLE_PLACES_API_KEY)');
+  const id = `${ask.text.toLowerCase()}|${ask.openNow ? 'open' : 'any'}`, kept = placesKept.get(id);
+  let body = kept && Date.now() - kept.at < PLACES_KEEP_MS ? kept.body : undefined;
+  if (body === undefined) {
+    placesAsked = placesAsked.filter(t => Date.now() - t < 10 * 60 * 1000);
+    if (placesAsked.length >= PLACES_LIMIT) return down('too many look-ups in ten minutes', 'Too many places were looked up in the last few minutes. Try again in ten minutes.');
+    placesAsked.push(Date.now());
+    try {
+      const res = await fetch(PLACES_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': PLACES_FIELDS },
+        body: JSON.stringify(placesRequest(ask)), signal: AbortSignal.timeout(10000) });
+      body = await res.json().catch(() => null);
+      if (!res.ok) {
+        console.error('planner-arvy places: Google said:', String((body as { error?: { message?: unknown } } | null)?.error?.message || '').split(key).join('(the key)').slice(0, 300));
+        return down(`Google refused (${placesRefusal(body, res.status)})`);
+      }
+    } catch (e) {
+      return down(e instanceof Error && e.name === 'TimeoutError' ? 'Google didn’t answer in time' : `the request failed (${e instanceof Error ? e.name : 'error'})`);
+    }
+    if (placesFrom(body, Date.now())) { if (placesKept.size > 60) placesKept.clear(); placesKept.set(id, { at: Date.now(), body }); }
+  }
+  const places = placesFrom(body, Date.now());
+  if (!places) return down('Google’s answer has changed and couldn’t be read', 'Google Maps answered, but not in a way that could be read.');
+  return json({ places });
+}
+
 Deno.serve(async req => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
@@ -203,6 +247,7 @@ Deno.serve(async req => {
       return json(r);
     }
     if (b.action === 'classes') return await gymClasses(b as unknown as { clubs?: unknown; from?: unknown });
+    if (b.action === 'places') return await findPlaces(b);
     if (b.action !== 'turn') return json({ error: 'Unknown action' }, 400);
 
     const c = b.context || {};

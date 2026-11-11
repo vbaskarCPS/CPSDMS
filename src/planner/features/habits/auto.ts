@@ -4,6 +4,7 @@
 // 'mini' or 'skip' (the home challenge, then the gym after all); un-ticking only clears what it set.
 import { dayKey, getDoc, getDocs, putDoc } from '../../lib/docs';
 import type { Habit, HabitLog } from './types';
+import { habitTicked } from './ticked';
 
 export type AutoTrigger = 'wake' | 'brief' | 'daycare' | 'fast' | 'dinner' | 'gym' | 'sauna' | 'review' | 'shake' | 'lightsOut';
 export const AUTO_LABELS: Record<AutoTrigger, string> = {
@@ -26,6 +27,6 @@ export async function autoMark(trigger: AutoTrigger, on = true, key = dayKey(), 
       if (on && mark !== 'done' && (!cur || cur === 'skip') && cur !== mark) { log[h.id] = mark; changed = true; }
       if (!on && cur === mark) { delete log[h.id]; changed = true; }
     }
-    if (changed) await putDoc('habitlog', key, log);
+    if (changed) { await putDoc('habitlog', key, log); habitTicked(); }
   } catch { /* the habit can still be ticked by hand */ }
 }

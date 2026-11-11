@@ -3,16 +3,20 @@
 // Sending, and everything a message sets off (the push to the other phone, Arvy reading it, its proposals), happens
 // in the planner-chat function; this file keeps the list fresh (it asks again every few seconds while the chat is
 // open, once a minute otherwise), shows a message the moment it's sent, and makes a confirmed proposal's change with
-// the same code Arvy's own changes use (arvy/act.ts). No React here.
+// the same code Arvy's own changes use (arvy/act.ts). A message can be sent as a reply to another; and messages picked
+// out of the chat (select.ts) can be handed to Arvy to do something with, or logged as an idea for the planner.
+// No React here.
 import { supabase } from '../../../lib/supabase';
 import { invoke } from '../../lib/ai';
 import { getPass } from '../../lib/auth';
 import { isDemo } from '../../lib/app';
-import { docsChanged, getDoc, getDocs, putDoc } from '../../lib/docs';
+import { calendarKey, docsChanged, getDoc, getDocs, putDoc } from '../../lib/docs';
 import { prepare } from '../arvy/act';
 import { arvyIsOpen, onArvyChange, setArvyOpen } from '../arvy/arvy';
-import { BUCKET, CHAT_KIND, MAX_IMAGE_BYTES, MAX_MEDIA, MAX_VIDEO_BYTES, canConfirm, type ChatMsg, type Media, type Proposal } from '../../../../supabase/functions/planner-chat/chat';
+import { entryOf } from '../arvy/log';
+import { BUCKET, CHAT_KIND, MAX_IMAGE_BYTES, MAX_MEDIA, MAX_VIDEO_BYTES, addProposals, canConfirm, isKey, plainEmoji, quoteOf, type ChatMsg, type Media, type Proposal, type ReplyTo } from '../../../../supabase/functions/planner-chat/chat';
 import { readyImage, readyVideo, type Ready } from './media';
+import { ideaFrom } from './select';
 
 /** A message on screen. `sending` = shown before the server has it; `local` = previews of what's being sent. */
 export interface Row { key: string; msg: ChatMsg; sending?: boolean; local?: string[] }
@@ -127,16 +131,23 @@ export function filesProblem(files: { type: string; size: number }[]): string | 
   return null;
 }
 
-/** Send a message. It shows straight away; the row is swapped for the saved one when the server has it. Throws (with
- *  the message taken back off the screen) when it couldn't be sent. */
-export async function say(text: string, files: File[] = []): Promise<void> {
+/** The quote a reply carries: where the message it answers is, who wrote it and its first line (or what was sent).
+ *  null = it can't be replied to yet (it is still on its way). */
+export function replyTo(row: Row): ReplyTo | null {
+  return row.sending || !isKey(row.key) ? null : { key: row.key, ...(row.msg.name ? { name: row.msg.name } : {}), ...quoteOf(row.msg) };
+}
+
+/** Send a message, as a reply to `to` when one is given. It shows straight away; the row is swapped for the saved one
+ *  when the server has it. Throws (with the message taken back off the screen) when it couldn't be sent. */
+export async function say(text: string, files: File[] = [], to: Row | null = null): Promise<void> {
   const pass = getPass();
   const words = text.trim();
   if (!pass || (!words && !files.length)) return;
   const at = new Date().toISOString(), id = `local-${Math.random().toString(36).slice(2, 9)}`;
   const local = files.map(f => URL.createObjectURL(f));
+  const reply = to ? replyTo(to) : null;
   const mine: Row = { key: `${at}~${id}`, sending: true, local, msg: { id, at, by: pass.user.username, name: pass.user.display_name.split(/\s+/)[0], ...(words ? { text: words } : {}),
-    ...(files.length ? { media: files.map(f => ({ kind: f.type.startsWith('video/') ? 'video' as const : 'image' as const, path: '' })) } : {}) } };
+    ...(files.length ? { media: files.map(f => ({ kind: f.type.startsWith('video/') ? 'video' as const : 'image' as const, path: '' })) } : {}), ...(reply ? { reply } : {}) } };
   rows = [...rows, mine]; tell();
   try {
     let saved: { key: string; msg: ChatMsg };
@@ -154,7 +165,9 @@ export async function say(text: string, files: File[] = []): Promise<void> {
           media.push({ kind: slot.kind, path: slot.path, ...(r.thumb ? { thumb: r.thumb } : {}), ...(r.seconds ? { seconds: r.seconds } : {}), ...(r.w ? { w: r.w, h: r.h } : {}) });
         }
       }
-      saved = await invoke<{ key: string; msg: ChatMsg }>({ action: 'say', text: words, media, looks: ready.flatMap(r => r.looks).slice(0, 6) }, 'planner-chat');
+      // the server is sent where the original is and the copy of it; the name on the quote it puts there itself
+      saved = await invoke<{ key: string; msg: ChatMsg }>({ action: 'say', text: words, media, looks: ready.flatMap(r => r.looks).slice(0, 6),
+        ...(reply ? { reply: { key: reply.key, ...(reply.text ? { text: reply.text } : {}), ...(reply.media ? { media: reply.media } : {}) } } : {}) }, 'planner-chat');
     }
     rows = rows.map(r => (r === mine || r.msg.id === id ? { key: saved.key, msg: saved.msg, local } : r)).sort((a, b) => a.key.localeCompare(b.key));
     tell(); schedule();
@@ -188,7 +201,55 @@ export async function answer(key: string, p: Proposal, how: 'done' | 'dismissed'
   }
 }
 
+// ── messages picked out of the chat (select.ts): ask Arvy about them, or log them as an idea ──
+/** What can be asked about picked messages: one of the three ready-made things (a to-do says whose), or their own words. */
+export type Asking = { what: 'shopping' | 'calendar' } | { what: 'todo'; for: string } | { what: 'words'; words: string };
+const NOT_YET = 'Arvy can’t do that from here yet.';
+
+/** Ask Arvy to do something with the picked messages. Nothing is added here: its proposals land under the last one
+ *  picked and wait for a Confirm tap like any other. Returns that message's key, how many proposals it made, and its
+ *  note when it had nothing to offer. Throws, in words, when it couldn't. */
+export async function askArvy(keys: string[], asking: Asking): Promise<{ key: string; added: number; note?: string }> {
+  const picked = [...new Set(keys)].filter(isKey).sort();
+  if (!picked.length) throw new Error('Pick a message first.');
+  let r: { key?: string; msg?: ChatMsg; added?: number; note?: string } | null;
+  try { r = isDemo() ? demoAsk(picked, asking) : await invoke<{ key?: string; msg?: ChatMsg; added?: number; note?: string }>({ action: 'ask', keys: picked, ...asking }, 'planner-chat'); }
+  catch (e) { throw /unknown action/i.test(e instanceof Error ? e.message : '') ? new Error(NOT_YET) : e instanceof Error ? e : new Error(NOT_YET); }
+  const key = r?.key, msg = r?.msg;
+  if (!key || !msg) throw new Error(NOT_YET);   // a server that doesn't know this yet
+  rows = rows.map(x => (x.key === key ? { ...x, msg } : x)); tell(); schedule();
+  return { key, added: r?.added || 0, ...(r?.note ? { note: r.note } : {}) };
+}
+
+/** Log the picked messages as an idea for the planner, in Arvy's improvements log of the person who picked them
+ *  (Settings › Arvy's log; arvy/log.ts). Throws when it didn't save. The demo saves nothing. */
+export async function logIdea(picked: Row[]): Promise<void> {
+  if (!picked.length) throw new Error('Pick a message first.');
+  if (isDemo()) return;
+  const entry = entryOf(ideaFrom(picked.map(r => r.msg)));
+  await putDoc('arvylog', `${entry.at}~${entry.id}`, entry);
+}
+
 // ── the demo (/demo): nothing is sent anywhere; "can you get…" shows what Arvy does with a message ──
+function demoAsk(keys: string[], a: Asking): { key: string; msg: ChatMsg; added: number; note?: string } | null {
+  const picked = rows.filter(r => keys.includes(r.key));
+  const last = picked[picked.length - 1];
+  if (!last) return null;
+  const said = picked.map(r => plainEmoji(quoteOf(r.msg).text || '').replace(/[?.!]+$/, '').trim()).filter(Boolean);
+  const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+  const id = `p${Math.random().toString(36).slice(2, 8)}`, today = calendarKey();
+  const ps: Proposal[] = [];
+  if (a.what === 'shopping' && said.length) {
+    const items = said.flatMap(t => (t.match(/(?:get|buy|pick up|need|out of)\s+(.+)/i)?.[1] || t).split(/,\s*|\s+and\s+/)).map(t => t.trim()).filter(Boolean).slice(0, 8).map(t => ({ text: cap(t).slice(0, 60) }));
+    ps.push({ id, tool: 'add_shopping_items', input: { items }, lines: [`Shopping list: add ${items.map(i => i.text).join(', ')}`], state: 'waiting' });
+  } else if (a.what === 'todo' && said.length) {
+    ps.push({ id, tool: 'add_todos', for: a.for, input: { todos: [{ text: cap(said[0]).slice(0, 120) }], date: today }, lines: [`To-do for ${a.for === me() ? (getPass()?.user.display_name || 'me').split(/\s+/)[0] : otherName()}: ${cap(said[0]).slice(0, 120)}`], state: 'waiting' });
+  } else if (a.what === 'calendar' && said.length) {
+    ps.push({ id, tool: 'add_event', input: { title: cap(said[0]).slice(0, 80), date: today, who: 'both' }, lines: [`Calendar: ${cap(said[0]).slice(0, 80)}, today`], state: 'waiting' });
+  }
+  const next = addProposals(last.msg, ps, a.what === 'words' ? 'In the demo Arvy keeps to the shopping list, a to-do or the calendar.' : undefined);
+  return { key: last.key, msg: next.msg, added: next.added.length, ...(next.note ? { note: next.note } : {}) };
+}
 function demoSay(m: ChatMsg): { key: string; msg: ChatMsg } {
   const id = Math.random().toString(36).slice(2, 8);
   const got = m.text?.match(/(?:get|buy|pick up|need|out of)\s+(.+)/i)?.[1];

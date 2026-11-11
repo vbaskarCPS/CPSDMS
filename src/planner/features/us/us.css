@@ -75,3 +75,69 @@
 .us-preview { display: flex; gap: 8px; align-items: baseline; padding: 8px 14px 0; border-top: 1px solid var(--line); }
 .us-preview span { flex-shrink: 0; font: 700 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
 .us-preview div { min-width: 0; max-height: 4.6em; overflow-y: auto; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+/* ── replying to a message, and picking messages out (select.ts, Us.tsx) ──
+   A message takes a press and hold (it's picked) and a swipe to the right (reply); up and down stays the list's own
+   scrolling (pan-y). On a phone the words in a message can't be marked with a finger and a picture brings up no menu
+   of the phone's own: that long press is ours, and Copy is in the bar. With a mouse, words can still be marked. */
+.us-sheet .arvy-body { overflow-x: hidden; min-height: 96px; }   /* a message or two always shows: the tray or the list under it gives way */
+.us-msg { position: relative; touch-action: pan-y; transition: transform .18s ease-out; -webkit-tap-highlight-color: transparent; }
+.us-msg.is-swiping { transition: none; }
+.us-msg a, .us-msg img { -webkit-user-drag: none; }
+@media (pointer: coarse) { .us-msg.can-pick, .us-msg.can-pick * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
+/* the arrow that grows beside a message as it is swiped, and fills in once letting go would reply */
+.us-swipe { position: absolute; top: 5px; left: -42px; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); border: 1px solid var(--line); color: var(--ink-2); opacity: var(--pull, 0); transform: scale(calc(.6 + .4 * var(--pull, 0))); pointer-events: none; }
+.us-swipe svg { width: 16px; height: 16px; }
+.us-msg.is-armed .us-swipe { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+/* a picked message: a band right across the chat and a tick beside it; an empty ring beside the ones that can be added */
+.us-msg.is-picked::before, .us-msg.is-flash::before { content: ''; position: absolute; inset: -5px -100vw; z-index: -1; pointer-events: none; background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.us-tick { position: absolute; top: 9px; width: 24px; height: 24px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--ink-2) 60%, transparent); background: var(--bg-2); color: var(--accent-ink); display: grid; place-items: center; pointer-events: none; }
+.us-msg.theirs .us-tick { right: -36px; }
+.us-msg.mine .us-tick { left: -36px; }
+.us-msg.is-picked .us-tick { background: var(--accent); border-color: var(--accent); }
+.us-tick svg { width: 14px; height: 14px; }
+.us-sheet.is-picking .us-msg.can-pick { cursor: pointer; }
+/* the message a tapped quote went back to, lit for a moment */
+.us-msg.is-flash::before { animation: usFlash 1.5s ease-out both; }
+@keyframes usFlash { 0%, 35% { background: color-mix(in srgb, var(--amber) 36%, transparent); } 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .us-msg { transition: none; }
+  .us-msg.is-flash::before { animation: none; background: color-mix(in srgb, var(--amber) 26%, transparent); }
+}
+/* the quote above a reply (a tap goes to the original), and the one above the box while a reply is being written */
+.us-quote { display: flex; flex-direction: column; justify-content: center; gap: 1px; max-width: 100%; min-height: 44px; padding: 5px 11px 5px 9px; border: 0; border-left: 3px solid var(--accent); border-radius: 4px 12px 12px 4px; background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink-2); font: 12.5px/1.35 var(--sans); text-align: left; cursor: pointer; }
+.us-quote b { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ink); }
+.us-quote b svg { width: 12px; height: 12px; flex: none; color: var(--accent); }
+.us-quote span, .us-replying span { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us-quote span > svg:not(.st), .us-replying span > svg:not(.st) { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
+.us-replying { display: flex; align-items: center; gap: 10px; padding: 4px 4px 0 14px; border-top: 1px solid var(--line); }
+.us-replying > svg { flex: none; width: 18px; height: 18px; color: var(--accent); }
+.us-replying > div { flex: 1; min-width: 0; padding-left: 9px; border-left: 3px solid var(--accent); font-size: 13px; line-height: 1.35; color: var(--ink-2); }
+.us-replying b { display: block; font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.us-replying > button { flex: none; width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
+.us-replying > button svg { width: 18px; height: 18px; }
+/* while messages are picked, this bar takes the place of the box you type in (what was being written is kept) */
+.us-bar { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 4px; border-top: 1px solid var(--line); }
+.us-bar b { flex: 1; min-width: 0; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.us-bar button { flex: none; min-width: 60px; min-height: 48px; padding: 4px 8px; border: 0; border-radius: 12px; background: transparent; color: var(--ink); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font: 600 11.5px var(--sans); cursor: pointer; }
+.us-bar button svg { width: 20px; height: 20px; color: var(--accent); }
+.us-bar button.us-bar-x { min-width: 44px; color: var(--ink-2); }
+.us-bar button.us-on { background: var(--accent); color: var(--accent-ink); }
+.us-bar button.us-bar-x svg, .us-bar button.us-on svg { color: inherit; }
+.us-bar button:disabled { opacity: .45; cursor: default; }
+/* what Arvy can be asked to do with them: opens above the bar */
+.us-ask { display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 4px; border-top: 1px solid var(--line); max-height: 58dvh; overflow-y: auto; }
+.us-ask h4 { margin: 0 2px 2px; display: flex; align-items: center; gap: 6px; font: 700 12px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
+.us-ask h4 svg { width: 14px; height: 14px; flex: none; color: var(--accent); }
+.us-ask > button, .us-ask-two { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--ink); font: 600 14.5px var(--sans); text-align: left; }
+.us-ask > button { cursor: pointer; }
+.us-ask > button svg, .us-ask-two span svg { width: 18px; height: 18px; flex: none; color: var(--accent); }
+.us-ask-two { flex-wrap: wrap; gap: 6px; padding: 4px 5px 4px 12px; }
+.us-ask-two span { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.us-ask-two button { flex: none; min-height: 44px; padding: 0 13px; border: 1.5px solid var(--line); border-radius: 22px; background: var(--bg-2); color: var(--ink); font: 700 13px var(--sans); cursor: pointer; }
+.us-ask button:disabled { opacity: .5; cursor: default; }
+.us-ask form { display: flex; gap: 8px; align-items: center; }
+.us-ask input { flex: 1; min-width: 0; height: 44px; border-radius: 22px; border: 1.5px solid var(--line); background: var(--bg); color: var(--ink); padding: 0 16px; font: 15px var(--sans); outline-offset: 2px; }
+.us-ask > p, .us-ask > .us-arvy-line, .us-ask > .arvy-error { margin: 0; padding: 2px 4px 4px; }
+/* a small line after something was done: "Copied", "Saved to Arvy's log" */
+.us-said { display: flex; align-items: center; gap: 6px; padding: 7px 14px 0; font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.us-said svg { width: 15px; height: 15px; flex: none; color: var(--good, #2e8b57); }

@@ -4,7 +4,7 @@
 // type by hand. Every change shows at once and is saved (store.ts); "Back to the planner's own look" clears it all.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, ChevronDown, ChevronLeft, ImagePlus } from 'lucide-react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ImagePlus, LayoutGrid, Shapes, Sticker } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
 import { profileOf } from '../../lib/app';
 import { loadTileFonts, tileFace } from './apply';
@@ -22,13 +22,13 @@ import { EDGES, FACES, LOOKS, OWN, SECTIONS, SHADOWS, bgPlan, brightnessOf, isPl
    Until then nothing is drawn. Those three screens are not built in this folder.
    ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
 function MoreOfTheStudio() {
-  return null;
-  // return (
-  //   <nav className="lk-next" aria-label="More of the Studio">
-  //     <Link className="pl-tile" to="/settings/icons"><Shapes aria-hidden /><div className="pl-grow"><b>Icons</b><small>…</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
-  //     …Stickers, Widgets
-  //   </nav>
-  // );
+  return (
+    <nav className="lk-next" aria-label="More of the Studio">
+      <Link className="pl-tile" to="/settings/icons"><Shapes aria-hidden /><div className="pl-grow"><b>Icons</b><small>Icon packs for the bar and the menu pages, or your own pictures</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
+      <Link className="pl-tile" to="/settings/stickers"><Sticker aria-hidden /><div className="pl-grow"><b>Stickers</b><small>Decorate your pages like a scrapbook</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
+      <Link className="pl-tile" to="/settings/widgets"><LayoutGrid aria-hidden /><div className="pl-grow"><b>Widgets</b><small>Arrange Today, and add a countdown, a note or a mini calendar</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
+    </nav>
+  );
 }
 
 const OWN_NAME = 'The planner’s own';
@@ -247,7 +247,7 @@ export function Studio({ pass }: { pass: PlannerPass }) {
           </section>)
         : <button type="button" className="pl-btn pl-btn--block" onClick={() => setAsking(true)}>Back to the planner’s own look</button>)}
 
-      {/* the three tiles still to come (Icons, Stickers, Widgets): see MoreOfTheStudio at the top of this file */}
+      {/* the rest of the Studio lives on its own screens: icons, stickers, widgets */}
       <MoreOfTheStudio />
     </main>
   );

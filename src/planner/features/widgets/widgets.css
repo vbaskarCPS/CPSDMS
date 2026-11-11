@@ -1,0 +1,150 @@
+/* src/planner/features/widgets/widgets.css — the widgets a person adds to Today (countdown, note, mini calendar, habit
+   tracker), the one-line size of the planner's own cards, and the Arrange Today screen (/settings/widgets).
+   Every colour comes from the shared variables (planner.css), so whatever look is on, light or dark, carries through;
+   each added widget is a .pl-card, so it takes the card's background, shape, border and shadow from the look as well.
+   planner.css is loaded after this file: a rule here that changes what a shared class also sets names both classes. */
+
+/* ── on Today ── */
+/* two small ones next to each other in the order share a row */
+.wg-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: stretch; }
+.wg-pair > * { min-width: 0; }
+
+/* the one-line size of a card: the same row as the Shopping card */
+.pl-row.wg-line { gap: 12px; text-decoration: none; color: inherit; }
+.wg-line > svg:first-child { flex: none; width: 22px; height: 22px; color: var(--accent); }
+.wg-line > div { min-width: 0; }
+.wg-line small { display: block; }
+
+/* the compact day's plan: the line that opens what's folded away */
+.wg-fold { display: flex; align-items: center; width: 100%; min-height: 44px; padding: 0; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--ink-2); font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; }
+
+/* the way back to the arrange screen, under everything (only once something has been arranged) */
+.wg-arrange { align-self: center; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; color: var(--ink-2); font-size: 13px; font-weight: 600; text-decoration: none; }
+.wg-arrange svg { width: 16px; height: 16px; }
+
+/* countdown: the days left in big type inside a ring, a dial of small ticks that fills over the last month */
+.wg-count { display: flex; align-items: center; gap: 16px; }
+.wg-count__ring { position: relative; flex: none; width: 92px; height: 92px; }
+.wg-count__ring svg { display: block; width: 100%; height: 100%; }
+.wg-count__dial { fill: color-mix(in srgb, var(--amber) 9%, transparent); stroke: color-mix(in srgb, var(--ink) 16%, transparent); stroke-width: 6; stroke-dasharray: 1.5 4.26; }
+.wg-count__arc { fill: none; stroke: var(--amber); stroke-width: 6; stroke-linecap: round; }
+.wg-count__big { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--serif); font-size: 38px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.wg-count__big.is-mid { font-size: 30px; }
+.wg-count__big.is-long { font-size: 21px; }
+.wg-count__big svg { width: 30px; height: 30px; color: var(--ink-2); }
+.wg-count__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wg-count__title { font-family: var(--serif); font-size: 19px; line-height: 1.2; overflow-wrap: anywhere; }
+.wg-count__text small { font-size: 13px; line-height: 1.35; }
+.wg-count.is-today .wg-count__dial { fill: color-mix(in srgb, var(--amber) 30%, transparent); }
+.wg-count.is-passed .wg-count__dial { fill: none; }
+.wg-count__tidy { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.wg-count__tidy .pl-btn { min-height: 44px; }
+.wg-count.is-small { flex-direction: column; justify-content: center; gap: 10px; text-align: center; }
+.wg-count.is-small .wg-count__text { flex: none; align-items: center; }
+.wg-count.is-small .wg-count__title { font-size: 17px; }
+.wg-count.is-small .wg-count__tidy { justify-content: center; }
+
+/* note: lined paper in a colour mixed from the look, a strip of tape on top */
+.pl-card.wg-note { position: relative; display: flex; flex-direction: column; padding-top: 22px; }
+.wg-note[data-paper="bright"] { background: color-mix(in srgb, var(--amber) 24%, var(--bg-2)); border-color: color-mix(in srgb, var(--amber) 42%, var(--line)); }
+.wg-note[data-paper="tint"] { background: color-mix(in srgb, var(--accent) 12%, var(--bg-2)); border-color: color-mix(in srgb, var(--accent) 24%, var(--line)); }
+.wg-note[data-paper="fresh"] { background: color-mix(in srgb, var(--good) 17%, var(--bg-2)); border-color: color-mix(in srgb, var(--good) 34%, var(--line)); }
+.wg-note[data-paper="warm"] { background: color-mix(in srgb, var(--bad) 13%, var(--bg-2)); border-color: color-mix(in srgb, var(--bad) 28%, var(--line)); }
+.wg-note__tape { position: absolute; top: -8px; left: 50%; width: 72px; height: 20px; margin-left: -36px; border-radius: 2px; transform: rotate(-3deg); background: color-mix(in srgb, var(--ink) 24%, var(--bg-2)); opacity: 0.86; box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 22%, transparent); pointer-events: none; }
+.wg-note__text { display: block; flex: 1 0 auto; width: 100%; min-height: 72px; padding: 0; border: 0; outline: 0; resize: none; overflow: hidden; background-color: transparent; color: var(--ink); font: 500 16px/24px var(--serif); overflow-wrap: anywhere;
+  background-image: repeating-linear-gradient(to bottom, transparent 0 23px, color-mix(in srgb, var(--ink) 13%, transparent) 23px 24px); }
+.wg-note__text::placeholder { color: var(--ink-2); opacity: 0.85; }
+.wg-note:focus-within { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 1px; }
+.wg-note .pl-error { display: block; margin-top: 6px; font-size: 12px; }
+
+/* mini calendar: a page of a wall calendar, two rings on top, today circled, a dot under a day with something on */
+.pl-card.wg-month { position: relative; display: block; padding-top: 20px; text-decoration: none; color: inherit; }
+.wg-month__rings { position: absolute; top: -7px; left: 0; right: 0; display: flex; justify-content: space-evenly; pointer-events: none; }
+.wg-month__rings i { width: 6px; height: 16px; border-radius: 3px; background: var(--ink-2); }
+.wg-month__head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; }
+.wg-month__head b { font-family: var(--serif); font-size: 18px; }
+.wg-month__head small { font-size: 12px; color: var(--ink-2); }
+.wg-month__grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.wg-month__dow { padding-bottom: 4px; font-size: 10.5px; font-weight: 600; color: var(--ink-2); }
+.wg-month__day { position: relative; display: grid; place-items: center; height: 32px; }
+.wg-month__day > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; }
+.wg-month__day.is-gone { color: var(--ink-2); }
+.wg-month__day.is-today > span { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.wg-month__day.is-busy::after { content: ''; position: absolute; left: 50%; bottom: 0; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--amber-2); }
+.pl-card.wg-month.is-small { padding-left: 12px; padding-right: 12px; }
+.wg-month.is-small .wg-month__head b { font-size: 16px; }
+.wg-month.is-small .wg-month__grid { font-size: 11px; row-gap: 1px; }
+.wg-month.is-small .wg-month__dow { font-size: 9.5px; }
+.wg-month.is-small .wg-month__day { height: 24px; }
+.wg-month.is-small .wg-month__day > span { width: 19px; height: 19px; }
+.wg-month.is-small .wg-month__day.is-busy::after { width: 4px; height: 4px; margin-left: -2px; bottom: -1px; }
+
+/* habit tracker: a row a habit, a stamp a day; a done one carries a small tick */
+.wg-week { display: block; text-decoration: none; color: inherit; }
+.wg-week > .pl-row > svg:first-child { width: 20px; height: 20px; color: var(--accent); }
+.wg-week > .pl-row > svg:last-child { width: 18px; height: 18px; color: var(--ink-2); }
+.wg-week > p { margin-top: 8px; font-size: 13px; }
+.wg-week__grid { display: grid; grid-template-columns: minmax(0, 1fr) repeat(7, 22px); gap: 7px 4px; align-items: center; margin-top: 10px; font-size: 13px; }
+.wg-week__dow { text-align: center; font-size: 10.5px; font-weight: 600; color: var(--ink-2); }
+.wg-week__dow.is-today { color: var(--accent); }
+.wg-week__name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wg-week__dot { display: grid; place-items: center; width: 18px; height: 18px; margin: 0 auto; border-radius: 50%; background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.wg-week__dot.is-done { background: var(--good); }
+.wg-week__dot.is-done::after { content: ''; width: 7px; height: 4px; margin-top: -2px; border-left: 2px solid var(--bg-2); border-bottom: 2px solid var(--bg-2); transform: rotate(-45deg); }
+.wg-week__dot.is-mini { background: var(--amber); }
+.wg-week__dot.is-missed { background: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--bad) 55%, transparent); }
+.wg-week__dot.is-open { background: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
+.wg-week__dot.is-future { background: none; box-shadow: inset 0 0 0 1px var(--line); }
+
+/* ── the Arrange Today screen ── */
+.pl-btn.wg-tap { min-height: 44px; }
+.wg-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.pl-card.wg-row { padding: 8px 10px 8px 4px; }
+.wg-row.is-off .wg-row__name { opacity: 0.55; }
+.wg-row.is-new { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* while a row is held, the others step aside smoothly; when it lands everything is simply in its new place */
+.wg-list.is-sorting .wg-row:not(.is-held) { transition: transform 0.16s ease; }
+.wg-row.is-held { position: relative; z-index: 5; border-color: var(--accent); box-shadow: 0 10px 26px color-mix(in srgb, var(--ink) 26%, transparent); }
+.wg-row__top { display: flex; align-items: center; gap: 4px; }
+.wg-row__grip { flex: none; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; background: none; color: var(--ink-2); cursor: grab; touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.wg-row__grip svg { width: 22px; height: 22px; }
+.wg-row__name { flex: 1; min-width: 0; }
+.wg-row__name b { display: block; font-size: 15px; line-height: 1.25; overflow-wrap: anywhere; }
+.wg-row__name small { display: block; margin-top: 1px; font-size: 12px; line-height: 1.3; color: var(--ink-2); }
+.wg-row__arrow { flex: none; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); color: var(--ink); cursor: pointer; }
+.wg-row__arrow svg { width: 20px; height: 20px; }
+.wg-row__arrow:disabled, .wg-row__grip:disabled { opacity: 0.3; cursor: default; }
+.wg-row__end { flex: none; display: grid; place-items: center; width: 52px; height: 44px; padding: 0; border: 0; background: none; color: var(--ink-2); }
+.wg-row__end svg { width: 19px; height: 19px; }
+.wg-row__bin { cursor: pointer; }
+/* on or off: a switch, 52 by 44 to the finger */
+.wg-switch { flex: none; position: relative; width: 52px; height: 44px; padding: 0; border: 0; background: none; cursor: pointer; }
+.wg-switch::before { content: ''; position: absolute; left: 3px; right: 3px; top: 8px; height: 28px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 20%, transparent); transition: background 0.15s; }
+.wg-switch::after { content: ''; position: absolute; left: 6px; top: 11px; width: 22px; height: 22px; border-radius: 50%; background: var(--bg-2); box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 35%, transparent); transition: transform 0.15s; }
+.wg-switch[aria-checked="true"]::before { background: var(--accent); }
+.wg-switch[aria-checked="true"]::after { transform: translateX(18px); }
+.wg-switch:disabled { opacity: 0.5; cursor: default; }
+.wg-row__more { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 2px 48px; }
+.wg-row__hint { flex-basis: 100%; font-size: 12px; line-height: 1.3; color: var(--ink-2); }
+.wg-row__more .pl-btn svg { width: 16px; height: 16px; }
+.pl-seg.wg-seg { flex: none; width: 176px; max-width: 100%; }
+.pl-seg.wg-seg button { min-height: 44px; }
+.wg-papers { display: flex; flex-wrap: wrap; }
+.wg-paper { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; background: none; cursor: pointer; }
+.wg-paper i { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); background: var(--bg-2); }
+.wg-paper[data-paper="bright"] i { background: color-mix(in srgb, var(--amber) 24%, var(--bg-2)); border-color: color-mix(in srgb, var(--amber) 42%, var(--line)); }
+.wg-paper[data-paper="tint"] i { background: color-mix(in srgb, var(--accent) 12%, var(--bg-2)); border-color: color-mix(in srgb, var(--accent) 24%, var(--line)); }
+.wg-paper[data-paper="fresh"] i { background: color-mix(in srgb, var(--good) 17%, var(--bg-2)); border-color: color-mix(in srgb, var(--good) 34%, var(--line)); }
+.wg-paper[data-paper="warm"] i { background: color-mix(in srgb, var(--bad) 13%, var(--bg-2)); border-color: color-mix(in srgb, var(--bad) 28%, var(--line)); }
+.wg-paper.is-on i { box-shadow: 0 0 0 2px var(--bg-2), 0 0 0 4px var(--accent); }
+.wg-said { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.wg-add { align-items: center; }
+.wg-add:disabled { opacity: 0.5; cursor: default; }
+.wg-add .wg-add__plus { color: var(--ink-2); }
+.wg-coming .pl-chip { min-height: 44px; }
+.pl-row.wg-yearly { gap: 10px; align-items: flex-start; min-height: 44px; }
+.wg-yearly input { flex: none; width: 22px; height: 22px; margin-top: 2px; accent-color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .wg-list.is-sorting .wg-row:not(.is-held), .wg-switch::before, .wg-switch::after { transition: none; }
+}
