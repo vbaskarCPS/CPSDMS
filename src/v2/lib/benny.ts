@@ -2,9 +2,11 @@
 // browser's own speech: speech to text for the mic, and text to speech for spoken answers.
 import { db } from './client';
 import type { BennyProposal } from './bennyActions';
+import { byRoad, withOrder } from './bennyDrive';
 
-/** pins with n are stops in an order: drawn numbered, joined by a line in that order, from start (where the manager is) when given */
-export interface BennyMap { maps: string[]; highlight: string[]; pins: { lat: number; lng: number; label: string; route: string | null; n?: number }[]; start?: { lat: number; lng: number } | null; title?: string }
+/** pins with n are stops in an order: drawn numbered, joined in that order from start (where the manager is) when given:
+ *  along path (the road, as [lng, lat] points) when the road is known, else in straight lines */
+export interface BennyMap { maps: string[]; highlight: string[]; pins: { lat: number; lng: number; label: string; route: string | null; n?: number }[]; start?: { lat: number; lng: number } | null; path?: [number, number][]; title?: string }
 export interface BennyMsg {
   role: 'user' | 'assistant'; text: string; spoken?: boolean; map?: BennyMap | null; error?: boolean;
   proposal?: BennyProposal | null;
@@ -41,8 +43,11 @@ export async function askBenny(messages: BennyMsg[], context: BennyContext): Pro
     throw new Error(msg || error.message || 'The Benny didn’t answer');
   }
   if (data?.error) throw new Error(data.error);
-  const proposal = (data?.proposal as BennyProposal) || null;
-  return { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: proposal && CARDS.includes(proposal.kind) ? proposal : null };
+  const got = (data?.proposal as BennyProposal) || null;
+  const answer = { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: got && CARDS.includes(got.kind) ? got : null };
+  // an order comes planned in straight lines: here it is put in driving order by the road's own times, when they can be read
+  if (answer.proposal?.kind === 'stops') return withOrder(answer, answer.proposal.check, await byRoad(answer.proposal.check).catch(() => null));
+  return answer;
 }
 
 /** The kept outlines of these master maps (only the ones that have one). Light, and open to anyone who can use the Benny. */

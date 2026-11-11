@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { floaterLegacyId, routeRuns } from './floater';
+import { floaterLegacyId, rmCenterFor, routeRuns } from './floater';
 import { visibleComponents } from '../app/nav';
 import type { Permission } from './permissions';
 
 describe('floater route manager', () => {
+  it('a route manager’s own map is their account’s center; a super admin’s is the center they are on', () => {
+    const bc = { id: 'bc' };
+    expect(rmCenterFor({ is_super_admin: false, rm_center_id: 'on' }, bc)).toBe('on');          // a manager works one center
+    expect(rmCenterFor({ is_super_admin: true, rm_center_id: 'demo' }, bc)).toBe('bc');         // not the demo one left on the account
+    expect(rmCenterFor({ is_super_admin: true, rm_center_id: 'demo' }, null)).toBe('demo');     // no center picked yet
+    expect(rmCenterFor({ is_super_admin: false, rm_center_id: null }, bc)).toBe('bc');
+    expect(rmCenterFor(null, null)).toBeNull();
+  });
   it('shows route codes as short runs', () => {
     expect(routeRuns(['GA03', 'GA01', 'GA02', 'BR07', 'GA05'])).toBe('BR07, GA01–03, GA05');
     expect(routeRuns(['OR09', 'OR10', 'OR11'])).toBe('OR09–11');

@@ -28,6 +28,12 @@ export function routeRuns(codes: string[]): string {
   return out.join(', ');
 }
 
+/** The center a person's own Route Manager map is for. A route manager works one center: the one set on their account.
+ *  A super admin switches centers in the top bar, so they get the map of the center they are on (their account's
+ *  center may be an old or a demo one). */
+export const rmCenterFor = (profile: { is_super_admin?: boolean; rm_center_id?: string | null } | null | undefined, topBar: { id: string } | null | undefined): string | null =>
+  (profile?.is_super_admin ? topBar?.id : null) || profile?.rm_center_id || topBar?.id || null;
+
 /** The id the floater view signs in as on the old map: never one of the day's real managers. */
 export const floaterLegacyId = (username: string) => `floater_${username}`;
 
