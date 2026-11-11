@@ -7,11 +7,13 @@
 // Changes Arvy makes show under its reply: small ones are already done (Undo), bigger ones wait for Confirm.
 // A question can come with pictures (pics.ts): paste a screenshot, drop one in, or use the picture button. Arvy reads
 // an appointment off it and sets it up for the calendar, and whatever it sets up from a picture waits for Confirm.
+// A place Arvy looked up on Google Maps gets real buttons under the reply: Call, Website or Book online, Directions.
+// They're kept with the chat, like the links to where a reply read.
 // Arvy is the coach too: screens open it with openArvy() (Train's "Ask Arvy"), and on the Train screens it offers
 // coaching questions. A thumbs-down under a reply, an Undo, or an error goes in Arvy's improvements log (log.ts).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Check, ClipboardPaste, ImagePlus, Images, MessagesSquare, Mic, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } from 'lucide-react';
+import { CalendarCheck, Check, ClipboardPaste, Globe, ImagePlus, Images, MessagesSquare, Mic, Navigation, Phone, Send, Sparkles, ThumbsDown, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { onUs, openUs, otherName, usUnread, usVersion } from '../us/us';
 import { getPass } from '../../lib/auth';
 import { isDemo, profileOf } from '../../lib/app';
@@ -21,6 +23,7 @@ import { NO_CONNECTION, setArvyNews, arvyIsOpen, ask, canListen, canUndo, cancel
 import { logArvy } from './log';
 import { flushChat, lean, loadChat, newer, saveChat } from './chat';
 import { canReadClipboard, clipboardImages, imagesFrom, MAX_PICS, readyPic, type Picked } from './pics';
+import { cleanLinks, type PlaceLinkKind } from '../../../../supabase/functions/planner-arvy/places';
 import './arvy.css';
 
 const MUTE = 'arvy.mute';
@@ -40,6 +43,32 @@ function Rich({ text }: { text: string }) {
 
 /** A page's site, for its link under a reply: "nhs.uk". */
 const siteOf = (url: string): string => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return 'source'; } };
+
+const PLACE_BUTTON: Record<PlaceLinkKind, { label: string; Icon: typeof Phone }> = {
+  call: { label: 'Call', Icon: Phone }, book: { label: 'Book online', Icon: CalendarCheck }, site: { label: 'Website', Icon: Globe }, map: { label: 'Directions', Icon: Navigation },
+};
+/** The places a reply names, each with its buttons: Call dials, the others open in the browser or the Maps app. The
+ *  links are checked again as they're drawn (cleanLinks): whatever a saved chat holds, only tel: and https: links
+ *  ever become a button. */
+function Places({ links }: { links: unknown }) {
+  const places = cleanLinks(links);
+  if (!places.length) return null;
+  return (
+    <div className="arvy-places">
+      {places.map((p, i) => (
+        <div key={i} className="arvy-place" role="group" aria-label={p.name}>
+          <b>{p.name}</b>
+          {p.where && <span>{p.where}</span>}
+          <div className="arvy-place-btns">
+            {p.buttons.map(b => {
+              const { label, Icon } = PLACE_BUTTON[b.kind];
+              return <a key={b.kind} className={b.kind} href={b.url} aria-label={`${label}: ${p.name}`} {...(b.kind === 'call' ? {} : { target: '_blank', rel: 'noopener noreferrer' })}><Icon aria-hidden />{label}</a>;
+            })}
+          </div>
+        </div>))}
+    </div>
+  );
+}
 
 const NOTE: Partial<Record<ChangeState, string>> = { cancelled: 'Cancelled', undone: 'Undone', failed: 'Didn’t work', expired: 'Not confirmed' };
 
@@ -149,7 +178,7 @@ export function Arvy() {
     setLines([...before, asked]);
     try {
       const t = await ask(before, question, loc.pathname, spoken, tools => setStep(tools.map(n => TOOL_LABEL[n] || n).join(', ')), pics.length ? { pics, at: asked.at } : undefined);
-      setLines(cur => [...cur, { role: 'assistant', text: t.reply, at: new Date().toISOString(), used: t.used, ...(t.changes.length ? { changes: t.changes } : {}), ...(t.sources?.length ? { sources: t.sources } : {}), ...(t.choices?.length ? { choices: t.choices } : {}) }]);
+      setLines(cur => [...cur, { role: 'assistant', text: t.reply, at: new Date().toISOString(), used: t.used, ...(t.changes.length ? { changes: t.changes } : {}), ...(t.sources?.length ? { sources: t.sources } : {}), ...(t.choices?.length ? { choices: t.choices } : {}), ...(t.links?.length ? { links: t.links } : {}) }]);
       if (t.navigate && t.navigate !== loc.pathname) nav(t.navigate);
       if (spoken && !muted) speak(t.reply).catch(e => setError(`Couldn’t speak: ${e instanceof Error ? e.message : e}`));
     } catch (e) {
@@ -286,6 +315,7 @@ export function Arvy() {
                   : <div className="arvy-pics-note">{l.pics.n === 1 ? 'A picture' : `${l.pics.n} pictures`}</div>)}
                 {l.role === 'assistant' ? <Rich text={l.text} /> : l.text}
                 {l.changes?.map(c => <ChangeCard key={c.id} c={c} onAct={onAct} />)}
+                {l.role === 'assistant' && !!l.links?.length && <Places links={l.links} />}
                 {!!l.sources?.length && (
                   <div className="arvy-sources"><span>From the web</span>
                     {l.sources.map(s => <a key={s.url} href={s.url} target="_blank" rel="noopener noreferrer" title={s.title}>{siteOf(s.url)}</a>)}

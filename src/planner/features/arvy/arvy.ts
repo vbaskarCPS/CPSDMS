@@ -1,8 +1,11 @@
 // src/planner/features/arvy/arvy.ts — talking with Arvy: the conversation loop, listening, and Arvy's voice.
 // One question = a few steps: the server asks Claude; when Claude wants tools, they run here (run.ts) and the results
 // go back, until Claude answers. Past questions are sent as plain text (tools are looked up fresh each time).
-// Once a question has read something from outside the planner (the web, GoodLife's class timetable), every change it
-// sets up waits for a Confirm tap, and where it read is linked under the reply.
+// Once a question has read something from outside the planner (the web, GoodLife's class timetable, a place on Google
+// Maps), every change it sets up waits for a Confirm tap, and where it read is linked under the reply. The same goes
+// for a look at the chat between the two of them: what one of them wrote there is not a request to Arvy.
+// A place Arvy looked up comes with buttons under the reply (Call, Website or Book online, Directions): the links are
+// the ones Google gave, never anything Arvy wrote; its reply only decides which places get their buttons.
 // A question can come with pictures (a screenshot of an appointment: pics.ts). They count as outside the planner too:
 // what Arvy sets up from one always waits for Confirm.
 import { invoke } from '../../lib/ai';
@@ -17,6 +20,7 @@ import { logArvy } from './log';
 import { memoryContext } from '../../lib/memory';
 import { changeOf, speakable, TOOLS_VERSION, type Block, type Msg, type Source } from '../../../../supabase/functions/planner-arvy/tools';
 import { gymPageUrl } from '../../../../supabase/functions/planner-arvy/gym';
+import { cleanLinks, linksFor, PLACES_AREA, placesPageUrl, type PlaceLinks } from '../../../../supabase/functions/planner-arvy/places';
 import type { Pic } from './pics';
 
 /** A change shown under Arvy's reply. done: made (Undo while this visit lasts); waiting: Confirm/Cancel. */
@@ -27,8 +31,9 @@ export interface Choice { label: string; send?: string }
 export interface ChatLine { role: 'user' | 'assistant'; text: string; at: string; used?: string[]; changes?: ChangeView[]; down?: boolean /* thumbs-down given */;
   pics?: { n: number; thumbs?: string[] } /* pictures sent with it: how many, and small previews (kept for the latest few: chat.ts lean) */;
   old?: boolean /* carried over from the Coach chat (chat.ts) */;
-  sources?: Source[] /* the web pages the reply cites */; choices?: Choice[] /* buttons to pick from */ }
-export interface Turn { reply: string; navigate?: string; used: string[]; changes: ChangeView[]; sources?: Source[]; choices?: Choice[] }
+  sources?: Source[] /* the web pages the reply cites */; choices?: Choice[] /* buttons to pick from */;
+  links?: PlaceLinks[] /* the places the reply names, each with its buttons: Call, Website or Book online, Directions */ }
+export interface Turn { reply: string; navigate?: string; used: string[]; changes: ChangeView[]; sources?: Source[]; choices?: Choice[]; links?: PlaceLinks[] }
 
 // What the panel can still do with a change: the Undo for a made one, or the worked-out change waiting for Confirm.
 // Kept for this visit only (they're functions); after a reload, waiting cards show as expired.
@@ -176,9 +181,11 @@ export const TOOL_LABEL: Record<string, string> = {
   set_must: 'your must-dos', log_favourite_meal: 'your favourites', save_favourite: 'your favourites', set_food_targets: 'your food targets',
   create_habit: 'your habits', pause_habit: 'your habits', set_budget: 'the budget', log_cycle_day: 'your cycle', log_period: 'your cycle',
   adjust_day: 'your day', change_routine: 'your routine', offer_choices: 'your options', web_search: 'the web', gym_classes: 'GoodLife’s class times',
+  find_place: 'Google Maps', our_chat: 'your chat',
 };
-/** Look-ups that read something outside the planner (the web search is the other one: it runs on the server). */
-const OUTSIDE = new Set(['gym_classes']);
+/** Look-ups that read something Arvy must not take orders from: outside the planner (the web search is the other one:
+ *  it runs on the server), or what the two of them wrote each other. After one, every change waits for Confirm. */
+const OUTSIDE = new Set(['gym_classes', 'find_place', 'our_chat']);
 
 export function context(path: string, spoken: boolean) {
   const units = (getPass()?.user.settings?.units as string) === 'kg' ? 'kg' : 'lb';
@@ -253,6 +260,7 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   const sources: Source[] = [];   // the web pages the answer cites (and the gym timetable it read), shown under it
   const found: Source[] = [];     // the pages the searches turned up: shown when the answer cites none
   let choices: Choice[] = [];     // buttons to pick from (offer_choices)
+  const places: PlaceLinks[][] = [];   // the places each look-up found, with the links for their buttons (find_place)
   let searched = false;           // the web was searched in this question…
   // …or something else outside the planner was read (a picture they sent counts from the start): from then on every change waits for Confirm
   let outside = msgs.some(m => Array.isArray(m.content) && m.content.some(b => b.type === 'image'));
@@ -260,7 +268,9 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   // one link a site (two pages of the same site would show as the same name twice); found pages only when none is cited
   const site = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
   const pages = () => { const list = sources.length ? sources : found; return list.filter((s, i) => list.findIndex(x => site(x.url) === site(s.url)) === i).slice(0, sources.length ? 6 : 4); };
-  const extras = () => ({ ...(pages().length ? { sources: pages() } : {}), ...(choices.length ? { choices } : {}) });
+  // the buttons go under the reply for the places it names (places.ts linksFor)
+  const extras = (reply: string) => { const links = linksFor(reply, places); return { ...(pages().length ? { sources: pages() } : {}), ...(choices.length ? { choices } : {}), ...(links.length ? { links } : {}) }; };
+  const answer = (reply: string): Turn => ({ reply, navigate, used, changes, ...extras(reply) });
   for (let step = 0; step < MAX_STEPS; step++) {
     const r = await serverStep<{ content: Block[]; stop_reason: string; raw?: Block[]; web?: { searches?: string[]; sources?: Source[]; found?: Source[] } }>({ action: 'turn', messages: msgs, context: ctx }, RETRY_WAIT.ms);
     const content = Array.isArray(r.content) ? r.content : [];
@@ -272,11 +282,11 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
     const calls = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
     const text = content.filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text').map(b => b.text).join('\n').trim();
     for (const c of calls) if (c.name === 'offer_choices') choices = choicesFrom(c.input);
-    if (r.stop_reason !== 'tool_use' || !calls.length) return { reply: text || (changes.length ? 'Done!' : 'Hmm, I lost my train of thought there. Try asking again?'), navigate, used, changes, ...extras() };
+    if (r.stop_reason !== 'tool_use' || !calls.length) return answer(text || (changes.length ? 'Done!' : 'Hmm, I lost my train of thought there. Try asking again?'));
     // the reply came with its buttons and nothing else to run: that's the answer, no need to go back to Claude
-    if (text && choices.length && calls.every(c => c.name === 'offer_choices')) return { reply: text, navigate, used, changes, ...extras() };
+    if (text && choices.length && calls.every(c => c.name === 'offer_choices')) return answer(text);
     onStep?.([...(r.web ? ['web_search'] : []), ...calls.map(c => c.name).filter(n => n !== 'offer_choices')]);   // a search asked for alongside a look-up runs during the next step
-    const res = new Map<string, { result: unknown; error?: boolean; navigate?: string; sources?: Source[] }>();
+    const res = new Map<string, { result: unknown; error?: boolean; navigate?: string; sources?: Source[]; links?: PlaceLinks[] }>();
     const about = { question, path };
     // look-ups together; changes one at a time, in order (each one's Undo snapshot is taken just before it)
     await Promise.all(calls.filter(c => !changeOf(c.name)).map(async c => { res.set(c.id, await runTool(c.name, c.input || {}, about)); }));
@@ -287,6 +297,8 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
       const out = res.get(c.id)!;
       if (out.navigate) navigate = out.navigate;
       keep(sources, out.sources);
+      const looked = cleanLinks(out.links, true);   // checked again here: only tel: and https: links ever reach the chat
+      if (looked.length) places.push(looked);
       if (out.error) void logArvy({ type: 'error', title: `${c.name} didn’t work`, detail: JSON.stringify(out.result).slice(0, 600), tools: [c.name], ...about });
       return { type: 'tool_result' as const, tool_use_id: c.id, content: JSON.stringify(out.result).slice(0, RESULT_CAP[c.name] || 13000), ...(out.error ? { is_error: true } : {}) };
     });
@@ -294,7 +306,7 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
     msgs.push({ role: 'assistant', content: r.raw?.length ? r.raw : content }, { role: 'user', content: results });
   }
   void logArvy({ type: 'error', title: 'Arvy ran out of steps on a question', question, path, tools: used });
-  return { reply: 'That one took me too many steps. Could you ask it a simpler way?', navigate, used, changes, ...extras() };
+  return answer('That one took me too many steps. Could you ask it a simpler way?');
 }
 
 // ── demo (/demo): canned answers, nothing sent anywhere. Changes are real, on the demo's own data. ──
@@ -327,6 +339,17 @@ async function demoTurn(q: string, changes: ChangeView[]): Promise<Turn> {
       used: ['gym_classes'], changes, sources: [{ title: 'GoodLife class schedule (demo)', url: gymPageUrl(201) }],
       choices: [{ label: 'Yoga 7:45 pm, Queenston', send: 'Put tonight’s 7:45 pm Yoga at Queenston on my calendar' }, { label: 'Hot Yin 6:00 pm, Burlington', send: 'Put tonight’s 6:00 pm Hot Yin Yoga class at Burlington Centre on my calendar' }] };
   }
+  // a place looked up (made up here; the real ones come from Google Maps): the buttons under the reply call it, open
+  // its booking page or its map
+  if (/\b(near|nearby|nearest|closest|phone number|directions|open now|google maps)\b|\bfind (me )?(a|an|the) (dentist|physio|doctor|clinic|pharmacy|vet|salon|barber|restaurant|caf[eé]|place)/i.test(q)) {
+    const map = placesPageUrl(`dentist near ${PLACES_AREA}`);
+    return { reply: 'Maple Leaf Dental (a made-up place, for the demo) is at 100 Example St in Hamilton, open Monday to Friday from 9 to 5. I can’t book it for you, but the buttons below call them or open their booking page. Once you’ve booked, tell me the day and the time and I’ll put it on the calendar.',
+      used: ['find_place'], changes, sources: [{ title: 'Google Maps (demo)', url: map }],
+      links: [{ name: 'Maple Leaf Dental (demo)', where: '100 Example St, Hamilton', buttons: [{ kind: 'call', url: 'tel:+19055550100' }, { kind: 'book', url: 'https://example.com/book' }, { kind: 'map', url: map }] }] };
+  }
+  // their chat with each other is read only when asked, and not at all in the demo (its chat is kept nowhere)
+  if (/\b(our|my|the) (chat|conversation|messages)\b|\bwhat did \w+ (say|write|ask|send)\b|\bdid we (agree|say|decide|settle)\b/i.test(q))
+    return { reply: 'Your chat isn’t read in the demo. In your own planner, ask me what was said about anything (“what did we say about dinner?”) and I’ll look at your chat with each other. Only when you ask.', used: [], changes };
   // looked up on the web: options to pick from, with where they came from (the demo's are made up; nothing is searched)
   if (/look ?up|search|online|on the web|google/i.test(q)) {
     return { reply: 'I looked at what physios and health services suggest for a sore lower back. Three ways to go:\n\n1. **Gentle mobility flow (15 min):** pelvic tilts, cat-cow, knees to chest, child’s pose. The calmest one.\n2. **Core stability (20 min):** bird dog, dead bug, side plank on knees, glute bridge. The usual pick when discs are involved.\n3. **Hips and hamstrings (20 min):** hip flexor, figure-4 and hamstring stretches. Tight hips load the lower back.\n\nI’d start with 1 today. Stop on any pain down the leg, and your chiropractor has the last word. Which one?',
