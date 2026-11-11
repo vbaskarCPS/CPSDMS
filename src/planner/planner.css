@@ -106,10 +106,12 @@ a.pl-btn { text-decoration: none; }   /* links styled as buttons */
 .pl-nav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; text-decoration: none; font-size: 10.5px; line-height: 12px; font-weight: 600; color: var(--ink-2); }
 .pl-nav a.active { color: var(--accent); }
 .pl-nav svg { width: 22px; height: 22px; }
-/* RV, Arvy's button: the one that stands out. A filled circle twice the size of the other icons, standing proud of the bar */
-.pl-nav__rv { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding: 0 0 13px; border: 0; background: none; cursor: pointer; font: 800 11.5px/12px var(--sans); letter-spacing: .06em; color: var(--ink); -webkit-tap-highlight-color: transparent; }
-.pl-nav__rv i { position: absolute; left: 50%; top: calc(-1 * var(--rv-rise)); width: 50px; height: 50px; margin-left: -25px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 3px var(--amber), 0 8px 18px rgba(16, 28, 58, .3); transition: transform .12s ease; }
-.pl-nav__rv i svg { width: 24px; height: 24px; }
+/* RV, Arvy's button: the one that stands out. A filled circle standing proud of the bar, with the planner's mark on it
+   (RV with a sparkle: ui/RvMark.tsx) and no word under it, which is what lets the circle be this big */
+.pl-nav__rv { position: relative; border: 0; background: none; cursor: pointer; color: var(--ink); -webkit-tap-highlight-color: transparent; }
+.pl-nav__rv i { position: absolute; left: 50%; top: calc(-1 * var(--rv-rise)); width: 62px; height: 62px; margin-left: -31px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 3px var(--amber), 0 8px 18px rgba(16, 28, 58, .3); transition: transform .12s ease; }
+.pl-nav__rv i svg { width: 28px; height: 28px; }
+.pl-nav__rv i svg.pl-rvmark { width: 42px; height: 39px; margin-top: -2px; }
 .pl-nav__rv:active i { transform: scale(.93); }
 .pl-nav__rv.is-open { color: var(--accent); }
 /* held down, RV opens Arvy listening: no scrolling or text-selecting under the held finger, and the ring breathes while it listens */
@@ -123,6 +125,7 @@ a.pl-btn { text-decoration: none; }   /* links styled as buttons */
 /* the rest timer runs along the top of the bar in a live workout: RV sits inside the bar then, so it doesn't cover the countdown */
 body:has(.wo-rest) .pl-nav__rv i { top: 5px; width: 30px; height: 30px; margin-left: -15px; box-shadow: 0 0 0 2px var(--amber); }
 body:has(.wo-rest) .pl-nav__rv i svg { width: 17px; height: 17px; }
+body:has(.wo-rest) .pl-nav__rv i svg.pl-rvmark { width: 21px; height: 20px; margin-top: -1px; }
 body:has(.wo-rest) .pl-nav__rv.is-hearing i { animation: none; }
 /* Health and Wealth take a drag as well as a tap: press, drag up, let go, and the camera opens (a meal, a receipt).
    touch-action: none keeps the page from scrolling under the finger, so the drag stays the button's. */

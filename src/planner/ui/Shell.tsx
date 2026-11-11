@@ -1,5 +1,6 @@
 // src/planner/ui/Shell.tsx — the bottom bar around every signed-in screen: Today · RV · Health · Wealth · Lifestyle
-// (ui/nav.ts says which screens sit under which button). RV is Arvy: the one button that stands out. A tap opens
+// (ui/nav.ts says which screens sit under which button). RV is Arvy: the one button that stands out, and the only one
+// with no word under it: its circle carries the planner's mark, RV with a sparkle (RvMark). A tap opens
 // the chat panel and closes it again; held down, it opens the chat already listening, so you can just talk.
 // Dragged up, RV offers two things: let go to the left for Arvy, to the right for the chat between the two of them
 // (features/us). A dot on RV says the other one has written.
@@ -16,6 +17,7 @@ import { Us } from '../features/us/Us';
 import { onUs, openUs, otherName, setUsOpen, startUs, usIsOpen, usUnread, usVersion } from '../features/us/us';
 import { giveShot, SHOT_TO, type ShotKind } from '../lib/quickShot';
 import { groupOf, NAV_TO, pull, PULL_SLOP, RV_HOLD_MS, RV_HOLD_SLOP, SHOTS, type NavGroup } from './nav';
+import { RvMark } from './RvMark';
 
 interface Tab { group: NavGroup; label: string; Icon: LucideIcon }
 const TABS: Tab[] = [
@@ -135,8 +137,7 @@ function RvButton() {
       onPointerCancel={stop}
       onClick={() => { if (held.current) { held.current = false; return; } if (usOpen) setUsOpen(false); else toggleArvy(); }}
       onContextMenu={e => e.preventDefault()}>
-      <i aria-hidden>{hearing ? <Mic /> : open ? <X /> : <Sparkles />}{(unread > 0 || news) && !open && <b className="pl-nav__dot" />}</i>
-      <span>RV</span>
+      <i aria-hidden>{hearing ? <Mic /> : open ? <X /> : <RvMark />}{(unread > 0 || news) && !open && <b className="pl-nav__dot" />}</i>
       {p && drag && (
         <span className="pl-nav__picks" style={{ '--lift': p.lift } as CSSProperties} aria-hidden>
           <span className={p.armed && !drag.right ? 'is-armed' : ''}><Sparkles /> Arvy</span>
