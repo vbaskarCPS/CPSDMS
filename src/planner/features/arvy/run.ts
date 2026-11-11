@@ -67,7 +67,7 @@ async function todayOverview(input: AnyDoc) {
   return {
     date, weekday: weekdayOf(date),
     routine_today: routine ? {
-      blocks: blocks(routine, adjust).map(b => `${clock(b.at)}${b.until ? `–${clock(b.until)}` : ''} ${b.label}${b.added ? (b.added.done ? ' (added for the day, done)' : ' (added for the day)') : ''}`),
+      blocks: blocks(routine, adjust).map(b => `${clock(b.at)}${b.until ? `–${clock(b.until)}` : ''} ${b.label}${b.added ? ` (added for the day${b.added.session ? ', the day’s training session' : ''}${b.added.done ? ', done' : ''})` : ''}`),
       changed_for_the_day: adjust ? { why: adjust.why, changes: adjustWords(adjust) } : 'no: it runs as the standing routine',
     } : undefined,
     priorities: (d.priorities || []).filter((p: AnyDoc) => p?.text).map((p: AnyDoc) => `${p.done ? '✓' : '○'} ${p.text}`),
@@ -80,7 +80,7 @@ async function todayOverview(input: AnyDoc) {
     food: { meals: ms.map(m => `${m.time} ${m.name} ${r0(m.totals?.kcal)} kcal, ${r0(m.totals?.protein)} g protein`), total: dayTotals(ms), targets: tg },
     calendar: eventsOn(events, date).map(evLine),
     workout: ws.length ? ws.map(w => ({ name: w.name, status: w.endedAt ? 'done' : 'in progress', exercises: w.exercises.length, prs: w.prs?.length ? w.prs : undefined }))
-      : planned.length ? { planned: planned.map(t => t.name) } : 'none planned',
+      : planned.length ? { planned: planned.map(t => `${t.name}${t.home ? ' (at home)' : ''}`) } : 'none planned',
   };
 }
 

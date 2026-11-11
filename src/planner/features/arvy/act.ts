@@ -22,7 +22,7 @@ import { loadEvents } from '../calendar/store';
 import { addCashRow, removeCashRow } from '../money/receipts';
 import { loadAccounts, loadMonths, monthKey, recategorize, visibleMonths } from '../money/lib';
 import { CATEGORIES } from '../money/categories';
-import { daysAgo, loadCustomExercises, loadTemplates, loadWorkouts, startFromTemplate, templateFromPlan } from '../workout/store';
+import { daysAgo, holdPlanned, loadCustomExercises, loadTemplates, loadWorkouts, releaseHeld, startFromTemplate, templateFromPlan } from '../workout/store';
 import { workoutKey, type Template } from '../workout/types';
 import { planExercisesFrom, sessionLines } from '../workout/format';
 import { findExercise } from '../workout/library';
@@ -177,6 +177,8 @@ const DAY_TIMES: [string, AdjustTime, string][] = [['wake', 'wake', 'up at'], ['
 const NIGHT_ONLY = new Set<AdjustTime>(['gym', 'review', 'kitchenClose']);
 const dayRun = (r: Routine, a: DayAdjust | undefined) => blocks(r, a).map(b => `${clock(b.at)} ${b.label}`).join(' · ');
 
+/** A block added to a day that reads like training: when a home session is planned for that day, it's that block. */
+const SESSION_WORDS = /stretch|mobility|workout|session|yoga|exercise|training|circuit|flow|walk/i;
 /** Reshape one day: blocks left out, times moved, blocks added (Day.adjust). A skipped gym is a planned rest day:
  *  the missed-gym question isn't asked and the gym habit is marked "skip", which keeps its streak. */
 async function adjustDay(input: AnyIn): Promise<Change> {
@@ -210,7 +212,7 @@ async function adjustDay(input: AnyIn): Promise<Change> {
     const saunaMin = typeof input.sauna_minutes === 'number' && r.profile === 'night' ? Math.max(0, Math.min(90, Math.round(input.sauna_minutes))) : undefined;
     const add: AddedBlock[] = (Array.isArray(input.add) ? input.add : []).map(x => x as AnyIn)
       .filter(x => x && str(x.title, 60) && isTime(x.time)).slice(0, 8)
-      .map(x => ({ id: uid().slice(0, 8), at: x.time as string, label: str(x.title, 60), ...(isTime(x.end_time) ? { until: x.end_time } : {}), ...(str(x.note, 140) ? { note: str(x.note, 140) } : {}) }));
+      .map(x => ({ id: uid().slice(0, 8), at: x.time as string, label: str(x.title, 60), ...(isTime(x.end_time) ? { until: x.end_time } : {}), ...(str(x.note, 140) ? { note: str(x.note, 140) } : {}), ...(x.session === true ? { session: true } : {}) }));
     if (Array.isArray(input.add) && input.add.length && !add.length) throw new Refuse('Each block to add needs a title and a time (like 07:00).');
     const remove = list(input.remove).map(n => one(before?.added || [], x => x.label, n, 'added block').id);
     next = mergeAdjust(before, { why: str(input.why, 60) || undefined, skip, unskip, times, saunaMin, add, remove });
@@ -220,22 +222,28 @@ async function adjustDay(input: AnyIn): Promise<Change> {
   // what the gym and sauna being off (or back on) means for the day: a planned rest, habits marked "skip"
   const gymOff = !!next?.skip?.includes('gym'), gymWasOff = !!before?.skip?.includes('gym');
   const saunaOff = !!next?.skip?.includes('sauna'), saunaWasOff = !!before?.skip?.includes('sauna');
+  // the gym session planned for a day that loses its gym waits on the next free day; it comes back when the gym does
+  const templates = gymOff !== gymWasOff ? await loadTemplates().catch(() => [] as Template[]) : [];
+  const moved = gymOff && !gymWasOff ? holdPlanned(templates, date) : !gymOff && gymWasOff ? releaseHeld(templates, date, before?.held) : null;
+  if (next && gymOff && !gymWasOff && moved) next = { ...next, held: { id: moved.id, to: moved.plannedFor! } };
   // the card says everything that's different about that day now (not only this step), then how the day runs
   const changed = next ? adjustWords(next) : ['back to the normal routine'];
   return {
-    kinds: ['day', 'habitlog'], confirm: false,
-    lines: [`${word}’s plan${next?.why ? ` (${next.why})` : ''}: ${changed.join(' · ')}`, `  The day now runs: ${dayRun(r, next)}`],
+    kinds: ['day', 'habitlog', 'template'], confirm: false,
+    lines: [`${word}’s plan${next?.why ? ` (${next.why})` : ''}: ${changed.join(' · ')}`, `  The day now runs: ${dayRun(r, next)}`,
+      ...(moved ? [`  “${moved.name}” ${gymOff ? 'waits until' : 'is back on'} ${moved.plannedFor === today ? 'today' : moved.plannedFor === plusDays(today, 1) ? 'tomorrow' : pretty(moved.plannedFor!)}`] : [])],
     apply: async () => {
       const undoDay = await snapshot('day', [date]);
       const undoHabits = await snapshot('habitlog', [date]);
+      const undoTemplate = moved ? await snapshot('template', [moved.id]) : null;
       const fresh = await dayDoc(date);
       let gym = fresh.gym;
       if (gymOff && !gym && !fresh.ticks.gym) gym = { answer: 'rest', at: new Date().toISOString(), planned: true };
       if (!gymOff && gym?.planned) gym = undefined;
-      await putDocs([{ kind: 'day', key: date, data: { ...fresh, adjust: next, gym } }]);
+      await putDocs([{ kind: 'day', key: date, data: { ...fresh, adjust: next, gym } }, ...(moved ? [{ kind: 'template', key: moved.id, data: moved }] : [])]);
       if (gymOff !== gymWasOff) await autoMark('gym', gymOff, date, 'skip');
       if (saunaOff !== saunaWasOff) await autoMark('sauna', saunaOff, date, 'skip');
-      return async () => { await undoHabits(); await undoDay(); };
+      return async () => { if (undoTemplate) await undoTemplate(); await undoHabits(); await undoDay(); };
     },
   };
 }
@@ -638,12 +646,32 @@ async function planWorkout(input: AnyIn): Promise<Change> {
     };
   }
   const date = when === 'tomorrow' ? plusDays(todayKey, 1) : todayKey;
-  const existing = templates.find(t => t.plannedFor === date && !t.archived);
-  const t: Template = { ...template, id: existing?.id || template.id, plannedFor: date, order: -1 };
+  // a session done at home (a stretch routine on a sick day) doesn't wipe out the gym session planned for that day:
+  // that one waits on the next free day. Like for like (gym for gym, home for home) replaces, as before.
+  const home = input.home === true;
+  const planned = templates.find(t => t.plannedFor === date && !t.archived && !!t.home === home);
+  const waits = home ? holdPlanned(templates, date) : null;
+  const t: Template = { ...template, id: planned?.id || template.id, plannedFor: date, order: -1, ...(home ? { home: true } : {}) };
+  const dayWord = (d: string) => (d === todayKey ? 'today' : d === plusDays(todayKey, 1) ? 'tomorrow' : pretty(d));
   return {
-    kinds: ['template', 'exercise'], confirm: true,
-    lines: [`Train ${when} (${pretty(date)}): “${t.name}” (${t.exercises.length} exercises)${existing ? `, instead of “${existing.name}”` : ''}`, ...shown],
-    apply: async () => { const u1 = await snap('exercise', created.map(e => e.id)); const u2 = await snapshot('template', [t.id]); await putDocs([...newExercises, { kind: 'template', key: t.id, data: t }]); return async () => { await u2(); await u1(); }; },
+    kinds: ['template', 'exercise', 'day'], confirm: true,
+    lines: [`Train ${when} (${pretty(date)}): “${t.name}” (${t.exercises.length} exercises${home ? ', at home' : ''})${planned ? `, instead of “${planned.name}”` : ''}`,
+      ...(waits ? [`  “${waits.name}” waits until ${dayWord(waits.plannedFor!)}`] : []), ...shown],
+    apply: async () => {
+      const u1 = await snap('exercise', created.map(e => e.id)); const u2 = await snapshot('template', [t.id, ...(waits ? [waits.id] : [])]);
+      const u3 = home ? await snapshot('day', [date]) : null;
+      await putDocs([...newExercises, { kind: 'template', key: t.id, data: t }, ...(waits ? [{ kind: 'template', key: waits.id, data: waits }] : [])]);
+      // on a day whose plan was changed, the block added for it ("Home stretch 8:00") becomes the session's block
+      if (home) {
+        const d = await dayDoc(date);
+        const added = d.adjust?.added || [];
+        const mine = added.filter(x => SESSION_WORDS.test(x.label));
+        if (d.adjust && !added.some(x => x.session) && mine.length === 1) {
+          await putDocs([{ kind: 'day', key: date, data: { ...d, adjust: { ...d.adjust, added: added.map(x => (x.id === mine[0].id ? { ...x, session: true } : x)), ...(waits && d.adjust.skip?.includes('gym') && !d.adjust.held ? { held: { id: waits.id, to: waits.plannedFor! } } : {}) } } }]);
+        }
+      }
+      return async () => { if (u3) await u3(); await u2(); await u1(); };
+    },
   };
 }
 

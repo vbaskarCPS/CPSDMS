@@ -197,6 +197,7 @@ describe('Arvy changes', () => {
     const routine = await import('../../lib/routine');
     routine.setProfile('morning'); routine.setProfile('night');   // a fresh 5 am club routine (the defaults)
     store.set('habit|g1', { id: 'g1', name: 'Gym', days: [], auto: 'gym', createdAt: '2026-01-01' });
+    await prepare('plan_workout', { name: 'x', exercises: [{ name: 'Plank', sets: 1, seconds: 30 }] });   // the starter templates are in place
     const before = snap();
     const c = (await prepare('adjust_day', { why: 'Sick day', skip: ['gym', 'sauna'], wake: '07:00',
       add: [{ title: 'Home stretch', time: '07:00', note: 'easy, about 20 min' }, { title: 'Breakfast', time: '07:30' }] }))!;
@@ -243,6 +244,63 @@ describe('Arvy changes', () => {
     const eve = (await prepare('adjust_day', { gym: '17:00' }))!;
     expect(eve.lines[1]).toBe('  The day now runs: 5:00 am Up · 5:15 am Today\'s Brief · 5:15 am Tackle the list · 2:00 pm Kitchen closed · 5:00 pm Gym · 6:05 pm Sauna · 9:30 pm Lights out');
   });
+  it('a no-gym day: the gym session planned for it waits on the next free day, a home session takes the day and its block, and it all comes back', async () => {
+    const routine = await import('../../lib/routine');
+    routine.setProfile('morning'); routine.setProfile('night');
+    const planned = () => [...store.entries()].filter(([k, v]) => k.startsWith('template|') && v && (v as { plannedFor?: string }).plannedFor)
+      .map(([, v]) => v as { id: string; name: string; plannedFor: string; home?: boolean }).sort((a, b) => (a.plannedFor + a.name < b.plannedFor + b.name ? -1 : 1)).map(t => `${t.plannedFor} ${t.name}${t.home ? ' (home)' : ''}`);
+    await (await prepare('plan_workout', { name: 'Powerful Chest', when: 'today', exercises: [{ name: 'Bench Press', sets: 4, reps: '5-6' }] }))!.apply();
+    await (await prepare('plan_workout', { name: 'Legs', when: 'tomorrow', exercises: [{ name: 'Goblet Squat', sets: 3, reps: '10' }] }))!.apply();
+    expect(planned()).toEqual(['2026-11-10 Powerful Chest', '2026-11-11 Legs']);
+    const before = snap();
+
+    // sick: the gym comes off today. Tomorrow is taken, so the chest session waits for the day after.
+    const off = (await prepare('adjust_day', { why: 'Sick day', skip: ['gym'], add: [{ title: 'Home stretch', time: '08:00', end_time: '08:20' }, { title: 'Breakfast', time: '07:35' }] }))!;
+    expect(off.lines[2]).toMatch(/^ {2}“Powerful Chest” waits until Thu,? Nov 12$/);
+    const undoOff = await off.apply();
+    expect(planned()).toEqual(['2026-11-11 Legs', '2026-11-12 Powerful Chest']);
+    const day = () => store.get('day|2026-11-10') as { adjust?: { held?: { to: string }; added?: { label: string; session?: boolean }[] } };
+    expect(day().adjust?.held?.to).toBe('2026-11-12');
+
+    // the stretch routine becomes today's session (it doesn't touch the gym sessions) and takes the "Home stretch" block
+    const home = (await prepare('plan_workout', { name: 'Home stretch and reset', when: 'today', home: true, exercises: [{ name: 'Cat-Cow', sets: 1, reps: '8', no_weight: true }, { name: 'Child’s Pose', sets: 1, seconds: 45, no_weight: true }] }))!;
+    expect(home.confirm).toBe(true);
+    expect(home.lines[0]).toMatch(/^Train today \(Tue,? Nov 10\): “Home stretch and reset” \(2 exercises, at home\)$/);
+    const undoHome = await home.apply();
+    expect(planned()).toEqual(['2026-11-10 Home stretch and reset (home)', '2026-11-11 Legs', '2026-11-12 Powerful Chest']);
+    expect(day().adjust?.added?.map(x => `${x.label}${x.session ? ' = the session' : ''}`)).toEqual(['Home stretch = the session', 'Breakfast']);
+    // what the Train page offers on the no-gym day, and on a normal one
+    const store2 = await import('../workout/store');
+    const ts = await store2.loadTemplates();
+    expect(store2.sessionToday(ts, [], true, new Date(2026, 10, 10, 9))?.name).toBe('Home stretch and reset');
+    expect(store2.sessionToday(ts.filter(t => !t.home), [], true, new Date(2026, 10, 10, 9))).toBeNull();   // nothing planned for today: rest, not the rotation
+
+    // feeling better: the gym is back on, and so is the chest session (the home one stays, the gym one is up)
+    const on = (await prepare('adjust_day', { unskip: ['gym'] }))!;
+    expect(on.lines.join('\n')).toMatch(/“Powerful Chest” is back on today/);
+    await on.apply();
+    expect(planned()).toEqual(['2026-11-10 Home stretch and reset (home)', '2026-11-10 Powerful Chest', '2026-11-11 Legs']);
+    expect(store2.todaysTemplate(await store2.loadTemplates(), [], new Date(2026, 10, 10, 9))?.name).toBe('Powerful Chest');
+
+    // a home session planned straight away, with no adjust_day first, still keeps the gym session: it waits
+    store.set('day|2026-11-10', { todos: [] });
+    await (await prepare('plan_workout', { name: 'Easy mobility', when: 'today', home: true, exercises: [{ name: 'Cat-Cow', sets: 1, reps: '8' }] }))!.apply();
+    expect(planned()).toEqual(['2026-11-10 Easy mobility (home)', '2026-11-11 Legs', '2026-11-12 Powerful Chest']);
+    expect(before.length).toBeGreaterThan(0); void undoOff; void undoHome;
+  });
+  it('undoing the sick day puts the gym session back on its day', async () => {
+    const routine = await import('../../lib/routine');
+    routine.setProfile('morning'); routine.setProfile('night');
+    await (await prepare('plan_workout', { name: 'Powerful Chest', when: 'today', exercises: [{ name: 'Bench Press', sets: 4, reps: '5-6' }] }))!.apply();
+    const before = snap();
+    const off = (await prepare('adjust_day', { why: 'Sick day', skip: ['gym', 'sauna'], wake: '07:30' }))!;
+    expect(off.lines[2]).toBe('  “Powerful Chest” waits until tomorrow');
+    const undo = await off.apply();
+    expect(snap()).not.toBe(before);
+    await undo();
+    expect(snap()).toBe(before);
+  });
+
   it('the standing routine changes after Confirm; moving the wake time moves the morning; undo puts it back', async () => {
     const routine = await import('../../lib/routine');
     routine.setProfile('morning'); routine.setProfile('night');

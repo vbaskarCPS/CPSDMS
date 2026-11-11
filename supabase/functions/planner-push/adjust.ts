@@ -12,8 +12,10 @@ export interface RoutineTimes {
   kitchenClose: string; eatOpen: string; kiaanUp: string;
   stretchMin: number; meditateMin: number; workoutMin: number;
 }
-/** A block added for one day: a stretch session at 7, breakfast at 7:30, a nap. `done` = when it was ticked ('HH:MM'). */
-export interface AddedBlock { id: string; at: string; until?: string; label: string; note?: string; done?: string }
+/** A block added for one day: a stretch session at 7, breakfast at 7:30, a nap. `done` = when it was ticked ('HH:MM').
+ *  `session` = this block is the day's training session (the home stretch planned instead of the gym): the Today
+ *  screen opens it on the Train page, and finishing the session ticks it. */
+export interface AddedBlock { id: string; at: string; until?: string; label: string; note?: string; done?: string; session?: boolean }
 export type AdjustTime = 'wake' | 'gym' | 'review' | 'lightsOut' | 'kitchenClose' | 'eatOpen' | 'kiaanUp';
 export const ADJUST_TIMES: AdjustTime[] = ['wake', 'gym', 'review', 'lightsOut', 'kitchenClose', 'eatOpen', 'kiaanUp'];
 export interface DayAdjust {
@@ -22,6 +24,7 @@ export interface DayAdjust {
   times?: Partial<Record<AdjustTime, string>>;  // times moved that day, 'HH:MM' (kitchenClose '' = no cut-off that day)
   saunaMin?: number;                            // a shorter or longer sauna that day
   added?: AddedBlock[];
+  held?: { id: string; to: string };            // the gym session that was planned for this day and moved on (template id, the day it went to): "Back to normal" brings it back
   at?: string;                                  // when it was last changed (ISO)
 }
 /** Blocks that can be left out of a day. Up, the list and lights out always stay. */
@@ -48,16 +51,19 @@ export function cleanAdjust(raw: unknown): DayAdjust | undefined {
   const added: AddedBlock[] = [];
   for (const x of (Array.isArray(a.added) ? a.added : []) as Record<string, unknown>[]) {
     if (!x || typeof x !== 'object' || !isHM(x.at) || !text(x.label, 60) || typeof x.id !== 'string' || !x.id) continue;
-    added.push({ id: x.id.slice(0, 24), at: x.at, label: text(x.label, 60), ...(isHM(x.until) ? { until: x.until } : {}), ...(text(x.note, 140) ? { note: text(x.note, 140) } : {}), ...(isHM(x.done) ? { done: x.done } : {}) });
+    added.push({ id: x.id.slice(0, 24), at: x.at, label: text(x.label, 60), ...(isHM(x.until) ? { until: x.until } : {}), ...(text(x.note, 140) ? { note: text(x.note, 140) } : {}), ...(isHM(x.done) ? { done: x.done } : {}), ...(x.session === true ? { session: true } : {}) });
     if (added.length >= 12) break;
   }
   if (!skip.length && !Object.keys(times).length && saunaMin === undefined && !added.length) return undefined;
+  const h = a.held as { id?: unknown; to?: unknown } | undefined;
+  const held = h && typeof h.id === 'string' && h.id && typeof h.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h.to) ? { id: h.id.slice(0, 60), to: h.to } : undefined;
   return {
     ...(text(a.why, 60) ? { why: text(a.why, 60) } : {}),
     ...(skip.length ? { skip } : {}),
     ...(Object.keys(times).length ? { times } : {}),
     ...(saunaMin !== undefined ? { saunaMin } : {}),
     ...(added.length ? { added } : {}),
+    ...(held && skip.includes('gym') ? { held } : {}),   // only while the gym is off that day
     ...(typeof a.at === 'string' ? { at: a.at.slice(0, 30) } : {}),
   };
 }
@@ -110,7 +116,7 @@ export function routineFor<R extends RoutineTimes>(r: R, a?: DayAdjust | null): 
 }
 
 /** Add one set of changes to what a day already has (what Arvy sends is "only what changes"). */
-export function mergeAdjust(base: DayAdjust | undefined, change: { why?: string; skip?: string[]; unskip?: string[]; times?: Partial<Record<AdjustTime, string | null>>; saunaMin?: number | null; add?: AddedBlock[]; remove?: string[] }, now = new Date()): DayAdjust | undefined {
+export function mergeAdjust(base: DayAdjust | undefined, change: { why?: string; skip?: string[]; unskip?: string[]; times?: Partial<Record<AdjustTime, string | null>>; saunaMin?: number | null; add?: AddedBlock[]; remove?: string[]; held?: { id: string; to: string } | null }, now = new Date()): DayAdjust | undefined {
   const b = base || {};
   const skip = new Set([...(b.skip || []), ...(change.skip || [])]);
   for (const s of change.unskip || []) skip.delete(s);
@@ -119,5 +125,6 @@ export function mergeAdjust(base: DayAdjust | undefined, change: { why?: string;
   const gone = new Set(change.remove || []);
   const added = [...(b.added || []).filter(x => !gone.has(x.id)), ...(change.add || [])];
   const saunaMin = change.saunaMin === null ? undefined : change.saunaMin ?? b.saunaMin;
-  return cleanAdjust({ why: change.why ?? b.why, skip: [...skip], times, saunaMin, added, at: now.toISOString() });
+  const held = change.held === null ? undefined : change.held ?? b.held;
+  return cleanAdjust({ why: change.why ?? b.why, skip: [...skip], times, saunaMin, added, held, at: now.toISOString() });
 }

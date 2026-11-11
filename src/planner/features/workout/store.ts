@@ -207,18 +207,46 @@ export function emptyWorkout(name = 'Workout'): Workout {
   return { id: uid(), date: dayKey(now), startedAt: now.toISOString(), name, exercises: [] };
 }
 
+const laterDay = (key: string, n: number): string => { const [y, m, d] = key.split('-').map(Number); const x = new Date(y, m - 1, d + n, 12); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+/** A day turned into a no-gym day (sick, a rest day): the gym session planned for it waits on the next day that has
+ *  nothing planned (within a week). Returns the session as moved, or null when there's none to move. Pure. */
+export function holdPlanned(templates: Template[], date: string): Template | null {
+  const t = templates.find(x => !x.archived && x.plannedFor === date && !x.home);
+  if (!t) return null;
+  const taken = new Set(templates.filter(x => !x.archived && x.plannedFor).map(x => x.plannedFor));
+  for (let i = 1; i <= 7; i++) { const to = laterDay(date, i); if (!taken.has(to)) return { ...t, plannedFor: to }; }
+  return null;
+}
+/** The day is a gym day again: the session that was held comes back, if it's still where it was put and the day has
+ *  no gym session of its own by now (a home session planned for the day is put aside by the caller). Pure. */
+export function releaseHeld(templates: Template[], date: string, held?: { id: string; to: string }): Template | null {
+  const t = held ? templates.find(x => x.id === held.id && !x.archived && x.plannedFor === held.to) : undefined;
+  if (!t || templates.some(x => !x.archived && x.plannedFor === date && !x.home)) return null;
+  return { ...t, plannedFor: date };
+}
+
 /** Which template is up today: one Arvy planned for this date, else one for this weekday, else the one not done for longest. */
 export function todaysTemplate(templates: Template[], workouts: Workout[], date = new Date()): Template | null {
   // one-off sessions planned for another date stay out of the way
   const live = templates.filter(t => !t.archived && (!t.plannedFor || t.plannedFor === dayKey(date)));
   if (!live.length) return null;
-  const forDate = live.find(t => t.plannedFor === dayKey(date));
+  // (a home session and a gym session can sit on the same day once a no-gym day is put back to normal: the gym one is up)
+  const onDate = live.filter(t => t.plannedFor === dayKey(date));
+  const forDate = onDate.find(t => !t.home) || onDate[0];
   if (forDate) return forDate;
   const dow = date.getDay();
   const planned = live.filter(t => t.days?.includes(dow));
   if (planned.length) return planned[0];
   const lastDone = (t: Template) => workouts.find(w => w.templateId === t.id && w.endedAt)?.startedAt || '';
   return [...live].sort((a, b) => (lastDone(a) < lastDone(b) ? -1 : 1))[0];
+}
+
+/** The session to offer on a day. On a day with no gym (sick, a rest day set with Arvy) only what was planned for
+ *  that very day is offered, the home session first: never the usual rotation, and not the gym session that waits. */
+export function sessionToday(templates: Template[], workouts: Workout[], noGym: boolean, date = new Date()): Template | null {
+  if (!noGym) return todaysTemplate(templates, workouts, date);
+  const on = templates.filter(t => !t.archived && t.plannedFor === dayKey(date));
+  return on.find(t => t.home) || on[0] || null;
 }
 
 /** Personal records set in this session: best estimated 1RM per exercise beats all history. */
