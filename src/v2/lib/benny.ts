@@ -34,9 +34,13 @@ export function forServer(messages: BennyMsg[]) {
  *  older open tab can't draw (it says "refresh" instead). Add a kind here when describe() and doProposal() handle it. */
 export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts'];
 
+/** What else this build can do with a card it already shows. 'crews' = a start-day card that says who goes with which
+ *  manager (an older tab would start the day and ignore the crews, so the server holds that card back from it). */
+export const CAN = ['crews'];
+
 export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null }> {
   const lastAsk = [...messages].reverse().find(m => m.role === 'user');
-  const body = { messages: forServer(messages), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag(), cards: CARDS } };
+  const body = { messages: forServer(messages), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag(), cards: [...CARDS, ...CAN] } };
   const { data, error } = await db.functions.invoke('benny-assist', { body });
   if (error) {
     // the function's own message (e.g. "for super admins") rides in the response body

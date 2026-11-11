@@ -16,7 +16,7 @@ describe('the Benny’s tools', () => {
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);
     expect(rm).toEqual(expect.arrayContaining(['live_team', 'logsheet', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'propose_job_change', 'propose_pin', 'propose_stops', 'report_bug', 'log_request', 'show_map']));
-    for (const no of ['find_people', 'day', 'maps', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails', 'payouts', 'propose_payouts']) expect(rm).not.toContain(no);
+    for (const no of ['find_people', 'day', 'maps', 'crew_stats', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails', 'payouts', 'propose_payouts']) expect(rm).not.toContain(no);
     expect(toolsFor('admin').map(t => t.name)).toEqual(TOOLS.map(t => t.name));
     expect(toolsFor('rm')[0]).not.toHaveProperty('roles');   // only what the model's API accepts is sent
   });
@@ -26,6 +26,17 @@ describe('the Benny’s tools', () => {
     const start = toolCall('propose_start_day', { assign: [], team_mode: 'whatever' }, ctx);
     expect(start && 'fn' in start && start.card?.team_mode).toBe('roster');
     expect(toolCall('propose_start_day', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
+  });
+  it('crews: the season’s averages are looked up for the day, and the start-day plan carries who goes with whom', () => {
+    expect(toolCall('crew_stats', { date: '2026-11-11' }, ctx)).toEqual({ fn: 'benny_crew_stats', args: { p_center: 'c1', p_date: '2026-11-11' } });
+    expect(toolCall('crew_stats', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
+    const assign = [{ managers: ['Franklyn'], maps: ['MISSION #1'], workers: ['I1065', 'I1002'] }, { managers: ['Jovan'], routes: ['NVN07'], workers: ['I1013'] }];
+    const c = toolCall('propose_start_day', { date: '2026-11-11', assign }, ctx);
+    expect(c).toMatchObject({ fn: 'benny_plan_day', args: { p_assign: assign }, card: { kind: 'start_day' } });
+    const t = TOOLS.find(x => x.name === 'propose_start_day')!;
+    expect(Object.keys((t.input_schema as { properties: { assign: { items: { properties: object } } } }).properties.assign.items.properties)).toEqual(['managers', 'maps', 'routes', 'workers']);
+    expect(system(ctx, 'admin')).toContain('call crew_stats for that day first');
+    expect(system(ctx, 'admin')).toContain('snake order');
   });
   it('a booking change sends only what was asked, and only super admins are told they can', () => {
     const c = toolCall('propose_booking', { booking: '3575 Latimer', status: 'done', field_note: 'gate code 1234', route: null, extra: 'x' }, ctx);

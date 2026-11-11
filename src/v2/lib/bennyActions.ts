@@ -1,6 +1,7 @@
 // src/v2/lib/bennyActions.ts — the changes the Benny prepares, done by the app after the person taps Confirm.
 // Each one uses the same code as the screen that does it by hand:
-//   start_day  → Workerbook › Start session (startSession)
+//   start_day  → Workerbook › Start session (startSession). With a crew per manager when the plan has them ("give
+//                Franklyn the worst half"): each worker's cart goes to the manager whose crew they are in.
 //   give_route → RM map › Assign route (whole route, with its prebooks; moves the route to the cart's manager)
 //   partner    → RM map › Move worker › to another cart
 //   solo       → RM map › Move worker › own cart
@@ -27,10 +28,23 @@ import { STOP_WORD } from './bennyDrive';
 import { queueHref } from './payoutQueue';
 
 export type TeamMode = 'roster' | 'solo' | 'pairs';
+/** A worker in a manager's crew, with their season so far (no days yet = no average). */
+export interface CrewWorker { hire_id: string; cn?: string; name: string; days?: number; avg_equiv?: number }
 export interface StartDayCheck {
   ok: boolean; date: string; day_id: string; pair: boolean;
-  assign: { managers: { id: string; name: string }[] | null; routes: { code: string; area: string; number: number }[] | null }[];
+  assign: { managers: { id: string; name: string }[] | null; routes: { code: string; area: string; number: number }[] | null;
+    /** set when the plan splits the crew between the managers: who goes with this one, best first */
+    crew?: CrewWorker[] | null; crew_avg?: number | null }[];
   booked: number; showed: number; teams: number; no_team: number; open_prebooks: number; maps?: string[]; live_map_on?: string | null;
+  /** the plan says who goes with which manager (every worker who showed is in exactly one crew) */
+  crews?: boolean; notes?: string[];
+}
+/** A crew in a few words: "Tim 23.2, Michael 19.7, Wilson (no days yet)". Two people with the same first name get their last initial. */
+export function crewNames(crew: CrewWorker[], all: CrewWorker[] = crew, max = 14): string {
+  const firsts = all.map(w => w.name.split(' ')[0]);
+  const short = (w: CrewWorker) => { const [f, ...rest] = w.name.split(' '); return firsts.filter(x => x === f).length > 1 && rest.length ? `${f} ${rest[rest.length - 1][0]}` : f; };
+  const one = (w: CrewWorker) => `${short(w)} ${w.avg_equiv != null && (w.days ?? 1) > 0 ? Number(w.avg_equiv).toFixed(1) : '(no days yet)'}`;
+  return [...crew.slice(0, max).map(one), ...(crew.length > max ? [`+ ${crew.length - max} more`] : [])].join(', ');
 }
 export interface LiveWorker { cn: string; name: string; cart_id?: string; manager?: string }
 export interface GiveCheck { ok: boolean; problems?: string[]; date: string; route: string; map?: string; worker: LiveWorker; cart?: { cn: string; name: string }[]; now?: string[]; route_manager?: string; open_prebooks?: number }
@@ -142,16 +156,21 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
       const c = p.check;
       const pretty = new Date(c.date + 'T12:00').toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
       const routes = c.assign.flatMap(a => a.routes || []);
-      const byMap = new Map<string, number>();
-      for (const r of routes) byMap.set(r.area, (byMap.get(r.area) || 0) + 1);
+      const mapsOf = (rs: { area: string }[]) => { const by = new Map<string, number>(); for (const r of rs) by.set(r.area, (by.get(r.area) || 0) + 1); return [...by].map(([m, n]) => `${m} (${n})`).join(', ') || 'none'; };
+      const first = (a: StartDayCheck['assign'][number]) => (a.managers || []).map(m => m.name.split(' ')[0]).join(' + ') || 'Nobody';
       const mgrs = c.assign.map(a => (a.managers || []).map(m => m.name).join(' + ')).filter(Boolean);
       const mode = p.team_mode || 'roster';
       return {
         title: `Start ${pretty}`,
         lines: [
           `Manager${mgrs.length > 1 || mgrs.some(m => m.includes('+')) ? 's' : ''}: ${mgrs.join(' · ')}${c.pair ? ' (paired)' : mgrs.length === 1 && !mgrs[0].includes('+') ? ', solo' : ''}`,
-          `Routes: ${[...byMap].map(([m, n]) => `${m} (${n})`).join(', ') || 'none'}`,
-          `Workers: ${c.showed} of ${c.booked} booked, ${mode === 'solo' ? 'each on their own cart' : mode === 'pairs' ? 'paired two to a cart' : c.no_team ? `roster carts, ${c.no_team} without one get their own` : 'on their roster carts'}`,
+          // who goes where: one line when there is one manager (or one pair), a line each when they have their own maps
+          ...(c.assign.length > 1 ? c.assign.map(a => `${first(a)}’s routes: ${mapsOf(a.routes || [])}`) : [`Routes: ${mapsOf(routes)}`]),
+          `Workers: ${c.showed} of ${c.booked} booked, ${mode === 'solo' || (mode === 'roster' && !c.teams && c.no_team) ? 'each on their own cart' : mode === 'pairs' ? `paired two to a cart${c.crews ? ' within each crew' : ''}` : c.no_team ? `roster carts, ${c.no_team} without one get their own` : 'on their roster carts'}`,
+          // who goes with whom, when the plan splits the crew: each crew best first, with its average equiv per day worked
+          ...(c.crews ? c.assign.filter(a => a.crew?.length).map(a =>
+            `${first(a)}’s crew (${a.crew!.length}${a.crew_avg != null ? `, average ${Number(a.crew_avg).toFixed(1)} equiv a day` : ''}): ${crewNames(a.crew!, c.assign.flatMap(x => x.crew || []))}`) : []),
+          ...(c.notes || []),
           `Prebooks on these routes: ${c.open_prebooks}`,
           ...(c.live_map_on && c.live_map_on !== c.date ? [`The live map moves from ${c.live_map_on} to this day (that day stays open to close).`] : []),
         ],
@@ -276,7 +295,11 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
 export function buildBennyPlan(check: StartDayCheck, teamMode: TeamMode, roster: RosterRow[], managers: PlanManager[],
   card: RateCardData, service: Service, seasonYear: number, appDaysBefore: Record<string, number> = {}): Plan {
   const avail = new Set(managers.map(m => m.id));
-  const entries = check.assign.map(a => ({ mgrs: (a.managers || []).map(m => m.id).filter(id => avail.has(id)), routes: a.routes || [] })).filter(e => e.mgrs.length);
+  const entries = check.assign.map(a => ({ mgrs: (a.managers || []).map(m => m.id).filter(id => avail.has(id)), routes: a.routes || [], crew: (a.crew || []).map(w => w.hire_id) })).filter(e => e.mgrs.length);
+  // a crew per manager, when the plan has them: a worker's cart goes to the manager whose crew they are in
+  const crewOf = new Map<string, string>();
+  for (const e of entries) for (const h of e.crew) if (!crewOf.has(h)) crewOf.set(h, e.mgrs[0]);
+  const mgrOf = (r: RosterRow) => crewOf.get(r.hire_id) ?? r.manager_id;
   const routes: PlanRoute[] = entries.flatMap(e => e.routes.map(r => ({ code: r.code, area: r.area, number: r.number, managerId: e.mgrs[0] })));
   const pairs = entries.filter(e => e.mgrs.length > 1).map(e => e.mgrs);
   const leads = entries.map(e => e.mgrs[0]);
@@ -293,13 +316,19 @@ export function buildBennyPlan(check: StartDayCheck, teamMode: TeamMode, roster:
   if (teamMode === 'roster') {
     const named = new Map<string, RosterRow[]>();
     for (const r of showedRows) if (r.team) named.set(r.team, [...(named.get(r.team) || []), r]);
-    for (const [n, rows] of [...named].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })))
-      addTeam(rows.map(r => r.hire_id), /^RC\d*$/i.test(n) ? 'ramp' : 'cart', rows.find(r => r.manager_id)?.manager_id, n);
-    for (const r of showedRows.filter(r => !r.team)) addTeam([r.hire_id], 'cart', r.manager_id);
+    for (const [n, rows] of [...named].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
+      // a roster cart whose members were put in different crews is broken up: each of them gets a cart of their own
+      const split = new Set(rows.map(r => crewOf.get(r.hire_id) || '')).size > 1;
+      if (split) for (const r of rows) addTeam([r.hire_id], 'cart', mgrOf(r));
+      else addTeam(rows.map(r => r.hire_id), /^RC\d*$/i.test(n) ? 'ramp' : 'cart', crewOf.get(rows[0].hire_id) ?? rows.find(r => r.manager_id)?.manager_id, n);
+    }
+    for (const r of showedRows.filter(r => !r.team)) addTeam([r.hire_id], 'cart', mgrOf(r));
   } else if (teamMode === 'solo') {
-    for (const r of showedRows) addTeam([r.hire_id], 'cart', r.manager_id);
+    for (const r of showedRows) addTeam([r.hire_id], 'cart', mgrOf(r));
   } else {
-    for (let i = 0; i < showedRows.length; i += 2) addTeam(showedRows.slice(i, i + 2).map(r => r.hire_id), 'cart', showedRows[i].manager_id);
+    // two to a cart; with crews, partners come from the same crew
+    const groups = crewOf.size ? [...leads.map(l => showedRows.filter(r => crewOf.get(r.hire_id) === l)), showedRows.filter(r => !crewOf.has(r.hire_id))] : [showedRows];
+    for (const g of groups) for (let i = 0; i < g.length; i += 2) addTeam(g.slice(i, i + 2).map(r => r.hire_id), 'cart', mgrOf(g[i]));
   }
   return {
     date: check.date, seasonYear, card, managers, routes, teams, members, roster, appDaysBefore,
@@ -310,6 +339,20 @@ export function buildBennyPlan(check: StartDayCheck, teamMode: TeamMode, roster:
 }
 
 interface CenterLite { id: string; region?: string | null; services?: readonly string[] | null }
+
+/** A plan with crews, checked against the roster as it is now (the card may be minutes old): the person said who goes with
+ *  whom, so a manager who has gone or a worker added since is a reason to stop, not something to deal out quietly. */
+export function crewProblems(check: StartDayCheck, roster: RosterRow[], managers: PlanManager[]): string[] {
+  if (!check.crews) return [];
+  const avail = new Set(managers.map(m => m.id));
+  const gone = check.assign.filter(a => a.crew?.length && !(a.managers || []).some(m => avail.has(m.id))).flatMap(a => (a.managers || []).map(m => m.name));
+  const placed = new Set(check.assign.flatMap(a => (a.crew || []).map(w => w.hire_id)));
+  const loose = roster.filter(r => (r.attendance ?? 'showed') === 'showed' && !placed.has(r.hire_id)).map(r => fullName(r.hire.person));
+  return [
+    ...(gone.length ? [`${gone.join(' and ')} ${gone.length > 1 ? 'aren’t' : 'isn’t'} available on ${check.date} any more, so the crews don’t hold. Ask me again.`] : []),
+    ...(loose.length ? [`${loose.join(', ')} ${loose.length > 1 ? 'aren’t' : 'isn’t'} in a crew: the roster changed since I checked. Ask me again.`] : []),
+  ];
+}
 
 export async function startDayFromBenny(p: Extract<BennyProposal, { kind: 'start_day' }>, center: CenterLite): Promise<string> {
   const c = p.check;
@@ -323,6 +366,8 @@ export async function startDayFromBenny(p: Extract<BennyProposal, { kind: 'start
   const card = cardFor(cards, c.date)?.data || defaultRateCard(service, regionTax(center.region || 'East'));
   const shown = await appShowedDates(roster.map(r => r.hire_id));
   const appDays = Object.fromEntries(roster.map(r => [r.hire_id, countBefore(shown[r.hire_id], c.date)]));
+  const stale = crewProblems(c, roster, managers);
+  if (stale.length) throw new Error(stale[0]);
   const plan = buildBennyPlan(c, p.team_mode || 'roster', roster, managers, card, service, season?.year || Number(c.date.slice(0, 4)), appDays);
   const problems = planProblems(plan);
   if (problems.length) throw new Error(problems[0]);
