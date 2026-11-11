@@ -179,6 +179,16 @@ const MapBox: React.FC<{ spec: Spec; centerId?: string | null; tall?: boolean }>
     message={err ? `The map didn’t load: ${err}` : !fc ? 'Loading the map…' : null} onRetry={() => { setData(null); setTries(t => t + 1); }} />;
 };
 
+/** The line under a map card's title: what is on it. Maps with nothing picked out are just "2 maps". */
+export function mapCaption(spec: Pick<Spec, 'maps' | 'highlight' | 'pins'>): string {
+  const n = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  const ordered = spec.pins.some(p => typeof p.n === 'number');
+  return [
+    spec.highlight.length ? `${n(spec.highlight.length, 'route')} highlighted` : !spec.pins.length ? n(spec.maps.length, 'map') : '',
+    spec.pins.length ? (ordered ? `${n(spec.pins.length, 'stop')} in order` : n(spec.pins.length, 'pin')) : '',
+  ].filter(Boolean).join(' · ');
+}
+
 export const BennyMapCard: React.FC<{ spec: Spec; centerId?: string | null }> = ({ spec, centerId }) => {
   const [full, setFull] = useState(false);
   useEffect(() => {
@@ -186,11 +196,7 @@ export const BennyMapCard: React.FC<{ spec: Spec; centerId?: string | null }> = 
     const esc = (e: KeyboardEvent) => e.key === 'Escape' && setFull(false);
     window.addEventListener('keydown', esc); return () => window.removeEventListener('keydown', esc);
   }, [full]);
-  const ordered = spec.pins.some(p => typeof p.n === 'number');
-  const caption = [
-    spec.highlight.length || !spec.pins.length ? `${spec.highlight.length} route${spec.highlight.length === 1 ? '' : 's'} highlighted` : '',
-    spec.pins.length ? (ordered ? `${spec.pins.length} stop${spec.pins.length === 1 ? '' : 's'} in order` : `${spec.pins.length} pin${spec.pins.length === 1 ? '' : 's'}`) : '',
-  ].filter(Boolean).join(' · ');
+  const caption = mapCaption(spec);
   return (
     <div className="benny-mapcard">
       <div className="benny-mapcard-h"><span className="benny-mapcard-t"><b>{spec.title || 'Map'}</b><span className="v2-small">{caption}</span></span>
