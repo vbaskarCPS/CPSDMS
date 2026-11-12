@@ -9,6 +9,11 @@
 //        The web is the one tool that runs here (Anthropic searches, inside the same call): `web` says what was
 //        searched, which pages the answer cites and which the search found, and `raw` is the step as Claude wrote it, for the app to send back
 //        when the question isn't finished (tools.ts webOut).
+//        context.chat = true: the question was written in the chat between the two of them, and the answer will be
+//        posted there for both to read (the app does that: src/planner/features/us). Arvy is then told so, is not
+//        handed the notes it keeps about the person, and is not offered what that chat never has (tools.ts
+//        CHAT_NEVER: email, the cycle tracker, those notes). The answer comes back with chat: true, so the app knows
+//        it was answered that way.
 //   POST { token, action: 'speak', text } → { audio }   MP3, base64: Arvy's voice (a woman's for Rosh, a man's for Vijay)
 //   POST { token, action: 'dayplan', context, units, library: [exercise names], answers? } → { review, questions, tomorrow }
 //        After a workout: a review of it, two questions, and tomorrow's session in Arvy's exercise shape (tools.ts EXERCISE).
@@ -243,35 +248,38 @@ Deno.serve(async req => {
     if (b.action !== 'turn') return json({ error: 'Unknown action' }, 400);
 
     const c = b.context || {};
+    const chat = c.chat === true;   // asked in the chat between the two of them: both read the answer (tools.ts CHAT)
     const ctx: ArvyCtx = {
       name: (user.display_name || user.username).split(/\s+/)[0], username: user.username, profile,
       today: /^\d{4}-\d{2}-\d{2}$/.test(String(c.today)) ? c.today : undefined, weekday: String(c.weekday || '').slice(0, 12),
       now: String(c.now || '').slice(0, 12), path: String(c.path || '/').slice(0, 60), spoken: !!c.spoken, units: c.units === 'kg' ? 'kg' : 'lb',
-      about: Array.isArray(c.about) ? c.about.slice(-25).map(n => String(n).replace(/\s+/g, ' ').slice(0, 300)).filter(Boolean) : undefined,
+      about: !chat && Array.isArray(c.about) ? c.about.slice(-25).map(n => String(n).replace(/\s+/g, ' ').slice(0, 300)).filter(Boolean) : undefined,   // never in the shared chat, whatever the app sent
+      chat,
       v: Math.max(1, Math.min(99, Math.floor(Number(c.v)) || 1)),   // an app from before the number was sent only has the first tools
     };
     // the web, for an app that can show the sources and holds changes for Confirm after a search (tools.ts WEB_SEARCH)
     let web = canWeb(ctx.v) && !webOff;
-    let messages = cleanMessages(b.messages, profile, web);
+    let messages = cleanMessages(b.messages, profile, web, chat);
     if (!messages) return json({ error: 'Nothing to answer' }, 400);
     const coaching = isCoaching(messages);
     const pictures = hasPictures(messages);
     let out: { content: unknown[]; stop_reason: string };
     try {
-      out = await claude(system(ctx, coaching, web, pictures), messages, web ? [...toolsFor(profile, ctx.v), WEB_SEARCH] : toolsFor(profile, ctx.v), coaching, web, pictures);
+      out = await claude(system(ctx, coaching, web, pictures), messages, web ? [...toolsFor(profile, ctx.v, chat), WEB_SEARCH] : toolsFor(profile, ctx.v, chat), coaching, web, pictures);
     } catch (e) {
       if (!(e instanceof WebOff)) throw e;
       console.error(`planner-arvy: answering without the web (${e.off ? 'switched off for this Anthropic account' : 'this request was refused'}):`, e.message);
       if (e.off) webOff = true;
       web = false;
-      messages = cleanMessages(b.messages, profile, false) || messages;
-      out = await claude(system(ctx, coaching, false, pictures), messages, toolsFor(profile, ctx.v), coaching, false, pictures);
+      messages = cleanMessages(b.messages, profile, false, chat) || messages;
+      out = await claude(system(ctx, coaching, false, pictures), messages, toolsFor(profile, ctx.v, chat), coaching, false, pictures);
     }
-    if (!web) return json(out);
+    const mode = chat ? { chat: true } : {};   // said back, so the app knows the chat's rules were in force
+    if (!web) return json({ ...out, ...mode });
     const shown = webOut(out.content);
-    if (!shown.searched) return json({ content: shown.content, stop_reason: out.stop_reason });
+    if (!shown.searched) return json({ content: shown.content, stop_reason: out.stop_reason, ...mode });
     return json({ content: shown.content, stop_reason: out.stop_reason, web: { searches: shown.searches, sources: shown.sources, found: shown.found },
-      ...(out.stop_reason === 'tool_use' ? { raw: webRaw(out.content) } : {}) });
+      ...(out.stop_reason === 'tool_use' ? { raw: webRaw(out.content) } : {}), ...mode });
   } catch (e) {
     console.error('planner-arvy:', action, e instanceof Error ? e.message : String(e));
     return json({ error: e instanceof Error ? e.message : 'Something went wrong' }, 500);

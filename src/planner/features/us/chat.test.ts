@@ -156,7 +156,7 @@ describe('the list on the phone', () => {
     invoke.mockImplementationOnce(async () => { during = usRows().map(r => `${r.msg.text}${r.sending ? ' (sending)' : ''}`); return { key: '2026-11-11T19:10:00.000Z~m9', msg: { id: 'm9', at: '2026-11-11T19:10:00.000Z', by: 'vijay', name: 'Vijay', text: 'on my way', arvy: { state: 'reading' } } }; });
     await say('  on my way ');
     expect(during).toEqual(['on my way (sending)']);
-    expect(invoke).toHaveBeenCalledWith({ action: 'say', text: 'on my way', media: [], looks: [] }, 'planner-chat');
+    expect(invoke).toHaveBeenCalledWith({ action: 'say', text: 'on my way', media: [], looks: [], turn: true }, 'planner-chat');   // turn: this app can answer a message for Arvy (asking.test.ts)
     expect(usRows().map(r => [r.msg.id, !!r.sending])).toEqual([['m9', false]]);
     invoke.mockRejectedValueOnce(new Error('I couldn’t reach the server.'));
     await expect(say('second')).rejects.toThrow('reach the server');

@@ -156,7 +156,7 @@ describe('sending a reply from the phone', () => {
     invoke.mockImplementationOnce(async () => { during = usRows()[usRows().length - 1]; return { key: '2026-11-11T19:41:00.000Z~m9', msg: { id: 'm9', at: '2026-11-11T19:41:00.000Z', by: 'vijay', name: 'Vijay', text: 'yes get two', reply: { key: KEY, name: 'Vijay', text: 'should I get apples?' } } }; });
     await say('yes get two', [], row);
     expect(during).toMatchObject({ sending: true, msg: { text: 'yes get two', reply: { key: KEY, name: 'Vijay', text: 'should I get apples?' } } });
-    expect(invoke).toHaveBeenCalledWith({ action: 'say', text: 'yes get two', media: [], looks: [], reply: { key: KEY, text: 'should I get apples?' } }, 'planner-chat');
+    expect(invoke).toHaveBeenCalledWith({ action: 'say', text: 'yes get two', media: [], looks: [], reply: { key: KEY, text: 'should I get apples?' }, turn: true }, 'planner-chat');
     expect(usRows().find(r => r.msg.id === 'm9')?.msg.reply).toEqual({ key: KEY, name: 'Vijay', text: 'should I get apples?' });
   });
   it('a server that doesn’t know replies yet saves the message without the quote, and that is what shows', async () => {
@@ -169,7 +169,7 @@ describe('sending a reply from the phone', () => {
     expect(replyTo(row)).toEqual({ key: KEY, name: 'Vijay', text: 'should I get apples?' });
     invoke.mockResolvedValueOnce({ key: '2026-11-11T19:44:00.000Z~m11', msg: { id: 'm11', at: '2026-11-11T19:44:00.000Z', by: 'vijay', name: 'Vijay', text: 'plain' } });
     await say('plain');
-    expect(invoke).toHaveBeenCalledWith({ action: 'say', text: 'plain', media: [], looks: [] }, 'planner-chat');
+    expect(invoke).toHaveBeenCalledWith({ action: 'say', text: 'plain', media: [], looks: [], turn: true }, 'planner-chat');
     expect(Object.keys(invoke.mock.calls[0][0])).not.toContain('reply');
   });
 });

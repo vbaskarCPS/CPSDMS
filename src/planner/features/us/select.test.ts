@@ -239,11 +239,16 @@ describe('asking from the phone', () => {
     expect(usRows().find(r => r.key === key(2))?.msg.arvy?.proposals).toEqual([offered]);
     expect(putDoc).not.toHaveBeenCalled();   // only a Confirm tap adds anything
   });
-  it('a to-do says whose; something typed goes as their words; Arvy’s note comes back when it had nothing', async () => {
+  it('a to-do says whose; Arvy’s note comes back when it had nothing', async () => {
     invoke.mockResolvedValue({ ok: true, key: key(3), added: 0, note: 'Which day?', msg: { ...stored[2].data, arvy: { state: 'done', note: 'Which day?' } } });
     expect(await askArvy([key(3)], { what: 'todo', for: 'rosh' })).toEqual({ key: key(3), added: 0, note: 'Which day?' });
     expect(invoke).toHaveBeenLastCalledWith({ action: 'ask', keys: [key(3)], what: 'todo', for: 'rosh' }, 'planner-chat');
-    await askArvy([key(3)], { what: 'words', words: 'put the thank-you on the calendar' });
+  });
+  it('something typed, with a server from before Arvy answered in the chat: asked the way it was until now', async () => {
+    // (with today's server the words go as a message for Arvy, and it answers in the chat: asking.test.ts)
+    invoke.mockResolvedValueOnce({ ok: true, key: key(9), msg: msg(9, 'vijay', { text: 'put the thank-you on the calendar', arvy: { state: 'reading' } }) })   // kept as an ordinary message
+      .mockResolvedValueOnce({ ok: true, key: key(3), added: 0, note: 'Which day?', msg: { ...stored[2].data, arvy: { state: 'done', note: 'Which day?' } } });
+    expect(await askArvy([key(3)], { what: 'words', words: 'put the thank-you on the calendar' })).toEqual({ key: key(3), added: 0, note: 'Which day?' });
     expect(invoke).toHaveBeenLastCalledWith({ action: 'ask', keys: [key(3)], what: 'words', words: 'put the thank-you on the calendar' }, 'planner-chat');
   });
   it('a server that doesn’t know how yet: it says so quietly, and the chat is as it was', async () => {
