@@ -1,9 +1,13 @@
 // A place looked up on Google Maps (supabase/functions/planner-arvy/places.ts): what Google is asked, reading its
 // answer, opening hours in words, which links may become buttons, which places a reply is talking about, what Arvy is
 // given, and the look-up as the app runs it (run.ts find_place). Every place, number and site here is made up.
+// Then the server's side: each person's allowance of look-ups for the month, and the look-up as the server runs it,
+// with a pretend database, a pretend Google and a clock set by hand. Nothing here touches the network.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PLACES_AREA, PLACES_FIELDS, PLACES_MAX, PLACES_URL, cleanLinks, linkOk, linksFor, looksLikeBooking, placeAnswer, placeHours, placeLinks, placesAsk, placesFrom, placesPageUrl, placesRefusal, placesRequest,
   type Place, type PlaceLinks } from '../../../../supabase/functions/planner-arvy/places';
+import { PLACES_COUNT_WAIT_MS, PLACES_DOWN, PLACES_KEEP_MS, PLACES_LIMIT, PLACES_MONTHLY, PLACES_MONTHLY_OTHERS, PLACES_MONTHLY_PEOPLE, PLACES_USE_KIND, placesAllowance, placesLookUp, placesMemory, placesMonth, placesSpend, placesUsed, placesUsedUp,
+  type PlaceUse, type PlacesDeps, type PlacesDocs } from '../../../../supabase/functions/planner-arvy/places';
 import { system, toolsFor, TOOLS, TOOLS_VERSION } from '../../../../supabase/functions/planner-arvy/tools';
 
 const invoke = vi.fn();
@@ -329,7 +333,7 @@ describe('what Arvy is given', () => {
 
 describe('the find_place tool', () => {
   it('comes with version 6 of the app: an older app isn’t offered it or told about it', () => {
-    expect(TOOLS_VERSION).toBe(6);
+    expect(TOOLS_VERSION).toBeGreaterThanOrEqual(6);
     expect(toolsFor('night').map(t => t.name)).toContain('find_place');
     expect(toolsFor('morning').map(t => t.name)).toContain('find_place');
     expect(toolsFor('night', 5).map(t => t.name)).not.toContain('find_place');
@@ -405,5 +409,366 @@ describe('the look-up, as the app runs it', () => {
     invoke.mockClear();
     expect(await runTool('find_place', {})).toMatchObject({ error: true });
     expect(invoke).not.toHaveBeenCalled();
+  });
+  it('the month’s look-ups used up: Arvy is told so as it is. Nothing is broken, so it isn’t an error and stays out of the improvements log', async () => {
+    invoke.mockResolvedValueOnce(placesUsedUp(450, 450));
+    const out = await runTool('find_place', { query: 'dentist' });
+    expect(out.error).toBeUndefined();   // arvy.ts only logs, and only marks the answer as failed, when this is set
+    expect(out.result).toEqual({ problem: 'This month’s Google look-ups are used up (450). They start again on the 1st.', why: 'this month’s allowance is used up (450 of 450)',
+      note: expect.stringMatching(/^Nothing was looked up, and nothing is broken: .* used up\. Tell them so plainly, with when they start again, and don’t guess a phone number, an address or hours\.$/) });
+    expect(JSON.stringify(out.result)).not.toMatch(/couldn’t reach/);
+    expect(out.links).toBeUndefined();
+    expect(out.sources).toBeUndefined();
+    // any other trouble is still Google Maps not being reached, whatever `broken` says or doesn't
+    invoke.mockResolvedValueOnce({ problem: 'Too many places were looked up in the last few minutes. Try again in ten minutes.', broken: true, why: 'too many look-ups in ten minutes' });
+    expect(await runTool('find_place', { query: 'dentist' })).toMatchObject({ error: true, result: { note: expect.stringMatching(/couldn’t reach Google Maps just now/) } });
+    invoke.mockResolvedValueOnce({ broken: false });   // nothing to tell them: not an answer we know
+    expect(await runTool('find_place', { query: 'dentist' })).toMatchObject({ error: true, result: { problem: 'Google Maps couldn’t be reached.' } });
+  });
+});
+
+// ── the server's side ──
+const T0 = Date.UTC(2026, 10, 11, 19, 30);   // Wednesday 2026-11-11: 2:30 pm in Hamilton, 11:30 am in Los Angeles
+const utc = (iso: string) => Date.parse(iso);
+const DENIED = { error: { code: 403, message: 'Requests from this caller with key made-up-google-key are blocked.', status: 'PERMISSION_DENIED' } };
+/** A pretend server: the person's planner docs in memory, Google answering from `google`, the clock in `now`.
+ *  `did` = everything asked of the database and of Google, in the order it was asked. */
+function world(username = 'vijay') {
+  const w = {
+    now: T0, key: 'made-up-google-key' as string | undefined,
+    docs: new Map<string, unknown>(), did: [] as string[], logs: [] as string[], sent: [] as { url: string; headers: Record<string, string>; body: Record<string, unknown> }[],
+    google: { status: 200, body: FULL as unknown, fail: null as Error | null },
+    /** set one to have the database answer something else, or throw */
+    db: { get: null as null | (() => unknown), put: null as null | (() => unknown), slow: false },
+    mem: placesMemory(),
+  };
+  const pause = () => (w.db.slow ? new Promise(r => setTimeout(r, 2)) : Promise.resolve());
+  const docs: PlacesDocs = {
+    async get(kind, key) { w.did.push(`get ${kind} ${key}`); await pause(); if (w.db.get) return w.db.get(); const k = `${kind}|${key}`; return { ok: true, docs: w.docs.has(k) ? [{ key, data: w.docs.get(k), updated_at: '2026-11-11T00:00:00Z' }] : [] }; },
+    async put(kind, key, data) { w.did.push(`put ${kind} ${key} ${JSON.stringify(data)}`); await pause(); if (w.db.put) return w.db.put(); w.docs.set(`${kind}|${key}`, data); return { ok: true }; },
+  };
+  const deps: PlacesDeps = { get key() { return w.key; }, username, docs, now: () => w.now, log: line => { w.logs.push(line); },
+    fetch: async (url, init) => {
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      w.did.push(`google ${body.textQuery}`); w.sent.push({ url, headers: init.headers, body });
+      if (w.google.fail) throw w.google.fail;
+      return { ok: w.google.status >= 200 && w.google.status < 300, status: w.google.status, json: async () => w.google.body };
+    } };
+  return Object.assign(w, {
+    docsFor: docs,
+    look: (query: string, more: Record<string, unknown> = {}) => placesLookUp({ query, ...more }, deps, w.mem),
+    /** the count as the month's doc has it */
+    n: (month = '2026-11') => (w.docs.get(`${PLACES_USE_KIND}|${month}`) as PlaceUse | undefined)?.n,
+    start: (n: unknown, month = '2026-11') => { w.docs.set(`${PLACES_USE_KIND}|${month}`, typeof n === 'number' ? { n, at: '2026-11-10T15:00:00.000Z' } : n); },
+    asked: () => w.did.filter(d => d.startsWith('google ')).length,
+  });
+}
+const USED_UP = 'This month’s Google look-ups are used up (450). They start again on the 1st.';
+
+describe('the month’s allowance', () => {
+  it('two full shares and a small one stay inside the thousand Google gives free', () => {
+    expect(PLACES_MONTHLY).toBe(450);
+    expect(PLACES_MONTHLY_OTHERS).toBe(20);
+    expect(PLACES_MONTHLY_PEOPLE).toEqual(['vijay', 'rosh']);
+    expect(PLACES_MONTHLY_PEOPLE.length * PLACES_MONTHLY + PLACES_MONTHLY_OTHERS).toBeLessThan(1000);
+    expect(placesAllowance('vijay')).toBe(450);
+    expect(placesAllowance('rosh')).toBe(450);
+    // anyone else (the test account), and a name that isn't exactly one of theirs
+    for (const other of ['tester', 'demo', '', 'Vijay', ' rosh', 'vijay2', undefined, null, 42, ['vijay']]) expect(placesAllowance(other), String(other)).toBe(20);
+  });
+  it('the month is Google’s: it turns at midnight in Los Angeles, not at midnight UTC and not at midnight in Hamilton', () => {
+    expect(placesMonth(T0)).toBe('2026-11');
+    expect(placesMonth(utc('2026-11-30T23:59:59Z'))).toBe('2026-11');
+    expect(placesMonth(utc('2026-12-01T00:00:00Z'))).toBe('2026-11');   // midnight UTC: 4 pm on the 30th in Los Angeles
+    expect(placesMonth(utc('2026-12-01T05:00:00Z'))).toBe('2026-11');   // midnight in Hamilton: 9 pm on the 30th there
+    expect(placesMonth(utc('2026-12-01T07:59:59Z'))).toBe('2026-11');
+    expect(placesMonth(utc('2026-12-01T08:00:00Z'))).toBe('2026-12');   // midnight in Los Angeles (3 am in Hamilton)
+    // the year turns the same way
+    expect(placesMonth(utc('2027-01-01T07:59:59Z'))).toBe('2026-12');
+    expect(placesMonth(utc('2027-01-01T08:00:00Z'))).toBe('2027-01');
+  });
+  it('the clocks changing, in spring and in autumn, moves the hour the month turns and never the month', () => {
+    // winter time until 8 March 2026: March starts at 08:00 UTC, and the night the clocks go forward stays in March
+    expect(placesMonth(utc('2026-03-01T07:59:59Z'))).toBe('2026-02');
+    expect(placesMonth(utc('2026-03-01T08:00:00Z'))).toBe('2026-03');
+    expect(placesMonth(utc('2026-03-08T09:59:59Z'))).toBe('2026-03');   // 1:59 am, the last second of winter time
+    expect(placesMonth(utc('2026-03-08T10:00:00Z'))).toBe('2026-03');   // 3:00 am, summer time
+    // summer time: April starts an hour earlier by UTC
+    expect(placesMonth(utc('2026-04-01T06:59:59Z'))).toBe('2026-03');
+    expect(placesMonth(utc('2026-04-01T07:00:00Z'))).toBe('2026-04');
+    // the clocks go back on 1 November 2026, two hours after that month has started
+    expect(placesMonth(utc('2026-11-01T06:59:59Z'))).toBe('2026-10');
+    expect(placesMonth(utc('2026-11-01T07:00:00Z'))).toBe('2026-11');
+    expect(placesMonth(utc('2026-11-01T08:59:59Z'))).toBe('2026-11');   // 1:59 am, summer time
+    expect(placesMonth(utc('2026-11-01T09:00:00Z'))).toBe('2026-11');   // 1:00 am again, winter time
+    // and December is back to 08:00 UTC
+    expect(placesMonth(utc('2026-12-01T07:00:00Z'))).toBe('2026-11');
+  });
+  it('reads the count from the month’s doc: no doc yet is none, and a doc that isn’t a count is not one to go on', () => {
+    expect(placesUsed(undefined)).toBe(0);
+    expect(placesUsed(null)).toBe(0);
+    expect(placesUsed({ n: 0, at: '2026-11-01T08:00:00.000Z' })).toBe(0);
+    expect(placesUsed({ n: 449, at: 'whenever' })).toBe(449);
+    expect(placesUsed({ n: 100000 })).toBe(100000);
+    for (const junk of ['449', 449, true, [], [{ n: 3 }], {}, { n: '449' }, { n: -1 }, { n: 1.5 }, { n: NaN }, { n: Infinity }, { n: null }, { count: 3 }]) expect(placesUsed(junk), JSON.stringify(junk)).toBeNull();
+  });
+  it('allowed at 0 and at 449, used up at 450 and at 451', async () => {
+    for (const [had, goes] of [[0, true], [449, true], [450, false], [451, false]] as const) {
+      const w = world();
+      w.start(had);
+      const r = await placesSpend(w.docsFor, 'vijay', T0);
+      if (goes) {
+        expect(r, String(had)).toEqual({ ok: true, used: had + 1, limit: 450 });
+        expect(w.docs.get('placeuse|2026-11')).toEqual({ n: had + 1, at: '2026-11-11T19:30:00.000Z' });
+      } else {
+        expect(r, String(had)).toEqual({ ok: false, problem: USED_UP, broken: false, why: `this month’s allowance is used up (${had} of 450)` });
+        expect(w.n()).toBe(had);                                  // nothing is written once the month is used up
+        expect(w.did).toEqual(['get placeuse 2026-11']);
+      }
+    }
+  });
+  it('no doc yet starts the month at one; a doc that isn’t a count stops the look-up, and is left as it is', async () => {
+    const fresh = world();
+    expect(await placesSpend(fresh.docsFor, 'vijay', T0)).toEqual({ ok: true, used: 1, limit: 450 });
+    expect(fresh.did).toEqual(['get placeuse 2026-11', 'put placeuse 2026-11 {"n":1,"at":"2026-11-11T19:30:00.000Z"}']);
+    for (const junk of ['449', { n: '12' }, { n: -3 }, { n: 2.5 }, [], { at: '2026-11-10T15:00:00.000Z' }]) {
+      const w = world();
+      w.start(junk);
+      expect(await placesSpend(w.docsFor, 'vijay', T0), JSON.stringify(junk)).toEqual({ ok: false, problem: 'Google Maps couldn’t be reached.', broken: true, why: 'the month’s count isn’t a count' });
+      expect(w.docs.get('placeuse|2026-11')).toEqual(junk);
+      expect(w.did).toEqual(['get placeuse 2026-11']);
+    }
+  });
+  it('the test account has twenty', async () => {
+    for (const [had, goes] of [[0, true], [19, true], [20, false], [21, false]] as const) {
+      const w = world('tester');
+      w.start(had);
+      const r = await placesSpend(w.docsFor, 'tester', T0);
+      expect(r.ok, String(had)).toBe(goes);
+      if (!r.ok) expect(r).toMatchObject({ problem: 'This month’s Google look-ups are used up (20). They start again on the 1st.', broken: false, why: `this month’s allowance is used up (${had} of 20)` });
+    }
+  });
+  it('says the month is used up in plain words: the share, and when it starts again. The why has the count, never what was asked', () => {
+    expect(placesUsedUp(450, 450)).toEqual({ problem: 'This month’s Google look-ups are used up (450). They start again on the 1st.', broken: false, why: 'this month’s allowance is used up (450 of 450)' });
+    expect(placesUsedUp(23, 20)).toEqual({ problem: 'This month’s Google look-ups are used up (20). They start again on the 1st.', broken: false, why: 'this month’s allowance is used up (23 of 20)' });
+    expect(PLACES_DOWN).toBe('Google Maps couldn’t be reached.');
+  });
+  it('two counts at the very same moment, with nothing to line them up, can both read the same number: one too few is counted', async () => {
+    // the known gap (see placesSpend): the server lines its own counts up (below), two copies of the server can't
+    const w = world();
+    w.db.slow = true;
+    w.start(7);
+    const both = await Promise.all([placesSpend(w.docsFor, 'vijay', T0), placesSpend(w.docsFor, 'vijay', T0)]);
+    expect(both.map(r => r.ok)).toEqual([true, true]);
+    expect(w.n()).toBe(8);
+  });
+});
+
+describe('the look-up, as the server runs it', () => {
+  it('counts the look-up first, then asks Google: one read, one write, one call', async () => {
+    const w = world();
+    const r = await w.look('dentist');
+    expect(w.did).toEqual(['get placeuse 2026-11', 'put placeuse 2026-11 {"n":1,"at":"2026-11-11T19:30:00.000Z"}', 'google dentist near Hamilton, Ontario, Canada']);
+    expect(r.status).toBe(200);
+    expect((r.body as { places: Place[] }).places.map(p => p.name)).toEqual(['Maple Leaf Dental', 'Lakeside Physio & Rehab']);
+    expect(w.sent[0]).toEqual({ url: PLACES_URL, headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': 'made-up-google-key', 'X-Goog-FieldMask': PLACES_FIELDS },
+      body: { textQuery: 'dentist near Hamilton, Ontario, Canada', pageSize: 4, languageCode: 'en', regionCode: 'CA' } });
+    expect(w.logs).toEqual([]);
+  });
+  it('the same question again within three minutes comes from the keep: Google isn’t asked and nothing is counted', async () => {
+    const w = world();
+    await w.look('dentist');
+    w.now += PLACES_KEEP_MS - 1;
+    const again = await w.look('Dentist');   // capitals don't make it another question
+    expect((again.body as { places: Place[] }).places).toHaveLength(2);
+    expect(w.did).toHaveLength(3);           // still the one read, one write and one call of the first time
+    expect(w.n()).toBe(1);
+    // “open now” is another question to Google, and so is the same one once the keep has run out
+    await w.look('dentist', { open_now: true });
+    expect(w.n()).toBe(2);
+    w.now += PLACES_KEEP_MS;
+    await w.look('dentist');
+    expect(w.n()).toBe(3);
+    expect(w.asked()).toBe(3);
+    expect(PLACES_KEEP_MS).toBe(3 * 60 * 1000);
+  });
+  it('a look-up Google refuses is counted all the same, and so is the next try', async () => {
+    const w = world();
+    w.google.status = 403; w.google.body = DENIED;
+    const r = await w.look('dentist');
+    expect(r).toEqual({ status: 200, body: { problem: 'Google Maps couldn’t be reached.', broken: true, why: 'Google refused (403 PERMISSION_DENIED)' } });
+    expect(w.n()).toBe(1);
+    await w.look('dentist');   // a refusal isn't kept
+    expect(w.n()).toBe(2);
+    expect(w.asked()).toBe(2);
+    // Google's own words go to the log with the key taken out, and never to the app
+    expect(w.logs.slice(0, 2)).toEqual(['planner-arvy places: Google said: Requests from this caller with key (the key) are blocked.', 'planner-arvy places: Google refused (403 PERMISSION_DENIED)']);
+    expect(JSON.stringify(r)).not.toMatch(/made-up-google-key|Requests from/);
+  });
+  it('Google not answering, or answering something that can’t be read, is counted too: it was asked', async () => {
+    const w = world();
+    w.google.fail = Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' });
+    expect((await w.look('dentist')).body).toEqual({ problem: 'Google Maps couldn’t be reached.', broken: true, why: 'Google didn’t answer in time' });
+    w.google.fail = new TypeError('error sending request');
+    expect((await w.look('dentist')).body).toMatchObject({ broken: true, why: 'the request failed (TypeError)' });
+    w.google.fail = null; w.google.body = { results: [], status: 'OK' };
+    expect((await w.look('dentist')).body).toEqual({ problem: 'Google Maps answered, but not in a way that could be read.', broken: true, why: 'Google’s answer has changed and couldn’t be read' });
+    expect(w.n()).toBe(3);
+    // nothing found is an answer: counted, and kept like any other
+    w.google.body = {};
+    expect((await w.look('unicorn stable')).body).toEqual({ places: [] });
+    expect((await w.look('unicorn stable')).body).toEqual({ places: [] });
+    expect(w.n()).toBe(4);
+    expect(w.asked()).toBe(4);
+  });
+  it('the month used up: Google isn’t asked, nothing is written, and the answer says so', async () => {
+    for (const had of [450, 451]) {
+      const w = world();
+      w.start(had);
+      const r = await w.look('dentist', { near: 'Stoney Creek' });
+      expect(r).toEqual({ status: 200, body: { problem: USED_UP, broken: false, why: `this month’s allowance is used up (${had} of 450)` } });
+      expect(r.body).toEqual(placesUsedUp(had, 450));
+      expect(w.did).toEqual(['get placeuse 2026-11']);
+      expect(w.asked()).toBe(0);
+      expect(w.n()).toBe(had);
+      // the log has the count and the share, not what was looked for
+      expect(w.logs).toEqual([`planner-arvy places: this month’s allowance is used up (${had} of 450)`]);
+    }
+  });
+  it('the last one of the month goes through, and the one after is told the month is used up', async () => {
+    const w = world();
+    w.start(449);
+    expect((await w.look('dentist')).body).toHaveProperty('places');
+    expect(w.n()).toBe(450);
+    expect((await w.look('physio')).body).toEqual(placesUsedUp(450, 450));
+    expect(w.asked()).toBe(1);
+    // what Google already answered is still there to go over, used up or not
+    expect((await w.look('dentist')).body).toHaveProperty('places');
+    expect(w.asked()).toBe(1);
+  });
+  it('each person has their own count; the test account stops at twenty', async () => {
+    const t = world('tester');
+    t.start(19);
+    expect((await t.look('dentist')).body).toHaveProperty('places');
+    expect((await t.look('physio')).body).toEqual({ problem: 'This month’s Google look-ups are used up (20). They start again on the 1st.', broken: false, why: 'this month’s allowance is used up (20 of 20)' });
+    expect(t.asked()).toBe(1);
+    const r = world('rosh');
+    r.start(449);
+    expect((await r.look('dentist')).body).toHaveProperty('places');
+    expect((await r.look('physio')).body).toEqual(placesUsedUp(450, 450));
+  });
+  it('a new month starts from nothing, at midnight in Los Angeles on the 1st', async () => {
+    const w = world();
+    w.start(450);
+    w.now = utc('2026-12-01T07:59:59Z');
+    expect((await w.look('dentist')).body).toEqual(placesUsedUp(450, 450));
+    w.now = utc('2026-12-01T08:00:00Z');
+    expect((await w.look('dentist')).body).toHaveProperty('places');
+    expect(w.did.slice(-3)).toEqual(['get placeuse 2026-12', 'put placeuse 2026-12 {"n":1,"at":"2026-12-01T08:00:00.000Z"}', 'google dentist near Hamilton, Ontario, Canada']);
+    expect(w.n('2026-12')).toBe(1);
+    expect(w.n('2026-11')).toBe(450);   // last month's count is left as it ended
+  });
+  it('a count that can’t be read: Google isn’t asked', async () => {
+    const cases: [() => unknown, string, string?][] = [
+      [() => { throw new Error('planner_get PGRST301 connection to the database was lost'); }, 'the month’s count couldn’t be read', 'planner-arvy places: the database said: planner_get PGRST301 connection to the database was lost'],
+      [() => ({ ok: false, reason: 'signed_out' }), 'the month’s count couldn’t be read (signed_out)'],
+      [() => null, 'the month’s count couldn’t be read (not the answer we know)'],
+      [() => ({ ok: true }), 'the month’s count couldn’t be read (not the answer we know)'],
+      [() => ({ ok: true, docs: [{ key: '2026-11', data: { n: 'twelve' } }] }), 'the month’s count isn’t a count'],
+    ];
+    for (const [get, why, said] of cases) {
+      const w = world();
+      w.db.get = get;
+      const r = await w.look('dentist');
+      expect(r, why).toEqual({ status: 200, body: { problem: 'Google Maps couldn’t be reached.', broken: true, why } });
+      expect(w.did, why).toEqual(['get placeuse 2026-11']);   // no write, and no call to Google
+      expect(w.logs, why).toEqual([...(said ? [said] : []), `planner-arvy places: ${why}`]);
+    }
+  });
+  it('a count that can’t be saved: Google isn’t asked', async () => {
+    const cases: [() => unknown, string][] = [
+      [() => { throw new Error('planner_put 57014 canceling statement due to statement timeout'); }, 'the month’s count couldn’t be saved'],
+      [() => ({ ok: false, reason: 'bad_key' }), 'the month’s count couldn’t be saved (bad_key)'],
+      [() => undefined, 'the month’s count couldn’t be saved (not the answer we know)'],
+    ];
+    for (const [put, why] of cases) {
+      const w = world();
+      w.start(3);
+      w.db.put = put;
+      const r = await w.look('dentist');
+      expect(r, why).toEqual({ status: 200, body: { problem: 'Google Maps couldn’t be reached.', broken: true, why } });
+      expect(w.asked(), why).toBe(0);
+      expect(w.n()).toBe(3);
+      expect(JSON.stringify(r)).not.toMatch(/57014|statement/);   // the database's own words stay in the log
+    }
+  });
+  it('a database that never answers: the look-up gives up without asking Google, and the next one isn’t left waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = world();
+      w.db.get = () => new Promise(() => { /* never */ });
+      let done: { status: number; body: unknown } | undefined;
+      void w.look('dentist').then(r => { done = r; });
+      await vi.advanceTimersByTimeAsync(PLACES_COUNT_WAIT_MS - 1);
+      expect(done).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toEqual({ status: 200, body: { problem: 'Google Maps couldn’t be reached.', broken: true, why: 'the month’s count couldn’t be read' } });
+      expect(w.logs).toContain('planner-arvy places: the database said: no answer in time');
+      expect(w.asked()).toBe(0);
+      w.db.get = null;
+      expect((await w.look('physio')).body).toHaveProperty('places');
+      expect(PLACES_COUNT_WAIT_MS).toBe(8000);
+    } finally { vi.useRealTimers(); }
+  });
+  it('two look-ups at the same moment on the last one of the month: one reaches Google, the other is told it’s used up', async () => {
+    const w = world();
+    w.db.slow = true;
+    w.start(449);
+    const [a, b] = await Promise.all([w.look('dentist'), w.look('physio')]);   // as one question with two look-ups sends them
+    expect(a.body).toHaveProperty('places');
+    expect(b.body).toEqual(placesUsedUp(450, 450));
+    expect(w.asked()).toBe(1);
+    expect(w.n()).toBe(450);
+    // and earlier in the month both go through, each counted
+    const v = world();
+    v.db.slow = true;
+    v.start(7);
+    await Promise.all([v.look('dentist'), v.look('physio'), v.look('pharmacy')]);
+    expect(v.n()).toBe(10);
+    expect(v.asked()).toBe(3);
+  });
+  it('the ten-minute limit is as it was: thirty look-ups, and the next is refused without being counted', async () => {
+    const w = world();
+    for (let i = 0; i < PLACES_LIMIT; i++) { w.now += 1000; expect((await w.look(`clinic ${i}`)).body, String(i)).toHaveProperty('places'); }
+    expect(w.n()).toBe(30);
+    const before = w.did.length;
+    expect((await w.look('one more')).body).toEqual({ problem: 'Too many places were looked up in the last few minutes. Try again in ten minutes.', broken: true, why: 'too many look-ups in ten minutes' });
+    expect(w.did).toHaveLength(before);   // not read, not counted, not asked
+    expect((await w.look('clinic 3')).body).toHaveProperty('places');   // one it already has is still answered
+    w.now += 10 * 60 * 1000;
+    expect((await w.look('one more')).body).toHaveProperty('places');
+    expect(w.n()).toBe(31);
+    expect(PLACES_LIMIT).toBe(30);
+  });
+  it('no key, or nothing to look for: nothing is counted and nothing is asked', async () => {
+    const w = world();
+    w.key = undefined;
+    expect(await w.look('dentist')).toEqual({ status: 200, body: { problem: 'Google Maps couldn’t be reached.', broken: true, why: 'the Google key isn’t set (GOOGLE_PLACES_API_KEY)' } });
+    w.key = 'made-up-google-key';
+    expect(await w.look('')).toEqual({ status: 400, body: { error: 'What should I look for?' } });
+    expect(await placesLookUp(null, { key: 'k', username: 'vijay', docs: w.docsFor, now: () => T0, log: () => undefined, fetch: async () => { throw new Error('not reached'); } }, w.mem)).toMatchObject({ status: 400 });
+    expect(w.did).toEqual([]);
+  });
+  it('what was looked for and the key never reach the log', async () => {
+    const w = world();
+    await w.look('walk-in clinic', { near: 'Stoney Creek' });
+    w.google.status = 400; w.google.body = { error: { code: 400, status: 'INVALID_ARGUMENT', message: 'API key not valid: made-up-google-key' } };
+    await w.look('physio', { near: 'Dundas' });
+    w.start(450);
+    await w.look('pharmacy', { near: 'Ancaster' });
+    w.start({ n: 'lots' });
+    await w.look('vet', { near: 'Waterdown' });
+    expect(w.logs).toHaveLength(4);
+    expect(w.logs.join('\n')).not.toMatch(/made-up-google-key|clinic|physio|pharmacy|vet|Stoney|Dundas|Ancaster|Waterdown/i);
   });
 });

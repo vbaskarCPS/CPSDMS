@@ -9,6 +9,7 @@ import { MemoryCard } from '../ui/MemoryCard';
 import { Sticker } from 'lucide-react';
 import { IconsTile } from '../features/icons';
 import { ArrangeTile } from '../features/widgets';
+import { MailTile } from '../features/mail';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
@@ -97,6 +98,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
 
       <Link className="pl-tile" to="/settings/stickers"><Sticker aria-hidden /><div className="pl-grow"><b>Stickers</b><small>Decorate your pages like a scrapbook</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
       <ArrangeTile />
+
+      <MailTile />
 
       <MemoryCard />
 

@@ -8,6 +8,9 @@
 // the ones Google gave, never anything Arvy wrote; its reply only decides which places get their buttons.
 // A question can come with pictures (a screenshot of an appointment: pics.ts). They count as outside the planner too:
 // what Arvy sets up from one always waits for Confirm.
+// Their email (email.ts) is outside the planner in the same way: after a look at it every change waits for Confirm,
+// and nothing with a card number, a code or a password in it is saved. An email Arvy writes is never sent by Arvy:
+// it sits on a Confirm card with its whole text, and the tap sends it (once: there is no Undo for it).
 // A question can also come from the chat between the two of them (features/us: a message there addressed to Arvy).
 // It runs here like any other, in chat mode: see "asked in the chat" below.
 import { invoke } from '../../lib/ai';
@@ -24,10 +27,11 @@ import { changeOf, chatOffers, chatSafe, speakable, TOOLS_VERSION, type Block, t
 import { gymPageUrl } from '../../../../supabase/functions/planner-arvy/gym';
 import { cleanLinks, linksFor, PLACES_AREA, placesPageUrl, type PlaceLinks } from '../../../../supabase/functions/planner-arvy/places';
 import type { Pic } from './pics';
+import { holdsSecret, MAIL_READS, SECRET_REFUSED } from './email';
 
 /** A change shown under Arvy's reply. done: made (Undo while this visit lasts); waiting: Confirm/Cancel. */
 export type ChangeState = 'done' | 'waiting' | 'cancelled' | 'undone' | 'failed' | 'expired';
-export interface ChangeView { id: string; lines: string[]; state: ChangeState; error?: string }
+export interface ChangeView { id: string; lines: string[]; state: ChangeState; error?: string; /** said under it once it's made ("Sent.") */ doneNote?: string }
 /** A button under a reply: tapping it sends `send` (or the label) as their next message. */
 export interface Choice { label: string; send?: string }
 export interface ChatLine { role: 'user' | 'assistant'; text: string; at: string; used?: string[]; changes?: ChangeView[]; down?: boolean /* thumbs-down given */;
@@ -46,10 +50,11 @@ const newId = () => Math.random().toString(36).slice(2, 10);
 export const canUndo = (id: string) => undos.has(id);
 export const isWaiting = (id: string) => waiting.has(id);
 
-/** Make a change and remember how to undo it. Screens showing that data reload. */
+/** Make a change and remember how to undo it (one that can't be taken back, like an email sent, gets no Undo).
+ *  Screens showing that data reload. */
 async function make(c: Change, id: string): Promise<void> {
   const undo = await c.apply();
-  undos.set(id, undo);
+  if (!c.final) undos.set(id, undo);
   docsChanged(c.kinds);
 }
 /** Make a change that was waiting for Confirm. Returns a screen to open, when the change starts something (a workout). */
@@ -133,7 +138,7 @@ async function runChange(name: string, input: Record<string, unknown>, out: Chan
   const id = newId();
   if (c.confirm || hold || changeOf(name) === 'confirm') {
     waiting.set(id, c);
-    out.push({ id, lines: c.lines, state: 'waiting' });
+    out.push({ id, lines: c.lines, state: 'waiting', ...(c.doneNote ? { doneNote: c.doneNote } : {}) });
     return { result: { waiting_for_confirm: c.lines, note: 'Not done yet: a Confirm button is showing under your reply. Ask them to tap it.' } };
   }
   try { await make(c, id); } catch (e) {
@@ -226,10 +231,14 @@ export const TOOL_LABEL: Record<string, string> = {
   create_habit: 'your habits', pause_habit: 'your habits', set_budget: 'the budget', log_cycle_day: 'your cycle', log_period: 'your cycle',
   adjust_day: 'your day', change_routine: 'your routine', offer_choices: 'your options', web_search: 'the web', gym_classes: 'GoodLife’s class times',
   find_place: 'Google Maps', our_chat: 'your chat',
+  email_inbox: 'your email', email_read: 'that email', email_send: 'the email',
 };
 /** Look-ups that read something Arvy must not take orders from: outside the planner (the web search is the other one:
  *  it runs on the server), or what the two of them wrote each other. After one, every change waits for Confirm. */
-const OUTSIDE = new Set(['gym_classes', 'find_place', 'our_chat']);
+const OUTSIDE = new Set(['gym_classes', 'find_place', 'our_chat', ...MAIL_READS]);
+/** Look-ups that save words (a note, a line in the improvements log). Once email has been read in a question, one
+ *  with a card number, a code, a password or an ID number in it isn't run, and neither is such a change. */
+const KEEPS = new Set(['remember', 'log_feedback', 'cant_do_yet']);
 
 export function context(path: string, spoken: boolean) {
   const units = (getPass()?.user.settings?.units as string) === 'kg' ? 'kg' : 'lb';
@@ -310,6 +319,7 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   let searched = false;           // the web was searched in this question…
   // …or something else outside the planner was read (a picture they sent counts from the start): from then on every change waits for Confirm
   let outside = msgs.some(m => Array.isArray(m.content) && m.content.some(b => b.type === 'image'));
+  let mailRead = false;           // …and their email was looked at: what Arvy saves after that is checked (email.ts holdsSecret)
   const keep = (to: Source[], from?: Source[]) => { for (const s of from || []) if (/^https?:\/\//i.test(s?.url || '') && !to.some(x => x.url === s.url) && to.length < 6) to.push({ url: s.url, title: String(s.title || '') }); };
   // one link a site (two pages of the same site would show as the same name twice); found pages only when none is cited
   const site = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
@@ -336,9 +346,15 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
     const res = new Map<string, { result: unknown; error?: boolean; navigate?: string; sources?: Source[]; links?: PlaceLinks[] }>();
     const about = { question: chat?.asked ?? question, path };
     // look-ups together; changes one at a time, in order (each one's Undo snapshot is taken just before it)
-    await Promise.all(calls.filter(c => !changeOf(c.name)).map(async c => { res.set(c.id, chat ? await chatLookUp(c.name, c.input || {}, about) : await runTool(c.name, c.input || {}, about)); }));
+    const afterMail = mailRead;   // email was read in an earlier step of this question: what this step saves may come from it
+    // (in the chat between the two of them, chat mode: a look-up may be one that chat never has, and no change is made. Email is never read there, so nothing below about email applies)
+    await Promise.all(calls.filter(c => !changeOf(c.name)).map(async c => { res.set(c.id, chat ? await chatLookUp(c.name, c.input || {}, about)
+      : afterMail && KEEPS.has(c.name) && holdsSecret(c.input) ? { result: SECRET_REFUSED } : await runTool(c.name, c.input || {}, about)); }));
     if (calls.some(c => OUTSIDE.has(c.name))) outside = true;
-    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, chat ? await proposeChange(c.name, c.input || {}, proposed, chat, about) : await runChange(c.name, c.input || {}, changes, about, outside));
+    if (calls.some(c => MAIL_READS.has(c.name))) mailRead = true;
+    // (an email to send is not something saved: its Confirm card shows every word of it)
+    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, chat ? await proposeChange(c.name, c.input || {}, proposed, chat, about)
+      : afterMail && c.name !== 'email_send' && holdsSecret(c.input) ? { result: SECRET_REFUSED } : await runChange(c.name, c.input || {}, changes, about, outside));
     const results = calls.map(c => {
       used.push(c.name);
       const out = res.get(c.id)!;
@@ -376,6 +392,15 @@ async function demoTurn(q: string, changes: ChangeView[]): Promise<Turn> {
     ] }, changes);
     return { reply: 'Sorry you’re feeling rough. Today’s plan is changed: no gym, no sauna, up at 7, breakfast at 7:30. The stretch is set up as today’s session on Train: tap Confirm and the 7:00 block opens it. Your gym session waits for tomorrow.', used: ['adjust_day', 'plan_workout'], changes };
   }
+  // their email (made up here; the real ones come from the mailbox they connect in Settings › Email): what's in it,
+  // then a reply that waits on a Confirm card with its whole text. Nothing is sent from the demo.
+  if (/\b(reply|write back|respond|answer (?:him|her|them|it)|send (?:an?|the|that) e-?mail)\b/i.test(q)) {
+    const first = (getPass()?.user.display_name || 'Me').split(/\s+/)[0];
+    await runChange('email_send', { to: ['office@mapleleafdental.example'], subject: 'Re: Your appointment on Thursday', body: `Hi,\n\nThursday at 3:00 works for me. See you then.\n\nThanks,\n${first}` }, changes, {}, true);
+    return { reply: changes[0]?.state === 'waiting' ? 'I’ve written the dentist a reply saying Thursday works. It’s on the card below, word for word: nothing goes out until you tap Confirm (and in the demo nothing is sent at all).' : 'There’s no mailbox to send from. In your own planner you connect one in Settings, Email.', used: ['email_read', 'email_send'], changes };
+  }
+  if (/\b(e-?mails?|inbox|mailbox)\b/i.test(q))
+    return { reply: 'Two things in your email (made up, for the demo). **Maple Leaf Dental** asks you to confirm Thursday at 3:00 with Dr. Shah: a reply will do. And the daycare says photo day is next Tuesday, with the order form due back Friday. Want me to write the dentist a reply? In your own planner you connect your mailbox in Settings, Email.', used: ['email_inbox'], changes };
   // class times at the gym (made up here; the real ones come from GoodLife's timetable): pick one, then it goes on the calendar
   if (/\b(yoga|class|classes)\b/i.test(q) && /calendar/i.test(q)) {
     await runChange('add_event', { title: 'Yoga · GoodLife Queenston', date: dayKey(), time: '19:45', end_time: '20:45' }, changes, {}, true);

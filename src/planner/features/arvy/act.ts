@@ -4,10 +4,13 @@
 //   Bigger ones wait for a Confirm card: calendar events, removing anything, money.
 //   The schedule too: one day reshaped (a block skipped, a time moved, a block added: straight away, with an Undo) or
 //   the standing routine changed (after Confirm).
+//   An email to send (email_send) is a change too, and the one that can't be undone: it always waits for Confirm, the
+//   card shows who it goes to, the subject and the whole text, and the tap is what sends it.
 // The same functions and doc shapes as the screens; after a change, screens holding a copy reload (lib/docs docsChanged).
 import { calendarKey, dayKey, docsChanged, getDoc, getDocs, putDocs } from '../../lib/docs';
 import { estimateFoodText } from '../../lib/ai';
 import { getPass } from '../../lib/auth';
+import { isDemo } from '../../lib/app';
 import { uid } from '../../ui/primitives';
 import { loadList, addLines } from '../shop/store';
 import type { ShopItem } from '../shop/types';
@@ -29,11 +32,16 @@ import { findExercise } from '../workout/library';
 import { adjustWords, blocks, clock, loadRoutine, mergeAdjust, saveRoutine, SKIPPABLE, type AddedBlock, type AdjustTime, type DayAdjust, type Routine } from '../../lib/routine';
 import { autoMark } from '../habits/auto';
 import type { Budget } from '../money/types';
+import { mailboxes, MailProblem, pickMailbox, readMail, sendMail } from '../mail/mail';
+import { cleanDraft, isMessageId, replySubject, type MailRead } from '../../../../supabase/functions/planner-mail/mail';
+import { sendLines } from './email';
 
 type AnyIn = Record<string, unknown>;
 /** A change Arvy worked out. `lines` say exactly what will happen (shown under the reply). */
 export interface Change { kinds: string[]; lines: string[]; confirm: boolean; apply: () => Promise<Undo>;
-  /** set by apply when the change opens a screen (a workout started now) */ go?: { to: string; state?: unknown } }
+  /** set by apply when the change opens a screen (a workout started now) */ go?: { to: string; state?: unknown };
+  /** can't be taken back once made (an email sent): no Undo is offered */ final?: boolean;
+  /** what the card says under it once it's made, when the tick alone wouldn't say ("Sent.") */ doneNote?: string }
 export type Undo = () => Promise<void>;
 /** The request can't be done as asked: Arvy explains. `miss` = nothing matched the name given (worth a look in the log). */
 export class Refuse extends Error { constructor(message: string, public miss = false) { super(message); } }
@@ -684,6 +692,39 @@ async function planWorkout(input: AnyIn): Promise<Change> {
   };
 }
 
+// ───────────── their email: one to send (TOOLS_VERSION 7) ─────────────
+/** An email to send from one of their mailboxes: a new one, or an answer to one Arvy read. Worked out in full here
+ *  (which mailbox, who to, the subject, every word), shown on the Confirm card, and sent by the tap, exactly as shown.
+ *  An answer with nobody named goes to whoever wrote the email, with its subject. Nothing is sent from here. */
+async function sendEmail(input: AnyIn): Promise<Change> {
+  const { mailboxes: all } = await mailboxes();
+  if (!all.length) throw new Refuse('No mailbox is connected yet. They can connect one in Settings, Email.');
+  const pick = pickMailbox(all, input.mailbox);
+  if (!pick) throw new Refuse(`None of their mailboxes matches “${str(input.mailbox, 60)}”. They have: ${all.map(m => m.address).join(', ')}.`, true);
+  if (Array.isArray(pick)) throw new Refuse(`Which mailbox should it go from: ${pick.map(m => m.address).join(' or ')}?`);
+  const box = pick;
+  if (box.needsSignIn) throw new Refuse(`The sign-in for ${box.address} has run out: it has to be connected again in Settings, Email.`);
+  if (!box.canSend) throw new Refuse(`${box.address} wasn’t given permission to send. Disconnecting it and connecting it again in Settings, Email fixes that (tick both boxes on Google’s page).`);
+  const asked = input.reply_to_id;
+  if (asked !== undefined && asked !== null && asked !== '' && !isMessageId(asked)) throw new Refuse('That isn’t an email I can answer: look at the inbox again and use the id it gives.');
+  const replyTo = isMessageId(asked) ? asked : undefined;
+  let answering: MailRead | undefined;
+  if (replyTo) {
+    try { answering = await readMail(box.id, replyTo); }
+    catch (e) { if (e instanceof MailProblem) throw new Refuse(e.message); throw e; }
+  }
+  const to = (Array.isArray(input.to) ? input.to : typeof input.to === 'string' ? [input.to] : []).filter(Boolean);
+  const draft = cleanDraft({ to: to.length ? to : answering?.answerTo ? [answering.answerTo] : [], subject: str(input.subject, 200) || (answering ? replySubject(answering.subject) : ''), body: input.body });
+  if ('problem' in draft) throw new Refuse(draft.problem);
+  return {
+    kinds: [], confirm: true, final: true, doneNote: isDemo() ? 'Not sent: nothing leaves the demo.' : 'Sent.', lines: sendLines({ from: box.address, draft, ...(answering ? { answering } : {}) }),
+    apply: async () => {
+      await sendMail({ mailbox: box.id, to: draft.to, subject: draft.subject, body: draft.body, ...(replyTo ? { replyTo } : {}) });
+      return async () => { throw new Error('An email that has been sent can’t be taken back.'); };
+    },
+  };
+}
+
 /** Work out a change. Throws Refuse with a reason when it can't be done as asked. null = not a change tool. */
 export async function prepare(name: string, input: AnyIn): Promise<Change | null> {
   switch (name) {
@@ -713,6 +754,7 @@ export async function prepare(name: string, input: AnyIn): Promise<Change | null
     case 'plan_workout': return planWorkout(input);
     case 'adjust_day': return adjustDay(input);
     case 'change_routine': return changeRoutine(input);
+    case 'email_send': return sendEmail(input);
     default: return null;
   }
 }

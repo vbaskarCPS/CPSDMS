@@ -75,7 +75,7 @@ describe('what Arvy is offered in the shared chat', () => {
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: '{}' }] }];
     const names = (chat: boolean) => (cleanMessages(raw, 'morning', false, chat)![1].content as { name?: string }[]).map(b => b.name);
     expect(names(true)).toEqual(['calendar']);
-    expect(names(false)).toEqual(['cycle', 'calendar', 'remember']);
+    expect(names(false).filter(n => !/^email_/.test(n || ''))).toEqual(['cycle', 'calendar', 'remember']);   // in her own chat they stay (and email_read too, once Arvy has it)
   });
   it('the notes about a person and the cycle tracker are taken out of a look-up’s answer', () => {
     expect(CHAT_HIDDEN).toEqual(['about_me_notes_oldest_first', 'cycle']);
@@ -107,6 +107,7 @@ describe('what Arvy is told in the shared chat', () => {
   });
   it('email never; every change waits for a tap, and it says who can confirm what', () => {
     expect(s).toMatch(/Email is never read or sent from this chat\. If asked about email here, say you only do that in your own chat/);
+    expect(s).not.toMatch(/email_inbox|email_read|email_send/);   // nothing about how to read or send email is told there, whether or not Arvy has those tools
     expect(s).toMatch(/Nothing is added or changed by you here: every change waits for a tap/);
     expect(s).toMatch(/never say “added” or “done”/);
     expect(s).toMatch(/Shopping items and a calendar event can be confirmed by either of them/);
