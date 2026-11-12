@@ -12,6 +12,7 @@ import { IconsTile } from '../features/icons';
 import { ArrangeTile } from '../features/widgets';
 import { MailTile } from '../features/mail';
 import { SoundsTile } from '../features/sounds';
+import { WatchTile } from '../features/watch';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
@@ -102,6 +103,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
       <ArrangeTile />
 
       <MailTile />
+
+      <WatchTile />
 
       <MemoryCard />
 
