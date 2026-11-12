@@ -34,6 +34,7 @@ import { IconsScreen } from './features/icons';
 import { ArrangeToday } from './features/widgets';
 import { MailSettings } from './features/mail';
 import { SoundsScreen } from './features/sounds';
+import { WatchSettings } from './features/watch';
 import './features/shop/shop.css';
 import './features/calendar/calendar.css';
 
@@ -123,6 +124,7 @@ export function PlannerApp() {
         <Route path="/settings/icons" element={<IconsScreen pass={pass} />} />
         <Route path="/settings/mail" element={<MailSettings />} />
         <Route path="/settings/sounds" element={<SoundsScreen />} />
+        <Route path="/settings/watch" element={<WatchSettings />} />
         <Route path="/us" element={<OpenUs />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
