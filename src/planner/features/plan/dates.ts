@@ -27,6 +27,18 @@ export const monthKey = (d = new Date()): string => `${d.getFullYear()}-${String
 export const monthRange = (d = new Date()): [string, string] => [`${monthKey(d)}-01`, `${monthKey(d)}-31`];
 export const shiftMonth = (d: Date, n: number): Date => new Date(d.getFullYear(), d.getMonth() + n, 1);
 
+/** The sauna timer has run out and the sauna isn't ticked: the time it ended ('HH:MM', the phone's clock), so it can
+ *  be ticked for you (Vijay, 12 Nov: "I keep forgetting to check off the sauna"). Null while it's still on, when it's
+ *  already ticked, never started, or the sauna is off today. */
+export function saunaDue(start: string | undefined, ticked: string | undefined, saunaMin: number, now: number): string | null {
+  if (!start || ticked || !(saunaMin > 0)) return null;
+  const s = Date.parse(start);
+  if (!Number.isFinite(s)) return null;
+  const end = s + saunaMin * 60_000;
+  if (now < end) return null;
+  const e = new Date(end);
+  return `${String(e.getHours()).padStart(2, '0')}:${String(e.getMinutes()).padStart(2, '0')}`;
+}
 export const nowHM = (): string => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
 /** Up by the wake target plus the grace? (ticks.up is the time the "Up" block was ticked.) A day whose plan was

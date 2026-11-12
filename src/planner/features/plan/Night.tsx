@@ -8,7 +8,7 @@ import { reflect } from '../../lib/ai';
 import { clock, routineMin, routineMinutes } from '../../lib/routine';
 import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Page, Header, Card, Button, Prompt, Score, Input, useToast } from '../../ui/primitives';
-import { addDays, nowHM, sleepEstimate } from './dates';
+import { addDays, nowHM, saunaDue, sleepEstimate } from './dates';
 import { beep } from './sound';
 import { MissedBedtime, isMorningHours } from './MissedBedtime';
 import { autoMark } from '../habits/auto';
@@ -44,6 +44,8 @@ export function Night() {
   const saunaLeft = day.night.saunaStart ? routine.saunaMin * 60 - Math.floor((now - new Date(day.night.saunaStart).getTime()) / 1000) : 0;
   const saunaHit = useRef(false);
   useEffect(() => { if (day.night.saunaStart && !day.ticks.sauna && saunaLeft <= 0 && !saunaHit.current) { saunaHit.current = true; beep(); } }, [saunaLeft, day.night.saunaStart, day.ticks.sauna]);
+  const saunaEnded = saunaDue(day.night.saunaStart, day.ticks.sauna, routine.saunaMin, now);   // ran out: ticked for you
+  useEffect(() => { if (saunaEnded) { set(d => (d.ticks.sauna ? d : { ...d, ticks: { ...d.ticks, sauna: saunaEnded } })); void autoMark('sauna', true); } }, [saunaEnded]); // eslint-disable-line react-hooks/exhaustive-deps
   const overCap = capSec > 0 && unwindSec >= capSec;
   useEffect(() => {
     if (unwinding && overCap && !capHit.current) { capHit.current = true; beep(); }
