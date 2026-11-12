@@ -46,7 +46,7 @@ describe('asking Arvy', () => {
     expect(t.sources).toEqual([{ title: 'Banana bread', url: 'https://bake.example/banana' }]);
     expect(t.choices).toEqual([{ label: '1. Gentle', send: 'Build option 1' }, { label: '2. Core' }]);
     expect(t.used).toEqual(['web_search']);
-    expect(invoke.mock.calls[0][0].context.v).toBe(6);   // the tools this app can run: find_place and our_chat came with 6
+    expect(invoke.mock.calls[0][0].context.v).toBe(7);   // the tools this app can run: find_place and our_chat came with 6, their email with 7
   });
   it('a reply that cites nothing still shows the pages the search found; cited pages win when there are any', async () => {
     const FOUND = [1, 2, 3, 4, 5].map(i => ({ title: `Page ${i}`, url: `https://site${i}.example/` }));

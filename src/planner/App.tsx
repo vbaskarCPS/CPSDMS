@@ -32,6 +32,7 @@ import { DecorLayer } from './features/decor/Layer';
 import { Stickers } from './features/decor/Stickers';
 import { IconsScreen } from './features/icons';
 import { ArrangeToday } from './features/widgets';
+import { MailSettings } from './features/mail';
 import './features/shop/shop.css';
 import './features/calendar/calendar.css';
 
@@ -119,6 +120,7 @@ export function PlannerApp() {
         <Route path="/settings/look" element={<Studio pass={pass} />} />
         <Route path="/settings/stickers" element={<Stickers pass={pass} />} />
         <Route path="/settings/icons" element={<IconsScreen pass={pass} />} />
+        <Route path="/settings/mail" element={<MailSettings />} />
         <Route path="/us" element={<OpenUs />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

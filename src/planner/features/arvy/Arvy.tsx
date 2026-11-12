@@ -9,6 +9,8 @@
 // an appointment off it and sets it up for the calendar, and whatever it sets up from a picture waits for Confirm.
 // A place Arvy looked up on Google Maps gets real buttons under the reply: Call, Website or Book online, Directions.
 // They're kept with the chat, like the links to where a reply read.
+// An email Arvy wrote (features/arvy/email.ts) is a Confirm card like any other, with who it goes to, the subject and
+// every line of it; Confirm sends it, and the card then says "Sent." with no Undo.
 // Arvy is the coach too: screens open it with openArvy() (Train's "Ask Arvy"), and on the Train screens it offers
 // coaching questions. A thumbs-down under a reply, an Undo, or an error goes in Arvy's improvements log (log.ts).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
@@ -91,6 +93,7 @@ function ChangeCard({ c, onAct }: { c: ChangeView; onAct: (id: string, what: 'co
       {state === 'done' && canUndo(c.id) && (
         <button type="button" className="arvy-undo" disabled={working} onClick={() => act('undo')}><Undo2 aria-hidden />Undo</button>)}
       {NOTE[state] && <div className="arvy-change-note">{NOTE[state]}</div>}
+      {state === 'done' && c.doneNote && <div className="arvy-change-note">{c.doneNote}</div>}
     </div>
   );
 }
