@@ -6,10 +6,10 @@ import { dayKey, getDoc, getDocs, putDoc } from '../../lib/docs';
 import type { Habit, HabitLog } from './types';
 import { habitTicked } from './ticked';
 
-export type AutoTrigger = 'wake' | 'brief' | 'daycare' | 'fast' | 'dinner' | 'gym' | 'sauna' | 'review' | 'shake' | 'lightsOut';
+export type AutoTrigger = 'wake' | 'brief' | 'daycare' | 'fast' | 'dinner' | 'gymStart' | 'gym' | 'sauna' | 'review' | 'shake' | 'lightsOut';
 export const AUTO_LABELS: Record<AutoTrigger, string> = {
   wake: 'I tick "I\'m up"', brief: 'the Bed/Morning Brief is finished', daycare: '(retired) daycare was ticked', fast: 'dinner is ticked with no food before the window',
-  dinner: 'dinner is ticked', gym: 'a workout is completed', sauna: 'the sauna is ticked', review: 'the day review is filled in (3 lines)', shake: 'the shake is ticked', lightsOut: 'lights out / in bed is ticked',
+  dinner: 'dinner is ticked', gymStart: 'Start workout is pressed in Training', gym: 'a workout is completed', sauna: 'the sauna is ticked', review: 'the day review is filled in (3 lines)', shake: 'the shake is ticked', lightsOut: 'lights out / in bed is ticked',
 };
 
 /** Mark (on) or clear (off) today's log for every habit with this trigger. Quiet on failure.

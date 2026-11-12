@@ -14,6 +14,7 @@ import { DonePanel } from './DonePanel';
 import { COACH_ASKS, openArvy } from '../arvy/arvy';
 import { useDocsChanged } from '../../lib/useDocsChanged';
 import { ExerciseSheet } from './ExerciseSheet';
+import { autoMark } from '../habits/auto';
 
 export function useUnits(pass: PlannerPass): Units { return pass.user.settings.units === 'kg' ? 'kg' : 'lb'; }
 
@@ -58,6 +59,7 @@ export function WorkoutHome({ pass }: { pass: PlannerPass }) {
     setStarting(true);
     const w = t ? startFromTemplate(t, workouts, units, custom) : emptyWorkout();
     await saveWorkout(w);
+    void autoMark('gymStart', true, w.date);   // a habit set to tick itself when Start workout is pressed
     nav(`/workout/live/${w.id}`, { state: { key: workoutKey(w) } });
   };
 
@@ -171,6 +173,7 @@ export function WorkoutTodayCard({ pass }: { pass: PlannerPass }) {
     if (!tpl) { nav('/workout'); return; }
     const w = startFromTemplate(tpl, workouts, units, custom);
     await saveWorkout(w);
+    void autoMark('gymStart', true, w.date);
     nav(`/workout/live/${w.id}`);
   };
 
