@@ -3,7 +3,8 @@
 // with no word under it: its circle carries the planner's mark, RV with a sparkle (RvMark). A tap opens
 // the chat panel and closes it again; held down, it opens the chat already listening, so you can just talk.
 // Dragged up, RV offers two things: let go to the left for Arvy, to the right for the chat between the two of them
-// (features/us). A dot on RV says the other one has written.
+// (features/us). Held there on one side for two seconds, that one opens listening: talk instead of type.
+// A dot on RV says the other one has written.
 // Health and Lifestyle open their menu pages (screens/Hub.tsx).
 // Health and Wealth also take a drag: press, drag up and let go, and the camera opens: for a meal (Health) or a
 // receipt (Wealth). The photo lands on Add a meal / Add a receipt as if its own "Take a photo" had been tapped
@@ -18,7 +19,7 @@ import { Calls } from '../features/us/call/CallLayer';
 import { onUs, openUs, otherName, setUsOpen, startUs, usIsOpen, usUnread, usVersion } from '../features/us/us';
 import { PlaceIcon } from '../features/icons';
 import { giveShot, SHOT_TO, type ShotKind } from '../lib/quickShot';
-import { groupOf, NAV_TO, pull, PULL_SLOP, RV_HOLD_MS, RV_HOLD_SLOP, SHOTS, type NavGroup } from './nav';
+import { groupOf, NAV_TO, pull, PULL_SLOP, RV_HOLD_MS, RV_HOLD_SLOP, RV_VOICE_MS, SHOTS, type NavGroup } from './nav';
 import { RvMark } from './RvMark';
 import { startSounds } from '../features/sounds/store';
 
@@ -98,7 +99,8 @@ function RvButton() {
   const dragging = useRef(false);
   const side = useRef<'arvy' | 'us' | null>(null);   // which one letting go would open
   const [drag, setDrag] = useState<{ up: number; right: boolean } | null>(null);
-  const stop = () => { window.clearTimeout(timer.current); from.current = null; dragging.current = false; side.current = null; setDrag(null); };
+  const voice = useRef(0);   // dragged to one side and held there: after RV_VOICE_MS that one opens listening
+  const stop = () => { window.clearTimeout(timer.current); window.clearTimeout(voice.current); from.current = null; dragging.current = false; side.current = null; setDrag(null); };
   const p = drag ? pull(drag.up) : null;
   return (
     <button type="button" className={`pl-nav__rv ${open ? 'is-open' : ''} ${hearing ? 'is-hearing' : ''}`} aria-expanded={open}
@@ -125,7 +127,17 @@ function RvButton() {
           if (!dragging.current) return;
         }
         const to = pull(up).armed ? (across < 0 ? 'arvy' as const : 'us' as const) : null;
-        if (to && to !== side.current) { try { navigator.vibrate?.(12); } catch { /* no buzz on this phone */ } }
+        if (to !== side.current) {
+          window.clearTimeout(voice.current);
+          if (to) {
+            try { navigator.vibrate?.(12); } catch { /* no buzz on this phone */ }
+            voice.current = window.setTimeout(() => {
+              stop(); held.current = true;
+              try { navigator.vibrate?.([20, 40, 20]); } catch { /* no buzz on this phone */ }
+              if (to === 'us') openUs({ mic: true }); else openArvy({ mic: true });
+            }, RV_VOICE_MS);
+          }
+        }
         side.current = to;
         setDrag({ up, right: across >= 0 });
       }}
@@ -143,8 +155,8 @@ function RvButton() {
       <i aria-hidden>{hearing ? <Mic /> : open ? <X /> : <RvMark />}{(unread > 0 || news) && !open && <b className="pl-nav__dot" />}</i>
       {p && drag && (
         <span className="pl-nav__picks" style={{ '--lift': p.lift } as CSSProperties} aria-hidden>
-          <span className={p.armed && !drag.right ? 'is-armed' : ''}><Sparkles /> Arvy</span>
-          <span className={p.armed && drag.right ? 'is-armed' : ''}><MessagesSquare /> {other}</span>
+          <span className={p.armed && !drag.right ? 'is-armed' : ''}><Sparkles /> Arvy{p.armed && !drag.right && <small className="pl-nav__talk"><Mic /> hold to talk</small>}</span>
+          <span className={p.armed && drag.right ? 'is-armed' : ''}><MessagesSquare /> {other}{p.armed && drag.right && <small className="pl-nav__talk"><Mic /> hold to talk</small>}</span>
         </span>)}
     </button>
   );

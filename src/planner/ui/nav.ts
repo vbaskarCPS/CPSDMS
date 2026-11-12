@@ -43,3 +43,5 @@ export function pull(up: number): { lift: number; armed: boolean } {
 /** RV held down this long (ms) opens Arvy listening; a shorter press is a tap. The finger may wander this far (px). */
 export const RV_HOLD_MS = 400;
 export const RV_HOLD_SLOP = 14;
+/** RV dragged up to one side and held there this long (ms): that one opens listening, to talk instead of type. */
+export const RV_VOICE_MS = 2000;

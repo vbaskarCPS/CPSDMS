@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-12-voice-drag", "date": "2026-11-12", "title": "Talk instead of typing, and room to think",
+    "lines": ["Drag RV up to Arvy or to the chat and hold it there for two seconds: it opens listening, so you can just talk.", "In the chat, what you say goes into the message box. Tap Send when it’s right. There’s a mic button there too.", "Talking now waits for a pause of two and a half seconds before it decides you’ve finished."] },
   { "id": "2026-11-12-habit-start-workout", "date": "2026-11-12", "title": "Your gym habit ticks itself at Start workout",
     "lines": ["A habit can now tick itself when you press Start workout in Training, the same moment your race timer stops.", "“Get to the gym and do the first set” is set up that way already.", "Throw the session away and the tick comes off again."] },
   { "id": "2026-11-12-race-start-workout", "date": "2026-11-12", "title": "Your race now finishes at Start workout", "for": "night",

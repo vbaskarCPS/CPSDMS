@@ -142,6 +142,8 @@ body:has(.wo-rest) .pl-nav__rv.is-hearing i { animation: none; }
 .pl-nav__picks { position: absolute; left: 50%; bottom: calc(100% + var(--rv-rise) + 6px); z-index: 2; display: flex; gap: 8px; pointer-events: none; transform: translate(-50%, calc(var(--lift, 0) * -30px)) scale(calc(.9 + var(--lift, 0) * .1)); animation: plFade .15s ease-out; }
 .pl-nav__picks > span { display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: 999px; white-space: nowrap; font: 700 13px/1 var(--sans); letter-spacing: 0; background: var(--bg-2); color: var(--ink); border: 1.5px solid var(--line); box-shadow: 0 8px 22px rgba(16, 28, 58, .22); }
 .pl-nav .pl-nav__picks svg { width: 17px; height: 17px; }
+.pl-nav__talk { display: inline-flex; align-items: center; gap: 3px; margin-left: 4px; font: 600 11px/1 var(--sans); opacity: .85; }
+.pl-nav .pl-nav__picks .pl-nav__talk svg { width: 12px; height: 12px; }
 .pl-nav__picks > span.is-armed { background: var(--accent); color: var(--accent-ink); border-color: transparent; box-shadow: 0 0 0 3px var(--amber), 0 10px 24px rgba(16, 28, 58, .3); }
 /* the other one has written */
 .pl-nav__dot { position: absolute; top: -1px; right: -1px; width: 13px; height: 13px; border-radius: 50%; background: var(--bad, #d43c3c); box-shadow: 0 0 0 2.5px var(--bg-2); }
