@@ -13,12 +13,13 @@ import { usePlanLine } from '../features/plan';
 import { useHabitsLine } from '../features/habits';
 import { useCalendarLine } from '../features/calendar';
 import { useShopLine } from '../features/shop';
+import { PlaceIcon, placeAt } from '../features/icons';
 
 /** `line` = today's headline for the section; null while it loads. */
 function Tile({ to, Icon, name, line }: { to: string; Icon: LucideIcon; name: string; line: string | null }) {
   return (
     <Link to={to} className="hub-tile">
-      <span className="hub-tile__icon"><Icon aria-hidden /></span>
+      <span className="hub-tile__icon"><PlaceIcon place={placeAt(to)} line={Icon} /></span>
       <span className="hub-tile__text"><b>{name}</b><small>{line ?? '…'}</small></span>
       <ChevronRight aria-hidden className="hub-tile__go" />
     </Link>

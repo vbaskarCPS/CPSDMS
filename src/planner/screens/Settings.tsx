@@ -1,11 +1,14 @@
-// src/planner/screens/Settings.tsx — my routine (the times the day runs on), units, PIN, sign out.
+// src/planner/screens/Settings.tsx — the Theme Studio's door, my routine (the times the day runs on), units, PIN, sign out.
 import { useEffect, useState, type FormEvent } from 'react';
 import { loadRoutine, routineNow, saveRoutine, type Routine } from '../lib/routine';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, ListChecks, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListChecks, Palette, Sparkles } from 'lucide-react';
 import { changePin, saveSettings, signOut, type PlannerPass } from '../lib/auth';
 import { PushCard } from '../ui/PushCard';
 import { MemoryCard } from '../ui/MemoryCard';
+import { Sticker } from 'lucide-react';
+import { IconsTile } from '../features/icons';
+import { ArrangeTile } from '../features/widgets';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
@@ -55,6 +58,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
         <h1>Settings</h1>
       </header>
 
+      <Link className="pl-tile" to="/settings/look"><Palette aria-hidden /><div className="pl-grow"><b>Theme Studio</b><small>Looks, backgrounds, shapes and type</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
+
       <form className="pl-card pl-stack" onSubmit={saveR}>
         <h3>My routine</h3>
         <p className="pl-muted" style={{ fontSize: 13 }}>{morningP
@@ -90,11 +95,16 @@ export function Settings({ pass }: { pass: PlannerPass }) {
 
       {morningP && <Link className="pl-tile" to="/setup"><Sparkles aria-hidden /><div className="pl-grow"><b>Set up my day again</b><small>The four short steps: your times, habits, last period, reminders</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>}
 
+      <Link className="pl-tile" to="/settings/stickers"><Sticker aria-hidden /><div className="pl-grow"><b>Stickers</b><small>Decorate your pages like a scrapbook</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
+      <ArrangeTile />
+
       <MemoryCard />
 
       <Link className="pl-tile" to="/settings/arvy-log"><ListChecks aria-hidden /><div className="pl-grow"><b>Arvy’s log</b><small>What Arvy couldn’t do or got wrong, and the fixes on the way</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
 
       <PushCard />
+
+      <IconsTile />
 
       <form className="pl-card pl-stack" onSubmit={save}>
         <label className="pl-field">

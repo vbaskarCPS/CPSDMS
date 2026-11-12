@@ -52,6 +52,14 @@ describe('the Benny’s tools', () => {
         'how much cash should Nathan have', 'what’s on route PCQ64', 'is 3575 Latimer done', 'Show me where the prebooks in Surrey are', 'is the day closed', 'any updates on Tim'])
         expect(needsMain(q), q).toBeNull();
     });
+    it('nor is a question about pace, or about how to run the day', () => {
+      // whichever reason it gives, the small model isn't tried
+      for (const q of ['compared to other days is this a good start or bad start', 'is this a good start or a bad start', 'should I move Kyle to another route']) expect(needsMain(q), q).not.toBeNull();
+      for (const q of ['are we behind today', 'where will we finish', 'how do I get the slow carts going',
+        'what would you do with the rookies', 'how many knocks does Mugove have', 'is the team on track', 'doors per sale today', 'what is your strategy for a dead route'])
+        expect(needsMain(q), q).toBe('judge');
+      expect(FAST_TOOLS).not.toContain('pace');
+    });
     it('every number in its answer has to be in what the lookups returned', () => {
       const ok = '2 workers on today’s list aren’t marked as showed:\n- Nathan Clark (I1002): worked 9 of 11 days, last on 11-10.\n- Steven Doherty (I1169): worked 3 of 10 days, last on 2026-11-04.\n15 are on the list.';
       expect(ungrounded(ok, [lookup], lengths)).toEqual([]);
@@ -85,6 +93,28 @@ describe('the Benny’s tools', () => {
       expect(fastAnswerStop('Today is 2026-11-10 and 2 didn’t show.', [lookup], chat, lengths)).toBeNull();   // today's date is known without a lookup
     });
   });
+  describe('pace and strategy', () => {
+    const ctx = { center_id: 'c1', today: '2026-11-11' };
+    it('the pace lookup is for super admins and route managers, and reads the map that is open', () => {
+      expect(toolsFor('admin').map(x => x.name)).toContain('pace'); expect(toolsFor('rm').map(x => x.name)).toContain('pace');
+      expect(toolCall('pace', {}, ctx)).toEqual({ fn: 'benny_pace', args: { p_center: 'c1', p_manager: null, p_worker: null, p_date: null, p_at: null } });
+      expect(toolCall('pace', { worker: ' Kyle ', date: '2026-11-05', at: '9:30' }, { ...ctx, screen: 'rm', rm_manager: 'rm_franklynmitchell' }))
+        .toEqual({ fn: 'benny_pace', args: { p_center: 'c1', p_manager: 'rm_franklynmitchell', p_worker: 'Kyle', p_date: '2026-11-05', p_at: '9:30' } });
+      expect(toolCall('pace', { at: '25:00', date: 'tomorrow' }, ctx)).toEqual({ fn: 'benny_pace', args: { p_center: 'c1', p_manager: null, p_worker: null, p_date: null, p_at: null } });
+      expect(toolCall('pace', {}, { ...ctx, screen: 'rm', rm_manager: 'floater_basvi', following: ['rm_a', 'rm_b'] })).toMatchObject({ args: { p_manager: 'floater_basvi,rm_a,rm_b' } });
+    });
+    it('the Benny gives the numbers, says what the times are, and asks before it gives a view', () => {
+      for (const role of ['admin', 'rm'] as const) {
+        const r = rules(role);
+        expect(r).toContain('the times are when a knock or a job was ENTERED in the app');
+        expect(r).toContain('give both, each as "if ...", never as one forecast');
+        expect(r).toContain('ask one or two short questions about their approach that would change the answer');
+        expect(r).toContain('Never give one right way, never judge a worker\'s character, never invent a fact about anyone.');
+        expect(r).toContain('- Knock: a door a worker went to and tapped in the app with no sale');
+      }
+    });
+  });
+
   describe('what is logged comes back as “it’s live”', () => {
     it('the Benny says it will tell them here, for a bug and for a request it couldn’t do', () => {
       for (const role of ['admin', 'rm'] as const) {

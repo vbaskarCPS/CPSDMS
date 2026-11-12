@@ -16,6 +16,7 @@ import { arvyHasNews, arvyIsHearing, arvyIsOpen, onArvyChange, openArvy, primeVo
 import { Us } from '../features/us/Us';
 import { Calls } from '../features/us/call/CallLayer';
 import { onUs, openUs, otherName, setUsOpen, startUs, usIsOpen, usUnread, usVersion } from '../features/us/us';
+import { PlaceIcon } from '../features/icons';
 import { giveShot, SHOT_TO, type ShotKind } from '../lib/quickShot';
 import { groupOf, NAV_TO, pull, PULL_SLOP, RV_HOLD_MS, RV_HOLD_SLOP, SHOTS, type NavGroup } from './nav';
 import { RvMark } from './RvMark';
@@ -71,7 +72,7 @@ function ShotTab({ t, active, shot, onShoot }: { t: Tab; active: boolean; shot: 
       onPointerCancel={stop}
       onClick={e => { if (dragged.current) { e.preventDefault(); dragged.current = false; } }}
       onContextMenu={e => e.preventDefault()}>
-      <t.Icon aria-hidden /> {t.label}
+      <PlaceIcon place={t.group} line={t.Icon} /> {t.label}
       {p && (
         <span className={`pl-nav__pull ${p.armed ? 'is-armed' : ''}`} style={{ '--lift': p.lift } as CSSProperties} aria-hidden>
           {p.armed ? <Camera /> : <ChevronsUp />}{shot.label}
@@ -165,7 +166,7 @@ export function Shell({ children }: { children: ReactNode }) {
     if (shot) return <ShotTab key={t.group} t={t} active={here === t.group} shot={shot} onShoot={shoot} />;
     return (
       <Link key={t.group} to={NAV_TO[t.group]} className={here === t.group ? 'active' : ''} aria-current={here === t.group ? 'page' : undefined}>
-        <t.Icon aria-hidden /> {t.label}
+        <PlaceIcon place={t.group} line={t.Icon} /> {t.label}
       </Link>
     );
   };

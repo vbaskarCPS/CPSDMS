@@ -5,6 +5,7 @@ import { useDocsChanged } from '../../lib/useDocsChanged';
 import { addDays, type Logs } from './streak';
 import type { Habit, HabitLog, HabitMark } from './types';
 import { seedHabitsIfEmpty } from './seed';
+import { habitTicked } from './ticked';
 
 export const LOG_DAYS = 84;
 
@@ -41,7 +42,7 @@ export function useHabits() {
       if (m) next[habitId] = m; else delete next[habitId];
       return { ...prev, [key]: next };
     });
-    try { await putDoc('habitlog', key, next); }
+    try { await putDoc('habitlog', key, next); habitTicked(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Could not save'); void reload(); }
   }, [today, reload]);
 
