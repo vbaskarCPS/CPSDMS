@@ -360,6 +360,30 @@ describe('Arvy changes', () => {
     expect(off.lines).toContain('Routine, every day: Eating window on → off');
   });
 
+  it('a reminder switched off for good keeps the block in the day; Confirm, then undo puts it back', async () => {
+    const routine = await import('../../lib/routine');
+    routine.setProfile('morning'); routine.setProfile('night');
+    const c = (await prepare('change_routine', { reminders_off: ['sauna'] }))!;
+    expect(c.confirm).toBe(true);
+    expect(c.lines[0]).toBe('Reminder, every day: Sauna and the Brief (6:20 am) on → off (the block stays in the day)');
+    expect(c.lines[c.lines.length - 1]).toContain('Sauna');                  // the day still runs with the sauna
+    const undo = await c.apply();
+    expect((store.get('prefs|routine') as { quiet: string[]; wake: string })).toMatchObject({ quiet: ['sauna'], wake: '05:00' });
+    expect(routine.blocks(await routine.loadRoutine()).map(b => b.id)).toContain('sauna');
+    await expect(prepare('change_routine', { reminders_off: ['sauna'] })).rejects.toThrow(/already runs that way/);
+    const on = (await prepare('change_routine', { reminders_on: ['sauna'] }))!;
+    expect(on.lines[0]).toMatch(/Sauna and the Brief \(6:20 am\) off → on/);
+    await expect(prepare('change_routine', { reminders_off: ['nap'] })).rejects.toThrow(/no reminder called “nap”/);
+    await undo();
+    expect((await routine.loadRoutine()).quiet || []).toEqual([]);
+  });
+  it('Arvy is told that a reminder is not the block, and offered only real reminders', async () => {
+    const { REMINDER_NAMES } = await import('../../../../supabase/functions/planner-push/reminders');
+    const { REMINDER_IDS } = await import('../../../../supabase/functions/planner-arvy/tools');
+    expect([...REMINDER_IDS].sort()).toEqual(Object.keys(REMINDER_NAMES).sort());
+    expect(system({ name: 'Vijay' })).toContain('Removing a reminder is not skipping the block');
+  });
+
   it('a name that matches nothing is marked as a miss (it goes in the improvements log)', async () => {
     const e = await prepare('mark_habit', { habit: 'juggling' }).catch(x => x);
     expect(e).toBeInstanceOf(Refuse);

@@ -1,7 +1,7 @@
 // The routine reminders (supabase/functions/planner-push/reminders.ts), and how a day's own changes to the routine
 // (Day.adjust) change them: nothing for a skipped block, moved times, one for each block added to the day.
 import { describe, expect, it } from 'vitest';
-import { dueReminders, NIGHT_ROUTINE, MORNING_ROUTINE, plannerDayKey, reminders } from '../../../supabase/functions/planner-push/reminders';
+import { dueReminders, NIGHT_ROUTINE, MORNING_ROUTINE, plannerDayKey, reminderList, reminders } from '../../../supabase/functions/planner-push/reminders';
 
 // Toronto, 11 November 2026 (EST, UTC-5)
 const at = (h: number, m = 0) => new Date(Date.UTC(2026, 10, 11, h + 5, m));
@@ -53,5 +53,43 @@ describe('routine reminders', () => {
     expect(reminders(none, 'roshplanner')[0].url).toBe('/roshplanner/');
     expect(reminders(MORNING_ROUTINE, 'roshplanner')[0]).toMatchObject({ body: 'Morning. Stretch, breathe, move — then the Brief.', url: '/roshplanner/plan/morning' });
     expect(due(5, 30, {}, {}, { ...MORNING_ROUTINE, meditateMin: 0, workoutMin: 0 })).toEqual(['wake: Morning. Stretch, breathe, move — then the Brief.']);   // a stretch alone is still a routine
+  });
+});
+
+describe('a reminder switched off (Settings: no notification, the block stays)', () => {
+  const ids = (r: typeof NIGHT_ROUTINE, app: 'vijayplanner' | 'roshplanner' = 'vijayplanner', a?: Parameters<typeof reminders>[2]) => reminders(r, app, a).map(x => x.id);
+  it('each of his reminders can be switched off on its own', () => {
+    const all = ids(NIGHT_ROUTINE);
+    expect(all).toEqual(['wake', 'sauna', 'kitchen', 'window', 'lightsOut']);
+    for (const id of all) expect(ids({ ...NIGHT_ROUTINE, quiet: [id] })).toEqual(all.filter(x => x !== id));
+    expect(due(6, 20, {}, {}, { ...NIGHT_ROUTINE, quiet: ['sauna'] })).toEqual([]);
+    expect(ids({ ...NIGHT_ROUTINE, quiet: ['gym'] }, 'vijayplanner', { times: { gym: '17:00' } })).not.toContain('gym');   // the late-gym nudge too
+  });
+  it('and each of hers', () => {
+    for (const id of ['wake', 'evening', 'bed']) expect(ids({ ...MORNING_ROUTINE, quiet: [id] }, 'roshplanner')).toEqual(['wake', 'evening', 'bed'].filter(x => x !== id));
+  });
+  it('names that are not reminders are ignored, and an old routine without the list sends everything', () => {
+    expect(ids({ ...NIGHT_ROUTINE, quiet: ['nap', '', 'x:s1'] })).toEqual(ids(NIGHT_ROUTINE));
+    expect(ids({ ...NIGHT_ROUTINE, quiet: 'sauna' as unknown as string[] })).toEqual(ids(NIGHT_ROUTINE));
+    expect(ids({ ...NIGHT_ROUTINE, quiet: [3, null] as unknown as string[] })).toEqual(ids(NIGHT_ROUTINE));
+    const old: Record<string, unknown> = { ...NIGHT_ROUTINE }; delete old.quiet;
+    expect(ids(old as unknown as typeof NIGHT_ROUTINE)).toEqual(['wake', 'sauna', 'kitchen', 'window', 'lightsOut']);
+  });
+  it('a block added for the day keeps its reminder', () => {
+    const r = { ...NIGHT_ROUTINE, quiet: ['wake', 'sauna', 'kitchen', 'window', 'lightsOut', 's1', 'x:s1'] };
+    expect(ids(r, 'vijayplanner', sick.adjust)).toEqual(['x:s1', 'x:b1']);
+  });
+  it('the Settings list is the same reminders, by name and time, switched off ones included', () => {
+    const r = { ...NIGHT_ROUTINE, quiet: ['sauna'] };
+    expect(reminderList(r, 'vijayplanner')).toEqual([
+      { id: 'wake', name: 'Up', at: '05:00', on: true },
+      { id: 'sauna', name: 'Sauna and the Brief', at: '06:20', on: false },
+      { id: 'kitchen', name: 'Kitchen closes', at: '13:30', on: true },
+      { id: 'window', name: 'Eating window', at: '17:45', on: true },
+      { id: 'lightsOut', name: 'Lights out', at: '21:15', on: true },
+    ]);
+    expect(reminderList(r, 'vijayplanner').map(x => x.id)).toEqual(reminders({ ...r, quiet: [] }, 'vijayplanner').map(x => x.id));
+    expect(reminderList(MORNING_ROUTINE, 'roshplanner').map(x => `${x.name} ${x.at}`)).toEqual(['Up 05:30', 'Evening review 20:30', 'Lights out 20:50']);
+    expect(reminderList({ ...NIGHT_ROUTINE, lightsOut: '00:30' }, 'vijayplanner').slice(-1)[0].at).toBe('00:15');   // after midnight
   });
 });

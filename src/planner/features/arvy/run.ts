@@ -14,6 +14,7 @@ import { invoke } from '../../lib/ai';
 import { lifeContext } from '../../lib/lifeContext';
 import { logArvy } from './log';
 import { adjustWords, blocks, cleanAdjust, clock, loadRoutine } from '../../lib/routine';
+import { quietOf, REMINDER_NAMES } from '../../../../supabase/functions/planner-push/reminders';
 import { loadEvents } from '../calendar/store';
 import { eventsOn, WHO_LABEL, type CalEvent } from '../calendar/types';
 import { loadList } from '../shop/store';
@@ -85,6 +86,8 @@ async function todayOverview(input: AnyDoc) {
     routine_today: routine ? {
       blocks: blocks(routine, adjust).map(b => `${clock(b.at)}${b.until ? `–${clock(b.until)}` : ''} ${b.label}${b.added ? ` (added for the day${b.added.session ? ', the day’s training session' : ''}${b.added.done ? ', done' : ''})` : ''}`),
       changed_for_the_day: adjust ? { why: adjust.why, changes: adjustWords(adjust) } : 'no: it runs as the standing routine',
+      // reminders switched off every day (Settings, or change_routine reminders_off): the blocks still run
+      ...(quietOf(routine).size ? { reminders_off: [...quietOf(routine)].map(id => `${id} (${REMINDER_NAMES[id]})`) } : {}),
     } : undefined,
     priorities: (d.priorities || []).filter((p: AnyDoc) => p?.text).map((p: AnyDoc) => `${p.done ? '✓' : '○'} ${p.text}`),
     todos: (d.todos || []).filter((t: AnyDoc) => t?.text).map((t: AnyDoc) => `${t.done ? '✓' : '○'} ${t.time ? t.time + ' ' : ''}${t.text}${t.must ? ' (must)' : ''}`),

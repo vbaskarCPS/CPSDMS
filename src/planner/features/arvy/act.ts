@@ -32,6 +32,7 @@ import { findExercise } from '../workout/library';
 import { adjustWords, blocks, clock, loadRoutine, mergeAdjust, saveRoutine, SKIPPABLE, type AddedBlock, type AdjustTime, type DayAdjust, type Routine } from '../../lib/routine';
 import { autoMark } from '../habits/auto';
 import type { Budget } from '../money/types';
+import { quietOf, reminderList, REMINDER_NAMES } from '../../../../supabase/functions/planner-push/reminders';
 import { mailboxes, MailProblem, pickMailbox, readMail, sendMail } from '../mail/mail';
 import { cleanDraft, isMessageId, replySubject, type MailRead } from '../../../../supabase/functions/planner-mail/mail';
 import { sendLines } from './email';
@@ -293,10 +294,25 @@ async function changeRoutine(input: AnyIn): Promise<Change> {
     if (input.list_start === undefined) next.review = shiftTime(r.review, by);
   }
   if (next.lightsOut !== r.lightsOut) next.windDown = shiftTime(r.windDown, minsOf(next.lightsOut) - minsOf(r.lightsOut));
+  // a reminder off or on, every day: only the notification; the block stays in the day
+  const quiet = quietOf(r);
+  const names = (v: unknown) => (Array.isArray(v) ? v : []).filter((x): x is string => typeof x === 'string');
+  const bad = [...names(input.reminders_off), ...names(input.reminders_on)].filter(x => !(x in REMINDER_NAMES));
+  if (bad.length) throw new Refuse(`There’s no reminder called “${bad[0]}”.`);
+  for (const id of names(input.reminders_off)) quiet.add(id);
+  for (const id of names(input.reminders_on)) quiet.delete(id);
+  const quietLines: string[] = [];
+  if (input.reminders_off !== undefined || input.reminders_on !== undefined) {
+    const was = quietOf(r);
+    next.quiet = [...quiet];
+    const at = new Map(reminderList({ ...next, quiet: [] }, r.profile === 'morning' ? 'roshplanner' : 'vijayplanner').map(x => [x.id, x.at]));
+    for (const id of new Set([...was, ...quiet])) if (was.has(id) !== quiet.has(id))
+      quietLines.push(`Reminder, every day: ${REMINDER_NAMES[id]}${at.has(id) ? ` (${clock(at.get(id)!)})` : ''} ${quiet.has(id) ? 'on → off' : 'off → on'} (the block stays in the day)`);
+  }
 
   const show = (v: Routine[keyof Routine]) => (typeof v === 'boolean' ? (v ? 'on' : 'off') : typeof v === 'number' ? `${v} min` : v ? clock(String(v)) : 'none');
   const labels: [keyof Routine, string][] = [...ROUTINE_TIMES.map(([, f, l]) => [f, l] as [keyof Routine, string]), ...ROUTINE_MINS.map(([, f, l]) => [f, l] as [keyof Routine, string]), ['kitchenClose', 'Kitchen closes'], ['fast', 'Eating window']];
-  const lines = labels.filter(([f]) => next[f] !== r[f]).map(([f, l]) => `Routine, every day: ${l} ${show(r[f])} → ${show(next[f])}`);
+  const lines = [...labels.filter(([f]) => next[f] !== r[f]).map(([f, l]) => `Routine, every day: ${l} ${show(r[f])} → ${show(next[f])}`), ...quietLines];
   if (!lines.length) throw new Refuse('The routine already runs that way.');
   return {
     kinds: ['prefs', 'day'], confirm: true,
