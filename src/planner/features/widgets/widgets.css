@@ -1,5 +1,5 @@
 /* src/planner/features/widgets/widgets.css — the widgets a person adds to Today (countdown, note, mini calendar, habit
-   tracker), the one-line size of the planner's own cards, and the Arrange Today screen (/settings/widgets).
+   tracker, race timer and its last 30 days), the one-line size of the planner's own cards, and the Arrange Today screen (/settings/widgets).
    Every colour comes from the shared variables (planner.css), so whatever look is on, light or dark, carries through;
    each added widget is a .pl-card, so it takes the card's background, shape, border and shadow from the look as well.
    planner.css is loaded after this file: a rule here that changes what a shared class also sets names both classes. */
@@ -96,6 +96,76 @@
 .wg-week__dot.is-open { background: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
 .wg-week__dot.is-future { background: none; box-shadow: inset 0 0 0 1px var(--line); }
 
+/* race timer: the name and the best on top, a big clock, a thin bar that fills as the best gets used up */
+.pl-card.wg-race { display: flex; flex-direction: column; gap: 10px; }
+.wg-race__open { display: flex; flex-direction: column; gap: 4px; width: 100%; min-height: 44px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.wg-race__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wg-race__head > svg { flex: none; width: 20px; height: 20px; color: var(--accent); }
+.wg-race__title { flex: 1; min-width: 0; font-family: var(--serif); font-size: 18px; line-height: 1.2; overflow-wrap: anywhere; }
+.wg-race__best { flex: none; padding: 3px 9px; border-radius: 999px; background: color-mix(in srgb, var(--amber) 16%, transparent); color: var(--ink); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.wg-race__clock { display: flex; align-items: baseline; gap: 8px; }
+.wg-race__big { font-family: var(--serif); font-size: 54px; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.wg-race__big.is-long { font-size: 44px; }
+.wg-race.is-idle .wg-race__big { color: var(--ink-2); opacity: 0.6; }
+.wg-race__approx { font-size: 13px; color: var(--ink-2); }
+.wg-race__bar { display: block; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 10%, transparent); overflow: hidden; }
+.wg-race__bar i { display: block; height: 100%; border-radius: inherit; background: var(--good); transition: width 0.9s linear; }
+.wg-race.is-behind .wg-race__bar i { background: var(--bad); }
+.wg-race__line { position: relative; font-size: 15px; font-weight: 600; color: var(--ink-2); }
+.wg-race.is-ahead .wg-race__line { color: var(--good); }
+.wg-race.is-behind .wg-race__line { color: var(--bad); }
+.wg-race.is-best .wg-race__line { color: var(--amber-2); font-size: 17px; }
+.wg-race__more { font-size: 13px; line-height: 1.35; color: var(--ink-2); }
+.wg-race__acts { display: flex; gap: 8px; }
+.pl-btn.wg-race__go { min-height: 48px; flex: 1; }
+.wg-race__go svg { width: 18px; height: 18px; }
+.wg-race .pl-error { font-size: 12px; }
+/* a new best: a few sparks, once */
+.wg-race__burst { position: absolute; left: 30px; top: 50%; width: 0; height: 0; pointer-events: none; }
+.wg-race__burst i { position: absolute; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: var(--amber); opacity: 0; animation: wgSpark 1.1s ease-out 0.2s 1 both; }
+.wg-race__burst i:nth-child(1) { --dx: -34px; --dy: -22px; } .wg-race__burst i:nth-child(2) { --dx: -6px; --dy: -34px; background: var(--accent); }
+.wg-race__burst i:nth-child(3) { --dx: 26px; --dy: -26px; } .wg-race__burst i:nth-child(4) { --dx: 40px; --dy: 4px; background: var(--good); }
+.wg-race__burst i:nth-child(5) { --dx: -40px; --dy: 8px; background: var(--accent); } .wg-race__burst i:nth-child(6) { --dx: 12px; --dy: 24px; }
+@keyframes wgSpark { 0% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.4); } }
+.wg-race.is-best .wg-race__big { animation: wgPop 0.6s ease-out 1 both; }
+@keyframes wgPop { 0% { transform: scale(0.92); } 60% { transform: scale(1.05); } 100% { transform: none; } }
+.wg-race.is-small .wg-race__big { font-size: 34px; }
+.wg-race.is-small .wg-race__big.is-long { font-size: 27px; }
+.wg-race.is-small .wg-race__title { font-size: 15px; }
+.wg-race.is-small .wg-race__line { font-size: 13px; }
+.wg-race.is-small .wg-race__burst { display: none; }
+.wg-race.is-small .wg-race__acts { flex-direction: column; }
+
+/* the race's last 30 days */
+.wg-rh__chart { position: relative; display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 2px; align-items: end; height: 120px; padding-bottom: 1px; border-bottom: 1px solid var(--line); }
+.wg-rh__col { display: flex; align-items: flex-end; height: 100%; }
+.wg-rh__col i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.wg-rh__col.is-none i { height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.wg-rh__col.is-best i { background: var(--amber); }
+.wg-rh__col.is-approx i { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--accent) 55%, transparent) 0 3px, color-mix(in srgb, var(--accent) 22%, transparent) 3px 6px); }
+.wg-rh__col.is-approx.is-best i { background: repeating-linear-gradient(135deg, var(--amber) 0 3px, color-mix(in srgb, var(--amber) 40%, transparent) 3px 6px); }
+.wg-rh__avg { position: absolute; left: 0; right: 0; height: 0; border-top: 1.5px dashed var(--ink-2); pointer-events: none; }
+.wg-rh__axis { display: flex; justify-content: space-between; margin-top: -8px; font-size: 12px; }
+.wg-rh__stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.wg-rh__stats > div { display: flex; flex-direction: column; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; }
+.wg-rh__stats b { font-family: var(--serif); font-size: 22px; font-variant-numeric: tabular-nums; }
+.wg-rh__stats small { font-size: 12px; line-height: 1.25; }
+.wg-rh__key { font-size: 12px; line-height: 1.5; }
+.wg-rh__sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
+.wg-rh__sw.is-best { background: var(--amber); }
+.wg-rh__sw.is-approx { background: repeating-linear-gradient(135deg, var(--accent) 0 2px, transparent 2px 4px); }
+.wg-rh__list { margin: 0; padding: 0; list-style: none; }
+.wg-rh__list > li { border-top: 1px solid var(--line); }
+.wg-rh__row { display: flex; align-items: center; gap: 8px; min-height: 48px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.pl-chip.wg-rh__tag { min-height: 0; padding: 2px 8px; font-size: 12px; }
+.wg-rh__bin { flex: none; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; background: none; color: var(--ink-2); cursor: pointer; }
+.wg-rh__bin svg { width: 18px; height: 18px; }
+.wg-rh__ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 10px; }
+.wg-rh__ask small { flex-basis: 100%; font-size: 13px; color: var(--ink-2); }
+/* picking which race, as one is added */
+.pl-tile.wg-kind { text-align: left; width: 100%; }
+.pl-tile.wg-kind.is-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
 /* ── the Arrange Today screen ── */
 .pl-btn.wg-tap { min-height: 44px; }
 .wg-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
@@ -147,4 +217,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .wg-list.is-sorting .wg-row:not(.is-held), .wg-switch::before, .wg-switch::after { transition: none; }
+  .wg-race__bar i { transition: none; }
+  .wg-race.is-best .wg-race__big, .wg-race__burst i { animation: none; }
+  .wg-race__burst { display: none; }
 }

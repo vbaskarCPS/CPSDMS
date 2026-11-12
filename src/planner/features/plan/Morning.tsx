@@ -77,7 +77,7 @@ export function Morning() {
 
   const start = () => {
     if (!stage) return;
-    set(d => ({ ...d, ticks: { ...d.ticks, up: d.ticks.up || nowHM() }, morningRoutine: { ...d.morningRoutine, startedAt: d.morningRoutine.startedAt || new Date().toISOString() } }));
+    set(d => ({ ...d, ticks: { ...d.ticks, up: d.ticks.up || nowHM(), upAt: d.ticks.up ? d.ticks.upAt : new Date().toISOString() }, morningRoutine: { ...d.morningRoutine, startedAt: d.morningRoutine.startedAt || new Date().toISOString() } }));
     endAt.current = Date.now() + left * 1000; setRunning(true);
   };
   const pause = () => { setRunning(false); };

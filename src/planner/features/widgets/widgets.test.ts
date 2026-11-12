@@ -285,6 +285,57 @@ describe('the saved shape', () => {
   });
 });
 
+describe('the race timer', () => {
+  const gym: Added = { id: 'x-race1', kind: 'race', race: 'gym', title: 'Up to first set' };
+  const door: Added = { id: 'x-race2', kind: 'race', race: 'manual', title: 'Out the door' };
+  it('is added like the others, at the top, named on the arrange list by its own name; several can be on the page', () => {
+    const p = add(add(EMPTY, 'night', gym), 'night', door);
+    expect(order(p).slice(0, 2)).toEqual(['x-race2', 'x-race1']);
+    expect(arrange(p, 'night').slice(0, 2).map(i => [i.name, i.resizable])).toEqual([['Out the door', true], ['Up to first set', true]]);
+    expect(canAdd(p, 'race')).toBe(true);
+    expect(ADDED.race.max).toBeGreaterThan(1);
+  });
+  it('is moved, made small (two side by side) and taken off like the others', () => {
+    let p = add(add(EMPTY, 'night', gym), 'night', door);
+    p = setSize(setSize(p, 'x-race1', 'compact'), 'x-race2', 'compact');
+    expect(shown(p)[0]).toBe('x-race2+x-race1');
+    p = move(p, 'night', 'x-race1', 1);
+    expect(order(p).slice(0, 3)).toEqual(['x-race2', 'streaks', 'x-race1']);
+    expect(order(remove(p, 'x-race1'))).not.toContain('x-race1');
+  });
+  it('is saved small and plain: which race and its name, nothing else (the times are kept in their own docs)', () => {
+    const p = add(EMPTY, 'night', door);
+    expect(p.added).toEqual([{ id: 'x-race2', kind: 'race', race: 'manual', title: 'Out the door' }]);
+    expect(clean(JSON.parse(JSON.stringify(p)))).toEqual(p);
+    expect(change(p, { ...door, title: 'Kids to bed' } as Added).added[0]).toMatchObject({ title: 'Kids to bed', race: 'manual' });
+  });
+  it('what comes back is tidied: a name trimmed, an empty one becomes the race’s own name, a race without a kind refused', () => {
+    const p = clean({ added: [
+      { id: 'x-rc1', kind: 'race', race: 'gym', title: '', times: [1, 2] },
+      { id: 'x-rc2', kind: 'race', race: 'manual', title: `   Kids   to bed ${'z'.repeat(60)}` },
+      { id: 'x-rc3', kind: 'race' },
+      { id: 'x-rc4', kind: 'race', race: 7 },
+    ] });
+    expect(p.added).toEqual([
+      { id: 'x-rc1', kind: 'race', race: 'gym', title: 'Up to first set' },
+      { id: 'x-rc2', kind: 'race', race: 'manual', title: `Kids to bed ${'z'.repeat(28)}` },
+    ]);
+    expect(p.kept).toBe(undefined);
+  });
+  it('a kind of race from a newer version is carried along untouched, not drawn and not lost', () => {
+    const later = { id: 'x-rc9', kind: 'race', race: 'daycare', title: 'Kiaan up to drop-off' };
+    const p = clean({ order: ['x-rc9', 'plan'], added: [gym, later] });
+    expect(p.added).toEqual([gym]);
+    expect(p.kept).toEqual([later]);
+    expect(order(p)).not.toContain('x-rc9');
+    expect(clean(JSON.parse(JSON.stringify(remove(p, 'x-race1')))).kept).toEqual([later]);
+  });
+  it('an older phone (no race timer at all) keeps one it doesn’t know the same way', () => {
+    // what that phone's version did with any kind it didn't know
+    expect(clean({ added: [{ id: 'x-moon2', kind: 'moon' }] }).kept).toEqual([{ id: 'x-moon2', kind: 'moon' }]);
+  });
+});
+
 describe('the countdown', () => {
   it('counts whole days across the end of a month and of a year', () => {
     expect(daysBetween('2026-11-11', '2026-12-25')).toBe(44);

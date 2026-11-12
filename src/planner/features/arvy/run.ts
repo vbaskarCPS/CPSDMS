@@ -33,6 +33,7 @@ import { PLACES_MAX, placeAnswer, placeLinks, placesAsk, placesPageUrl, type Pla
 import { CHAT_KIND, type ChatMsg } from '../../../../supabase/functions/planner-chat/chat';
 import { chatAnswer, chatDays, chatSince } from './ourchat';
 import { emailInbox, emailRead } from './email';
+import { raceSummary } from '../widgets/raceStore';
 
 type AnyDoc = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 /** `sources` = where an answer from outside the planner came from: a link shown under Arvy's reply.
@@ -60,7 +61,7 @@ const fmtSet = (s: AnyDoc) => (s.seconds && !s.reps ? `${s.seconds}s` : `${s.wei
 // ── the tools ──
 async function todayOverview(input: AnyDoc) {
   const date = isDate(input.date) ? input.date : dayKey();
-  const [day, habits, log, meals, tg, events, workouts, templates, routine] = await Promise.all([
+  const [day, habits, log, meals, tg, events, workouts, templates, routine, races] = await Promise.all([
     getDoc<AnyDoc>('day', date).catch(() => null),
     getDocs<Habit>('habit').catch(() => []),
     getDoc<HabitLog>('habitlog', date).catch(() => null),
@@ -70,6 +71,7 @@ async function todayOverview(input: AnyDoc) {
     getDocs<Workout>('workout', `${date}~`, `${date}~￿`).catch(() => []),
     getDocs<Template>('template').catch(() => []),
     loadRoutine().catch(() => null),
+    raceSummary(date).catch(() => undefined),   // ── race timers (features/widgets/race.ts): "how fast was I to the gym today?"
   ]);
   const wd = new Date(`${date}T12:00:00`).getDay();
   const d = day || {};
@@ -95,6 +97,8 @@ async function todayOverview(input: AnyDoc) {
     calendar: eventsOn(events, date).map(evLine),
     workout: ws.length ? ws.map(w => ({ name: w.name, status: w.endedAt ? 'done' : 'in progress', exercises: w.exercises.length, prs: w.prs?.length ? w.prs : undefined }))
       : planned.length ? { planned: planned.map(t => `${t.name}${t.home ? ' (at home)' : ''}`) } : 'none planned',
+    // ── race timers on Today: that day's time, the best and the average over the last 30 days ──
+    race_timers: races,
   };
 }
 

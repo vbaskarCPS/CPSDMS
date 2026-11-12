@@ -37,7 +37,8 @@ export interface TemplateExercise extends Format { exerciseId: string; name: str
 export interface Template { id: string; name: string; days?: number[]; exercises: TemplateExercise[]; order: number; archived?: boolean; plannedFor?: string; focus?: string; minutes?: number;
   /** done away from the gym (a stretch routine, mobility, a bodyweight session at home): it's the day's session on a day with no gym */ home?: boolean }
 
-export interface SetLog { weight: number; reps: number; rpe?: number; done: boolean; prev?: { weight: number; reps: number; repsR?: number }; seconds?: number; repsR?: number }
+// doneAt = the moment the set was ticked done (ISO), for the race timer (features/widgets/race.ts); older sets have none
+export interface SetLog { weight: number; reps: number; rpe?: number; done: boolean; doneAt?: string; prev?: { weight: number; reps: number; repsR?: number }; seconds?: number; repsR?: number }
 // Unilateral exercises (one-arm row, split squat…): reps = left side, repsR = right side, one weight.
 export interface WorkoutExercise extends Format { exerciseId: string; name: string; restSec: number; targetReps?: string; sets: SetLog[]; mode?: SetMode; note?: string; comment?: string; lastComment?: string; coachCue?: string }
 // coachCue = what the coach prescribed for this exercise when the previous session was completed (the numbers are already prefilled)

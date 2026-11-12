@@ -1,7 +1,7 @@
 // src/planner/features/widgets/TodayWidgets.tsx — Today's blocks, drawn in the person's own order (widgets.ts, store.ts).
 // screens/Today.tsx hands over its blocks by name, exactly as it has always built them; this decides which show, in what
 // order and at what size, and slots in the ones the person added (a countdown, a note, the mini calendar, the habit
-// tracker). For someone who never arranged anything it draws the same blocks in the same order with nothing around
+// tracker, a race timer: it's handed today's day page as the screen has it, so a tick shows on it at once). For someone who never arranged anything it draws the same blocks in the same order with nothing around
 // them, so their Today is what it was.
 import { Component, Fragment, useMemo, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -13,6 +13,8 @@ import { CountdownCard } from './Countdown';
 import { HabitWeekCard } from './HabitWeek';
 import { MonthCard } from './Month';
 import { NoteCard } from './Note';
+import { RaceCard } from './RaceCard';
+import type { Day } from '../plan/types';
 import { useWidgets } from './store';
 import { arrange, change, EMPTY, remove, rows, untouched, type Item, type TodayBlockId } from './widgets';
 
@@ -37,7 +39,7 @@ class Guard extends Component<{ children: ReactNode }, { broken: boolean }> {
 
 /** `blocks` = every one of the planner's own blocks by name (one missing is a type error, so a block added to Today
  *  later can't be left out of the list). */
-export function TodayWidgets({ widgets, blocks }: { widgets: ReturnType<typeof useTodayWidgets>; blocks: Record<TodayBlockId, ReactNode> }) {
+export function TodayWidgets({ widgets, blocks, day }: { widgets: ReturnType<typeof useTodayWidgets>; blocks: Record<TodayBlockId, ReactNode>; day?: { key: string; day: Day } | null }) {
   const { uid, loaded, save } = widgets;
   const draw = (it: Item): ReactNode => {
     if (it.block) {
@@ -51,6 +53,7 @@ export function TodayWidgets({ widgets, blocks }: { widgets: ReturnType<typeof u
         {w.kind === 'countdown' ? <CountdownCard w={w} small={small} ready={loaded} onMove={date => save(p => change(p, { ...w, date }))} onRemove={() => save(p => remove(p, w.id))} />
           : w.kind === 'note' ? <NoteCard w={w} uid={uid} small={small} />
           : w.kind === 'month' ? <MonthCard small={small} />
+          : w.kind === 'race' ? <RaceCard w={w} small={small} live={day} />
           : <HabitWeekCard />}
       </Guard>
     );

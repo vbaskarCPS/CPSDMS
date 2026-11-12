@@ -1,6 +1,7 @@
 // src/planner/features/widgets/widgets.ts — what is on the Today page, in what order and at what size.
 // Two sorts of thing live there: the planner's own blocks (the streaks, the day's plan, the feature cards), which a
-// person can move, shrink or switch off, and the ones a person adds (a countdown, a note, the month, the habit week).
+// person can move, shrink or switch off, and the ones a person adds (a countdown, a note, the month, the habit week,
+// a race timer).
 // Everything here is plain functions with no React (tested in widgets.test.ts): the list of blocks, how a saved
 // arrangement is read back safely, and the countdown's sums. Saved per person in the doc 'prefs' / 'widgets' (store.ts).
 //
@@ -8,6 +9,7 @@
 // added to Today in a later update turns up for someone who arranged their page before it existed.
 import type { Profile } from '../../lib/app';
 import { upcoming } from '../us/occasions';
+import { isRaceKind, RACES, type RaceKind } from './race';
 
 /** The planner's own blocks on Today. The day's plan holds the routine and the to-do list. */
 export type TodayBlockId = 'streaks' | 'plan' | 'calendar' | 'shop' | 'cycle' | 'habits' | 'train' | 'food' | 'money';
@@ -32,7 +34,7 @@ export const blocksFor = (profile: Profile): TodayBlock[] => BLOCKS.filter(b => 
 export const defaultOrder = (profile: Profile): TodayBlockId[] => blocksFor(profile).map(b => b.id);
 
 // ── the ones a person adds ──
-export type AddedKind = 'countdown' | 'note' | 'month' | 'habitweek';
+export type AddedKind = 'countdown' | 'note' | 'month' | 'habitweek' | 'race';
 /** A note's paper. The colours come from the look that's on: plain card, the bright colour, a tint of the main one, green, warm. */
 export type Paper = 'plain' | 'bright' | 'tint' | 'fresh' | 'warm';
 export const PAPERS: Paper[] = ['plain', 'bright', 'tint', 'fresh', 'warm'];
@@ -42,7 +44,10 @@ export interface Countdown { id: string; kind: 'countdown'; title: string; date:
 export interface Note { id: string; kind: 'note'; paper: Paper }
 export interface Month { id: string; kind: 'month' }
 export interface HabitWeek { id: string; kind: 'habitweek' }
-export type Added = Countdown | Note | Month | HabitWeek;
+/** A race timer (race.ts): which kind of race, and its name (typed for one started and stopped by hand). Its times
+ *  are kept in their own docs ('race' / `${id}~${day}`), not here. */
+export interface Race { id: string; kind: 'race'; race: RaceKind; title: string }
+export type Added = Countdown | Note | Month | HabitWeek | Race;
 
 /** What each added one is called, how many fit on a page, and whether it has a small size (two small ones sit side by side). */
 export const ADDED: Record<AddedKind, { name: string; about: string; max: number; small: boolean }> = {
@@ -50,6 +55,7 @@ export const ADDED: Record<AddedKind, { name: string; about: string; max: number
   note: { name: 'Note', about: 'A sticky note to type on', max: 6, small: true },
   month: { name: 'Mini calendar', about: 'This month, with a dot on the days something is on', max: 1, small: true },
   habitweek: { name: 'Habit tracker', about: 'This week’s ticks for your habits', max: 1, small: false },
+  race: { name: 'Race timer', about: 'How fast you get from one thing to the next, every day', max: 6, small: true },
 };
 export const MAX_ADDED = 12;
 export const TITLE_MAX = 40;
@@ -79,8 +85,16 @@ function cleanAdded(a: unknown): Added | null {
   }
   if (a.kind === 'note') return { id, kind: 'note', paper: PAPERS.includes(a.paper as Paper) ? (a.paper as Paper) : 'plain' };
   if (a.kind === 'month' || a.kind === 'habitweek') return { id, kind: a.kind };
+  if (a.kind === 'race') {
+    if (!isRaceKind(a.race)) return null;
+    const title = (typeof a.title === 'string' ? a.title : '').replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX) || RACES[a.race].name;
+    return { id, kind: 'race', race: a.race, title };
+  }
   return null;
 }
+
+/** A race timer of a kind this version doesn't know yet (another phone is a version ahead). */
+const newerRace = (a: Record<string, unknown>): boolean => a.kind === 'race' && typeof a.race === 'string' && a.race.length <= 24 && !isRaceKind(a.race);
 
 /** Whatever was saved (nothing, an older shape, something broken), made safe to use. Never throws.
  *  Ids it doesn't know are kept in `order`, `off` and `size` (another phone may be a version ahead) and simply not drawn. */
@@ -91,7 +105,7 @@ export function clean(raw: unknown): WidgetPrefs {
     const w = cleanAdded(a);
     if (!w) {
       // a kind from a newer version: not drawn here, but not thrown away either
-      if (isObj(a) && typeof a.id === 'string' && ADDED_ID.test(a.id) && typeof a.kind === 'string' && a.kind.length <= 24 && !(a.kind in ADDED) && kept.length < MAX_ADDED && !kept.some(x => x.id === a.id)) kept.push(a);
+      if (isObj(a) && typeof a.id === 'string' && ADDED_ID.test(a.id) && typeof a.kind === 'string' && a.kind.length <= 24 && (!(a.kind in ADDED) || newerRace(a)) && kept.length < MAX_ADDED && !kept.some(x => x.id === a.id)) kept.push(a);
       continue;
     }
     if (added.length >= MAX_ADDED || added.some(x => x.id === w.id)) continue;
@@ -132,7 +146,7 @@ export function arrange(prefs: WidgetPrefs, profile: Profile): Item[] {
     if (block) return { id, name: block.name, block, on: !!block.always || !p.off.includes(id), size: block.sizes && p.size[id] === 'compact' ? 'compact' : 'full', resizable: !!block.sizes };
     const added = p.added.find(a => a.id === id)!;
     const small = ADDED[added.kind].small;
-    return { id, name: added.kind === 'countdown' ? added.title : ADDED[added.kind].name, added, on: true, size: small && p.size[id] === 'compact' ? 'compact' : 'full', resizable: small };
+    return { id, name: added.kind === 'countdown' || added.kind === 'race' ? added.title : ADDED[added.kind].name, added, on: true, size: small && p.size[id] === 'compact' ? 'compact' : 'full', resizable: small };
   });
 }
 
@@ -185,7 +199,7 @@ export function add(p: WidgetPrefs, profile: Profile, w: Added): WidgetPrefs {
   if (!canAdd(c, w.kind) || c.added.some(a => a.id === w.id) || !cleanAdded(w)) return c;
   return clean({ ...c, added: [...c.added, w], order: [w.id, ...orderOf(c, profile)] });
 }
-/** Change an added one's settings (a countdown's title or date, a note's paper). */
+/** Change an added one's settings (a countdown's title or date, a note's paper, a race's name). */
 export function change(p: WidgetPrefs, w: Added): WidgetPrefs {
   const c = clean(p);
   return clean({ ...c, added: c.added.map(a => (a.id === w.id && a.kind === w.kind ? w : a)) });
