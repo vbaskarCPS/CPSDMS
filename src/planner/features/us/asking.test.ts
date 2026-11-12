@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ARVY, type ChatMsg, type Proposal } from '../../../../supabase/functions/planner-chat/chat';
 import { EMOJI, emojiText } from './emoji';
-import { ASK_BEFORE, askedText } from './asked';
+import { ASK_BEFORE, ASK_ROOM, askedText } from './asked';
 
 const invoke = vi.fn();
 const turn = vi.fn();
@@ -72,6 +72,20 @@ describe('what Arvy is handed', () => {
     const set: Proposal[] = [{ id: 'e', tool: 'add_event', input: {}, lines: ['Calendar: Date night, Friday'], state: 'done', by: 'rosh' }, { id: 's', tool: 'add_shopping_items', input: {}, lines: ['Shopping list: add Wine'], state: 'waiting' }];
     const said = askedText({ before: [m(5, ARVY, { text: 'Two ideas.', to: 'vijay', arvy: { state: 'done', proposals: set } })], picked: [], msg: m(40, 'vijay', { text: 'RV the second one' }), names });
     expect(said).toContain('Arvy (you, answering Vijay): Two ideas. [you set up: Calendar: Date night, Friday (confirmed); Shopping list: add Wine (still waiting for a tap)]');
+  });
+  it('never longer than Arvy’s server takes: the message always goes whole, the picked ones next, the earlier chat in what room is left', () => {
+    const long = (n: number, by: string, len: number) => m(n, by, { text: `${n}:${'x'.repeat(len)}` });
+    const words = `RV ${'please '.repeat(280)}do it`;   // as long as a message can be
+    const full = askedText({ before: Array.from({ length: 12 }, (_, i) => long(i, i % 2 ? 'rosh' : 'vijay', 900)), picked: [], msg: m(40, 'vijay', { text: words }), names });
+    expect(full.length).toBeLessThanOrEqual(ASK_ROOM);
+    expect(full.endsWith(words)).toBe(true);
+    expect(full).toContain('11:xxx');          // the newest of the earlier chat is what is kept
+    expect(full).not.toContain('] Vijay: 0:');  // …the oldest is what gives way
+    const picked = askedText({ before: Array.from({ length: 12 }, (_, i) => long(i, 'rosh', 900)), picked: Array.from({ length: 12 }, (_, i) => long(20 + i, 'rosh', 2000)), msg: m(40, 'vijay', { text: 'find the one about the dentist' }), names });
+    expect(picked.length).toBeLessThanOrEqual(ASK_ROOM);
+    expect(picked.endsWith('find the one about the dentist')).toBe(true);
+    for (let i = 20; i < 32; i++) expect(picked, `picked ${i}`).toContain(`Rosh: ${i}:x`);   // every picked one is there, cut shorter
+    expect(askedText({ before: [], picked: [], msg: m(40, 'vijay', { text: 'RV hi' }), names }).length).toBeLessThan(80);
   });
   it('messages picked out for it come whole and apart from the rest; a reply says what it answers', () => {
     const t = askedText({ before, picked: [before[0]], msg: m(20, 'vijay', { text: 'find a vet near there', reply: { key: k(1), name: 'Rosh', text: 'turtle appt is friday at 9' } }), names });
