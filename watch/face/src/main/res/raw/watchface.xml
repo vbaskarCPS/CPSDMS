@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The planner watch face (Watch Face Format 1). Top: the time and the date. Then what's next in the planner, and three
+  rings: protein, habits, steps. The rings and the "next" line are spots (complications) filled by the planner app
+  (app.propertystars.planner.watch …Spot): press and hold the face › Customize to put other spots there instead.
+  Always-on: only the time and date stay, dimmed.
+-->
+<WatchFace width="450" height="450">
+    <Metadata key="CLOCK_TYPE" value="DIGITAL" />
+    <Metadata key="PREVIEW_TIME" value="08:42:00" />
+
+    <Scene backgroundColor="#ff000000">
+
+        <!-- the time -->
+        <PartText x="0" y="48" width="450" height="112">
+            <Text align="CENTER">
+                <Font family="SYNC_TO_DEVICE" size="104" weight="LIGHT" color="#ffffffff">
+                    <Template>%s:%s<Parameter expression="[HOUR_1_12]" /><Parameter expression="[MINUTE_Z]" /></Template>
+                </Font>
+            </Text>
+        </PartText>
+
+        <!-- the date -->
+        <PartText x="0" y="160" width="450" height="34">
+            <Text align="CENTER">
+                <Font family="SYNC_TO_DEVICE" size="24" color="#ffbdbdbd">
+                    <Template>%s %s %s<Parameter expression="[DAY_OF_WEEK_S]" /><Parameter expression="[MONTH_S]" /><Parameter expression="[DAY]" /></Template>
+                </Font>
+            </Text>
+            <Variant mode="AMBIENT" target="alpha" value="170" />
+        </PartText>
+
+        <!-- what's next in the planner -->
+        <ComplicationSlot slotId="0" x="85" y="204" width="280" height="44"
+            supportedTypes="LONG_TEXT SHORT_TEXT" isCustomizable="TRUE">
+            <DefaultProviderPolicy
+                defaultSystemProvider="EMPTY" defaultSystemProviderType="EMPTY"
+                primaryProvider="app.propertystars.planner.watch/app.propertystars.planner.watch.NextSpot"
+                primaryProviderType="LONG_TEXT" />
+            <BoundingBox x="0" y="0" width="280" height="44" />
+            <Complication type="LONG_TEXT">
+                <PartDraw x="0" y="0" width="280" height="44">
+                    <RoundRectangle x="0" y="0" width="280" height="44" cornerRadiusX="22" cornerRadiusY="22">
+                        <Fill color="#ff1c1c1c" />
+                    </RoundRectangle>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartDraw>
+                <PartText x="12" y="0" width="256" height="44">
+                    <Text align="CENTER" ellipsis="TRUE">
+                        <Font family="SYNC_TO_DEVICE" size="22" color="#ffffffff">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+            </Complication>
+            <Complication type="SHORT_TEXT">
+                <PartText x="0" y="0" width="280" height="44">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="22" color="#ffffffff">
+                            <Template>%s %s<Parameter expression="[COMPLICATION.TITLE]" /><Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+
+        <!-- three rings: protein, habits, steps -->
+        <ComplicationSlot slotId="1" x="58" y="268" width="96" height="96"
+            supportedTypes="RANGED_VALUE SHORT_TEXT" isCustomizable="TRUE">
+            <DefaultProviderPolicy
+                defaultSystemProvider="EMPTY" defaultSystemProviderType="EMPTY"
+                primaryProvider="app.propertystars.planner.watch/app.propertystars.planner.watch.ProteinSpot"
+                primaryProviderType="RANGED_VALUE" />
+            <BoundingOval x="0" y="0" width="96" height="96" />
+            <Complication type="RANGED_VALUE">
+                <PartDraw x="0" y="0" width="96" height="96">
+                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                        <Stroke color="#ff2a2a2a" thickness="8" />
+                    </Arc>
+                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                        <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                        <Stroke color="#ffff9a4d" thickness="8" cap="ROUND" />
+                    </Arc>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartDraw>
+                <PartText x="0" y="26" width="96" height="28">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+                <PartText x="0" y="54" width="96" height="18">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="13" color="#ffbdbdbd">
+                            <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+            </Complication>
+            <Complication type="SHORT_TEXT">
+                <PartText x="0" y="26" width="96" height="44">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+
+        <ComplicationSlot slotId="2" x="177" y="268" width="96" height="96"
+            supportedTypes="RANGED_VALUE SHORT_TEXT" isCustomizable="TRUE">
+            <DefaultProviderPolicy
+                defaultSystemProvider="EMPTY" defaultSystemProviderType="EMPTY"
+                primaryProvider="app.propertystars.planner.watch/app.propertystars.planner.watch.HabitsSpot"
+                primaryProviderType="RANGED_VALUE" />
+            <BoundingOval x="0" y="0" width="96" height="96" />
+            <Complication type="RANGED_VALUE">
+                <PartDraw x="0" y="0" width="96" height="96">
+                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                        <Stroke color="#ff2a2a2a" thickness="8" />
+                    </Arc>
+                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                        <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                        <Stroke color="#ff7ee0a8" thickness="8" cap="ROUND" />
+                    </Arc>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartDraw>
+                <PartText x="0" y="26" width="96" height="28">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+                <PartText x="0" y="54" width="96" height="18">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="13" color="#ffbdbdbd">
+                            <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+            </Complication>
+            <Complication type="SHORT_TEXT">
+                <PartText x="0" y="26" width="96" height="44">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+
+        <ComplicationSlot slotId="3" x="296" y="268" width="96" height="96"
+            supportedTypes="RANGED_VALUE SHORT_TEXT" isCustomizable="TRUE">
+            <DefaultProviderPolicy
+                defaultSystemProvider="STEP_COUNT" defaultSystemProviderType="SHORT_TEXT"
+                primaryProvider="app.propertystars.planner.watch/app.propertystars.planner.watch.StepsSpot"
+                primaryProviderType="RANGED_VALUE" />
+            <BoundingOval x="0" y="0" width="96" height="96" />
+            <Complication type="RANGED_VALUE">
+                <PartDraw x="0" y="0" width="96" height="96">
+                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                        <Stroke color="#ff2a2a2a" thickness="8" />
+                    </Arc>
+                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                        <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                        <Stroke color="#ff8fc1ff" thickness="8" cap="ROUND" />
+                    </Arc>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartDraw>
+                <PartText x="0" y="26" width="96" height="28">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+                <PartText x="0" y="54" width="96" height="18">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="13" color="#ffbdbdbd">
+                            <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+            </Complication>
+            <Complication type="SHORT_TEXT">
+                <PartText x="0" y="26" width="96" height="44">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+    </Scene>
+</WatchFace>

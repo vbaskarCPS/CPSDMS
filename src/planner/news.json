@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-12-watch-health", "date": "2026-11-12", "title": "Your watch's steps reach the assistant", "for": "night",
+    "lines": ["With the planner on your Galaxy Watch, your steps and resting heart rate are saved each day.", "Ask the assistant about them, or how your workout heart rate went: it can see both."] },
   { "id": "2026-11-12-bank-add-accounts", "date": "2026-11-12", "title": "Add a card to a bank that’s already connected",
     "lines": ["Money › Banks: tap “Add or change accounts” on TD to share another TD account, like a credit card.", "Then choose where it goes, for example “Vijay and Rosh CCD”.", "Stuck waiting for the bank to approve? Open its app yourself, or ask for a code by text.", "Arvy can now tell you how to add a card and take you there."] },
   { "id": "2026-11-12-quiet-reminders", "date": "2026-11-12", "title": "Switch off a single reminder",

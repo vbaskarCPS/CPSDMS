@@ -60,6 +60,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.9.0")
 
+    // the watch-face spots (complications)
+    implementation("androidx.wear.watchface:watchface-complications-data-source-ktx:1.2.1")
+
     // heart rate from the watch's sensor
     implementation("androidx.health:health-services-client:1.0.0-rc02")
 }

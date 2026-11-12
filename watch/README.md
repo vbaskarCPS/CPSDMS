@@ -16,6 +16,13 @@ It talks to the same database as the phone, so everything shows up in the planne
 
 Pick the watch at the top of Android Studio and press **Run** (the green triangle). The app opens on the watch.
 
+## The planner watch face
+
+The `face` module is the planner's own watch face. To install it, pick **face** in the box next to the green ▶
+(it says *app*), and the watch, then press ▶. The first time, Android Studio may say "Default Activity not found":
+open **Run › Edit Configurations… › face**, set **Launch** to **Nothing**, OK, and press ▶ again. Then on the watch,
+press and hold the face, swipe to **Planner**, tap it. Install the app as well: the face's rings come from it.
+
 ## First time on the watch
 
 1. The app shows a 4-digit code.
@@ -28,11 +35,15 @@ Pick the watch at the top of Android Studio and press **Run** (the green triangl
 |---|---|
 | Today | The block you're in and what's next, protein left, habits done |
 | Habits | Today's habits and to-dos; tap to tick |
-| Workout | The next set of the session started on the phone; weight and reps with the buttons or the bezel; Done |
+| Workout | Start today's session, or carry on one started on the phone; weight and reps with the buttons or the bezel; Done |
 | Rest | Counts down the rest, buzzes at the end; +30 s or Skip |
+| Timers | I'm up, the race timer (from Up), the sauna countdown that ticks itself |
 | Today tile | The same as Today, at a glance |
+| Spots | Protein left, habits done, steps, next block: on the planner face or any face with spots |
 
 Heart rate is measured while the workout screen is open and saved on the session (`hr: { avg, max }`).
+Steps and a resting heart rate are collected in the background all day and saved to the planner
+(`health` / date), where the assistant sees them. Sleep isn't available to other apps on the watch.
 
 ## How it works
 
@@ -43,5 +54,4 @@ Heart rate is measured while the workout screen is open and saved on the session
 - `Today.kt`, `Workout.kt`, `Heart.kt`: today's summary and ticks, sets, heart rate.
 - `MainActivity.kt`: the screens (the time always in the top 30%). `TodayTileService.kt`: the tile.
 
-Coming next: race and sauna timers, watch-face spots, the assistant (press and talk), and each day's steps, sleep and
-resting heart rate.
+Coming next: the assistant (press and talk).

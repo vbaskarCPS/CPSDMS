@@ -30,7 +30,7 @@ data class TodaySummary(
         .put("now", now?.label ?: "").put("nowUntil", now?.until ?: "")
         .put("next", next?.label ?: "").put("nextAt", next?.at ?: "")
         .put("habitsDone", habitsDone).put("habits", habits.size)
-        .put("proteinLeft", proteinLeft)
+        .put("proteinLeft", proteinLeft).put("proteinEaten", proteinEaten).put("proteinGoal", proteinGoal)
 }
 
 class Today(private val planner: Planner) {
@@ -112,11 +112,17 @@ class Today(private val planner: Planner) {
         ticks.put(tick, Planner.hhmmNow())
         d.put("ticks", ticks)
         planner.put("day", day, d)
-        val auto = planner.docs("habit").map { it.data }.filter { !it.optBoolean("archived") && it.optString("auto") == autoName }
-        if (auto.isNotEmpty()) {
-            val marks = planner.doc("habitlog", day) ?: JSONObject()
-            for (h in auto) marks.put(h.optString("id"), "done")
-            planner.put("habitlog", day, marks)
-        }
+        markAuto(autoName)
+    }
+
+    /** Tick today the habits set to tick themselves on this (features/habits/auto.ts autoMark). */
+    suspend fun markAuto(trigger: String) {
+        val day = Planner.dayKey()
+        val auto = planner.docs("habit").map { it.data }.filter { !it.optBoolean("archived") && it.optString("auto") == trigger }
+        if (auto.isEmpty()) return
+        val marks = planner.doc("habitlog", day) ?: JSONObject()
+        var changed = false
+        for (h in auto) if (marks.optString(h.optString("id")) != "done") { marks.put(h.optString("id"), "done"); changed = true }
+        if (changed) planner.put("habitlog", day, marks)
     }
 }
