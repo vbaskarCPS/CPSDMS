@@ -4,15 +4,21 @@
 //
 // From the app (the planner token is checked by `me`, exactly as planner-arvy checks it):
 //   connect_start { provider: 'google', app }   → { url }  Google's own sign-in page, with a one-time state value
+//   connect_finish { code, state }              → { ok, connected, mailboxes } | { problem }   what Google's page handed
+//       the browser, brought back by the signed-in planner. Only here is the code swapped for tokens, and only when
+//       the person asking is the one who started that sign-in.
 //   list                                        → { mailboxes: [{ id, provider, address, since, todos, checkedAt, problem, canSend, needsSignIn }], ready }
 //   disconnect { mailbox }                      → { ok, revoked }   taken back at Google where possible, the row deleted
 //   watch { mailbox, on }                       → { ok, todos }     "turn what comes in into to-dos" on or off
 //   inbox { mailbox, search?, unread?, max? }   → { mails: [{ id, from, subject, when, preview, unread }], more }   15 at most
 //   read { mailbox, id }                        → { mail: { id, from, to, subject, when, text, cut?, attachments, answerTo } }
 //   send { mailbox, to, subject, body, reply_to? } → { ok, id }      sends as that mailbox: the app calls it only from a Confirm tap
-// From Google's sign-in page (no planner token: the state value says whose sign-in it is):
-//   GET …/planner-mail/callback?state=…&code=…  → the mailbox is stored, and the browser goes back to
-//       <site>/<app>/settings/mail?connected=<address>   or   ?problem=<plain words>
+// From Google's sign-in page (no planner token, so nothing is connected here):
+//   GET …/planner-mail/callback?state=…&code=…  → the browser is passed on to the planner it came from:
+//       <site>/<app>/settings/mail#mail_code=…&mail_state=…   (after the #: that part of an address is never sent to
+//       a server or along to another site, so the two values stay in that browser)
+//       or <site>/<app>/settings/mail?problem=<plain words> when Google sent no code.
+//       Nothing is asked of Google and the state is not used up: that happens in connect_finish.
 // From pg_cron, every 30 minutes (header x-cron-key = planner_secrets.cron_key):
 //   check → for each mailbox with to-dos on: the new email in its Primary inbox is read by Claude for things the
 //           person is asked to do; each is saved as an offered to-do (their own doc of kind 'mailtodo'), and one
@@ -20,10 +26,12 @@
 //
 // The rules this file keeps:
 //   · A person only ever reaches their own mailboxes: every look-up of a mailbox carries their id.
+//   · A mailbox is only ever connected to the planner of the person who started the sign-in AND is signed in to the
+//     browser that came back from Google. A sign-in link passed to someone else connects nothing.
 //   · The key to a mailbox (its refresh token) is locked before it's stored (secure.ts) and is never sent to the app,
 //     never logged and never put in an error. The short-lived token asked for with it is kept in memory only.
 //   · What is logged when something fails: which action, the mailbox's id, and a short code. Never an address, a
-//     subject, a word of an email, a state value or anything Google or Claude said in sentences.
+//     subject, a word of an email, a state value, Google's code, or anything Google or Claude said in sentences.
 //   · Nothing here deletes, moves or marks an email, or changes a mailbox's settings.
 import { EXPIRED, EXTRACT_SCHEMA, GONE, GOOGLE_DOWN, NO_SENDING, NOT_SET_UP, CHECK_CHARS, CHECK_MAX, cleanDraft, extractInput, extractSystem, forApp, freshIds, freshMails, isMessageId, nextCursor, notifyLine, readCursor, startCursor,
   todosFrom, type MailFull, type MailLine, type MailTodo, type ProviderId } from './mail.ts';
@@ -39,6 +47,8 @@ export interface Me { id: string; name: string; app: AppId }
 export interface Store {
   /** keep a sign-in that was just started; this person's finished and run-out ones are cleared away */
   startState(row: StateRow, nowIso: string): Promise<void>;
+  /** the sign-in a returning value belongs to, only looked at: nothing is marked. null = unknown. */
+  peekState(hash: string): Promise<StateRow | null>;
   /** the sign-in a returning value belongs to, marked used in the same step. null = unknown, or used before. */
   claimState(hash: string, nowIso: string): Promise<StateRow | null>;
   mailboxes(userId: string): Promise<MailboxRow[]>;
@@ -161,40 +171,64 @@ function failed(d: Deps, action: string, row: MailboxRow, e: unknown): Out {
 }
 
 // ── coming back from Google's sign-in page ──
+const TOOK_TOO_LONG = 'That sign-in took too long. Tap Connect Gmail again.';
+const NOT_FINISHED = 'The sign-in at Google wasn’t finished, so nothing was connected.';
+const SOMEONE_ELSE = 'This sign-in was started from a different planner. Open Settings › Email in your own planner and tap Connect Gmail.';
+/** Google's code as it may be carried: one piece of text, no spaces, not absurdly long. */
+const looksLikeCode = (v: unknown): v is string => typeof v === 'string' && v.length >= 4 && v.length <= 1024 && /^[\x21-\x7e]+$/.test(v);
+
+/** The address Google sends the browser to. Nobody is signed in here, so nothing is connected and Google is asked
+ *  nothing: the browser is passed on to the planner the sign-in was started from, carrying Google's code and the
+ *  state after the # (never sent to a server, never in a Referer). The planner, signed in, brings them back with
+ *  connect_finish. The state is only looked at here, not used up. */
 async function callback(q: URLSearchParams, d: Deps): Promise<Out> {
   const value = q.get('state');
   const stale = 'This sign-in has already been used, or was started too long ago. Go back to your planner, open Settings, Email, and tap Connect Gmail again.';
   if (!looksLikeState(value)) return { status: 400, text: stale };
-  const nowIso = new Date(d.now()).toISOString();
-  // found by its hash and marked used in one step: the same value never works twice
-  const row = await d.store.claimState(await stateHash(value), nowIso);
-  if (!row || !isApp(row.app)) return { status: 400, text: stale };
-  const back = (o: Record<string, string>): Out => ({ redirect: `${siteOf(d.env)}/${row.app}/settings/mail?${new URLSearchParams(o).toString()}` });
+  const row = await d.store.peekState(await stateHash(value));
+  if (!row || row.used_at || stateExpired(row, d.now()) || !isApp(row.app)) return { status: 400, text: stale };
+  const page = `${siteOf(d.env)}/${row.app}/settings/mail`;   // only which planner comes from the row: nothing from the request
+  const code = q.get('code');
+  // Google sends an error instead of a code when the person stopped, or didn't allow it
+  if (q.get('error') || !looksLikeCode(code)) return { redirect: `${page}?${new URLSearchParams({ problem: NOT_FINISHED }).toString()}` };
+  return { redirect: `${page}#${new URLSearchParams({ mail_code: code, mail_state: value }).toString()}` };
+}
+
+/** connect_finish: the signed-in planner brings back what Google's page handed the browser. The state is used up
+ *  first (so it works once), then the person asking must be the one who started the sign-in: only then is Google
+ *  asked to swap the code, and the mailbox stored for them. Neither the code nor the state is logged or sent back. */
+async function connectFinish(b: Record<string, unknown>, me: Me, d: Deps): Promise<Out> {
+  const cfg = config(d.env);
+  if (!cfg) return problem(NOT_SET_UP, 'not_set_up');
+  let key: CryptoKey;
+  try { key = await mailKey(cfg.key); } catch { d.log('connect_finish: PLANNER_MAIL_KEY is not 32 bytes of base64'); return problem(NOT_SET_UP, 'not_set_up'); }
+  if (!looksLikeState(b.state) || !looksLikeCode(b.code)) return problem(TOOK_TOO_LONG, 'stale');
+  const code = b.code;
+  // found by its hash and marked used in one step: the same value never works twice, whoever brings it
+  const row = await d.store.claimState(await stateHash(b.state), new Date(d.now()).toISOString());
+  if (!row || stateExpired(row, d.now())) return problem(TOOK_TOO_LONG, 'stale');
+  // someone else's sign-in, finished in this person's browser: nothing is asked of Google, nothing is connected
+  if (row.user_id !== me.id) { d.log('connect_finish: started by someone else'); return problem(SOMEONE_ELSE, 'someone_else'); }
+  const p = providerOf(row);
+  if (!p) return problem(NOT_SET_UP, 'not_set_up');
   try {
-    if (stateExpired(row, d.now())) return back({ problem: 'That sign-in took too long. Tap Connect Gmail again.' });
-    const p = providerOf(row), cfg = config(d.env);
-    if (!p || !cfg) return back({ problem: NOT_SET_UP });
-    const code = q.get('code');
-    // Google sends an error instead of a code when the person stopped, or didn't allow it
-    if (q.get('error') || !code) return back({ problem: 'The sign-in at Google wasn’t finished, so nothing was connected.' });
-    let key: CryptoKey;
-    try { key = await mailKey(cfg.key); } catch { d.log('callback: PLANNER_MAIL_KEY is not 32 bytes of base64'); return back({ problem: NOT_SET_UP }); }
     const g = await p.exchange({ clientId: cfg.id, clientSecret: cfg.secret, redirect: cfg.redirect, code }, d.fetch);
     const undo = async () => { try { await p.revoke(g.refresh || g.access, d.fetch); } catch { /* it runs out by itself */ } };
-    if (!g.refresh) { await undo(); d.log('callback: Google gave no refresh token'); return back({ problem: 'Google didn’t let the planner stay connected. Tap Connect Gmail again.' }); }
+    if (!g.refresh) { await undo(); d.log('connect_finish: Google gave no refresh token'); return problem('Google didn’t let the planner stay connected. Tap Connect Gmail again.', 'no_refresh'); }
     // Google lets people untick what an app asks for: without reading there is nothing to connect
-    if (!g.scopes.includes(p.readScope)) { await undo(); return back({ problem: 'The planner wasn’t allowed to read this mailbox. Tap Connect Gmail again and tick both boxes on Google’s page.' }); }
+    if (!g.scopes.includes(p.readScope)) { await undo(); return problem('The planner wasn’t allowed to read this mailbox. Tap Connect Gmail again and tick both boxes on Google’s page.', 'not_allowed'); }
     const address = await p.address(g.access, d.fetch);
-    const mine = await d.store.mailboxes(row.user_id);
-    if (!mine.some(m => m.provider === p.id && m.address === address) && mine.length >= MAX_MAILBOXES) { await undo(); return back({ problem: `That’s as many mailboxes as one planner takes (${MAX_MAILBOXES}). Disconnect one first.` }); }
-    // the mailbox belongs to whoever started this sign-in: the person the state was made for, nobody named in the request
-    const owner = { user_id: row.user_id, provider: p.id, address };
+    const mine = await d.store.mailboxes(me.id);
+    if (!mine.some(m => m.provider === p.id && m.address === address) && mine.length >= MAX_MAILBOXES) { await undo(); return problem(`That’s as many mailboxes as one planner takes (${MAX_MAILBOXES}). Disconnect one first.`, 'too_many'); }
+    // stored for the person asking, who is the person the state was made for
+    const owner = { user_id: me.id, provider: p.id, address };
     const saved = await d.store.saveMailbox({ ...owner, token_enc: await seal(key, g.refresh, tokenOwner(owner)), scopes: g.scopes.join(' ').slice(0, 600), cursor: startCursor(d.now()) });
     kept.set(saved.id, { access: g.access, until: d.now() + g.expiresIn * 1000 });
-    return back({ connected: address });
+    return json({ ok: true, connected: address, mailboxes: (await d.store.mailboxes(me.id)).map(forList) });
   } catch (e) {
-    d.log(`callback: ${e instanceof MailError ? e.why : e instanceof Error ? e.name : 'error'}`);
-    return back({ problem: e instanceof MailError && e.kind === 'down' ? 'Google didn’t answer. Tap Connect Gmail again in a minute.' : 'Google didn’t finish the sign-in. Tap Connect Gmail again.' });
+    if (!(e instanceof MailError)) throw e;
+    d.log(`connect_finish: ${e.why}`);
+    return problem(e.kind === 'down' ? 'Google didn’t answer. Tap Connect Gmail again in a minute.' : 'Google didn’t finish the sign-in. Tap Connect Gmail again.', e.kind === 'down' ? 'down' : 'refused');
   }
 }
 
@@ -287,6 +321,8 @@ export async function handle(req: In, d: Deps): Promise<Out> {
     await d.store.startState(await stateRow(value, { userId: me.id, app: isApp(b.app) ? b.app : me.app, provider: b.provider }, d.now()), nowIso);
     return json({ url: PROVIDERS[b.provider].signInUrl({ clientId: cfg.id, redirect: cfg.redirect, state: value }) });
   }
+
+  if (action === 'connect_finish') return connectFinish(b, me, d);
 
   // everything below is about one mailbox: this person's own, or nothing
   if (!['disconnect', 'watch', 'inbox', 'read', 'send'].includes(action)) return json({ error: 'Unknown action' }, 400);

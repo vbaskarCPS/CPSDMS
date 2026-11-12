@@ -3,6 +3,8 @@
 // The app never holds the key to a mailbox: it knows which mailboxes are connected, and gets mail when it asks for it.
 // Each person only ever sees their own (the function looks every mailbox up by the signed-in person).
 // Connecting sends the browser to Google's own sign-in page and nowhere else: connectStart refuses any other address.
+// Google sends it back with a code; the planner hands that to the function (connectFinish, called from finish.ts),
+// which connects the mailbox only when the person signed in here is the one who tapped Connect.
 // The demo (/demo) has one pretend mailbox, with made-up mail, and sends nothing.
 import { invoke } from '../../lib/ai';
 import { appId, isDemo } from '../../lib/app';
@@ -48,6 +50,13 @@ export async function connectStart(): Promise<string> {
   if (!signInAddressOk(r?.url)) throw new Error('The sign-in page couldn’t be opened. Try again.');
   return r.url;
 }
+/** Finish connecting: hand the function what Google's page gave this browser. It answers with the mailbox that is now
+ *  connected and the person's list, or (as a MailProblem) why nothing was connected. */
+export async function connectFinish(code: string, state: string): Promise<{ connected: string; mailboxes: Mailbox[] }> {
+  const r = await ask<{ connected?: unknown; mailboxes?: unknown }>({ action: 'connect_finish', code, state });
+  if (typeof r?.connected !== 'string' || !r.connected) throw new Error('The mailbox wasn’t connected. Tap Connect Gmail again.');
+  return { connected: r.connected.slice(0, 254), mailboxes: (Array.isArray(r.mailboxes) ? r.mailboxes : []).map(m => cleanBox(m as Partial<Mailbox>)).filter((m): m is Mailbox => !!m) };
+}
 /** Disconnect a mailbox. `revoked` false = it is forgotten here, but Google couldn't be told. */
 export async function disconnect(id: string): Promise<{ revoked: boolean }> {
   if (isDemo()) { demoBoxes = demoBoxes.filter(m => m.id !== id); return { revoked: true }; }
@@ -92,16 +101,15 @@ export function pickMailbox(list: Mailbox[], named: unknown): Mailbox | Mailbox[
   return fits.length === 1 ? fits[0] : fits.length ? fits : null;
 }
 
-// ── coming back from Google's sign-in page ──
-/** What the address the planner was sent back to says happened: `connected` = that mailbox was connected,
- *  `problem` = why it wasn't, in plain words. Anyone can write an address, so only an email address is taken as one,
- *  and only plain words (no links, nothing that looks like a web address) are shown as the problem. */
-export function cameBack(params: { get(name: string): string | null }): { connected?: string; problem?: string } {
-  const a = (params.get('connected') || '').trim().toLowerCase();
-  if (a.length <= 254 && /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(a)) return { connected: a };
-  const p = (params.get('problem') || '').replace(/\s+/g, ' ').trim();
-  if (p && p.length <= 200 && /^[A-Za-z0-9 ,.’'()-]+$/.test(p) && !/https?|www|\w\.\w/i.test(p)) return { problem: p };
-  return params.get('connected') || params.get('problem') ? { problem: 'The mailbox wasn’t connected. Try again.' } : {};
+// ── coming back from Google's sign-in page without a code ──
+/** When the sign-in at Google wasn't finished, the planner is sent back with ?problem=<plain words>. Anyone can write
+ *  an address, so only plain words (no links, nothing that looks like a web address) are shown; anything else that
+ *  claims to be a problem gets one fixed sentence. (A finished sign-in comes back another way: finish.ts.) */
+export function cameBack(params: { get(name: string): string | null }): { problem?: string } {
+  const raw = params.get('problem');
+  if (raw === null) return {};
+  const p = raw.replace(/\s+/g, ' ').trim();
+  return { problem: p && p.length <= 200 && /^[A-Za-z0-9 ,.’'()-]+$/.test(p) && !/https?|www|\w\.\w/i.test(p) ? p : 'The mailbox wasn’t connected. Try again.' };
 }
 /** How long ago something was, in a few words: "just now", "12 minutes ago", "3 hours ago", "on Nov 9". */
 export function ago(iso: string | null, nowMs: number): string {

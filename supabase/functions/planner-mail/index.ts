@@ -3,12 +3,17 @@
 // offered to-dos. Gmail only for now (gmail.ts keeps the mail service behind one small interface).
 //
 // This file is the wiring: the database, the secrets, Claude and the notification, handed to handle.ts, where every
-// action is written and documented (connect_start, list, disconnect, watch, inbox, read, send; the callback Google
-// sends people back to; check, from pg_cron). mail.ts reads an email, secure.ts locks the stored token.
+// action is written and documented (connect_start, connect_finish, list, disconnect, watch, inbox, read, send; the
+// callback Google sends people back to; check, from pg_cron). mail.ts reads an email, secure.ts locks the stored token.
 //
-// Sign-in happens on Google's own page: this function never sees or asks for an email password. What it keeps for a
-// mailbox is Google's refresh token, encrypted (AES-GCM, key = PLANNER_MAIL_KEY), in planner_mailboxes: a table only
-// the service role reaches. It is never sent to the app, never logged, never part of an error.
+// Sign-in happens on Google's own page: this function never sees or asks for an email password. Connecting takes two
+// steps on purpose. Google sends the browser to the callback, which connects nothing: it passes the browser on to the
+// planner with Google's code after the # of the address. The planner, signed in, then hands the code back
+// (connect_finish), and only if the person signed in there is the one who tapped Connect is the code swapped for
+// tokens. So a sign-in link handed to someone else can't put their mailbox in the wrong planner.
+// What is kept for a mailbox is Google's refresh token, encrypted (AES-GCM, key = PLANNER_MAIL_KEY), in
+// planner_mailboxes: a table only the service role reaches. It is never sent to the app, never logged, never part
+// of an error.
 //
 // Secrets: GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET (the planner's Google sign-in client),
 //   PLANNER_MAIL_KEY (32 random bytes, base64). Any of them missing: "Email isn't set up yet", not a crash.
@@ -17,7 +22,7 @@
 //   planner_secrets.cron_key). Claude: ANTHROPIC_API_KEY and ARVY_MODEL, as planner-arvy.
 // Deployed without JWT verification, like the other planner functions: planner users have no Supabase account, and
 // Google's redirect and pg_cron can't send one. The app's calls carry the planner token (checked with planner_me),
-// the callback carries the one-time state value, the check carries the cron key.
+// the callback only passes the browser on (it changes nothing), the check carries the cron key.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { handle, type Deps, type MailboxRow, type Me, type Store } from './handle.ts';
 import { MAILTODO_KIND, type MailTodo } from './mail.ts';
@@ -52,6 +57,11 @@ function storeOf(svc: Svc): Store {
       await svc.from('planner_mail_states').delete().eq('user_id', row.user_id).not('used_at', 'is', null);
       await svc.from('planner_mail_states').delete().eq('user_id', row.user_id).lt('expires_at', nowIso);
       must('state', (await svc.from('planner_mail_states').insert(row)).error);
+    },
+    async peekState(hash: string) {
+      const { data, error } = await svc.from('planner_mail_states').select('state_hash, user_id, app, provider, expires_at, used_at').eq('state_hash', hash).maybeSingle();
+      must('state', error);
+      return (data as StateRow | null) || null;
     },
     async claimState(hash: string, nowIso: string) {
       // one statement: only a row not yet used is marked, and only the request that marked it gets it back

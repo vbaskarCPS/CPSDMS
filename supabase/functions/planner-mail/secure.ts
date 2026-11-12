@@ -4,8 +4,11 @@
 // Nothing but WebCrypto here: no Deno, no network, no database (tested from src/planner/features/mail/secure.test.ts).
 //
 // The state: 32 random bytes. Only its SHA-256 is kept (planner_mail_states), with who started the sign-in, which
-// planner they came from, and when it runs out (10 minutes). Coming back, the row is found by the hash and marked
-// used in the same step (handle.ts claims it), so a value works once, for the person who started it, and not late.
+// planner they came from, and when it runs out (10 minutes). Google hands the value back to the browser; the
+// callback only looks the row up (to know which planner to send the browser to). The planner, signed in, then brings
+// the value to connect_finish, where the row is found by the hash and marked used in the same step (handle.ts claims
+// it), and the person signed in must be the person in the row. So a value works once, not late, and only for the
+// person who started it, in a browser where they are signed in to their planner.
 //
 // The key: AES-256-GCM with the PLANNER_MAIL_KEY secret, a fresh 12-byte IV for every value, and the mailbox it
 // belongs to mixed in (so a locked token copied onto another row doesn't open). What is stored reads

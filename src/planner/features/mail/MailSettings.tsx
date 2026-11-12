@@ -2,13 +2,17 @@
 // ones connected, switch "turn what comes in into to-dos" on or off for each, disconnect one. Each person connects
 // their own, as many as they have, and only ever sees their own.
 // Connect opens Google's own sign-in page in this tab (the planner never asks for an email password). Google sends
-// the browser back here with ?connected=<address> or ?problem=<plain words>, which is shown once.
+// the browser back here with a code after the # of the address. finish.ts has already taken it out of the address
+// by the time this screen is drawn; this screen hands it to the server once ("Finishing…") and shows what came of
+// it: the mailbox that is now connected, or why not. Only the person who tapped Connect, signed in to this planner,
+// gets a mailbox out of it. When the sign-in at Google wasn't finished, the address says so (?problem=…), shown once.
 // The page also says exactly what Arvy can and can't do with a connected mailbox, and what Google's "hasn't verified
 // this app" screen is about (this is a private app for two people).
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Mail } from 'lucide-react';
 import { ago, cameBack, connectStart, disconnect, mailboxes, MailProblem, setWatch, type Mailbox } from './mail';
+import { finishReturn, returnWaiting } from './finish';
 
 /** The tile on the Settings screen. */
 export function MailTile() {
@@ -23,7 +27,10 @@ export function MailTile() {
 
 export function MailSettings() {
   const [params, setParams] = useSearchParams();
-  const [came] = useState(() => cameBack(params));           // what Google's page sent back, read once
+  // what became of a sign-in at Google: the mailbox now connected, or why not (from the address when Google sent no
+  // code, else from the finish below)
+  const [came, setCame] = useState<{ connected?: string; problem?: string }>(() => cameBack(params));
+  const [finishing, setFinishing] = useState(() => returnWaiting());   // Google's code is being handed to the server
   const [boxes, setBoxes] = useState<Mailbox[] | null>(null);
   const [ready, setReady] = useState(true);                    // false = email isn't set up on the server yet
   const [loadErr, setLoadErr] = useState(false);
@@ -37,9 +44,20 @@ export function MailSettings() {
     try { const r = await mailboxes(); setBoxes(r.mailboxes); setReady(r.ready); setLoadErr(false); }
     catch { setLoadErr(true); }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    // back from Google's page with a code: hand it over. finishReturn makes the call once however often this runs
+    // (the same answer is given to a screen that is drawn twice), and its answer has the list in it.
+    const finish = finishReturn();
+    if (!finish) { setFinishing(false); void load(); return; }
+    setFinishing(true);
+    void finish.then(r => {
+      setFinishing(false);
+      if ('connected' in r) { setCame({ connected: r.connected }); setBoxes(r.mailboxes); setLoadErr(false); }
+      else { setCame({ problem: r.problem }); void load(); }
+    });
+  }, [load]);
   // the result is in the page now: take it out of the address, so going back or reloading doesn't show it again
-  useEffect(() => { if (params.has('connected') || params.has('problem')) setParams({}, { replace: true }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (params.has('problem')) setParams({}, { replace: true }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const connect = async () => {
     setMsg(null); setOpening(true);
@@ -62,7 +80,6 @@ export function MailSettings() {
       : `${m.address} is disconnected here. Google couldn’t be told just now: to remove the planner there too, open your Google Account, Security, “Your connections to third-party apps”.`));
   };
 
-  const mine = came.connected ? boxes?.some(m => m.address.toLowerCase() === came.connected) : undefined;
   return (
     <main className="pl-page pl-stack pl-fade mail-page" style={{ gap: 16 }}>
       <header className="pl-row">
@@ -70,20 +87,20 @@ export function MailSettings() {
         <h1>Email</h1>
       </header>
 
-      {came.connected && mine === true && <div className="pl-card mail-result is-good" role="status"><b>{came.connected} is connected.</b> Ask Arvy “anything important in my email?” to try it.</div>}
-      {came.connected && mine === false && <div className="pl-card mail-result is-bad" role="alert"><b>{came.connected} was connected, but not to the planner you’re signed in to here.</b> That sign-in was started from another planner, so the mailbox is there. If that isn’t what you meant, disconnect it there.</div>}
-      {came.problem && <div className="pl-card mail-result is-bad" role="alert"><b>Not connected.</b> {came.problem}</div>}
+      {finishing && <div className="pl-card mail-result" role="status" aria-busy="true"><b>Finishing…</b> Connecting the mailbox you just signed in to.</div>}
+      {!finishing && came.connected && <div className="pl-card mail-result is-good" role="status"><b>{came.connected} is connected.</b> Ask Arvy “anything important in my email?” to try it.</div>}
+      {!finishing && came.problem && <div className="pl-card mail-result is-bad" role="alert"><b>Not connected.</b> {came.problem}</div>}
 
       <section className="pl-card pl-stack">
         <p>Connect your own mailboxes here. You sign in on Google’s page: the planner never sees your email password.</p>
         {ready
-          ? <button type="button" className="pl-btn pl-btn--primary" disabled={opening} onClick={() => void connect()}><Mail aria-hidden />{opening ? 'Opening Google…' : boxes?.length ? 'Connect another Gmail' : 'Connect Gmail'}</button>
+          ? <button type="button" className="pl-btn pl-btn--primary" disabled={opening || finishing} onClick={() => void connect()}><Mail aria-hidden />{opening ? 'Opening Google…' : boxes?.length ? 'Connect another Gmail' : 'Connect Gmail'}</button>
           : <p className="pl-muted" role="status">Email isn’t set up yet. A mailbox can be connected once the set-up on the server is finished.</p>}
         {msg && <p className={msg.bad ? 'pl-error' : 'pl-muted'} role={msg.bad ? 'alert' : 'status'} style={{ fontSize: 14 }}>{msg.text}</p>}
       </section>
 
       {loadErr && <p className="pl-error" role="alert">Couldn’t load your mailboxes. Check the connection. <button type="button" className="pl-btn pl-btn--small" onClick={() => void load()}>Try again</button></p>}
-      {boxes === null && !loadErr && <p className="pl-muted" aria-busy="true">Loading…</p>}
+      {boxes === null && !loadErr && !finishing && <p className="pl-muted" aria-busy="true">Loading…</p>}
       {boxes?.length === 0 && <p className="pl-muted">No mailbox connected yet.</p>}
 
       {boxes?.map(m => (

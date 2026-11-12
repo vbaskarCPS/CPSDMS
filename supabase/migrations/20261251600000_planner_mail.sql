@@ -42,9 +42,12 @@ revoke all on table public.planner_mailboxes from anon, authenticated;
 
 -- ───────────── sign-ins that have been started ─────────────
 -- When someone taps Connect, the function makes a random value, sends it to Google with them and keeps only its
--- SHA-256 here, with who started it and which planner they came from. Google hands the value back when they return.
--- It is good once (used_at is set in the same statement that finds it) and for 10 minutes (expires_at), and the
--- mailbox is stored for the person in this row: never for anyone named in the request that comes back.
+-- SHA-256 here, with who started it and which planner they came from. Google hands the value back to the browser,
+-- and the function's callback only looks this row up to know which planner to send the browser on to (app): it
+-- connects nothing. The planner, signed in, then brings the value back (connect_finish). There it is good once
+-- (used_at is set in the same statement that finds it) and for 10 minutes (expires_at), and only when the person
+-- signed in to that planner is the person in this row (user_id). The mailbox is stored for that person, never for
+-- anyone named in a request, so a sign-in link passed to someone else connects nothing.
 create table if not exists public.planner_mail_states (
   state_hash text primary key,                                    -- sha-256 (hex) of the value; the value itself is kept nowhere
   user_id uuid not null references public.planner_users(id),
