@@ -12,6 +12,7 @@ import { IconsTile } from '../features/icons';
 import { ArrangeTile } from '../features/widgets';
 import { MailTile } from '../features/mail';
 import { SoundsTile } from '../features/sounds';
+import { WatchTile } from '../features/watch';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
@@ -26,7 +27,7 @@ export function Settings({ pass }: { pass: PlannerPass }) {
   const saveR = async (e: FormEvent) => {
     e.preventDefault();
     setRSaving(true); setRErr(null);
-    try { await saveRoutine({ ...routine, profile: routineNow().profile }); setRSaved(true); }
+    try { await saveRoutine({ ...routine, quiet: routineNow().quiet, profile: routineNow().profile }); setRSaved(true); }   // the reminders switched off are saved by their own switches (PushCard)
     catch (x) { setRErr(x instanceof Error ? x.message : 'Could not save'); }
     finally { setRSaving(false); }
   };
@@ -102,6 +103,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
       <ArrangeTile />
 
       <MailTile />
+
+      <WatchTile />
 
       <MemoryCard />
 

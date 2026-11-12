@@ -1,10 +1,12 @@
-// src/planner/ui/PushCard.tsx — Settings card: turn routine reminders on or off on this phone.
+// src/planner/ui/PushCard.tsx — Settings card: turn routine reminders on or off on this phone, and switch single
+// reminders off for good (Routine.quiet: no notification, the block stays in the day).
 import { useEffect, useState } from 'react';
 import { Bell, BellOff, Smartphone } from 'lucide-react';
 import { Card, Button } from './primitives';
 import { checkPush, disablePush, enablePush, pushAdvice, pushState, type PushCheck, type PushState } from '../lib/push';
-import { app, appBase } from '../lib/app';
-import { clock, hhmm, minutesOf, routineNow, planAt, type Routine } from '../lib/routine';
+import { app, appBase, appId } from '../lib/app';
+import { clock, hhmm, loadRoutine, minutesOf, onRoutineChange, routineNow, planAt, saveRoutine, type Routine } from '../lib/routine';
+import { reminderList } from '../../../supabase/functions/planner-push/reminders';
 
 /** The reminders a routine gives, as shown before turning them on (the sending is supabase/functions/planner-push). */
 export function reminderTimes(r: Routine): { at: string; what: string }[] {
@@ -26,7 +28,18 @@ export function PushCard() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const [check, setCheck] = useState<PushCheck | 'running' | null>(null);   // "Check notifications": where they stop
-  const r = routineNow();
+  const [r, setR] = useState<Routine>(routineNow());
+  useEffect(() => { void loadRoutine().then(setR); return onRoutineChange(setR); }, []);
+  const [quietErr, setQuietErr] = useState<string | null>(null);
+  // one reminder on or off: saved straight away to the routine, put back if it didn't save
+  const flip = async (id: string, on: boolean) => {
+    setQuietErr(null);
+    const was = r;
+    const quiet = [...new Set((was.quiet || []).filter(q => q !== id).concat(on ? [] : [id]))];
+    setR({ ...was, quiet });
+    try { await saveRoutine({ ...(await loadRoutine()), quiet }); }
+    catch (e) { setR(was); setQuietErr(e instanceof Error ? e.message : 'That didn’t save. Try again.'); }
+  };
   const runCheck = async () => {
     setMsg(null); setCheck('running');
     try { setCheck(await checkPush(app().name, `${appBase()}/icon-192.png`)); }
@@ -44,7 +57,7 @@ export function PushCard() {
     finally { setBusy(false); refresh(); }
   };
 
-  const reminders = reminderTimes(r);
+  const list = reminderList(r, appId());
 
   return (
     <Card className="pl-stack">
@@ -85,16 +98,17 @@ export function PushCard() {
       )}
 
       <div>
-        <p className="pl-eyebrow" style={{ marginBottom: 6 }}>What you'll get</p>
+        <p className="pl-eyebrow" style={{ marginBottom: 6 }}>Each reminder</p>
         <div className="pl-list">
-          {reminders.map(x => (
-            <div key={x.what} className="pl-item" style={{ padding: '8px 0' }}>
-              <span className="pl-num" style={{ minWidth: 72, fontWeight: 600 }}>{clock(x.at)}</span>
-              <span className="pl-muted">{x.what}</span>
+          {list.map(x => (
+            <div key={x.id} className="pl-item rem-item">
+              <span className="pl-grow" id={`rem-${x.id}`}><b>{x.name}</b><small className="pl-num">{clock(x.at)}</small></span>
+              <button type="button" role="switch" aria-checked={x.on} aria-labelledby={`rem-${x.id}`} className="rem-switch" onClick={() => void flip(x.id, !x.on)} />
             </div>
           ))}
         </div>
-        <p className="pl-muted" style={{ fontSize: 12, marginTop: 6 }}>Times follow your routine. A reminder is skipped once that step is ticked off.</p>
+        {quietErr && <p className="pl-error" style={{ fontSize: 13 }}>{quietErr}</p>}
+        <p className="pl-muted" style={{ fontSize: 12, marginTop: 6 }}>Off = no notification. The block stays in your day. Times follow your routine, and a reminder is skipped once that step is ticked off.</p>
       </div>
     </Card>
   );

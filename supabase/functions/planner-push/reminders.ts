@@ -2,6 +2,7 @@
 // here, so the rules are tested from the app's tests (src/planner/lib/reminders.test.ts).
 // A day whose plan was changed (adjust.ts: sick, so no gym, no sauna, up at 7, a stretch at 7) gets that day's
 // reminders: nothing for a skipped block, moved times, and one for each block added to the day.
+// A reminder switched off in Settings (Routine.quiet, every day) is not sent; its block stays in the day.
 import { cleanAdjust, lateGym, routineFor, type DayAdjust } from './adjust.ts';
 
 export const TZ = 'America/Toronto';
@@ -10,7 +11,7 @@ export const DAY_START_HOUR = 4;   // the planner's day rolls over at 4 am (src/
 // Same defaults as src/planner/lib/routine.ts (night: Vijay, morning: Rosh); the app comes from settings.app
 export type Profile = 'night' | 'morning';
 export type AppId = 'vijayplanner' | 'roshplanner';
-export interface Routine { profile: Profile; wake: string; wakeGrace: number; briefMinutes: number; daycare: string; eatOpen: string; eatClose: string; gym: string; shake: string; saunaMin: number; review: string; windDown: string; unwindCap: number; lightsOut: string; stretchMin: number; meditateMin: number; workoutMin: number; kiaanUp: string; fast: boolean; kitchenClose: string }
+export interface Routine { profile: Profile; wake: string; wakeGrace: number; briefMinutes: number; daycare: string; eatOpen: string; eatClose: string; gym: string; shake: string; saunaMin: number; review: string; windDown: string; unwindCap: number; lightsOut: string; stretchMin: number; meditateMin: number; workoutMin: number; kiaanUp: string; fast: boolean; kitchenClose: string; quiet?: string[] }
 // night profile = Vijay's 5 am club: up at 5, gym, the sauna (yesterday's review + today's Brief), lights out 9:30
 export const NIGHT_ROUTINE: Routine = {
   profile: 'night', stretchMin: 0, meditateMin: 0, workoutMin: 0, kiaanUp: '07:30', fast: true,
@@ -46,8 +47,33 @@ export function clock(hhmm: string): string {
 export interface Reminder { id: string; at: number; body: string; url: string; done: (day: DayDoc) => boolean }
 export interface DayDoc { brief?: { finishedAt?: string }; ticks?: Record<string, string | undefined>; night?: { review?: Record<string, string> }; adjust?: unknown }
 
-/** The day's reminders. `a` = that day's changes to the routine; `r` is the standing routine. */
+/** Plain names for the reminders, as Settings lists them with a switch each. */
+export const REMINDER_NAMES: Record<string, string> = {
+  wake: 'Up', sauna: 'Sauna and the Brief', gym: 'Gym later in the day', kitchen: 'Kitchen closes', window: 'Eating window',
+  lightsOut: 'Lights out', evening: 'Evening review', bed: 'Lights out',
+};
+/** The reminders switched off, every day (Settings). Old routines have none; anything that isn't a name is dropped. */
+export const quietOf = (r: { quiet?: unknown }): Set<string> =>
+  new Set(Array.isArray(r.quiet) ? r.quiet.filter((s): s is string => typeof s === 'string' && s in REMINDER_NAMES) : []);
+
+/** The day's reminders. `a` = that day's changes to the routine; `r` is the standing routine. A reminder switched off
+ *  (r.quiet) is left out; a block added for the day always keeps its own. */
 export function reminders(r: Routine, app: AppId, a?: DayAdjust | null): Reminder[] {
+  const off = quietOf(r);
+  return allReminders(r, app, a).filter(x => x.id.startsWith('x:') || !off.has(x.id));
+}
+
+/** Each reminder the standing routine can send, with its plain name, its time ('HH:MM') and whether it is on: the list
+ *  Settings shows. Built from the same code that sends them, so the two can't drift apart. */
+export function reminderList(r: Routine, app: AppId): { id: string; name: string; at: string; on: boolean }[] {
+  const off = quietOf(r);
+  return allReminders(r, app, null).map(x => {
+    const m = (x.at + DAY_START_HOUR * 60) % 1440;
+    return { id: x.id, name: REMINDER_NAMES[x.id] || x.id, at: `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`, on: !off.has(x.id) };
+  });
+}
+
+function allReminders(r: Routine, app: AppId, a?: DayAdjust | null): Reminder[] {
   const u = (path: string) => `/${app}${path}`;
   const e = routineFor(r, a);              // the routine as it runs that day
   const skip = new Set(a?.skip || []);

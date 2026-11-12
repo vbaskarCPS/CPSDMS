@@ -10,6 +10,8 @@
 //   stops      → RM map › Pins: one numbered pin per cart, in the planned order; an earlier order of the same kind is replaced
 //   job        → RM map › a worker's jobs › edit a job: its amount and how it was paid (the edit screen's own save, which
 //                works the cart's equiv and totals out again). The database keeps a record of each one (benny_job_changes).
+//   add_job    → the logsheet's own save of a new sale (completeJob), with each add-on as its own line tied to it; the
+//                cart's totals are worked out again, and a client with an email gets the logsheet's receipt
 //   bonus      → the day's payout list › Add bonus, on one or more paid-out carts: the live day saves it on the logsheet
 //                (bonuses and the pay it was closed at); a saved day saves it on the cart and works the day's pay out
 //                again. The database keeps a record of each one (benny_bonus_changes).
@@ -32,6 +34,7 @@ import type { BookingEmailKind, EmailPreset } from './bookingEmails';
 import { STOP_WORD } from './bennyDrive';
 import { textOf, textsTitle, type TextPerson, type TextsCheck, type TextsState } from './bennyTexts';
 import { removeCard, removedSaid, type RemoveCheck, type RemoveDone } from './bennyRemove';
+import { addJobCard, addJobLines, addedSaid, type AddJobCheck } from './bennyAddJob';
 import { queueHref } from './payoutQueue';
 import { cartContext, dayLines, listCarts, saveDay } from './payoutCarts';
 import { bonusName, bonusesSaid, liveBonusPatch, withBonuses, type BonusCheck, type LiveNow } from './bennyBonus';
@@ -135,6 +138,7 @@ export const payoutsStart = (c: PayoutsCheck): string | null => queueHref(c.date
 
 export type BennyProposal =
   | { kind: 'remove'; check: RemoveCheck }
+  | { kind: 'add_job'; check: AddJobCheck }
   | { kind: 'texts'; check: TextsCheck }
   | { kind: 'bonus'; check: BonusCheck }
   | { kind: 'payouts'; check: PayoutsCheck }
@@ -282,6 +286,7 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
       };
     }
     case 'remove': return removeCard(p.check);
+    case 'add_job': return addJobCard(p.check);
     case 'texts':
       // drawn by its own card (a button per worker); these are its words for anything that reads a card as lines
       return { title: textsTitle(p.check), lines: p.check.people.map(x => `${x.name}: “${x.text}”`), action: 'Text' };
@@ -530,6 +535,28 @@ export async function jobFromBenny(p: Extract<BennyProposal, { kind: 'job' }>, c
   return `${c.job.client ? `${c.job.client.split(' ')[0]}’s job` : 'The job'} on ${first}’s logsheet now reads ${dollars(begun.patch.price)}, ${begun.patch.payment_method}. The totals are worked out again.`;
 }
 
+/** The logsheet's own save for a new sale and its add-ons. The database checks it again first, on the live day. */
+export async function addJobFromBenny(p: Extract<BennyProposal, { kind: 'add_job' }>, centerId: string): Promise<string> {
+  const c = p.check;
+  const { sessionService, date } = await legacy(centerId);
+  if (date !== c.date) throw new Error('The live day changed since I checked. Ask me again.');
+  const again = must(await db.rpc('benny_check_add_job', { p_center: centerId, p_worker: c.worker.cn, p_job: {
+    address: c.job.address, price: c.job.price, paid_by: c.job.paid_by, service: c.job.service, route: c.job.route, client: c.job.client,
+    phone: c.contact?.phone, email: c.contact?.email, add_ons: c.job.add_ons } })) as AddJobCheck;
+  if (!again?.ok) throw new Error(again?.problems?.[0] || 'That job can’t be added now. Ask me again.');
+  if (again.cart.id !== c.cart.id) throw new Error(`${c.worker.name.split(' ')[0]} is on another cart now. Ask me again.`);
+  const lines = addJobLines(again);
+  let saved = 0;
+  for (const l of lines) {
+    try { await sessionService.completeJob(l.tx, l.jobId, c.worker.cn, again.cart.workers); saved++; }
+    catch (e) {
+      if (!saved) throw new Error(`The job didn’t save: ${e instanceof Error ? e.message : 'try again'}. Nothing was added.`);
+      throw new Error(`The sale saved, but ${lines.length - saved} add-on${lines.length - saved === 1 ? '' : 's'} didn’t. Add ${lines.length - saved === 1 ? 'it' : 'them'} on the logsheet screen.`);
+    }
+  }
+  return addedSaid(again);
+}
+
 /**
  * The day's payout list › Add bonus, for each bonus on the card. The database checks once more and starts a record of
  * each; the app saves the way that day's payout list does; the carts are read back, so "added" is only said when they are.
@@ -634,6 +661,7 @@ export async function doProposal(p: BennyProposal, center: CenterLite): Promise<
   if (p.kind === 'job') return jobFromBenny(p, center.id);
   if (p.kind === 'bonus') return bonusesFromBenny(p, center);
   if (p.kind === 'remove') return removeFromBenny(p, center.id);
+  if (p.kind === 'add_job') return addJobFromBenny(p, center.id);
   if (p.kind === 'pin') return pinFromBenny(p, center.id);
   if (p.kind === 'stops') return stopsFromBenny(p, center.id);
   // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)

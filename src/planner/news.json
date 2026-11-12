@@ -1,4 +1,8 @@
 [
+  { "id": "2026-11-12-quiet-reminders", "date": "2026-11-12", "title": "Switch off a single reminder",
+    "lines": ["Settings › Reminders now lists each reminder with its own switch.", "Off means no notification; the block stays in your day.", "Or just tell Arvy: “no reminder for the sauna”.", "Ask Arvy for a to-do “this week” and it picks the emptiest day for it."] },
+  { "id": "2026-11-12-watch-connect", "date": "2026-11-12", "title": "Settings › Watch, ready for the watch app", "for": "night",
+    "lines": ["New in Settings: Watch. When the planner app is on your Galaxy Watch, it shows a 4-digit code: type it there to connect.", "The watch app itself is on its way: log sets, rest timers, heart rate, habits, timers, steps and sleep."] },
   { "id": "2026-11-12-sauna-auto", "date": "2026-11-12", "title": "The sauna ticks itself", "for": "night",
     "lines": ["When the sauna timer runs out, Sauna is ticked for you at the time it ended, and the sauna habit with it.", "It works from Today too, if you’ve left the sauna screen. Tap it to untick if you didn’t go."] },
   { "id": "2026-11-12-race-today-fix", "date": "2026-11-12", "title": "Race timer fixed, and the gym habit has a 30-minute rule", "for": "night",

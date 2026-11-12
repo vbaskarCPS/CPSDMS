@@ -200,7 +200,7 @@ describe('the Benny’s tools', () => {
   });
   it('changes become cards; lookups don’t', () => {
     const kinds = TOOLS.map(t => { const c = toolCall(t.name, {}, ctx); return c && 'fn' in c && c.card ? c.card.kind : null; }).filter(Boolean);
-    expect(kinds.sort()).toEqual(['bonus', 'booking', 'booking_emails', 'give_route', 'job', 'partner', 'payouts', 'pin', 'remove', 'solo', 'start_day', 'stops', 'texts']);
+    expect(kinds.sort()).toEqual(['add_job', 'bonus', 'booking', 'booking_emails', 'give_route', 'job', 'partner', 'payouts', 'pin', 'remove', 'solo', 'start_day', 'stops', 'texts']);
     const start = toolCall('propose_start_day', { assign: [], team_mode: 'whatever' }, ctx);
     expect(start && 'fn' in start && start.card?.team_mode).toBe('roster');
     expect(toolCall('propose_start_day', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
