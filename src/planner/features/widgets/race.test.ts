@@ -3,7 +3,7 @@
 // with no finish, the best, the average and the streak, the live clock, and what gets kept day by day.
 import { describe, expect, it } from 'vitest';
 import type { Workout } from '../workout/types';
-import { board, clockOf, cleanResult, firstSet, isNewBest, lapOf, liveView, momentOf, raceOn, resultOf, settle, upMoment, wordsOf, type Lap, type RaceDay } from './race';
+import { board, clockOf, cleanResult, firstSet, workoutStart, RULE, isNewBest, lapOf, liveView, momentOf, raceOn, resultOf, settle, upMoment, wordsOf, type Lap, type RaceDay } from './race';
 
 const at = (day: string, hm: string, s = 0) => { const [y, m, d] = day.split('-').map(Number); const [h, mi] = hm.split(':').map(Number); return new Date(y, m - 1, d, h, mi, s).getTime(); };
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -59,12 +59,12 @@ describe('when it finishes: the first set ticked done', () => {
   });
   it('a race across midnight: up late, first set after twelve, still that planner day', () => {
     const day: RaceDay = { key: D, ticks: { up: '23:40' }, workouts: [session(D, at('2026-11-12', '00:05'), [at('2026-11-12', '00:12')])] };
-    const r = raceOn('gym', day);
+    const r = raceOn('firstset', day);
     expect(r.start).toEqual({ at: at(D, '23:40') });
     expect(lapOf(D, resultOf(r.start!, r.finish))!.ms).toBe(32 * 60_000);
   });
   it('a start with no finish (no gym that day) is not a race', () => {
-    const r = raceOn('gym', { key: D, ticks: { up: '05:04' }, workouts: [] });
+    const r = raceOn('firstset', { key: D, ticks: { up: '05:04' }, workouts: [] });
     expect(r.start).not.toBeNull();
     expect(r.finish).toBeNull();
     expect(lapOf(D, resultOf(r.start!, r.finish))).toBeNull();
@@ -142,29 +142,52 @@ describe('what gets kept, day by day', () => {
     key, ticks: { up }, workouts: first ? [session(key, at(key, first) - 60_000, [approx ? null : at(key, first)])] : [],
   });
   it('the days gone by are filled in the first time, so the board isn’t empty the day the widget is added', () => {
-    const { writes, results } = settle('gym', D, {}, [day('2026-11-09', '05:00', '05:30'), day('2026-11-10', '05:00', null), day(D, '05:02', '05:25')]);
+    const { writes, results } = settle('firstset', D, {}, [day('2026-11-09', '05:00', '05:30'), day('2026-11-10', '05:00', null), day(D, '05:02', '05:25')]);
     expect(writes.map(w => w.day)).toEqual(['2026-11-09', D]);
     expect(Object.keys(results).sort()).toEqual(['2026-11-09', D]);
   });
   it('a day gone by that is already kept is left as it is; a day taken off stays off', () => {
     const kept = { '2026-11-09': resultOf({ at: at('2026-11-09', '05:00') }, { at: at('2026-11-09', '05:40') }), '2026-11-10': { v: 1 as const, removed: true as const } };
-    const { writes, results } = settle('gym', D, kept, [day('2026-11-09', '05:00', '05:30'), day('2026-11-10', '05:00', '05:10')]);
+    const { writes, results } = settle('firstset', D, kept, [day('2026-11-09', '05:00', '05:30'), day('2026-11-10', '05:00', '05:10')]);
     expect(writes).toEqual([]);
     expect(lapOf('2026-11-09', results['2026-11-09'])!.ms).toBe(40 * 60_000);
     expect(lapOf('2026-11-10', results['2026-11-10'])).toBeNull();
   });
   it('today follows the day: kept when it finishes, gone again when the tick is undone', () => {
-    const done = settle('gym', D, {}, [day(D, '05:02', '05:25')]);
+    const done = settle('firstset', D, {}, [day(D, '05:02', '05:25')]);
     expect(done.writes).toHaveLength(1);
     const kept = { [D]: done.writes[0].data };
-    expect(settle('gym', D, kept, [day(D, '05:02', '05:25')]).writes).toEqual([]);
-    expect(settle('gym', D, kept, [{ key: D, ticks: {}, workouts: [] }]).writes).toEqual([{ day: D, data: null }]);
+    expect(settle('firstset', D, kept, [day(D, '05:02', '05:25')]).writes).toEqual([]);
+    expect(settle('firstset', D, kept, [{ key: D, ticks: {}, workouts: [] }]).writes).toEqual([{ day: D, data: null }]);
   });
   it('an older session’s day is kept as approximate', () => {
-    expect(settle('gym', D, {}, [day('2026-11-09', '05:00', '05:30', true)]).writes[0].data).toMatchObject({ approx: true });
+    expect(settle('firstset', D, {}, [day('2026-11-09', '05:00', '05:30', true)]).writes[0].data).toMatchObject({ approx: true });
   });
   it('one by hand is only what was kept: nothing is worked out or written', () => {
     const kept = { [D]: { v: 1 as const, start: iso(at(D, '19:00')) } };
     expect(settle('manual', D, kept, [day(D, '05:02', '05:25')])).toEqual({ results: kept, writes: [] });
+  });
+});
+
+describe('"Up to Start workout" (gym): finishes when Start workout is pressed', () => {
+  const up = at(D, '05:00');
+  it('the earliest gym session started after Up; home and thrown-away ones don’t count', () => {
+    const ws = [session(D, at(D, '05:31'), [at(D, '05:40')]), session(D, at(D, '05:22'), [], { kind: 'home' }), session(D, at(D, '05:20'), [], { discarded: true }), session(D, at(D, '05:27'), [])];
+    expect(workoutStart({ key: D, workouts: ws }, up)).toEqual({ at: at(D, '05:27') });
+    expect(workoutStart({ key: D, workouts: [session(D, at(D, '04:55'), [])] }, up)).toBeNull();
+    expect(raceOn('gym', { key: D, ticks: { up: '05:00' }, workouts: [session(D, at(D, '05:27'), [])] }).finish).toEqual({ at: at(D, '05:27') });
+  });
+  it('days kept under the old first-set rule are worked out again; a day taken off stays off', () => {
+    const old = cleanResult({ v: 1, start: new Date(at('2026-11-09', '05:00')).toISOString(), finish: new Date(at('2026-11-09', '05:40')).toISOString() });
+    const off = { v: 1 as const, removed: true as const };
+    const days = [
+      { key: '2026-11-09', ticks: { up: '05:00' }, workouts: [session('2026-11-09', at('2026-11-09', '05:25'), [at('2026-11-09', '05:40')])] },
+      { key: '2026-11-10', ticks: { up: '05:00' }, workouts: [session('2026-11-10', at('2026-11-10', '05:25'), [])] },
+    ];
+    const { writes } = settle('gym', D, { '2026-11-09': old, '2026-11-10': off }, days);
+    expect(writes).toEqual([{ day: '2026-11-09', data: { v: 1, start: new Date(at('2026-11-09', '05:00')).toISOString(), finish: new Date(at('2026-11-09', '05:25')).toISOString(), rule: RULE.gym } }]);
+    const again = settle('gym', D, { '2026-11-09': writes[0].data }, days.slice(0, 1));
+    expect(again.writes).toEqual([]);
+    expect(cleanResult(writes[0].data)).toEqual(writes[0].data);
   });
 });

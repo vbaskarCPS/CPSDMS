@@ -317,7 +317,7 @@ describe('the race timer', () => {
       { id: 'x-rc4', kind: 'race', race: 7 },
     ] });
     expect(p.added).toEqual([
-      { id: 'x-rc1', kind: 'race', race: 'gym', title: 'Up to first set' },
+      { id: 'x-rc1', kind: 'race', race: 'gym', title: 'Up to Start workout' },
       { id: 'x-rc2', kind: 'race', race: 'manual', title: `Kids to bed ${'z'.repeat(28)}` },
     ]);
     expect(p.kept).toBe(undefined);

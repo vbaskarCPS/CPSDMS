@@ -1,5 +1,5 @@
 // src/planner/features/widgets/race.ts — the race timer's sums: how long it took, day by day, from one moment to
-// another ("Up to first set": from ticking Up to the first set ticked done in the gym), the best, the average, the
+// another ("Up to Start workout": from ticking Up to pressing Start workout in Training), the best, the average, the
 // streak, and what the live clock says while a race is on. Plain functions with no React (tested in race.test.ts).
 // The results are kept per person in the doc 'race' / `${widget id}~${day}` (raceStore.ts); RaceCard.tsx draws them.
 //
@@ -64,14 +64,33 @@ export function firstSet(d: RaceDay, from: number): Moment | null {
   return best;
 }
 
-export type RaceKind = 'gym' | 'manual';
+/** Start workout pressed in Training that day, at or after `from`: the earliest session started then. A session done at
+ *  home (the back-on-track challenge) or thrown away doesn't count. */
+export function workoutStart(d: RaceDay, from: number): Moment | null {
+  let best: Moment | null = null;
+  for (const w of d.workouts || []) {
+    if (!w || w.discarded || w.kind === 'home') continue;
+    const at = msOf(w.startedAt);
+    if (at !== null && at >= from && (!best || at < best.at)) best = { at };
+  }
+  return best;
+}
+
+/** 'gym' finishes when Start workout is pressed (Vijay, 12 Nov). It was the first set until then: results kept for it
+ *  before carry no `rule` and are worked out again (see settle). */
+export type RaceKind = 'gym' | 'firstset' | 'manual';
 export const RACES: Record<RaceKind, RaceDef> = {
-  gym: { name: 'Up to first set', about: 'From ticking Up to your first set done in the gym', start: upMoment, finish: firstSet, waiting: 'Starts when you tick I’m up' },
+  gym: { name: 'Up to Start workout', about: 'From ticking Up to pressing Start workout in Training', start: upMoment, finish: workoutStart, waiting: 'Starts when you tick I’m up' },
+  firstset: { name: 'Up to first set', about: 'From ticking Up to your first set done in the gym', start: upMoment, finish: firstSet, waiting: 'Starts when you tick I’m up' },
   manual: { name: 'Start and stop yourself', about: 'For anything: tap Start, then Stop. You name it' },
 };
 export const RACE_KINDS = Object.keys(RACES) as RaceKind[];
 export const isRaceKind = (v: unknown): v is RaceKind => typeof v === 'string' && v in RACES;
 export const byHand = (k: RaceKind): boolean => !RACES[k].start;
+/** Which version of a kind's start and finish a kept result was worked out with. A kept day from an older version is
+ *  worked out again when the day still gives a time (a day taken off stays off). */
+export const RULE: Record<RaceKind, number> = { gym: 2, firstset: 1, manual: 1 };
+const ruleOf = (r: RaceResult | null): number => r?.rule ?? 1;
 
 /** One day's race, read from the day. `finish` is null while it's still on, or on a day it was never finished. */
 export function raceOn(kind: RaceKind, d: RaceDay): { start: Moment | null; finish: Moment | null } {
@@ -83,7 +102,7 @@ export function raceOn(kind: RaceKind, d: RaceDay): { start: Moment | null; fini
 
 // ── the stored result ──
 /** What's kept for one day. `removed` = taken off by the person (a forgotten tick): it isn't worked out again. */
-export interface RaceResult { v: 1; start?: string; finish?: string; approx?: true; removed?: true }
+export interface RaceResult { v: 1; start?: string; finish?: string; approx?: true; removed?: true; rule?: number }
 /** Whatever was saved, made safe; null when there's nothing usable. A finish before its start is no finish. */
 export function cleanResult(raw: unknown): RaceResult | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -91,11 +110,13 @@ export function cleanResult(raw: unknown): RaceResult | null {
   if (r.removed === true) return { v: 1, removed: true };
   const s = msOf(r.start), f = msOf(r.finish);
   if (s === null) return null;
-  return { v: 1, start: r.start as string, ...(f !== null && f >= s ? { finish: r.finish as string } : {}), ...(r.approx === true ? { approx: true } : {}) };
+  const rule = typeof r.rule === 'number' && Number.isInteger(r.rule) && r.rule > 1 && r.rule < 100 ? { rule: r.rule } : {};
+  return { v: 1, start: r.start as string, ...(f !== null && f >= s ? { finish: r.finish as string } : {}), ...(r.approx === true ? { approx: true } : {}), ...rule };
 }
 /** A day's race as it's kept. */
-export const resultOf = (start: Moment, finish: Moment | null): RaceResult => ({
+export const resultOf = (start: Moment, finish: Moment | null, rule = 1): RaceResult => ({
   v: 1, start: new Date(start.at).toISOString(), ...(finish ? { finish: new Date(finish.at).toISOString() } : {}), ...(start.approx || finish?.approx ? { approx: true } : {}),
+  ...(rule > 1 ? { rule } : {}),
 });
 export const sameResult = (a: RaceResult | null, b: RaceResult | null): boolean => JSON.stringify(a) === JSON.stringify(b);
 export const raceKey = (id: string, day: string): string => `${id}~${day}`;
@@ -168,11 +189,13 @@ export function settle(kind: RaceKind, today: string, kept: Record<string, RaceR
     const had = kept[d.key] ?? null;
     if (had?.removed) continue;
     const { start, finish } = raceOn(kind, d);
-    const now = start && finish ? resultOf(start, finish) : null;
+    const now = start && finish ? resultOf(start, finish, RULE[kind]) : null;
+    const stale = !!had && ruleOf(had) !== RULE[kind];
     if (d.key === today) {
       if (now && !sameResult(had, now)) { writes.push({ day: d.key, data: now }); results[d.key] = now; }
       else if (!now && had) { writes.push({ day: d.key, data: null }); delete results[d.key]; }
-    } else if (now && !had) { writes.push({ day: d.key, data: now }); results[d.key] = now; }
+    } else if (now && (!had || (stale && !sameResult(had, now)))) { writes.push({ day: d.key, data: now }); results[d.key] = now; }
+    else if (!now && stale) { writes.push({ day: d.key, data: null }); delete results[d.key]; }
   }
   return { results, writes };
 }

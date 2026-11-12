@@ -1,5 +1,5 @@
 // src/planner/features/widgets/RaceCard.tsx — a race timer on Today: how long it took today to get from one thing to
-// the next ("Up to first set": from ticking Up to the first set done in the gym), against the person's best.
+// the next ("Up to Start workout": from ticking Up to pressing Start workout in Training), against the person's best.
 // While it's on, a big clock counts up from the stored start (so a phone that sleeps, or the planner closed and opened
 // again, loses nothing), with the best beside it and how far ahead or behind it is right now. After the finish: today's
 // time, "New best!" when it is, and the days in a row faster than the average. Tap it for the last 30 days, where a
@@ -10,7 +10,7 @@ import { dayKey } from '../../lib/docs';
 import { Sheet } from '../../ui/primitives';
 import { addDays } from '../plan/dates';
 import type { Day } from '../plan/types';
-import { byHand, clockOf, isNewBest, LIVE_MAX, liveView, RACES, wordsOf, type Lap } from './race';
+import { byHand, clockOf, isNewBest, LIVE_MAX, liveView, RACES, wordsOf, type Lap, type RaceKind } from './race';
 import { useRace, WINDOW } from './raceStore';
 import type { Race } from './widgets';
 
@@ -99,14 +99,14 @@ export function RaceCard({ w, small, live }: { w: Race; small: boolean; live?: {
     </section>
     {/* beside the card, not in it: a card's look (its shadow, its paper) mustn't hold the sheet in */}
     <Sheet open={open} onClose={() => setOpen(false)} title={w.title}>
-      {open && <RaceHistory laps={r.laps} board={r.board} today={today} hand={hand} ready={r.loaded} onRemove={r.remove} onClose={() => setOpen(false)} />}
+      {open && <RaceHistory kind={w.race} laps={r.laps} board={r.board} today={today} hand={hand} ready={r.loaded} onRemove={r.remove} onClose={() => setOpen(false)} />}
     </Sheet>
   </>);
 }
 
 /** The last 30 days: a bar a day (the best one marked, an approximate one striped), the average and the best, and a
  *  way to take a wrong day off. */
-function RaceHistory({ laps, board, today, hand, ready, onRemove, onClose }: { laps: Lap[]; board: ReturnType<typeof useRace>['board']; today: string; hand: boolean; ready: boolean; onRemove: (day: string) => void; onClose: () => void }) {
+function RaceHistory({ kind, laps, board, today, hand, ready, onRemove, onClose }: { kind: RaceKind; laps: Lap[]; board: ReturnType<typeof useRace>['board']; today: string; hand: boolean; ready: boolean; onRemove: (day: string) => void; onClose: () => void }) {
   const [asking, setAsking] = useState<string | null>(null);
   const days = Array.from({ length: WINDOW }, (_, i) => addDays(today, i - WINDOW + 1));
   const by = new Map(laps.map(l => [l.day, l]));
@@ -114,7 +114,7 @@ function RaceHistory({ laps, board, today, hand, ready, onRemove, onClose }: { l
   const list = [...laps].sort((a, b) => b.day.localeCompare(a.day));
   return (
     <div className="pl-stack wg-rh">
-      {!laps.length ? <p className="pl-muted">No times yet. {hand ? 'Tap Start, then Stop, and your first one shows here.' : 'Tick I’m up, then your first set in the gym, and your first one shows here.'}</p> : (
+      {!laps.length ? <p className="pl-muted">No times yet. {hand ? 'Tap Start, then Stop, and your first one shows here.' : `Tick I’m up, then ${kind === 'firstset' ? 'your first set in the gym' : 'press Start workout in Training'}, and your first one shows here.`}</p> : (
         <>
           <div className="wg-rh__chart" role="img" aria-label={`The last ${WINDOW} days: ${laps.length} raced. Best ${wordsOf(board.best!.ms)}, average ${wordsOf(board.average!)}`}>
             {days.map(d => {
