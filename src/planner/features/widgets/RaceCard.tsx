@@ -64,13 +64,13 @@ export function RaceCard({ w, small, live }: { w: Race; small: boolean; live?: {
   else { big = '0:00'; line = hand ? 'Tap Start when you begin' : RACES[w.race].waiting || ''; tone = 'is-idle'; }
   const said = `${w.title}: ${lv ? `${wordsOf(lv.ms)} so far${lv.word ? `, ${lv.word}` : ''}` : mine && !lv ? `today ${wordsOf(mine.ms)}${fresh ? ', a new best' : ''}` : line}${best ? `. Best ${wordsOf(best.ms)}` : ''}. Open the last ${WINDOW} days`;
 
-  return (
+  return (<>
     <section className={`pl-card wg-race ${small ? 'is-small' : ''} ${running && !late ? 'is-on' : ''} ${tone}`}>
       <button type="button" className="wg-race__open" aria-label={said} onClick={() => setOpen(true)}>
         <span className="wg-race__head">
           <Timer aria-hidden />
           <b className="wg-race__title">{w.title}</b>
-          {best && !small && <span className="wg-race__best">Best {clockOf((before && running ? before : best).ms)}</span>}
+          {best && !small && r.board.count > 1 && <span className="wg-race__best">Best {clockOf((before && running ? before : best).ms)}</span>}
         </span>
         <span className="wg-race__clock" aria-hidden>
           <b className={`wg-race__big ${big.length > 5 ? 'is-long' : ''}`}>{big}</b>
@@ -81,13 +81,10 @@ export function RaceCard({ w, small, live }: { w: Race; small: boolean; live?: {
           {tone === 'is-best' && <span className="wg-race__burst" aria-hidden>{Array.from({ length: 6 }, (_, i) => <i key={i} />)}</span>}
           {line}
         </span>
-        {!small && !lv && mine && (best || r.board.streak > 0) && (
-          <span className="wg-race__more" aria-hidden>
-            {best && best.day !== today && `Best ${clockOf(best.ms)}`}{best && best.day !== today && r.board.streak > 0 ? ' · ' : ''}
-            {r.board.streak > 0 && `${r.board.streak} ${r.board.streak === 1 ? 'day' : 'days'} in a row faster than your average`}
-          </span>
+        {!small && !lv && mine && r.board.streak > 0 && (
+          <span className="wg-race__more" aria-hidden>{r.board.streak} {r.board.streak === 1 ? 'day' : 'days'} in a row faster than your average</span>
         )}
-        {small && best && <span className="wg-race__more" aria-hidden>Best {clockOf(best.ms)}</span>}
+        {small && best && r.board.count > 1 && <span className="wg-race__more" aria-hidden>Best {clockOf(best.ms)}</span>}
       </button>
       {hand && r.loaded && !r.removed && (!r.start ? (
         <button type="button" className="pl-btn pl-btn--primary wg-race__go" onClick={r.begin}><Play aria-hidden /> Start</button>
@@ -99,11 +96,12 @@ export function RaceCard({ w, small, live }: { w: Race; small: boolean; live?: {
       ) : null)}
       {r.trouble === 'load' && <small className="pl-error">Couldn’t load the times. Check the connection.</small>}
       {r.trouble === 'save' && <small className="pl-error">Not saved yet. Check the connection.</small>}
-      <Sheet open={open} onClose={() => setOpen(false)} title={w.title}>
-        {open && <RaceHistory laps={r.laps} board={r.board} today={today} hand={hand} ready={r.loaded} onRemove={r.remove} onClose={() => setOpen(false)} />}
-      </Sheet>
     </section>
-  );
+    {/* beside the card, not in it: a card's look (its shadow, its paper) mustn't hold the sheet in */}
+    <Sheet open={open} onClose={() => setOpen(false)} title={w.title}>
+      {open && <RaceHistory laps={r.laps} board={r.board} today={today} hand={hand} ready={r.loaded} onRemove={r.remove} onClose={() => setOpen(false)} />}
+    </Sheet>
+  </>);
 }
 
 /** The last 30 days: a bar a day (the best one marked, an approximate one striped), the average and the best, and a

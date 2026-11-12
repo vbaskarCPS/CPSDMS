@@ -139,10 +139,10 @@
 /* the race's last 30 days */
 .wg-rh__chart { position: relative; display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 2px; align-items: end; height: 120px; padding-bottom: 1px; border-bottom: 1px solid var(--line); }
 .wg-rh__col { display: flex; align-items: flex-end; height: 100%; }
-.wg-rh__col i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.wg-rh__col i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: color-mix(in srgb, var(--ink) 30%, transparent); }
 .wg-rh__col.is-none i { height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--ink) 10%, transparent); }
 .wg-rh__col.is-best i { background: var(--amber); }
-.wg-rh__col.is-approx i { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--accent) 55%, transparent) 0 3px, color-mix(in srgb, var(--accent) 22%, transparent) 3px 6px); }
+.wg-rh__col.is-approx i { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ink) 30%, transparent) 0 3px, color-mix(in srgb, var(--ink) 10%, transparent) 3px 6px); }
 .wg-rh__col.is-approx.is-best i { background: repeating-linear-gradient(135deg, var(--amber) 0 3px, color-mix(in srgb, var(--amber) 40%, transparent) 3px 6px); }
 .wg-rh__avg { position: absolute; left: 0; right: 0; height: 0; border-top: 1.5px dashed var(--ink-2); pointer-events: none; }
 .wg-rh__axis { display: flex; justify-content: space-between; margin-top: -8px; font-size: 12px; }
@@ -153,7 +153,7 @@
 .wg-rh__key { font-size: 12px; line-height: 1.5; }
 .wg-rh__sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
 .wg-rh__sw.is-best { background: var(--amber); }
-.wg-rh__sw.is-approx { background: repeating-linear-gradient(135deg, var(--accent) 0 2px, transparent 2px 4px); }
+.wg-rh__sw.is-approx { background: repeating-linear-gradient(135deg, var(--ink-2) 0 2px, transparent 2px 4px); }
 .wg-rh__list { margin: 0; padding: 0; list-style: none; }
 .wg-rh__list > li { border-top: 1px solid var(--line); }
 .wg-rh__row { display: flex; align-items: center; gap: 8px; min-height: 48px; font-size: 15px; font-variant-numeric: tabular-nums; }
