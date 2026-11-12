@@ -149,3 +149,14 @@
 /* a small line after something was done: "Copied", "Saved to Arvy's log" */
 .us-said { display: flex; align-items: center; gap: 6px; padding: 7px 14px 0; font-size: 13px; font-weight: 700; color: var(--ink-2); }
 .us-said svg { width: 15px; height: 15px; flex: none; color: var(--good, #2e8b57); }
+/* ── Arvy in the chat: its answer to a message that was addressed to it (a message of its own, on the left, with its
+   name over it), and under the asking message where the answer stands: looking, or no answer and "Ask again" ── */
+.us-msg.arvy { max-width: 92%; }
+.us-arvy-name { display: flex; align-items: center; gap: 5px; padding: 0 4px; font: 700 12px var(--sans); color: var(--ink-2); }
+.us-arvy-name svg { width: 13px; height: 13px; flex: none; color: var(--accent); }
+.us-msg.arvy .us-bubble { white-space: normal; border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line)); }
+.us-msg.arvy .us-bubble p { margin: 0 0 6px; }
+.us-msg.arvy .us-bubble p:last-child { margin: 0; }
+.us-again { display: block; min-height: 44px; margin: 6px 0 0; padding: 0 18px; border: 1.5px solid var(--line); border-radius: 22px; background: var(--bg-2); color: var(--ink); font: 700 13.5px var(--sans); cursor: pointer; }
+.us-again:disabled { opacity: .5; cursor: default; }
+.us-asked .arvy-error { padding: 4px 4px 0; }

@@ -6,6 +6,10 @@
 // tap on that quote goes back to the original). A message pressed and held is picked: more can be tapped, and the bar
 // that takes the box's place offers Reply, Ask Arvy (do something with them: the same proposals, under the last one
 // picked) and Copy. How a press, a swipe and a scroll are told apart: select.ts.
+// A message that starts with RV or Arvy is for Arvy: it answers in the chat, as a message of its own that both of them
+// see, with what it does in its own chat (looking things up, places with their buttons). "Arvy is looking…" shows
+// under the asking message meanwhile; if no answer comes, a plain line says so and the asker can ask again. What Arvy
+// set up waits on its message for a Confirm tap like any other proposal.
 // The list, sending, asking and confirming are in us.ts; a message and a proposal are defined in planner-chat/chat.ts.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
 import { CalendarPlus, Check, Copy, Image as Picture, ImagePlus, Lightbulb, ListTodo, Play, Reply, Send, ShoppingCart, Smile, Sparkles, Video, X } from 'lucide-react';
@@ -16,15 +20,18 @@ import { Tray } from './Tray';
 import { getPass } from '../../lib/auth';
 import { enablePush, pushState, type PushState } from '../../lib/push';
 import { setArvyOpen } from '../arvy/arvy';
+import { Places, Rich } from '../arvy/Arvy';
 import { imagesFrom } from '../arvy/pics';
-import { canConfirm, MAX_ASK, MAX_ASK_WORDS, MAX_TEXT, quoteWords, type ChatMsg, type Proposal, type ReplyTo } from '../../../../supabase/functions/planner-chat/chat';
+import { askLine, canConfirm, isArvy, isShared, MAX_ASK, MAX_ASK_WORDS, MAX_TEXT, quoteWords, type ChatMsg, type Proposal, type ReplyTo } from '../../../../supabase/functions/planner-chat/chat';
 import { HOLD_MS, barFor, copyText, fingerIs, pickedRows, swipeOf, togglePick } from './select';
-import { answer, askArvy, filesProblem, logIdea, mediaUrl, onUs, otherName, replyTo, say, setUsOpen, usIsOpen, usLoaded, usRows, usVersion, type Asking, type Row } from './us';
+import { answer, askAgain, askArvy, askingNow, filesProblem, logIdea, mediaUrl, onUs, otherName, replyTo, say, setUsOpen, usIsOpen, usLoaded, usRows, usVersion, type Asking, type Row } from './us';
 import { CallButton } from './call/CallButton';
 import '../arvy/arvy.css';
 import './us.css';
 
 const nameOf = (username: string) => username.charAt(0).toUpperCase() + username.slice(1);
+/** A page's site, for its link under an answer of Arvy's: "google.com". */
+const siteOf = (url: string): string => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return 'source'; } };
 /** When a message was sent: the time today, the day and time before that. */
 export function sentAt(iso: string, now = new Date()): string {
   const d = new Date(iso);
@@ -41,10 +48,11 @@ function ProposalCard({ row, p, user }: { row: Row; p: Proposal; user: string })
     try { await answer(row.key, p, how); } catch (e) { setError(e instanceof Error ? e.message : 'That didn’t save.'); }
     finally { setWorking(false); }
   };
+  const own = !isShared(p.tool);   // not the shopping list, the calendar or a to-do: a change of the asker's own, on an answer of Arvy's
   return (
     <div className={`arvy-change ${p.state === 'dismissed' ? 'cancelled' : p.state}`}>
       <div className="arvy-change-lines">
-        {p.state === 'done' && <Check className="arvy-change-tick" aria-label="Added" />}
+        {p.state === 'done' && <Check className="arvy-change-tick" aria-label={own ? 'Done' : 'Added'} />}
         <div>{p.lines.map((l, i) => <div key={i}>{l}</div>)}{error && <div className="arvy-error">{error}</div>}</div>
       </div>
       {p.state === 'waiting' && (canConfirm(p, user)
@@ -52,9 +60,9 @@ function ProposalCard({ row, p, user }: { row: Row; p: Proposal; user: string })
             <button type="button" className="arvy-confirm" disabled={working} onClick={() => void act('done')}>{working ? 'Saving…' : 'Confirm'}</button>
             <button type="button" className="arvy-cancel" disabled={working} onClick={() => void act('dismissed')}>No thanks</button>
           </div>
-        : <div className="arvy-change-note">Waiting for {nameOf(p.for || '')} to confirm</div>)}
-      {p.state === 'done' && <div className="arvy-change-note">Added{p.by ? ` · ${p.by === user ? 'you' : nameOf(p.by)} confirmed` : ''}</div>}
-      {p.state === 'dismissed' && <div className="arvy-change-note">Not added</div>}
+        : <div className="arvy-change-note">{own ? `Only ${nameOf(p.for || '')} can confirm this` : `Waiting for ${nameOf(p.for || '')} to confirm`}</div>)}
+      {p.state === 'done' && <div className="arvy-change-note">{own ? 'Done' : 'Added'}{p.by ? ` · ${p.by === user ? 'you' : nameOf(p.by)} confirmed` : ''}</div>}
+      {p.state === 'dismissed' && <div className="arvy-change-note">{own ? 'Not done' : 'Not added'}</div>}
     </div>
   );
 }
@@ -83,7 +91,12 @@ function Message({ row, user, picked, picking, flash, touch, onPick, onReply, on
 }) {
   const m: ChatMsg = row.msg;
   const mine = m.by === user;
-  const big = !m.media?.length ? bigEmoji(m.text) : null;   // a message that is only emoji of ours: drawn big, with no bubble
+  const arvy = isArvy(m);                                    // Arvy's answer to a message addressed to it
+  // under a message addressed to Arvy: it is looking, or it didn't answer (and the one who asked can ask again)
+  const now = askingNow(row.key);
+  const asked = row.sending ? null : askLine(m, { me: user, now: Date.now(), running: !!now });
+  const [again, setAgain] = useState<'busy' | string | null>(null);
+  const big = !m.media?.length && !arvy ? bigEmoji(m.text) : null;   // a message that is only emoji of ours: drawn big, with no bubble
   const [playing, setPlaying] = useState<number | null>(null);
   const can = !!replyTo(row);                                // one still on its way can't be replied to or picked yet
   const el = useRef<HTMLDivElement>(null);
@@ -97,9 +110,9 @@ function Message({ row, user, picked, picking, flash, touch, onPick, onReply, on
   };
   const hold = () => { if (!finger.current) return; touch.current.spent = true; stop(); buzz(); onPick(row.key); };
   return (
-    <div ref={el} data-key={row.key} className={`us-msg ${mine ? 'mine' : 'theirs'}${picked ? ' is-picked' : ''}${flash ? ' is-flash' : ''}${can ? ' can-pick' : ''}`}
+    <div ref={el} data-key={row.key} className={`us-msg ${mine ? 'mine' : 'theirs'}${arvy ? ' arvy' : ''}${picked ? ' is-picked' : ''}${flash ? ' is-flash' : ''}${can ? ' can-pick' : ''}`}
       onPointerDown={e => {
-        if (!can || (e.pointerType === 'mouse' && e.button !== 0) || (e.target as Element).closest('.us-arvy, video')) return;
+        if (!can || (e.pointerType === 'mouse' && e.button !== 0) || (e.target as Element).closest('.us-arvy, .arvy-places, .arvy-sources, video')) return;
         finger.current = { id: e.pointerId, x: e.clientX, y: e.clientY, mode: 'press', armed: false, touch: e.pointerType !== 'mouse' };
         window.clearTimeout(timer.current);
         if (!picking) timer.current = window.setTimeout(hold, HOLD_MS);
@@ -128,7 +141,7 @@ function Message({ row, user, picked, picking, flash, touch, onPick, onReply, on
       onClickCapture={e => { if (picking && can && !(e.target as Element).closest('.us-arvy')) { e.preventDefault(); e.stopPropagation(); onPick(row.key); } }}
       onContextMenu={e => {
         // a phone's own long press (its menu for a link or a picture) is ours; so is a right click
-        if (!can || (e.target as Element).closest('.us-arvy, video')) return;
+        if (!can || (e.target as Element).closest('.us-arvy, .arvy-places, .arvy-sources, video')) return;
         e.preventDefault();
         if (finger.current) hold(); else if (!picking && !touch.current.spent) onPick(row.key);
       }}>
@@ -156,13 +169,37 @@ function Message({ row, user, picked, picking, flash, touch, onPick, onReply, on
               : x.thumb ? <img key={i} src={x.thumb} alt="Photo" className="is-thumb" draggable={false} /> : <span key={i} className="us-blank" />;
           })}
         </div>)}
-      {big ? <div className="us-sticker">{big.list.map((e, i) => <Emoji key={i} e={e} size={big.size} />)}</div> : m.text && <div className="us-bubble"><EmojiText text={m.text} /></div>}
+      {arvy && <div className="us-arvy-name"><Sparkles aria-hidden /> Arvy</div>}
+      {big ? <div className="us-sticker">{big.list.map((e, i) => <Emoji key={i} e={e} size={big.size} />)}</div>
+        : arvy ? (
+          // Arvy's answer: its words, the places it names with their buttons, and where it read. The links are checked
+          // again as they are drawn (Places; and only https here), whatever the message holds
+          <div className="us-bubble">
+            <Rich text={m.text || ''} />
+            {!!m.links?.length && <Places links={m.links} />}
+            {!!m.sources?.some(s => /^https:\/\//i.test(s?.url || '')) && (
+              <div className="arvy-sources"><span>From</span>
+                {m.sources.filter(s => /^https:\/\//i.test(s?.url || '')).slice(0, 4).map(s => <a key={s.url} href={s.url} target="_blank" rel="noopener noreferrer" title={s.title}>{siteOf(s.url)}</a>)}
+              </div>)}
+          </div>)
+        : m.text && <div className="us-bubble"><EmojiText text={m.text} /></div>}
       <div className="us-meta">{row.sending ? 'Sending…' : sentAt(m.at)}</div>
+      {asked && (
+        <div className="us-arvy us-asked">
+          {asked.state === 'working'
+            ? <div className="us-arvy-line" role="status"><Sparkles aria-hidden /> {now?.step ? `Arvy is checking ${now.step}…` : 'Arvy is looking…'}</div>
+            : <>
+                <div className="us-arvy-line"><Sparkles aria-hidden /> {asked.again ? 'Arvy didn’t answer that.' : `Arvy didn’t answer that. ${m.name || nameOf(m.by)} can ask again.`}</div>
+                {asked.again && <button type="button" className="us-again" disabled={again === 'busy'}
+                  onClick={() => { setAgain('busy'); askAgain(row.key).then(() => setAgain(null)).catch(e => setAgain(e instanceof Error ? e.message : 'That didn’t work. Try again.')); }}>Ask again</button>}
+                {again && again !== 'busy' && <div className="arvy-error" role="alert">{again}</div>}
+              </>}
+        </div>)}
       {m.arvy && m.arvy.state !== 'none' && !row.sending && (
         <div className="us-arvy">
           {m.arvy.state === 'reading' && Date.now() - Date.parse(m.at) < 90_000 && <div className="us-arvy-line"><Sparkles aria-hidden /> Arvy is reading…</div>}
           {m.arvy.note && <div className="us-arvy-line"><Sparkles aria-hidden /> {m.arvy.note}</div>}
-          {!!m.arvy.proposals?.length && <div className="us-arvy-line"><Sparkles aria-hidden /> Arvy</div>}
+          {!!m.arvy.proposals?.length && !arvy && <div className="us-arvy-line"><Sparkles aria-hidden /> Arvy</div>}
           {m.arvy.proposals?.map(p => <ProposalCard key={p.id} row={row} p={p} user={user} />)}
         </div>)}
     </div>
@@ -191,7 +228,7 @@ function AskList({ about, user, other, busy, error, onAsk, onIdea }: {
         <input value={words} onChange={e => setWords(e.target.value)} maxLength={MAX_ASK_WORDS} placeholder="Or ask something else…" aria-label={`Ask Arvy something else about ${about}`} enterKeyHint="send" />
         <button type="submit" className="arvy-send" disabled={busy || !words.trim()} aria-label="Ask Arvy"><Send /></button>
       </form>
-      {busy ? <div className="us-arvy-line" role="status"><Sparkles aria-hidden /> Arvy is reading…</div> : error ? <div className="arvy-error" role="alert">{error}</div> : <p className="us-meta">Arvy offers it under the last one. Nothing is added until you tap Confirm.</p>}
+      {busy ? <div className="us-arvy-line" role="status"><Sparkles aria-hidden /> Arvy is reading…</div> : error ? <div className="arvy-error" role="alert">{error}</div> : <p className="us-meta">Arvy offers these under the last one. What you type, it answers in the chat, where you both see it. Nothing is added until a Confirm tap.</p>}
     </div>
   );
 }
@@ -297,7 +334,7 @@ export function Us() {
   // the newest message stays in view: when one arrives, and when Arvy's offer lands under the last one. Not while
   // messages are being picked: the list stays where the finger left it
   const last = rows[rows.length - 1]?.msg;
-  const tail = `${rows.length}:${last?.arvy?.state || ''}:${last?.arvy?.proposals?.length || 0}`;
+  const tail = `${rows.length}:${last?.arvy?.state || ''}:${last?.arvy?.proposals?.length || 0}:${last?.ask?.state || ''}`;
   useEffect(() => { if (open && !picking) endRef.current?.scrollIntoView({ block: 'end' }); }, [open, tail, sending]); // eslint-disable-line react-hooks/exhaustive-deps
   // …and when the quote or the bar takes room from under it. The list of things to ask takes a lot: the last
   // picked message, the one Arvy's offer will land under, is kept in view above it
@@ -387,6 +424,7 @@ export function Us() {
           <div className="arvy-hello">
             <p><b>This is your chat with {other}.</b> Write, or send a photo or a short video.</p>
             <p>Arvy reads along. When one of you asks for something (“can you get apples”, “dentist Thursday at 3”), it offers to put it on the shopping list, the calendar or a to-do list, and waits for a tap. Nothing is added by itself.</p>
+            <p>To ask Arvy something, start the message with <b>RV</b> or <b>Arvy</b> (“RV find us somewhere for dinner on Friday”). It answers here, where you both see it.</p>
           </div>)}
         {!loaded && <div className="us-meta">Loading…</div>}
         {rows.map(r => <Message key={r.msg.id} row={r} user={user} picked={picks.includes(r.key)} picking={picking} flash={flash === r.key} touch={touch} onPick={pickMsg} onReply={reply} onJump={jump} />)}

@@ -32,8 +32,9 @@ const load = (k: string): ChatLine[] => { try { return JSON.parse(sessionStorage
 const save = (k: string, m: ChatLine[]) => { try { sessionStorage.setItem(k, JSON.stringify(lean(m.slice(-40)))); } catch { /* private mode */ } };
 const SUGGEST = ['How’s my day looking?', 'What’s on this weekend?', 'How’s the budget this month?', 'Add milk and eggs to the list'];
 
-/** A light touch of formatting: **bold** and "- " list lines. */
-function Rich({ text }: { text: string }) {
+/** A light touch of formatting: **bold** and "- " list lines. (Also used for Arvy's answers in the chat between the
+ *  two of them: features/us/Us.tsx.) */
+export function Rich({ text }: { text: string }) {
   const parts = (s: string) => s.split(/(\*\*[^*]+\*\*)/g).map((p, i) => (p.startsWith('**') && p.endsWith('**') ? <b key={i}>{p.slice(2, -2)}</b> : p));
   const lines = text.split('\n');
   return <>{lines.map((l, i) => /^\s*[-•*]\s+/.test(l)
@@ -49,8 +50,8 @@ const PLACE_BUTTON: Record<PlaceLinkKind, { label: string; Icon: typeof Phone }>
 };
 /** The places a reply names, each with its buttons: Call dials, the others open in the browser or the Maps app. The
  *  links are checked again as they're drawn (cleanLinks): whatever a saved chat holds, only tel: and https: links
- *  ever become a button. */
-function Places({ links }: { links: unknown }) {
+ *  ever become a button. (Also drawn under Arvy's answers in the chat between the two of them: features/us/Us.tsx.) */
+export function Places({ links }: { links: unknown }) {
   const places = cleanLinks(links);
   if (!places.length) return null;
   return (
