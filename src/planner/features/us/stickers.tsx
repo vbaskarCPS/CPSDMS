@@ -1,13 +1,16 @@
-// src/planner/features/us/stickers.tsx — the chat's own drawings of things: three for each occasion (occasions.ts).
-// With the smileys (smileys.tsx) they make up the emoji packs (emoji.tsx), which is where sending and showing live.
-// Each one stands for an ordinary emoji: a message that is nothing but that emoji, typed on any keyboard, is drawn
-// as our drawing (stickerOf).
+// src/planner/features/us/stickers.tsx — the chat's own drawings of things: three for each occasion (occasions.ts),
+// and ten for Christmas, the first theme with a full set. With the smileys (smileys.tsx) they make up the emoji packs
+// (emoji.tsx), which is where sending and showing live.
+// Each one stands for an ordinary emoji. For the 21 that came first, a message that is nothing but that emoji, typed
+// on any keyboard, is drawn as our drawing (stickerOf); the ones added since are ours only when picked from the tray
+// (`trayOnly`), so a cup of coffee typed in July doesn't turn into a Christmas mug.
 // The drawings are ours; the movement is in us.css (st-…) and stops for anyone who has asked their phone for less motion.
 import type { ReactNode } from 'react';
 import type { OccasionId } from './occasions';
 
-/** One emoji of ours. `emoji` = the ordinary emoji it stands for (what a notification shows); `smiley` = a face. */
-export interface StickerDef { id: string; emoji: string; name: string; occasion: OccasionId; art: ReactNode; smiley?: boolean }
+/** One emoji of ours. `emoji` = the ordinary emoji it stands for (what a notification shows); `smiley` = a face;
+ *  `trayOnly` = ours only when picked from the tray: typed by itself on a keyboard it stays the ordinary emoji. */
+export interface StickerDef { id: string; emoji: string; name: string; occasion: OccasionId; art: ReactNode; smiley?: boolean; trayOnly?: boolean }
 
 export const HEART = 'M32 54 C10 38 8 22 20 16 C27 13 32 19 32 23 C32 19 37 13 44 16 C56 22 54 38 32 54 Z';
 export const STAR = 'M32 4 L35 12 L43 12 L37 17 L39 25 L32 20 L25 25 L27 17 L21 12 L29 12 Z';
@@ -16,6 +19,16 @@ export const rays = (cx: number, cy: number, from: number, to: number, colors: s
   const a = (i / n) * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
   return <line key={i} x1={cx + c * from} y1={cy + s * from} x2={cx + c * to} y2={cy + s * to} stroke={colors[i % colors.length]} strokeWidth={width} strokeLinecap="round" />;
 });
+// a sprig of holly, placed by its berries: two leaves spread left and right, three berries between them
+const LEAF = 'M0 0 Q2.5 -2.2 4.6 -5.2 Q6.6 -3.2 8.6 -5.6 Q10.2 -3 12.6 -4.4 Q13.4 -1.6 17 0 Q13.4 1.6 12.6 4.4 Q10.2 3 8.6 5.6 Q6.6 3.2 4.6 5.2 Q2.5 2.2 0 0 Z';
+export const holly = (cx: number, cy: number, s = 1) => <g transform={`translate(${cx} ${cy}) scale(${s})`}>
+  {[-158, -22].map(a => <g key={a} transform={`rotate(${a})`}><path d={LEAF} fill="#27894e" stroke="#1a6b3a" strokeWidth=".9" strokeLinejoin="round" /><path d="M2 0 H14" stroke="#62c486" strokeWidth=".9" strokeLinecap="round" /></g>)}
+  {[[0, -1.8], [-2.9, 2.6], [2.9, 2.6]].map(([x, y]) => <circle key={x} cx={x} cy={y} r="2.9" fill="#e23d4b" stroke="#b8283c" strokeWidth=".8" />)}
+  <circle cx="-.9" cy="-2.7" r=".8" fill="#ffb3bb" /><circle cx="-3.8" cy="1.7" r=".8" fill="#ffb3bb" /><circle cx="2" cy="1.7" r=".8" fill="#ffb3bb" /></g>;
+
+// the gingerbread man's shape, in one colour: drawn twice, a darker one a little fatter underneath for the baked edge
+const biscuit = (colour: string, limb: number, head: number) => <g stroke={colour} strokeWidth={limb} strokeLinecap="round">
+  <path d="M16 31 H48 M32 28 V42 M32 42 L23 54 M32 42 L41 54" fill="none" /><circle cx="32" cy="17" r={head} fill={colour} stroke="none" /></g>;
 
 export const STICKERS: StickerDef[] = [
   // ── Halloween ──
@@ -55,6 +68,43 @@ export const STICKERS: StickerDef[] = [
   { id: 'snowflake', emoji: '❄', name: 'Snowflake', occasion: 'christmas', art: <g className="st-spin" stroke="#7cc8f5" strokeWidth="3.5" strokeLinecap="round" fill="none">
     {[0, 60, 120].map(a => <g key={a} transform={`rotate(${a} 32 32)`}><line x1="32" y1="6" x2="32" y2="58" /><path d="M25 13 L32 19 L39 13 M25 51 L32 45 L39 51" /></g>)}
     <circle cx="32" cy="32" r="4" fill="#d8f0ff" stroke="none" /></g> },
+  // the rest of the Christmas set: picked from the tray only (see the top of the file)
+  { id: 'ribbon', emoji: '💝', name: 'With love', occasion: 'christmas', trayOnly: true, art: <g className="st-beat">
+    <path d={HEART} fill="#e8324f" transform="translate(0 3)" /><path d="M17.5 30 C17 26.5 19 23.6 22 22.8" stroke="#ff9db0" strokeWidth="3" fill="none" strokeLinecap="round" />
+    <path d="M29.4 25 H34.6 V54 L32 57 L29.4 54 Z" fill="#ffd166" />
+    <path d="M32 24.5 C26.5 13 17.5 16 20.5 21.5 C22 24.6 28 25.4 32 24.5 Z M32 24.5 C37.5 13 46.5 16 43.5 21.5 C42 24.6 36 25.4 32 24.5 Z" fill="#ffd166" stroke="#e9b53a" strokeWidth="1.5" strokeLinejoin="round" />
+    <path d="M30.6 25.5 L26.6 34 L31.3 31.5 Z M33.4 25.5 L37.4 34 L32.7 31.5 Z" fill="#f2b01c" /><circle cx="32" cy="24.6" r="3.2" fill="#f2b01c" /></g> },
+  { id: 'star', emoji: '⭐', name: 'Star', occasion: 'christmas', trayOnly: true, art: <>
+    <g className="st-beat"><path d="M32 6 L39.05 23.3 L57.7 24.7 L43.4 36.7 L47.9 54.8 L32 45 L16.1 54.8 L20.6 36.7 L6.3 24.7 L24.95 23.3 Z" fill="#ffd23f" stroke="#e8a317" strokeWidth="3.2" strokeLinejoin="round" />
+      <path d="M32 6 L39.05 23.3 L57.7 24.7 L43.4 36.7 L47.9 54.8 L32 45 L16.1 54.8 L20.6 36.7 L6.3 24.7 L24.95 23.3 Z" fill="#ffe98f" transform="translate(32 32.4) scale(.48) translate(-32 -33)" /></g>
+    {dots([[8, 9, '#ffc93a'], [57, 8, '#ffc93a'], [58, 46, '#ffc93a'], [6, 47, '#ffc93a']], 1.9)}</> },
+  { id: 'bell', emoji: '🔔', name: 'Bell', occasion: 'christmas', trayOnly: true, art: <g className="st-swing">
+    <circle cx="32" cy="55" r="5.2" fill="#e9a820" />
+    <path d="M32 12 C21 12 18.5 22 18.5 31 C18.5 40 15 44.5 10.5 48.5 H53.5 C49 44.5 45.5 40 45.5 31 C45.5 22 43 12 32 12 Z" fill="#ffc93a" stroke="#e9a820" strokeWidth="1.6" strokeLinejoin="round" />
+    <rect x="8.5" y="45.6" width="47" height="6.8" rx="3.4" fill="#f2b01c" stroke="#e9a820" strokeWidth="1" />
+    <path d="M24.5 22 C23 27 23 33 23.5 38" stroke="#fff3bf" strokeWidth="3.2" fill="none" strokeLinecap="round" />{holly(32, 12, .92)}</g> },
+  { id: 'cocoa', emoji: '☕', name: 'Hot chocolate', occasion: 'christmas', trayOnly: true, art: <>
+    <path className="st-twinkle" d="M20 14 C17 10.5 23 8 20 3.5 M31 13 C28 9.5 34 7 31 2.5" stroke="#b9b3cf" strokeWidth="2.4" fill="none" strokeLinecap="round" />
+    <path d="M46 34 C57.5 34 57.5 50 45 50" fill="none" stroke="#27894e" strokeWidth="5" strokeLinecap="round" />
+    <path d="M10 26 H48 V47 C48 54 43.5 58.5 37 58.5 H21 C14.5 58.5 10 54 10 47 Z" fill="#2f9e5b" />
+    <ellipse cx="29" cy="26" rx="19" ry="5.4" fill="#7a4a22" stroke="#27894e" strokeWidth="1.8" />
+    <rect x="17" y="19.5" width="9" height="7" rx="2.6" fill="#fff" stroke="#e3dfe8" strokeWidth="1" transform="rotate(-14 21.5 23)" /><rect x="27" y="18" width="9" height="7" rx="2.6" fill="#fff" stroke="#e3dfe8" strokeWidth="1" transform="rotate(9 31.5 21.5)" /><rect x="33" y="22.5" width="8.4" height="6.4" rx="2.4" fill="#fff" stroke="#e3dfe8" strokeWidth="1" transform="rotate(-6 37 25.5)" />
+    <g stroke="#fff" strokeWidth="2.2" strokeLinecap="round">{[0, 60, 120].map(a => <line key={a} x1="29" y1="36.5" x2="29" y2="50.5" transform={`rotate(${a} 29 43.5)`} />)}</g></> },
+  { id: 'ginger', emoji: '🍪', name: 'Gingerbread man', occasion: 'christmas', trayOnly: true, art: <g className="st-wobble">
+    {biscuit('#a5642d', 15.6, 12)}{biscuit('#cf8a4d', 12.8, 10.6)}
+    <path d="M15.6 26.4 V35.6 M48.4 26.4 V35.6 M20.2 48.4 L27.6 53.8 M43.8 48.4 L36.4 53.8" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
+    <circle cx="28" cy="15.4" r="1.8" fill="#2b2540" /><circle cx="36" cy="15.4" r="1.8" fill="#2b2540" /><path d="M27.4 20 Q32 24.4 36.6 20" stroke="#fff" strokeWidth="2" fill="none" strokeLinecap="round" />
+    <circle cx="32" cy="32" r="2.3" fill="#e23d4b" /><circle cx="32" cy="39.6" r="2.3" fill="#2f9e5b" /></g> },
+  { id: 'cane', emoji: '🍬', name: 'Candy cane', occasion: 'christmas', trayOnly: true, art: <g className="st-wobble"><g transform="rotate(14 32 34)" fill="none">
+    <path d="M25 56 V23 A10.5 10.5 0 0 1 46 23 V29" stroke="#d6aab3" strokeWidth="11.8" strokeLinecap="round" /><path d="M25 56 V23 A10.5 10.5 0 0 1 46 23 V29" stroke="#fff" strokeWidth="9.4" strokeLinecap="round" />
+    <path d="M25 56 V23 A10.5 10.5 0 0 1 46 23 V29" stroke="#e23d4b" strokeWidth="9.4" strokeDasharray="5.4 6.4" strokeDashoffset="3" />
+    <path d="M25 41 C19 34 12 38 15.5 42 C17.5 44 22 43 25 41 Z M25 41 C31 34 38 38 34.5 42 C32.5 44 28 43 25 41 Z" fill="#3fb56c" stroke="#27894e" strokeWidth="1.2" strokeLinejoin="round" /><circle cx="25" cy="41" r="2.6" fill="#27894e" /></g></g> },
+  { id: 'stocking', emoji: '🧦', name: 'Stocking', occasion: 'christmas', trayOnly: true, art: <g className="st-swing">
+    <path d="M40 9 C46 2 51 8 43 12" fill="none" stroke="#c4263f" strokeWidth="2.4" strokeLinecap="round" />
+    <path d="M20 14 H42 V36 C42 39 44 40.5 47 42 C54 45.5 57 50 55.5 54.5 C54 59 49 60 44 60 H29 C23 60 20 56 20 50 Z" fill="#e23d4b" stroke="#c4263f" strokeWidth="1.4" strokeLinejoin="round" />
+    <path d="M48 42.6 C54.4 46 57 50.2 55.5 54.5 C54 59 49 60 45 60 C50.5 56.5 52 49 48 42.6 Z M20 47 C27 47.4 31 52.4 30.4 60 H29 C23 60 20 56 20 50 Z" fill="#2f9e5b" />
+    <rect x="16.5" y="6" width="29" height="11.6" rx="5.6" fill="#fff" stroke="#e3dfe8" strokeWidth="1.4" />
+    <g stroke="#fff" strokeWidth="2" strokeLinecap="round">{[0, 60, 120].map(a => <line key={a} x1="31" y1="24" x2="31" y2="35" transform={`rotate(${a} 31 29.5)`} />)}</g></g> },
   // ── New Year ──
   { id: 'sparkler', emoji: '🎇', name: 'Sparkler', occasion: 'newyear', art: <>
     <line x1="12" y1="58" x2="34" y2="28" stroke="#9aa0ad" strokeWidth="3" strokeLinecap="round" />
@@ -103,7 +153,7 @@ export const STICKERS: StickerDef[] = [
 
 // the emoji as typed can carry an invisible "show as a picture" mark (U+FE0F): the same sticker with or without it
 export const bare = (s: string) => s.replace(/\uFE0F/g, '').trim();
-const BY_EMOJI = new Map(STICKERS.map(s => [bare(s.emoji), s]));
+const BY_EMOJI = new Map(STICKERS.filter(s => !s.trayOnly).map(s => [bare(s.emoji), s]));
 /** The sticker a message is, when the message is nothing but that one emoji. */
 export function stickerOf(text?: string | null): StickerDef | null {
   return (text && BY_EMOJI.get(bare(text))) || null;

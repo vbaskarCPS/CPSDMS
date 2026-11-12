@@ -10,8 +10,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
 import { CalendarPlus, Check, Copy, Image as Picture, ImagePlus, Lightbulb, ListTodo, Play, Reply, Send, ShoppingCart, Smile, Sparkles, Video, X } from 'lucide-react';
 import { calendarKey, getDocs } from '../../lib/docs';
-import { birthdaysFrom, countdown, upcoming, type Birthday } from './occasions';
-import { Emoji, EmojiText, bigEmoji, hasOurs, healDraft, packOf, putIn, type EmojiDef } from './emoji';
+import { birthdaysFrom, upcoming, type Birthday } from './occasions';
+import { Emoji, EmojiText, bigEmoji, hasOurs, healDraft, putIn, type EmojiDef } from './emoji';
+import { Tray } from './Tray';
 import { getPass } from '../../lib/auth';
 import { enablePush, pushState, type PushState } from '../../lib/push';
 import { setArvyOpen } from '../arvy/arvy';
@@ -220,9 +221,9 @@ export function Us() {
   const [push, setPush] = useState<PushState | null>(null);
   const pickRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  // the emoji tray: a pack for each occasion, the one coming up next first. Birthdays are read off the calendar the
-  // first time it opens. A tap puts the emoji into the message where the caret is (or was: the box needn't be in use,
-  // so the keyboard stays down while picking)
+  // the emoji tray (Tray.tsx): one theme at a time, opening on the occasion coming up next. Birthdays are read off the
+  // calendar when the chat first opens, so the tray knows which is next by the time it is asked for. A tap puts the
+  // emoji into the message where the caret is (or was: the box needn't be in use, so the keyboard stays down while picking)
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const caret = useRef<number | null>(null);      // where typing would land, as last seen
   const setCaret = useRef<number | null>(null);   // where to put the caret once the box has the new text
@@ -234,9 +235,9 @@ export function Us() {
   const [tray, setTray] = useState(false);
   const [birthdays, setBirthdays] = useState<Birthday[] | null>(null);
   useEffect(() => {
-    if (!tray || birthdays) return;
+    if (!open || birthdays) return;
     getDocs<{ title?: string; date?: string; repeat?: string }>('event').then(d => setBirthdays(birthdaysFrom(d.map(x => x.data).filter(Boolean)))).catch(() => setBirthdays([]));
-  }, [tray, birthdays]);
+  }, [open, birthdays]);
   const occasions = useMemo(() => upcoming(calendarKey(), birthdays || []), [birthdays, tray]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // replying, and picking messages out. `answering` = the message the next one sent will be a reply to; `picks` =
@@ -408,17 +409,7 @@ export function Us() {
             <div className="us-picked">
               {files.map((f, i) => <span key={i}>{f.type.startsWith('video/') ? 'Video' : 'Photo'} {i + 1}<button type="button" onClick={() => setFiles(files.filter((_, j) => j !== i))} aria-label="Take it off"><X /></button></span>)}
             </div>)}
-          {tray && (
-            <div className="us-tray">
-              {occasions.map((o, i) => (
-                <section key={`${o.id}:${o.name}`} className={i === 0 ? 'is-next' : ''}>
-                  <h4>{i === 0 && Number.isFinite(o.days) ? 'Coming up: ' : ''}{o.name}{countdown(o) && <em>{countdown(o)}</em>}</h4>
-                  <div className="us-pack">
-                    {packOf(o.id).map(e => <button key={e.id} type="button" onClick={() => putEmoji(e)} aria-label={`Add ${e.name}`} title={e.name}><Emoji e={e} size={38} still /></button>)}
-                  </div>
-                </section>))}
-              {birthdays && !birthdays.length && <p className="us-meta">Put your birthdays on the calendar as yearly events (“Rosh’s birthday”) and they count down here too.</p>}
-            </div>)}
+          {tray && <Tray occasions={occasions} noBirthdays={!!birthdays && !birthdays.length} onPick={putEmoji} />}
           {quote && answering && (
             <div className="us-replying">
               <Reply aria-hidden />

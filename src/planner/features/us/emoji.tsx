@@ -1,6 +1,6 @@
 // src/planner/features/us/emoji.tsx — the chat's emoji packs: for each occasion (occasions.ts), its smileys
-// (smileys.tsx) and its drawings of things (stickers.tsx). They go into a message like any emoji, in among the words;
-// a message that is only emoji of ours shows them big.
+// (smileys.tsx) and its drawings of things (stickers.tsx). The tray (Tray.tsx) shows one pack at a time. They go into
+// a message like any emoji, in among the words; a message that is only emoji of ours shows them big.
 //
 // How one travels: as an ordinary look-alike emoji (🎅 for the Santa-hat face) followed by its name spelled in
 // invisible characters (Unicode "tag" characters, the same ones flags like England's are made of) and an invisible
@@ -18,6 +18,9 @@ export const EMOJI: EmojiDef[] = [...SMILEYS, ...STICKERS];
 const BY_ID = new Map(EMOJI.map(e => [e.id, e]));
 /** An occasion's pack: its smileys, then its things. */
 export const packOf = (occasion: OccasionId): EmojiDef[] => EMOJI.filter(e => e.occasion === occasion);
+// the one drawing that stands for a whole theme, on its chip in the tray (Tray.tsx): a thing from its own pack
+const EMBLEM: Record<OccasionId, string> = { halloween: 'pumpkin', diwali: 'diya', christmas: 'tree', newyear: 'popper', valentine: 'heart', easter: 'egg', birthday: 'cake' };
+export const emblemOf = (occasion: OccasionId): EmojiDef => BY_ID.get(EMBLEM[occasion])!;
 
 // ── how one is written into a message ──
 const TAG = 0xe0000, END = 0xe007f;
