@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-11-sounds", "date": "2026-11-11", "title": "A sound for each kind of notification",
+    "lines": ["Settings › Sounds: pick a sound for the chat, one for Arvy, and one for reminders. Tap ▶ to hear them.", "They play while the planner is open on screen.", "When it’s closed your phone plays its own sound. Switch that off for any of the three to get those notifications quietly."] },
   { "id": "2026-11-11-chat-arvy", "date": "2026-11-11", "title": "Ask Arvy in your chat with each other",
     "lines": ["Start a message in your chat with RV or Arvy and it answers right there, where you both see it.", "It can do what it does in its own chat: look up places (with Call, Website and Directions buttons), search the web, read the calendar.", "Nothing is added by itself: what Arvy sets up waits on its message for a Confirm tap. Something that is only yours, only you can confirm.", "Your own things stay out unless you ask for them there. Email, the cycle tracker and Arvy’s notes about you are never used in the shared chat."] },
   { "id": "2026-11-11-arvy-email", "date": "2026-11-11", "title": "Connect your Gmail to Arvy",
