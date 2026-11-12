@@ -11,16 +11,8 @@ import { loadTileFonts, tileFace } from './apply';
 import { clearLook, flushLook, loadPicture, lookPrefs, lookVersion, onLookPrefs, pictureFor, removePicture, setLook, setPicture } from './store';
 import { EDGES, FACES, LOOKS, OWN, SECTIONS, SHADOWS, bgPlan, brightnessOf, isPlain, lookList, noPrefs, overlayOf, strengthOf, tileVars, type Choice, type Edge, type FaceId, type Look, type LookPrefs, type PicSlot, type Section, type Shadow } from './looks';
 
-/* ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
-   MORE OF THE STUDIO: THE THREE TILES STILL TO COME GO IN HERE
-   They are the last thing on this screen, under everything else:
-       Icons     →  /settings/icons
-       Stickers  →  /settings/stickers
-       Widgets   →  /settings/widgets
-   Put the three tiles inside the <nav> below, in that order, and take the `return null` away. A tile is whatever
-   those parts export for the purpose, or a plain link drawn like the ones in Settings (the commented example).
-   Until then nothing is drawn. Those three screens are not built in this folder.
-   ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+/* The rest of the Studio lives on its own screens, built beside this one: icon packs (features/icons), stickers placed
+   on pages (features/decor) and the widgets on Today (features/widgets). These tiles are the way to them from here. */
 function MoreOfTheStudio() {
   return (
     <nav className="lk-next" aria-label="More of the Studio">
