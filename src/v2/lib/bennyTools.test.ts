@@ -93,6 +93,23 @@ describe('the Benny’s tools', () => {
       expect(fastAnswerStop('Today is 2026-11-10 and 2 didn’t show.', [lookup], chat, lengths)).toBeNull();   // today's date is known without a lookup
     });
   });
+  describe('areas', () => {
+    const ctx = { center_id: 'c1', today: '2026-11-12' };
+    it('closing rate by map is for super admins and route managers, never the small model', () => {
+      expect(toolsFor('admin').map(x => x.name)).toContain('areas'); expect(toolsFor('rm').map(x => x.name)).toContain('areas');
+      expect(FAST_TOOLS).not.toContain('areas');
+      expect(toolCall('areas', {}, ctx)).toEqual({ fn: 'benny_areas', args: { p_center: 'c1', p_map: null, p_from: null, p_to: null, p_min_doors: null } });
+      expect(toolCall('areas', { map: ' north van 2 ', from: '2026-11-01', to: 'today', min_doors: 25 }, ctx))
+        .toEqual({ fn: 'benny_areas', args: { p_center: 'c1', p_map: 'north van 2', p_from: '2026-11-01', p_to: null, p_min_doors: 25 } });
+      expect(toolCall('areas', { min_doors: -3 }, ctx)).toMatchObject({ args: { p_min_doors: null } });
+      expect(needsMain('which area had the highest closing percentage')).not.toBeNull();
+      for (const role of ['admin', 'rm'] as const) {
+        expect(rules(role)).toContain('call areas (with map for one map)');
+        expect(rules(role)).toContain('Closing rate (close %, closing percentage): sales divided by doors');
+      }
+    });
+  });
+
   describe('pace and strategy', () => {
     const ctx = { center_id: 'c1', today: '2026-11-11' };
     it('answers are plain text: the chat draws no tables', () => {

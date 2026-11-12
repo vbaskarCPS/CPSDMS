@@ -114,7 +114,7 @@ assert.equal(a.status, 200);
 assert.deepEqual(fns(), ['benny_ok_any', 'benny_side', 'benny_plan_day']);
 assert.equal(a.body.proposal.kind, 'start_day'); assert.equal(a.body.proposal.team_mode, 'solo'); assert.equal(a.body.proposal.check.date, '2026-11-11');
 assert.deepEqual(a.body.map.highlight, ['NVN01', 'NVN19']); assert.equal(a.body.reply, 'Tap Start the day to do it.');
-assert.equal(state.lastAsk.tools.length, 31); assert(!('roles' in state.lastAsk.tools[0]));
+assert.equal(state.lastAsk.tools.length, 32); assert(!('roles' in state.lastAsk.tools[0]));
 // the Benny drew the maps itself and picked no routes out: the plan's routes are highlighted all the same
 state.script = [turn(use('show_map', { maps: ['NORTH VANCOUVER #1'], title: 'Tomorrow' })),
   turn(use('propose_start_day', { date: '2026-11-11', assign: [{ managers: ['me'], maps: ['NORTH VANCOUVER #1'] }] })), say('Tap Start the day to do it.')];
