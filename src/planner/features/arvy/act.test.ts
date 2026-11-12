@@ -39,7 +39,7 @@ beforeEach(() => {
 describe('Arvy changes', () => {
   it('every change tool can be worked out, and is marked now or confirm', async () => {
     const changes = TOOLS.filter(t => t.change);
-    expect(changes.length).toBe(26);
+    expect(changes.length).toBe(27);   // 26, and an email to send (email_send)
     for (const t of changes) expect(['now', 'confirm']).toContain(changeOf(t.name));
     expect(changeOf('calendar')).toBeUndefined();
     expect(toolsFor('night').map(t => t.name)).toContain('add_event');

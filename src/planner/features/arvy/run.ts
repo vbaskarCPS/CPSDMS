@@ -6,6 +6,7 @@
 // is the server's). The answers are made here (supabase/functions/planner-arvy/gym.ts, places.ts); a place comes with
 // the links for its buttons under Arvy's reply.
 // our_chat reads the chat between the two of them (ourchat.ts): only when they ask about it.
+// email_inbox and email_read look at the mailboxes they connected (email.ts, through the planner-mail function).
 import { dayKey, getDoc, getDocs } from '../../lib/docs';
 import { addMemory } from '../../lib/memory';
 import { getPass } from '../../lib/auth';
@@ -31,6 +32,7 @@ import { GYM_CLUBS, gymAnswer, gymClubsFor, gymPageUrl, type GymClubClasses } fr
 import { PLACES_MAX, placeAnswer, placeLinks, placesAsk, placesPageUrl, type Place, type PlaceLinks } from '../../../../supabase/functions/planner-arvy/places';
 import { CHAT_KIND, type ChatMsg } from '../../../../supabase/functions/planner-chat/chat';
 import { chatAnswer, chatDays, chatSince } from './ourchat';
+import { emailInbox, emailRead } from './email';
 
 type AnyDoc = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 /** `sources` = where an answer from outside the planner came from: a link shown under Arvy's reply.
@@ -282,6 +284,9 @@ export async function runTool(name: string, input: Record<string, unknown>, abou
       case 'gym_classes': return await gymClasses(input);
       case 'find_place': return await findPlace(input);
       case 'our_chat': return { result: await ourChat(input) };
+      // their email (TOOLS_VERSION 7)
+      case 'email_inbox': return await emailInbox(input);
+      case 'email_read': return await emailRead(input);
       case 'remember': {
         const note = String(input.note || '').trim().slice(0, 300);
         if (!note) return { result: { error: 'empty note' }, error: true };

@@ -29,6 +29,7 @@ import { CycleTodayCard } from '../features/cycle';
 import { CalendarTodayCard } from '../features/calendar';
 import { ShopTodayCard } from '../features/shop';
 import { TodayWidgets, foldsAway, useTodayWidgets } from '../features/widgets';
+import { MailTodos } from '../features/mail';
 
 function greeting(h: number): string {
   if (h < 4) return 'Still up';
@@ -198,6 +199,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
       <MissedBedtime routine={eff} open={askBed} onClose={() => setAskBed(false)} />
       <MissedGym routine={routine} day={day} set={set} today={today} loading={loading} />
       <GuessMeals routine={eff} today={today} />
+      <MailTodos />   {/* "From your email": only while the check has to-dos on offer. A prompt like the ones above it, not a block to arrange */}
       {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
       {/* the blocks, by name: features/widgets draws them in the person's order (as written here when nothing is arranged) */}
       <TodayWidgets widgets={widgets} blocks={{ streaks: (

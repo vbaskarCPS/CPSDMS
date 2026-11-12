@@ -329,7 +329,7 @@ describe('what Arvy is given', () => {
 
 describe('the find_place tool', () => {
   it('comes with version 6 of the app: an older app isn’t offered it or told about it', () => {
-    expect(TOOLS_VERSION).toBe(6);
+    expect(TOOLS_VERSION).toBeGreaterThanOrEqual(6);
     expect(toolsFor('night').map(t => t.name)).toContain('find_place');
     expect(toolsFor('morning').map(t => t.name)).toContain('find_place');
     expect(toolsFor('night', 5).map(t => t.name)).not.toContain('find_place');

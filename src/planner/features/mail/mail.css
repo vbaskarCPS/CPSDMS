@@ -1,0 +1,49 @@
+/* src/planner/features/mail/mail.css — Settings › Email, and the "From your email" card on Today. Colours come from
+   the planner's variables only (planner.css), so both people's looks, light and dark, are right without a rule here. */
+
+/* ── "From your email" on Today ── */
+.mail-todos { display: flex; flex-direction: column; gap: 10px; border-color: color-mix(in srgb, var(--amber) 55%, var(--line)); }
+.mail-todos__head { display: flex; align-items: center; gap: 10px; }
+.mail-todos__head svg { width: 20px; height: 20px; flex: none; color: var(--amber-2); }
+.mail-todos__head b { display: block; font-size: 15px; }
+.mail-todos__head small { display: block; color: var(--ink-2); font-size: 13px; }
+.mail-todos__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.mail-todos__list li { padding: 10px 0; min-width: 0; }
+.mail-todos__list li + li { border-top: 1px solid var(--line); }
+.mail-todos__list li:last-child { padding-bottom: 0; }
+.mail-todos__list b { display: block; font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
+.mail-todos__list small { display: block; margin-top: 2px; color: var(--ink-2); font-size: 13px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-todos__list small.mail-todos__day { color: var(--amber-2); font-weight: 600; white-space: normal; }
+.mail-todos__btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.mail-todos__btns .pl-btn { min-height: 44px; }
+.mail-todos__more { align-self: flex-start; min-height: 44px; padding: 0 4px; border: 0; background: none; color: var(--ink-2); font-size: 14px; font-weight: 600; text-decoration: underline; cursor: pointer; }
+.mail-todos__note { font-size: 14px; color: var(--good); font-weight: 600; }
+
+/* ── Settings › Email ── */
+.mail-page p { overflow-wrap: anywhere; }
+.mail-page .pl-btn { min-height: 44px; }
+.mail-page .pl-btn svg { width: 18px; height: 18px; }
+/* what Google's page sent back: a card (so it takes the shape of whatever look is on), edged green or red */
+.mail-result { padding: 12px 14px; font-size: 14.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.mail-result b { display: block; overflow-wrap: anywhere; }
+.mail-result.is-good { border-color: var(--good); }
+.mail-result.is-bad { border-color: var(--bad); }
+.mail-box__icon { width: 22px; height: 22px; flex: none; margin-top: 2px; color: var(--accent); }
+.mail-box__who { min-width: 0; }
+.mail-box__who b { display: block; font-size: 16px; overflow-wrap: anywhere; }
+.mail-box__who small, .mail-box__todos small { display: block; color: var(--ink-2); font-size: 13px; line-height: 1.4; }
+.mail-box__todos { align-items: flex-start; }
+.mail-box__todos b { display: block; font-size: 15px; }
+.mail-box__off { align-self: flex-start; }
+.mail-box__ask { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 14.5px; }
+/* the on/off switch: 52 × 44 to tap, the track and knob drawn inside it */
+.mail-switch { flex: none; position: relative; width: 52px; height: 44px; padding: 0; border: 0; background: none; cursor: pointer; }
+.mail-switch::before { content: ''; position: absolute; left: 3px; right: 3px; top: 8px; height: 28px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 20%, transparent); transition: background 0.15s; }
+.mail-switch::after { content: ''; position: absolute; left: 6px; top: 11px; width: 22px; height: 22px; border-radius: 50%; background: var(--bg-2); box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 35%, transparent); transition: transform 0.15s; }
+.mail-switch[aria-checked="true"]::before { background: var(--accent); }
+.mail-switch[aria-checked="true"]::after { transform: translateX(18px); }
+.mail-switch:disabled { opacity: 0.6; cursor: default; }
+.mail-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 12px; }
+.mail-about ul, .mail-about ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14.5px; line-height: 1.45; }
+.mail-about h3 + ul { margin-bottom: 4px; }
+@media (prefers-reduced-motion: reduce) { .mail-switch::before, .mail-switch::after { transition: none; } }
