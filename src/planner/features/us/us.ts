@@ -86,7 +86,11 @@ export function setUsOpen(v: boolean): void {
   tell();
   schedule();
 }
-export const openUs = (): void => setUsOpen(true);
+/** Open the chat; `mic` = start talking into the message box straight away (RV dragged towards the chat and held). */
+let micWanted = false;
+export const openUs = (o: { mic?: boolean } = {}): void => { if (o.mic) micWanted = true; setUsOpen(true); tell(); };
+/** The chat screen asks once whether it should start listening. */
+export const takeUsMic = (): boolean => { const m = micWanted; micWanted = false; return m; };
 onArvyChange(() => { if (arvyIsOpen() && open) setUsOpen(false); });   // …and Arvy opening closes the chat
 
 // ── keeping it fresh ──

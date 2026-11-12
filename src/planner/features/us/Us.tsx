@@ -12,19 +12,19 @@
 // set up waits on its message for a Confirm tap like any other proposal.
 // The list, sending, asking and confirming are in us.ts; a message and a proposal are defined in planner-chat/chat.ts.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from 'react';
-import { CalendarPlus, Check, Copy, Image as Picture, ImagePlus, Lightbulb, ListTodo, Play, Reply, Send, ShoppingCart, Smile, Sparkles, Video, X } from 'lucide-react';
+import { CalendarPlus, Check, Copy, Image as Picture, ImagePlus, Lightbulb, ListTodo, Mic, Play, Reply, Send, ShoppingCart, Smile, Sparkles, Video, X } from 'lucide-react';
 import { calendarKey, getDocs } from '../../lib/docs';
 import { birthdaysFrom, upcoming, type Birthday } from './occasions';
 import { Emoji, EmojiText, bigEmoji, hasOurs, healDraft, putIn, type EmojiDef } from './emoji';
 import { Tray } from './Tray';
 import { getPass } from '../../lib/auth';
 import { enablePush, pushState, type PushState } from '../../lib/push';
-import { setArvyOpen } from '../arvy/arvy';
+import { canListen, listen, setArvyOpen } from '../arvy/arvy';
 import { Places, Rich } from '../arvy/Arvy';
 import { imagesFrom } from '../arvy/pics';
 import { askLine, canConfirm, isArvy, isShared, MAX_ASK, MAX_ASK_WORDS, MAX_TEXT, quoteWords, type ChatMsg, type Proposal, type ReplyTo } from '../../../../supabase/functions/planner-chat/chat';
 import { HOLD_MS, barFor, copyText, fingerIs, pickedRows, swipeOf, togglePick } from './select';
-import { answer, askAgain, askArvy, askingNow, filesProblem, logIdea, mediaUrl, onUs, otherName, replyTo, say, setUsOpen, usIsOpen, usLoaded, usRows, usVersion, type Asking, type Row } from './us';
+import { answer, askAgain, askArvy, askingNow, filesProblem, logIdea, mediaUrl, onUs, otherName, replyTo, say, setUsOpen, takeUsMic, usIsOpen, usLoaded, usRows, usVersion, type Asking, type Row } from './us';
 import { CallButton } from './call/CallButton';
 import '../arvy/arvy.css';
 import './us.css';
@@ -271,6 +271,24 @@ export function Us() {
     if (at !== null && el && document.activeElement === el) el.setSelectionRange(at, at);
   }, [text]);
   const [tray, setTray] = useState(false);
+  // talking instead of typing: the words go into the message box as they're heard, after what was already typed, and
+  // wait there to be sent (nothing goes to the other one without a tap on Send)
+  const [hearing, setHearing] = useState(false);
+  const rec = useRef<ReturnType<typeof listen> | null>(null);
+  const talk = () => {
+    if (rec.current) { rec.current.stop(); return; }
+    if (!canListen()) { setError('Talking isn’t supported in this browser'); return; }
+    setError(null); setTray(false);
+    const base = text.trim();
+    const join = (said: string) => [base, said].filter(Boolean).join(' ');
+    const r = listen(said => setText(join(said)));
+    rec.current = r; setHearing(true);
+    // a send while listening lets go of it (rec.current no longer this one): the words already went, don't put them back
+    r.done.then(said => { if (rec.current === r) setText(join(said)); }).catch(e => { if (rec.current === r) setError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (rec.current === r) { rec.current = null; setHearing(false); } });
+  };
+  useEffect(() => { if (open && takeUsMic()) talk(); });   // RV dragged towards the chat and held: start listening
+  useEffect(() => { if (!open && rec.current) rec.current.cancel(); }, [open]);
   const [birthdays, setBirthdays] = useState<Birthday[] | null>(null);
   useEffect(() => {
     if (!open || birthdays) return;
@@ -354,6 +372,7 @@ export function Us() {
   if (!open) return null;
 
   const send = async () => {
+    if (rec.current) { rec.current.cancel(); rec.current = null; setHearing(false); }   // sending ends the listening: what was heard so far is what goes
     const t = text, f = files, to = answering;
     if (sending || (!t.trim() && !f.length)) return;
     setSending(true); setError(null); setText(''); setFiles([]); setAnswering(null); caret.current = null;
@@ -468,7 +487,8 @@ export function Us() {
             <input ref={pickRef} type="file" accept="image/*,video/*" multiple hidden onChange={e => { const list = Array.from(e.target.files || []); e.target.value = ''; pick(list); }} />
             <button type="button" className="arvy-mic" onClick={() => pickRef.current?.click()} disabled={sending} aria-label="Add a photo or a video"><ImagePlus /></button>
             <button type="button" className={`arvy-mic${tray ? ' us-on' : ''}`} onClick={() => setTray(t => !t)} aria-label="Emoji" aria-expanded={tray}><Smile /></button>
-            <textarea ref={boxRef} rows={1} value={text} onChange={e => typed(e.target)} onSelect={e => { caret.current = e.currentTarget.selectionStart; }} placeholder={answering ? 'Your reply…' : `Message ${other}…`} aria-label={`Message ${other}`} enterKeyHint="send"
+            {canListen() && <button type="button" className={`arvy-mic${hearing ? ' us-on is-hearing' : ''}`} onClick={talk} disabled={sending} aria-label={hearing ? 'Stop listening' : 'Talk instead of typing'} aria-pressed={hearing}><Mic /></button>}
+            <textarea ref={boxRef} rows={1} value={text} onChange={e => typed(e.target)} onSelect={e => { caret.current = e.currentTarget.selectionStart; }} placeholder={hearing ? 'Listening…' : answering ? 'Your reply…' : `Message ${other}…`} aria-label={`Message ${other}`} enterKeyHint="send"
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
             <button type="submit" className="arvy-send" disabled={sending || (!text.trim() && !files.length)} aria-label="Send"><Send /></button>
           </form>

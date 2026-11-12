@@ -463,20 +463,57 @@ const RecCtor = (): (new () => Rec) | null => {
 };
 export const canListen = () => !!RecCtor();
 
-/** Listen once: `onText` gets the words so far; resolves with the final words when you pause or `stop()` is called. */
+/** How long a pause in speech can be before it counts as finished (Vijay, 12 Nov: "when I pause to think… up to 2.5
+ *  seconds"), and how long to wait for the first word. The phone's own recogniser stops after a much shorter pause, so
+ *  when it stops early it is started again and what it hears is added on. */
+export const PAUSE_MS = 2500;
+export const FIRST_WORD_MS = 8000;
+/** Should listening go on after the recogniser stopped by itself? `heard` = any words yet; times in ms. */
+export function keepListening(heard: boolean, startedAt: number, lastWordAt: number, now: number): boolean {
+  return heard ? now - lastWordAt < PAUSE_MS : now - startedAt < FIRST_WORD_MS;
+}
+/** Listen: `onText` gets the words so far; resolves with all the words once there's been a pause of PAUSE_MS, or when
+ *  `stop()` is called. */
 export function listen(onText: (text: string) => void): { done: Promise<string>; stop: () => void; cancel: () => void } {
   const Ctor = RecCtor();
   if (!Ctor) return { done: Promise.reject(new Error('Talking isn’t supported in this browser')), stop: () => undefined, cancel: () => undefined };
-  const rec = new Ctor();
-  rec.lang = 'en-CA'; rec.interimResults = true; rec.continuous = false;
-  let text = ''; let cancelled = false;
+  let before = '', text = '', cancelled = false, stopped = false, finished = false;
+  const startedAt = Date.now();
+  let lastWordAt = startedAt, rec: Rec | null = null, watch = 0;
   const done = new Promise<string>((resolve, reject) => {
-    rec.onresult = e => { let all = ''; for (let i = 0; i < e.results.length; i++) all += e.results[i][0].transcript; text = all.trim(); onText(text); };
-    rec.onerror = e => { if (e.error === 'no-speech' || e.error === 'aborted') return; reject(new Error(e.error === 'not-allowed' ? 'Microphone access is blocked for this site' : e.error)); };
-    rec.onend = () => resolve(cancelled ? '' : text);
+    const finish = (err?: Error) => {
+      if (finished) return;
+      finished = true; window.clearInterval(watch);
+      if (err) reject(err); else resolve(cancelled ? '' : text);
+    };
+    const begin = () => {
+      const r = new Ctor();
+      r.lang = 'en-CA'; r.interimResults = true; r.continuous = false;
+      r.onresult = e => {
+        let all = ''; for (let i = 0; i < e.results.length; i++) all += e.results[i][0].transcript;
+        const now = all.trim();
+        text = [before, now].filter(Boolean).join(' ');
+        if (now) lastWordAt = Date.now();
+        onText(text);
+      };
+      r.onerror = e => { if (e.error === 'no-speech' || e.error === 'aborted') return; finish(new Error(e.error === 'not-allowed' ? 'Microphone access is blocked for this site' : e.error)); };
+      r.onend = () => {
+        if (finished) return;
+        before = text;
+        if (cancelled || stopped || !keepListening(!!text, startedAt, lastWordAt, Date.now())) { finish(); return; }
+        try { begin(); } catch { finish(); }   // stopped by itself mid-pause: listen on
+      };
+      rec = r;
+      r.start();
+    };
+    try { begin(); } catch { /* already started */ }
+    // the pause is timed here, not by the phone: once it's long enough, stop (onend then finishes)
+    watch = window.setInterval(() => {
+      if (finished || stopped) return;
+      if (!keepListening(!!text, startedAt, lastWordAt, Date.now())) { stopped = true; try { rec?.stop(); } catch { finish(); } }
+    }, 200);
   });
-  try { rec.start(); } catch { /* already started */ }
-  return { done, stop: () => rec.stop(), cancel: () => { cancelled = true; rec.abort(); } };
+  return { done, stop: () => { stopped = true; try { rec?.stop(); } catch { /* already over */ } }, cancel: () => { cancelled = true; try { rec?.abort(); } catch { /* already over */ } } };
 }
 
 // ── Arvy's voice (Google's, from planner-arvy). Phones only play sound a tap started, so a tap primes the player first. ──

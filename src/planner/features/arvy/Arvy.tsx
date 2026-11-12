@@ -300,7 +300,7 @@ export function Arvy() {
             <button type="button" className="arvy-icon" onClick={toggleMute} aria-label={muted ? 'Turn Arvy’s voice on' : 'Turn Arvy’s voice off'} title={muted ? 'Voice off' : 'Voice on'}>
               {muted ? <VolumeX /> : <Volume2 />}
             </button>
-            <button type="button" className="arvy-icon" onClick={openUs} aria-label={`Chat with ${otherName(user)}${unread ? `: ${unread} new` : ''}`} title={`Chat with ${otherName(user)}`}><MessagesSquare />{unread > 0 && <i className="us-dot" />}</button>
+            <button type="button" className="arvy-icon" onClick={() => openUs()} aria-label={`Chat with ${otherName(user)}${unread ? `: ${unread} new` : ''}`} title={`Chat with ${otherName(user)}`}><MessagesSquare />{unread > 0 && <i className="us-dot" />}</button>
             <button type="button" className="arvy-icon" onClick={() => setArvyOpen(false)} aria-label="Close"><X /></button>
           </header>
           <div className="arvy-body">
