@@ -3,13 +3,38 @@
 // the installed app's own address, for one reason: a phone decides whose notification it is by the address of the
 // worker that shows it. From the site-wide worker (sw.js, at /, outside the installed app) the planner's
 // notifications are Chrome's: Chrome's icon, Chrome's notification settings. From here they are the Planner app's.
-// It caches nothing and answers no page requests; the app itself still runs on sw.js.
+// It answers no page requests; the app itself still runs on sw.js. The one thing it keeps is a copy of the person's
+// choice in Settings › Sounds (src/planner/features/sounds/store.ts writes it): which kinds of notification come
+// without the phone's sound.
 self.addEventListener('install', () => self.skipWaiting());
 
 self.addEventListener('message', e => {
   // "Check notifications" asks whether this worker tells the page when a push arrives
   if (e.data && e.data.type === 'push-check' && e.source) e.source.postMessage({ type: 'push-check', ok: true });
 });
+
+// ── Settings › Sounds: silent or not ──
+// Which kind a push is (the app works it out the same way: src/planner/features/sounds/choice.ts, kindOfPush).
+const ARVY_TITLE = 'Arvy';
+function soundKind(d) {
+  const tag = (d && d.tag) || '';
+  if (tag === 'chat') return d.title === ARVY_TITLE ? 'arvy' : 'chat';
+  if (tag.indexOf('arvy') === 0) return 'arvy';
+  return 'other';
+}
+// The app keeps the choice in Cache Storage under this worker's own address (the worker can't read the page's
+// storage). Silent only when that copy says so in so many words: when it can't be read, the phone makes its sound.
+const SOUND_CACHE = 'planner-sounds';
+async function silentFor(d) {
+  try {
+    const hit = await (await caches.open(SOUND_CACHE)).match(self.registration.scope + 'sounds.json');
+    if (!hit) return false;
+    const c = await hit.json();
+    const k = c && c[soundKind(d)];
+    return !!k && k.closed === false;
+  } catch { return false; }
+}
+self.plannerSound = { soundKind, silentFor };   // for the tests (src/planner/features/sounds/worker.test.ts)
 
 // Chat messages stack: several from the same person while the phone wasn't looked at become one notification that
 // lists them (newest last, the last five), not one that keeps replacing itself.
@@ -24,6 +49,7 @@ async function showPush(d) {
     data.count = (same ? before.data.count || 1 : 0) + 1;
     if (data.count > 1) { body = data.lines.join('\n'); title = `${title} · ${data.count} messages`; }
   }
+  const silent = await silentFor(d);
   return self.registration.showNotification(title, {
     body,
     icon: d.icon || '/vijayplanner/icon-192.png',
@@ -31,7 +57,8 @@ async function showPush(d) {
     tag: d.tag || undefined,
     renotify: !!d.tag,
     timestamp: Date.now(),
-    vibrate: [70, 50, 70],
+    // a silent one doesn't buzz either (a phone refuses a notification that is both silent and buzzes)
+    ...(silent ? { silent: true } : { vibrate: [70, 50, 70] }),
     data,
   });
 }

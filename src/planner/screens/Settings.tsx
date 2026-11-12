@@ -1,4 +1,5 @@
-// src/planner/screens/Settings.tsx — the Theme Studio's door, my routine (the times the day runs on), units, PIN, sign out.
+// src/planner/screens/Settings.tsx — the Theme Studio's door, my routine (the times the day runs on), notifications and
+// their sounds, units, PIN, sign out.
 import { useEffect, useState, type FormEvent } from 'react';
 import { loadRoutine, routineNow, saveRoutine, type Routine } from '../lib/routine';
 import { Link } from 'react-router-dom';
@@ -10,6 +11,7 @@ import { Sticker } from 'lucide-react';
 import { IconsTile } from '../features/icons';
 import { ArrangeTile } from '../features/widgets';
 import { MailTile } from '../features/mail';
+import { SoundsTile } from '../features/sounds';
 
 export function Settings({ pass }: { pass: PlannerPass }) {
   const s = pass.user.settings;
@@ -106,6 +108,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
       <Link className="pl-tile" to="/settings/arvy-log"><ListChecks aria-hidden /><div className="pl-grow"><b>Arvy’s log</b><small>What Arvy couldn’t do or got wrong, and the fixes on the way</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
 
       <PushCard />
+
+      <SoundsTile />
 
       <IconsTile />
 
