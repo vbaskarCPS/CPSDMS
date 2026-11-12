@@ -44,6 +44,7 @@ describe('is this message for Arvy?', () => {
     for (const line of [
       'the RV park was full', 'did you ask Arvy about it?', 'I asked rv and it said friday', 'we could rent an RV this summer', 'arvy’s idea was good', "Arvy's answer made me laugh", 'RV’s wrong about the time',
       'thanks RV', 'love you', 'ok', 'can you get apples and oranges', 'dentist Thursday at 3', 'RVs are so expensive', 'the arvy thing is cool', 'email me at vijay@rv.example', 'see arvy.example for more',
+      'Arvind called about the furnace', 'RVing with the kids sounds exhausting', 'hi Rosh, RV said friday works', 'good morning ❤️', 'Harvey can you call me',
     ]) expect(toArvy(line), line).toBe(false);
   });
   it('no: it opens with the name but is a remark about it, or about a camper', () => {
