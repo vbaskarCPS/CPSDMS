@@ -35,6 +35,7 @@ export interface Routine {
   windDown: string;    // night profile: hard stop for the unwind — teeth, face, phone on charge, bed
   lightsOut: string;   // in bed, lights off
   kitchenClose: string;// night profile: last food of the day ('' = no cut-off); the protein road's slots all land before it
+  quiet?: string[];    // reminders switched off, every day (ids from planner-push/reminders.ts): no notification, the block stays
 }
 
 export const NIGHT_ROUTINE: Routine = {
