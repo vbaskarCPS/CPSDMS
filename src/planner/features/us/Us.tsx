@@ -14,6 +14,7 @@ import { setArvyOpen } from '../arvy/arvy';
 import { imagesFrom } from '../arvy/pics';
 import { canConfirm, MAX_TEXT, type ChatMsg, type Proposal } from '../../../../supabase/functions/planner-chat/chat';
 import { answer, filesProblem, mediaUrl, onUs, otherName, say, setUsOpen, usIsOpen, usLoaded, usRows, usVersion, type Row } from './us';
+import { CallButton } from './call/CallButton';
 import '../arvy/arvy.css';
 import './us.css';
 
@@ -171,6 +172,7 @@ export function Us() {
       <header className="arvy-head">
         <div className="arvy-avatar us-avatar" aria-hidden>{other.charAt(0)}</div>
         <div className="arvy-title"><b>{other}</b><span>Arvy reads along</span></div>
+        <CallButton />
         <button type="button" className="arvy-icon" onClick={() => setArvyOpen(true)} aria-label="Switch to Arvy" title="Arvy"><Sparkles /></button>
         <button type="button" className="arvy-icon" onClick={() => setUsOpen(false)} aria-label="Close"><X /></button>
       </header>
