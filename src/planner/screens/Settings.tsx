@@ -1,8 +1,8 @@
-// src/planner/screens/Settings.tsx — my routine (the times the day runs on), units, PIN, sign out.
+// src/planner/screens/Settings.tsx — the Theme Studio's door, my routine (the times the day runs on), units, PIN, sign out.
 import { useEffect, useState, type FormEvent } from 'react';
 import { loadRoutine, routineNow, saveRoutine, type Routine } from '../lib/routine';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, ListChecks, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListChecks, Palette, Sparkles } from 'lucide-react';
 import { changePin, saveSettings, signOut, type PlannerPass } from '../lib/auth';
 import { PushCard } from '../ui/PushCard';
 import { MemoryCard } from '../ui/MemoryCard';
@@ -57,6 +57,8 @@ export function Settings({ pass }: { pass: PlannerPass }) {
         <Link to="/" className="pl-btn pl-btn--ghost" aria-label="Back" style={{ minHeight: 40, padding: '0 8px' }}><ChevronLeft /></Link>
         <h1>Settings</h1>
       </header>
+
+      <Link className="pl-tile" to="/settings/look"><Palette aria-hidden /><div className="pl-grow"><b>Theme Studio</b><small>Looks, backgrounds, shapes and type</small></div><ChevronRight aria-hidden style={{ color: 'var(--ink-2)' }} /></Link>
 
       <form className="pl-card pl-stack" onSubmit={saveR}>
         <h3>My routine</h3>

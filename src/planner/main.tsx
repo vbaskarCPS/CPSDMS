@@ -5,7 +5,12 @@ import { BrowserRouter } from 'react-router-dom';
 import { PlannerApp } from './App';
 import { appBase, isDemo } from './lib/app';
 import { registerAppWorker } from '../lib/offline/appUpdate';
+import { bootLook } from './features/look';
 import './planner.css';
+import './features/look/look.css';   // after planner.css: a look's rules win by coming last
+
+// A look chosen in the Theme Studio goes on before the first screen is drawn, from what this phone remembers.
+bootLook();
 
 // Keep the app's service worker (shared with the field app, scope '/') registered from the planner too,
 // so an installed planner receives push reminders, and notice when a newer version has downloaded

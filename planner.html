@@ -19,6 +19,23 @@
         tag('meta', { name: 'theme-color', content: color });
         tag('meta', { name: 'apple-mobile-web-app-title', content: short });
         tag('meta', { name: 'description', content: name });
+        // A look chosen in the Theme Studio: its page colour goes on now, before anything is drawn, so the planner
+        // never opens in its old colours for a moment. What to use was left by the app the last time it ran
+        // (features/look/store.ts), by section; the app puts on the rest of the look as it starts.
+        try {
+          var pass = demo ? null : JSON.parse(localStorage.getItem(rosh ? 'roshplanner-pass' : 'vijay-planner-pass') || 'null');
+          var first = pass && pass.user ? JSON.parse(localStorage.getItem('planner-look-first:' + pass.user.id) || 'null') : null;
+          if (first) {
+            var part = location.pathname.split('/').filter(Boolean)[1] || '';
+            var look = first.sections && Object.prototype.hasOwnProperty.call(first.sections, part) ? first.sections[part] : first.all;
+            if (look && /^#[0-9a-f]{6}$/i.test(look.bg)) {
+              var page = document.documentElement.style;
+              page.setProperty('--bg', look.bg);
+              page.setProperty('background-color', look.bg);   // in case this runs before the stylesheet is in
+              page.setProperty('color-scheme', look.scheme === 'dark' ? 'dark' : 'light');
+            }
+          }
+        } catch (e) { /* nothing remembered: the planner's own colours */ }
       })();
     </script>
     <noscript>
