@@ -8,6 +8,8 @@
 // the ones Google gave, never anything Arvy wrote; its reply only decides which places get their buttons.
 // A question can come with pictures (a screenshot of an appointment: pics.ts). They count as outside the planner too:
 // what Arvy sets up from one always waits for Confirm.
+// A question can also come from the chat between the two of them (features/us: a message there addressed to Arvy).
+// It runs here like any other, in chat mode: see "asked in the chat" below.
 import { invoke } from '../../lib/ai';
 import { dayKey } from '../../lib/docs';
 import { isDemo, profileOf } from '../../lib/app';
@@ -18,7 +20,7 @@ import { runTool } from './run';
 import { prepare, Refuse, type Change, type Undo } from './act';
 import { logArvy } from './log';
 import { memoryContext } from '../../lib/memory';
-import { changeOf, speakable, TOOLS_VERSION, type Block, type Msg, type Source } from '../../../../supabase/functions/planner-arvy/tools';
+import { changeOf, chatOffers, chatSafe, speakable, TOOLS_VERSION, type Block, type Msg, type Source } from '../../../../supabase/functions/planner-arvy/tools';
 import { gymPageUrl } from '../../../../supabase/functions/planner-arvy/gym';
 import { cleanLinks, linksFor, PLACES_AREA, placesPageUrl, type PlaceLinks } from '../../../../supabase/functions/planner-arvy/places';
 import type { Pic } from './pics';
@@ -33,7 +35,8 @@ export interface ChatLine { role: 'user' | 'assistant'; text: string; at: string
   old?: boolean /* carried over from the Coach chat (chat.ts) */;
   sources?: Source[] /* the web pages the reply cites */; choices?: Choice[] /* buttons to pick from */;
   links?: PlaceLinks[] /* the places the reply names, each with its buttons: Call, Website or Book online, Directions */ }
-export interface Turn { reply: string; navigate?: string; used: string[]; changes: ChangeView[]; sources?: Source[]; choices?: Choice[]; links?: PlaceLinks[] }
+export interface Turn { reply: string; navigate?: string; used: string[]; changes: ChangeView[]; sources?: Source[]; choices?: Choice[]; links?: PlaceLinks[];
+  /** asked in the chat between the two of them: what Arvy set up, not made (the chat hangs it on Arvy's message) */ proposed?: Proposed[] }
 
 // What the panel can still do with a change: the Undo for a made one, or the worked-out change waiting for Confirm.
 // Kept for this visit only (they're functions); after a reload, waiting cards show as expired.
@@ -141,6 +144,47 @@ async function runChange(name: string, input: Record<string, unknown>, out: Chan
   return { result: { done: c.lines } };
 }
 
+// ── asked in the chat between the two of them (features/us: a message there addressed to Arvy) ──
+// The same question loop, on the phone of the one who asked, with these differences:
+//   - nothing is changed here. Every change Arvy sets up is worked out (so it can say what it would do, or why it
+//     can't) and handed back as `proposed`; the chat hangs it on Arvy's message as a card that waits for Confirm;
+//   - the notes Arvy keeps about the person are not sent with the question, and are taken out of the coaching
+//     context along with the cycle tracker (tools.ts chatSafe);
+//   - a tool the shared chat never has (tools.ts CHAT_NEVER: email, the cycle tracker, those notes) is not run,
+//     whatever asked for it;
+//   - the server has to say it answered in chat mode. One from before this doesn't know the chat's rules (both of
+//     them read the answer), so its answer is thrown away and the chat says Arvy couldn't answer.
+/** `members` = the usernames of the two of them: whose a to-do can be. `asked` = the message as they wrote it (the
+ *  question itself also carries the recent chat): what goes in the improvements log when something goes wrong. */
+export interface ChatAsk { members: string[]; asked?: string }
+/** A change Arvy set up in the chat: its own tool call and the lines saying what it would do. Not made. */
+export interface Proposed { tool: string; input: Record<string, unknown>; lines: string[]; /** a to-do: whose */ for?: string }
+export const CHAT_NOT_YET = 'Arvy can’t answer in the chat yet.';
+const NOT_IN_CHAT = { not_here: 'That is never done from the chat the two of them share. Say you can do that in your own chat (the RV button), and nothing more about it.' };
+/** A look-up in chat mode: not run at all when the chat never has it; otherwise run, and the private parts taken out. */
+async function chatLookUp(name: string, input: Record<string, unknown>, about: { question?: string; path?: string }): Promise<Awaited<ReturnType<typeof runTool>>> {
+  if (!chatOffers(name)) return { result: NOT_IN_CHAT };
+  const out = await runTool(name, input, about);
+  return { ...out, result: chatSafe(out.result) };
+}
+/** A change in chat mode: worked out, never made. What Claude is told back. */
+async function proposeChange(name: string, input: Record<string, unknown>, out: Proposed[], chat: ChatAsk, about: { question?: string; path?: string }): Promise<{ result: unknown; error?: boolean }> {
+  if (!chatOffers(name)) return { result: NOT_IN_CHAT };
+  let c: Change | null;
+  try { c = await prepare(name, input); } catch (e) {
+    if (e instanceof Refuse) {
+      if (e.miss) void logArvy({ type: 'miss', title: e.message, tools: [name], ...about });
+      return { result: { not_done: e.message } };
+    }
+    return { result: { error: e instanceof Error ? e.message : String(e) }, error: true };
+  }
+  if (!c) return { result: { error: `unknown tool ${name}` }, error: true };
+  // a to-do is one person's: the one named, else the one who asked
+  const whose = name === 'add_todos' ? chat.members.find(m => m === String(input.for || '').toLowerCase()) || getPass()?.user.username : undefined;
+  out.push({ tool: name, input, lines: c.lines, ...(whose ? { for: whose } : {}) });
+  return { result: { waiting_for_confirm: c.lines, note: 'Not done: a Confirm card will show on your message in the chat. Say what you set up and that it waits for a tap on Confirm.' } };
+}
+
 /** How a change ended, for the next question's history (so Arvy knows if they confirmed or undid it). */
 const stateWords: Record<ChangeState, string> = { done: 'MADE and saved (confirmed, if it needed Confirm)', waiting: 'still waiting for their Confirm tap', cancelled: 'they cancelled it: not made', undone: 'they undid it', failed: 'it failed: not made', expired: 'never confirmed: not made' };
 /** When a message was sent, for the history: "Tue Nov 10, 11:28 PM". Old chats say "tomorrow" about a day that's now today. */
@@ -244,17 +288,19 @@ export function choicesFrom(input: unknown): Choice[] {
 }
 
 /** Ask Arvy. `onStep` says which tools are running, for the "looking at…" line. `sent` = the pictures that came with
- *  the question (and when it was asked, as its line in the chat has it). */
-export async function ask(lines: ChatLine[], question: string, path: string, spoken: boolean, onStep?: (tools: string[]) => void, sent?: { pics: Pic[]; at: string }): Promise<Turn> {
+ *  the question (and when it was asked, as its line in the chat has it). `chat` = the question was written in the
+ *  chat between the two of them: nothing is changed, what Arvy set up comes back as `proposed` (see above). */
+export async function ask(lines: ChatLine[], question: string, path: string, spoken: boolean, onStep?: (tools: string[]) => void, sent?: { pics: Pic[]; at: string }, chat?: ChatAsk): Promise<Turn> {
   const changes: ChangeView[] = [];
+  const proposed: Proposed[] = [];   // chat mode: what Arvy set up
   const pics = sent?.pics || [];
   if (isDemo()) return pics.length ? { reply: 'Pictures aren’t read in the demo. In your own planner, send me a screenshot of an appointment and I’ll set it up on the calendar.', used: [], changes } : demoTurn(question, changes);
   // "what's new?": the planner's release notes ride along with the question (they aren't shown in the chat)
   const profile = profileOf(getPass()?.user.settings);
-  const words = !question.trim() ? PIC_ONLY : asksWhatsNew(question) ? `${question}\n\n${newsNote(profile)}` : question;
+  const words = !question.trim() ? PIC_ONLY : !chat && asksWhatsNew(question) ? `${question}\n\n${newsNote(profile)}` : question;
   const msgs: Msg[] = [...history(lines, picsOf), { role: 'user', content: pics.length ? withPics(pics, words) : words }];
   if (sent && pics.length) lastPics = { at: sent.at, pics };
-  const ctx = { ...context(path, spoken), about: await aboutMe() };
+  const ctx = chat ? { ...context(path, false), chat: true } : { ...context(path, spoken), about: await aboutMe() };   // in their shared chat: no notes about them
   const used: string[] = [];
   let navigate: string | undefined;
   const sources: Source[] = [];   // the web pages the answer cites (and the gym timetable it read), shown under it
@@ -270,9 +316,10 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   const pages = () => { const list = sources.length ? sources : found; return list.filter((s, i) => list.findIndex(x => site(x.url) === site(s.url)) === i).slice(0, sources.length ? 6 : 4); };
   // the buttons go under the reply for the places it names (places.ts linksFor)
   const extras = (reply: string) => { const links = linksFor(reply, places); return { ...(pages().length ? { sources: pages() } : {}), ...(choices.length ? { choices } : {}), ...(links.length ? { links } : {}) }; };
-  const answer = (reply: string): Turn => ({ reply, navigate, used, changes, ...extras(reply) });
+  const answer = (reply: string): Turn => ({ reply, navigate, used, changes, ...extras(reply), ...(proposed.length ? { proposed } : {}) });
   for (let step = 0; step < MAX_STEPS; step++) {
-    const r = await serverStep<{ content: Block[]; stop_reason: string; raw?: Block[]; web?: { searches?: string[]; sources?: Source[]; found?: Source[] } }>({ action: 'turn', messages: msgs, context: ctx }, RETRY_WAIT.ms);
+    const r = await serverStep<{ content: Block[]; stop_reason: string; raw?: Block[]; web?: { searches?: string[]; sources?: Source[]; found?: Source[] }; chat?: boolean }>({ action: 'turn', messages: msgs, context: ctx }, RETRY_WAIT.ms);
+    if (chat && r.chat !== true) throw new Error(CHAT_NOT_YET);   // a server that doesn't know the chat's rules
     const content = Array.isArray(r.content) ? r.content : [];
     if (r.web) {
       if (!searched) used.push('web_search');
@@ -282,16 +329,16 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
     const calls = content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
     const text = content.filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text').map(b => b.text).join('\n').trim();
     for (const c of calls) if (c.name === 'offer_choices') choices = choicesFrom(c.input);
-    if (r.stop_reason !== 'tool_use' || !calls.length) return answer(text || (changes.length ? 'Done!' : 'Hmm, I lost my train of thought there. Try asking again?'));
+    if (r.stop_reason !== 'tool_use' || !calls.length) return answer(text || (proposed.length ? 'That’s set up: it waits for a tap on Confirm.' : changes.length ? 'Done!' : 'Hmm, I lost my train of thought there. Try asking again?'));
     // the reply came with its buttons and nothing else to run: that's the answer, no need to go back to Claude
     if (text && choices.length && calls.every(c => c.name === 'offer_choices')) return answer(text);
     onStep?.([...(r.web ? ['web_search'] : []), ...calls.map(c => c.name).filter(n => n !== 'offer_choices')]);   // a search asked for alongside a look-up runs during the next step
     const res = new Map<string, { result: unknown; error?: boolean; navigate?: string; sources?: Source[]; links?: PlaceLinks[] }>();
-    const about = { question, path };
+    const about = { question: chat?.asked ?? question, path };
     // look-ups together; changes one at a time, in order (each one's Undo snapshot is taken just before it)
-    await Promise.all(calls.filter(c => !changeOf(c.name)).map(async c => { res.set(c.id, await runTool(c.name, c.input || {}, about)); }));
+    await Promise.all(calls.filter(c => !changeOf(c.name)).map(async c => { res.set(c.id, chat ? await chatLookUp(c.name, c.input || {}, about) : await runTool(c.name, c.input || {}, about)); }));
     if (calls.some(c => OUTSIDE.has(c.name))) outside = true;
-    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, await runChange(c.name, c.input || {}, changes, about, outside));
+    for (const c of calls.filter(c => changeOf(c.name))) res.set(c.id, chat ? await proposeChange(c.name, c.input || {}, proposed, chat, about) : await runChange(c.name, c.input || {}, changes, about, outside));
     const results = calls.map(c => {
       used.push(c.name);
       const out = res.get(c.id)!;
@@ -305,7 +352,7 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
     // a step that searched goes back as Claude wrote it (`raw`: the search and its results too), or it would search again
     msgs.push({ role: 'assistant', content: r.raw?.length ? r.raw : content }, { role: 'user', content: results });
   }
-  void logArvy({ type: 'error', title: 'Arvy ran out of steps on a question', question, path, tools: used });
+  void logArvy({ type: 'error', title: 'Arvy ran out of steps on a question', question: chat?.asked ?? question, path, tools: used });
   return answer('That one took me too many steps. Could you ask it a simpler way?');
 }
 

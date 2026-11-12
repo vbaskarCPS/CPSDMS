@@ -6,6 +6,19 @@
 //        calendar event, a to-do. A proposal sends a push and waits for a Confirm tap; nothing is added by itself.
 //        `reply` makes it a reply to the message under that key: the original is looked up in this household's chat
 //        and the quote saved with the reply is taken from it (who wrote it, its first line), not from the app.
+//        A message addressed to Arvy ("RV plan…", "Arvy, can you…", "@rv": chat.ts toArvy) from an app that can
+//        answer it (`turn: true`) is NOT read along: it is saved with ask: { state: 'working' }, and that phone runs
+//        Arvy with its own tools and posts the answer (action 'answer'). `picked: [key]` = messages picked out for
+//        Arvy with it ("Ask Arvy", their own words): all of them have to be in this household's chat. An app from
+//        before this sends no `turn`, and its messages are read along as they always were.
+//   POST { token, action: 'answer', key, text, links?, sources?, changes?: [{ tool, input, lines, for? }] } → { ok, key, msg, asked: { key, msg } }
+//        Arvy's answer to the message under `key`, posted by the phone that worked it out. Only the one who wrote
+//        that message may post it, only when the message was addressed to Arvy, and only once. The words are cleaned
+//        and cut, the buttons under it can only be tel: and https: links, and what Arvy set up becomes proposals on
+//        the new message (chat.ts arvyAnswer). It is saved as a message written by Arvy, tied to the asking one like
+//        a reply, and the other person's phone is told.
+//   POST { token, action: 'asked', key, state: 'failed' | 'working' } → { ok, msg }
+//        The asker's phone says its try gave up (a plain line shows under the message), or that they asked again.
 //   POST { token, action: 'ask', keys: [key], what: 'shopping' | 'todo' | 'calendar' | 'words', for?, words? } → { ok, key, msg, added, note? }
 //        One of them picked messages out (12 at most, all from this household's chat) and asked Arvy to do something
 //        with them: put them on the shopping list, make a to-do for one of them (`for`), put them on the calendar,
@@ -24,7 +37,7 @@
 // What a message is and how Arvy's reading becomes proposals: chat.ts (shared with the app).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { sendPush, type VapidKeys } from './webpush.ts';
-import { BUCKET, CHAT_KIND, MAX_IMAGE_BYTES, MAX_MEDIA, MAX_VIDEO_BYTES, MEDIA_TYPES, READ_SCHEMA, addProposals, askSystem, askText, askWords, cleanAsk, cleanMessage, onlyAsked, pickedFrom, proposalsFrom, pushLine, readSystem, readText, replyFrom, resolveProposal, settleReading, type ChatMsg } from './chat.ts';
+import { ARVY_NAME, BUCKET, CHAT_KIND, MAX_ASK, MAX_IMAGE_BYTES, MAX_MEDIA, MAX_VIDEO_BYTES, MEDIA_TYPES, READ_SCHEMA, addProposals, arvyAnswer, askSystem, askText, askWords, askedNext, cleanAsk, cleanMessage, cleanPicked, isKey, onlyAsked, pickedFrom, proposalsFrom, pushLine, readSystem, readText, readingOf, replyFrom, resolveProposal, settleReading, type ChatMsg } from './chat.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
 const FALLBACK = 'claude-sonnet-5-5';
@@ -212,9 +225,21 @@ Deno.serve(async req => {
         const { data: orig, error: oe } = await svc.from('planner_docs').select('data').eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', reply.key).maybeSingle();
         reply = replyFrom(reply, oe ? undefined : ((orig?.data as ChatMsg | undefined) || null));
       }
-      // words (not just emoji) or something to look at: worth a read. A reply can be shorter and still mean something ("2")
-      const reads = (!!clean.text && (/\p{L}{2,}/u.test(clean.text) || (!!reply && /[\p{L}\p{N}]/u.test(clean.text)))) || looks.length > 0;
-      const msg: ChatMsg = { id, at, by: user.username, name: first(user), ...(clean.text ? { text: clean.text } : {}), ...(clean.media.length ? { media: clean.media } : {}), ...(reply ? { reply } : {}), ...(reads ? { arvy: { state: 'reading' } } : {}) };
+      // messages picked out for Arvy with it: every one has to be in this household's chat (as for action 'ask')
+      const picked = b.turn === true ? cleanPicked(b.picked) : [];
+      if (!picked) return json({ error: `${MAX_ASK} messages at a time at most.` }, 400);
+      if (picked.length) {
+        const { data: docs, error: de } = await svc.from('planner_docs').select('key, data').eq('user_id', owner).eq('kind', CHAT_KIND).in('key', picked);
+        if (de) throw new Error(de.message);
+        if (!pickedFrom(picked, (docs || []) as { key: string; data: ChatMsg | null }[])) return json({ error: 'One of those messages isn’t in your chat any more.' }, 404);
+      }
+      // what it sets off (chat.ts readingOf). For Arvy, from an app that can answer it: that phone runs Arvy and
+      // posts the answer, and it is not read along here too. Otherwise words (not just emoji) or something to look
+      // at is worth a read; a reply can be shorter and still mean something ("2")
+      const how = readingOf({ text: clean.text, reply: !!reply, looks: looks.length, turn: b.turn === true, picked: picked.length });
+      const reads = how === 'read';
+      const msg: ChatMsg = { id, at, by: user.username, name: first(user), ...(clean.text ? { text: clean.text } : {}), ...(clean.media.length ? { media: clean.media } : {}), ...(reply ? { reply } : {}), ...(reads ? { arvy: { state: 'reading' } } : {}),
+        ...(how === 'asked' ? { ask: { state: 'working', at, ...(picked.length ? { keys: picked } : {}) } } : {}) };
       const { error: e } = await svc.from('planner_docs').insert({ user_id: owner, kind: CHAT_KIND, key, data: msg });
       if (e) throw new Error(e.message);
       const after = (async () => {
@@ -224,6 +249,51 @@ Deno.serve(async req => {
       // the message is saved: the phone gets its answer now, the telling and the reading carry on behind it
       if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(after); else await after;
       return json({ ok: true, key, msg });
+    }
+
+    if (action === 'answer') {
+      const key = String(b.key || '');
+      if (!isKey(key)) return json({ error: 'Which message?' }, 400);
+      const who = members.map(m => ({ username: m.username, name: first(m) }));
+      for (let attempt = 0; attempt < 3; attempt++) {
+        // the asking message is looked for in this household's chat and nowhere else
+        const { data: cur, error: ce } = await svc.from('planner_docs').select('data, updated_at').eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', key).maybeSingle();
+        if (ce) throw new Error(ce.message);
+        const at = new Date().toISOString();
+        const next = arvyAnswer({ asking: (cur?.data as ChatMsg | undefined) || null, key, raw: b, user, members: who, today: nowParts().today, at, id: () => rand(6) });
+        if ('error' in next) return json({ error: next.error }, next.status);
+        // marked answered first, and only if nobody changed that message meanwhile: of two posts at once, one wins
+        const { data: done } = await svc.from('planner_docs').update({ data: next.asking, updated_at: at }).eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', key).eq('updated_at', cur!.updated_at).select('key');
+        if (!done?.length) continue;
+        const { error: ie } = await svc.from('planner_docs').insert({ user_id: owner, kind: CHAT_KIND, key: next.key, data: next.msg });
+        if (ie) {   // the answer wasn't kept: the asking message says so, and they can ask again
+          const ask = next.asking.ask!;
+          await svc.from('planner_docs').update({ data: { ...next.asking, ask: { state: 'failed', at: ask.at, ...(ask.keys?.length ? { keys: ask.keys } : {}) } }, updated_at: new Date().toISOString() }).eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', key);
+          throw new Error(ie.message);
+        }
+        // the one who asked is looking at it; the other one hears that Arvy wrote
+        const tell = Promise.all(members.filter(m => m.id !== user.id).map(m => push(svc, m, { title: ARVY_NAME, body: pushLine({ text: next.msg.text }), tag: 'chat' })))
+          .catch(err => console.error('planner-chat after answer:', err instanceof Error ? err.message : String(err)));
+        if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(tell); else await tell;
+        return json({ ok: true, key: next.key, msg: next.msg, asked: { key, msg: next.asking } });
+      }
+      return json({ error: 'Busy. Try again.' }, 409);
+    }
+
+    if (action === 'asked') {
+      const key = String(b.key || '');
+      if (!isKey(key)) return json({ error: 'Which message?' }, 400);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const { data: cur, error: ce } = await svc.from('planner_docs').select('data, updated_at').eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', key).maybeSingle();
+        if (ce) throw new Error(ce.message);
+        const at = new Date().toISOString();
+        const next = askedNext((cur?.data as ChatMsg | undefined) || null, user.username, b.state, at);
+        if ('error' in next) return json({ error: next.error }, next.status);
+        if (!next.changed) return json({ ok: true, msg: next.msg });
+        const { data: done } = await svc.from('planner_docs').update({ data: next.msg, updated_at: at }).eq('user_id', owner).eq('kind', CHAT_KIND).eq('key', key).eq('updated_at', cur!.updated_at).select('key');
+        if (done?.length) return json({ ok: true, msg: next.msg });
+      }
+      return json({ error: 'Busy. Try again.' }, 409);
     }
 
     if (action === 'ask') {
