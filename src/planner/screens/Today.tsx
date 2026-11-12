@@ -81,6 +81,9 @@ export function Today({ pass }: { pass: PlannerPass }) {
   // sizes, and the widgets they added. Nothing arranged = the page as it has always been.
   const widgets = useTodayWidgets(pass, routine.profile);
   const [unfolded, setUnfolded] = useState(false);   // the compact plan, opened up for now
+  // today's page as this screen has it, for a race timer on the page (a tick shows on it at once); nothing until it has
+  // loaded, so the race never reads an empty page as Up not ticked
+  const raceDay = useMemo(() => (loading || loadError ? null : { key: today, day }), [loading, loadError, today, day]);
 
   useEffect(() => { void loadRoutine().then(setRoutine); return onRoutineChange(setRoutine); }, []);   // and when Arvy changes the routine
   useEffect(() => { const id = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(id); }, []);
@@ -149,7 +152,8 @@ export function Today({ pass }: { pass: PlannerPass }) {
     const k = tickKey(id);
     const on = !day.ticks[k];
     if (id === 'lightsOut' && on && isMorningHours()) { setAskBed(true); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-    set(d => ({ ...d, ticks: { ...d.ticks, [k]: on ? nowHM() : undefined } }));
+    // Up also keeps the exact moment, for the race timer (features/widgets/race.ts); undoing Up clears both
+    set(d => ({ ...d, ticks: { ...d.ticks, [k]: on ? nowHM() : undefined, ...(k === 'up' ? { upAt: on ? new Date().toISOString() : undefined } : {}) } }));
     // habits tied to this tick
     if (id === 'wake') void autoMark('wake', on);
     else if (id === 'gym' || id === 'sauna' || id === 'shake' || id === 'lightsOut') void autoMark(id, on);
@@ -202,7 +206,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
       <MailTodos />   {/* "From your email": only while the check has to-dos on offer. A prompt like the ones above it, not a block to arrange */}
       {loadError && <p className="pl-error" style={{ fontSize: 13 }}>Couldn't load this day — check the connection. Nothing typed is saved until it loads.</p>}
       {/* the blocks, by name: features/widgets draws them in the person's order (as written here when nothing is arranged) */}
-      <TodayWidgets widgets={widgets} blocks={{ streaks: (
+      <TodayWidgets widgets={widgets} day={raceDay} blocks={{ streaks: (
       <div className="pl-stats today-streaks">
         <Stat label={<span className="pl-row" style={{ gap: 4 }}><Sunrise aria-hidden style={{ width: 14, height: 14 }} /> Up on time</span>} value={streaks ? streaks.up : '–'} sub={`by ${clock(eff.wake)}`} tone={streaks && streaks.up > 0 ? 'good' : undefined} />
         <Stat label={<span className="pl-row" style={{ gap: 4 }}><Moon aria-hidden style={{ width: 14, height: 14 }} /> {isMorning ? 'In bed' : 'Lights out'}</span>} value={streaks ? streaks.lights : '–'} sub={`by ${clock(eff.lightsOut)}`} tone={streaks && streaks.lights > 0 ? 'good' : undefined} />

@@ -1,11 +1,11 @@
 // src/planner/features/widgets/Arrange.tsx — /settings/widgets, "Arrange Today": the list of what's on the Today page,
 // top to bottom. Drag a row by its handle, or use its arrows (easier to be exact on a phone); switch one of the
-// planner's blocks off or back on; pick a size where there are two; add a countdown, a note, the mini calendar or the
-// habit tracker, and take them off again. "Put it back as it was" restores the original page. Every change shows on
+// planner's blocks off or back on; pick a size where there are two; add a countdown, a note, the mini calendar, the
+// habit tracker or a race timer (its kind of race picked as it's added), and take them off again. "Put it back as it was" restores the original page. Every change shows on
 // Today straight away and is saved by store.ts. The day's plan can't be switched off: the whole planner runs on it.
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, ChevronDown, ChevronRight, ChevronUp, GripVertical, Hourglass, LayoutGrid, Lock, Pencil, Plus, Repeat, RotateCcw, StickyNote, Trash2, type LucideIcon } from 'lucide-react';
+import { CalendarDays, ChevronDown, ChevronRight, ChevronUp, GripVertical, Hourglass, LayoutGrid, Lock, Pencil, Plus, Repeat, RotateCcw, StickyNote, Timer, Trash2, type LucideIcon } from 'lucide-react';
 import type { PlannerPass } from '../../lib/auth';
 import { profileOf } from '../../lib/app';
 import { calendarKey, getDocs } from '../../lib/docs';
@@ -14,10 +14,12 @@ import { Button, Field, Header, Input, Page, Sheet, useToast } from '../../ui/pr
 import { birthdaysFrom, upcoming, type Birthday } from '../us/occasions';
 import { dayWords } from './Countdown';
 import { dropNote, NOTE_KIND, useWidgets } from './store';
-import { add, ADDED, arrange, canAdd, change, countdownView, isAsItWas, isDay, move, moveTo, newId, PAPERS, putBack, remove, setOn, setSize, TITLE_MAX, type AddedKind, type Countdown, type Item, type Paper, type Size } from './widgets';
+import { byHand, RACE_KINDS, RACES, type RaceKind } from './race';
+import { dropRace } from './raceStore';
+import { add, ADDED, arrange, canAdd, change, countdownView, isAsItWas, isDay, move, moveTo, newId, PAPERS, putBack, remove, setOn, setSize, TITLE_MAX, type AddedKind, type Countdown, type Item, type Paper, type Race, type Size } from './widgets';
 
 const GAP = 10;   // between rows (widgets.css .wg-list)
-const ICON: Record<AddedKind, LucideIcon> = { countdown: Hourglass, note: StickyNote, month: CalendarDays, habitweek: Repeat };
+const ICON: Record<AddedKind, LucideIcon> = { countdown: Hourglass, note: StickyNote, month: CalendarDays, habitweek: Repeat, race: Timer };
 const PAPER_WORD: Record<Paper, string> = { plain: 'Plain paper', bright: 'Bright paper', tint: 'Tinted paper', fresh: 'Green paper', warm: 'Warm paper' };
 
 /** The way in from Settings (and from anywhere else that wants to link here). */
@@ -45,6 +47,7 @@ export function ArrangeToday({ pass }: { pass: PlannerPass }) {
   const [fresh, setFresh] = useState<string | null>(null);     // the one just added: marked and scrolled to
   const [asking, setAsking] = useState<string | null>(null);   // the row asking "take this off?"; 'back' = "put it back?"
   const [form, setForm] = useState<{ w: Countdown; isNew: boolean } | null>(null);
+  const [raceForm, setRaceForm] = useState<{ w: Race; isNew: boolean } | null>(null);
   const notes = useDocs<{ text?: string }>(NOTE_KIND);          // what's written on each note, to tell them apart here
   const words = (id: string) => (notes.docs.find(d => d.key === id)?.data?.text || '').replace(/\s+/g, ' ').trim();
 
@@ -118,6 +121,7 @@ export function ArrangeToday({ pass }: { pass: PlannerPass }) {
 
   const addOne = (kind: AddedKind) => {
     if (kind === 'countdown') { setForm({ w: { id: newId(), kind: 'countdown', title: '', date: '' }, isNew: true }); return; }
+    if (kind === 'race') { setRaceForm({ w: { id: newId(), kind: 'race', race: 'gym', title: '' }, isNew: true }); return; }
     const id = newId();
     if (!save(p => add(p, profile, kind === 'note' ? { id, kind, paper: 'bright' } : { id, kind }))) return;
     setFresh(id);
@@ -129,12 +133,19 @@ export function ArrangeToday({ pass }: { pass: PlannerPass }) {
     if (form.isNew) { setFresh(w.id); say('Added at the top of Today', 'good'); }
     setForm(null);
   };
+  const saveRace = (w: Race) => {
+    if (!raceForm) return;
+    if (!save(p => (raceForm.isNew ? add(p, profile, w) : change(p, w)))) return;
+    if (raceForm.isNew) { setFresh(w.id); say('Added at the top of Today', 'good'); }
+    setRaceForm(null);
+  };
   // "put it back?" is asked at the foot of a long page: bring the question into view
   const backQ = useRef<HTMLDivElement>(null);
   useEffect(() => { if (asking === 'back') backQ.current?.scrollIntoView({ block: 'center' }); }, [asking]);
   const takeOff = (it: Item) => {
     if (!save(p => remove(p, it.id))) return;
     if (it.added?.kind === 'note') { void dropNote(uid, it.id); notes.setDocs(ds => ds.filter(d => d.key !== it.id)); }
+    if (it.added?.kind === 'race') void dropRace(it.id);
     setAsking(null);
   };
 
@@ -143,6 +154,7 @@ export function ArrangeToday({ pass }: { pass: PlannerPass }) {
     if (it.block) return it.block.always ? `Always shown · ${it.block.about}` : it.on ? it.block.about : 'Off';
     const w = it.added!;
     if (w.kind === 'countdown') { const v = countdownView(w.date, today); return `Countdown · ${v.state === 'coming' ? `${v.big} ${v.small.replace(' · tomorrow', '')}` : v.state === 'today' ? 'today!' : v.small} · ${dayWords(w.date, today)}${w.yearly ? ' · every year' : ''}`; }
+    if (w.kind === 'race') return `Race timer · ${w.title === RACES[w.race].name ? RACES[w.race].about : RACES[w.race].name}`;
     if (w.kind === 'note') { const t = words(w.id); return t ? `“${t.length > 44 ? `${t.slice(0, 42)}…` : t}”` : 'Nothing written on it yet'; }
     return ADDED[w.kind].about;
   };
@@ -178,7 +190,7 @@ export function ArrangeToday({ pass }: { pass: PlannerPass }) {
               </div>
               {asking === it.id ? (
                 <div className="wg-row__more" role="group" aria-label="Take it off Today?">
-                  <small className="wg-row__hint">Take this off Today?{note && words(it.id) ? ' What’s written on it goes too.' : ''}</small>
+                  <small className="wg-row__hint">Take this off Today?{note && words(it.id) ? ' What’s written on it goes too.' : ''}{it.added?.kind === 'race' ? ' Its times go too.' : ''}</small>
                   <button type="button" className="pl-btn pl-btn--small pl-btn--danger wg-tap" onClick={() => takeOff(it)}>Take it off</button>
                   <button type="button" className="pl-btn pl-btn--small pl-btn--ghost wg-tap" onClick={() => setAsking(null)}>Keep it</button>
                 </div>
@@ -189,6 +201,7 @@ export function ArrangeToday({ pass }: { pass: PlannerPass }) {
                       {(['full', 'compact'] as Size[]).map(s => <button key={s} type="button" className={it.size === s ? 'is-on' : ''} aria-pressed={it.size === s} disabled={!loaded} onClick={() => save(p => setSize(p, it.id, s))}>{sizeWord(it, s)}</button>)}
                     </div>
                   )}
+                  {it.added?.kind === 'race' && <button type="button" className="pl-btn pl-btn--small wg-tap" disabled={!loaded} onClick={() => setRaceForm({ w: it.added as Race, isNew: false })}><Pencil aria-hidden /> Rename</button>}
                   {it.added?.kind === 'countdown' && <button type="button" className="pl-btn pl-btn--small wg-tap" disabled={!loaded} onClick={() => setForm({ w: it.added as Countdown, isNew: false })}><Pencil aria-hidden /> Change</button>}
                   {note && (
                     <div className="wg-papers" role="group" aria-label="Paper">
@@ -239,6 +252,9 @@ export function ArrangeToday({ pass }: { pass: PlannerPass }) {
       <Sheet open={!!form} onClose={() => setForm(null)} title={form?.isNew ? 'New countdown' : 'Change the countdown'}>
         {form && <CountdownForm key={form.w.id} start={form.w} isNew={form.isNew} today={today} onSave={saveCountdown} />}
       </Sheet>
+      <Sheet open={!!raceForm} onClose={() => setRaceForm(null)} title={raceForm?.isNew ? 'New race timer' : 'Rename the race'}>
+        {raceForm && <RaceForm key={raceForm.w.id} start={raceForm.w} isNew={raceForm.isNew} onSave={saveRace} />}
+      </Sheet>
       {toast}
     </Page>
   );
@@ -269,6 +285,31 @@ function CountdownForm({ start, isNew, today, onSave }: { start: Countdown; isNe
         <span><b>Every year</b><br /><span className="pl-muted" style={{ fontSize: 13 }}>A birthday, an anniversary: once it has passed, it offers next year’s.</span></span>
       </label>
       <Button block primary disabled={!title || !dayOk} onClick={() => onSave({ ...w, title })}>{isNew ? 'Add to Today' : 'Save'}</Button>
+    </div>
+  );
+}
+
+/** Setting a race timer up: which race (fixed once it's added), and its name. One started and stopped by hand needs a
+ *  name, since it could be for anything. */
+function RaceForm({ start, isNew, onSave }: { start: Race; isNew: boolean; onSave: (w: Race) => void }) {
+  const [w, setW] = useState<Race>(start);
+  const hand = byHand(w.race), title = w.title.trim();
+  return (
+    <div className="pl-stack">
+      {isNew && (
+        <div className="pl-stack wg-kinds" role="radiogroup" aria-label="Which race">
+          {RACE_KINDS.map((k: RaceKind) => (
+            <button key={k} type="button" role="radio" aria-checked={w.race === k} className={`pl-tile wg-kind ${w.race === k ? 'is-on' : ''}`} onClick={() => setW({ ...w, race: k })}>
+              <Timer aria-hidden />
+              <div className="pl-grow"><b>{RACES[k].name}</b><small>{RACES[k].about}</small></div>
+            </button>
+          ))}
+        </div>
+      )}
+      <Field label={hand ? 'What for' : 'Name'} hint={hand ? undefined : `Leave it empty for “${RACES[w.race].name}”`}>
+        <Input value={w.title} maxLength={TITLE_MAX} placeholder={hand ? 'Out the door · Kids to bed' : RACES[w.race].name} onChange={e => setW({ ...w, title: e.target.value })} />
+      </Field>
+      <Button block primary disabled={hand && !title} onClick={() => onSave({ ...w, title: title || RACES[w.race].name })}>{isNew ? 'Add to Today' : 'Save'}</Button>
     </div>
   );
 }

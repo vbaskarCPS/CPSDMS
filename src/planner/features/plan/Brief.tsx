@@ -93,7 +93,7 @@ export function Brief() {
     if (loading || started.current) return;
     started.current = true;
     const t = nowHM();
-    if (!day.brief.startedAt || !day.ticks.up) set(d => ({ ...d, brief: { ...d.brief, startedAt: d.brief.startedAt || new Date().toISOString() }, ticks: { ...d.ticks, up: d.ticks.up || t } }));
+    if (!day.brief.startedAt || !day.ticks.up) set(d => ({ ...d, brief: { ...d.brief, startedAt: d.brief.startedAt || new Date().toISOString() }, ticks: { ...d.ticks, up: d.ticks.up || t, upAt: d.ticks.up ? d.ticks.upAt : new Date().toISOString() } }));
   }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(id); }, []);
   useEffect(() => { window.setTimeout(() => focus.current?.focus(), 50); }, [step]);

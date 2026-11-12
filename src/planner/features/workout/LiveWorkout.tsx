@@ -140,15 +140,16 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     }
     if (b.at.every(i => next.exercises[i].sets.every(x => x.done)) && bi < bs.length - 1) window.setTimeout(() => setOpen(bi + 1), 400);
   };
-  const timedDone = (ei: number, si: number, seconds: number) => { const next = patchSet(ei, si, { done: true, seconds }); if (next) { afterDone(next, ei, si); coachSet(next, ei, si); } };
+  // doneAt: the moment a set is done, for the race timer on Today (features/widgets/race.ts)
+  const timedDone = (ei: number, si: number, seconds: number) => { const next = patchSet(ei, si, { done: true, doneAt: new Date().toISOString(), seconds }); if (next) { afterDone(next, ei, si); coachSet(next, ei, si); } };
   /** A round of self-running intervals just ended (the runner keeps its own rest). */
-  const intervalRound = (ei: number, si: number, seconds: number) => { const next = patchSet(ei, si, { done: true, seconds }); if (next) afterDone(next, ei, si, false); };
+  const intervalRound = (ei: number, si: number, seconds: number) => { const next = patchSet(ei, si, { done: true, doneAt: new Date().toISOString(), seconds }); if (next) afterDone(next, ei, si, false); };
   const setRestSec = (ei: number, restSec: number) => { patchEx(ei, e => ({ ...e, restSec })); };
   const setComment = (ei: number, comment: string) => { patchEx(ei, e => ({ ...e, comment })); };
   const toggleDone = (ei: number, si: number) => {
     const s = latest.current?.exercises[ei]?.sets[si]; if (!s) return;
     const done = !s.done;
-    const next = patchSet(ei, si, { done });
+    const next = patchSet(ei, si, { done, doneAt: done ? new Date().toISOString() : undefined });
     if (done && next) { coachSet(next, ei, si); afterDone(next, ei, si); }
   };
   const blankSet = (ex: WorkoutExercise): SetLog => {
@@ -165,18 +166,19 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
    *  AMRAP: every exercise did `count` rounds. EMOM: the minutes go round the exercises in turn. */
   const clockDone = (b: Block, count: number) => {
     const cur = latest.current; if (!cur || count <= 0) return;
+    const doneAt = new Date().toISOString();
     const exercises = cur.exercises.map((e, i) => {
       const k = b.at.indexOf(i); if (k < 0) return e;
       const n = b.kind === 'emom' ? Math.ceil((count - k) / b.at.length) : count;
       if (n <= 0) return e;
       const first = e.sets[0] || blankSet(e);
-      return { ...e, sets: Array.from({ length: Math.min(n, 60) }, () => ({ ...first, done: true })) };
+      return { ...e, sets: Array.from({ length: Math.min(n, 60) }, () => ({ ...first, done: true, doneAt })) };
     });
     const next = { ...cur, exercises }; persist(next, true);
     afterDone(next, b.at[0], 0, false);
   };
   /** Run a clocked block again: back to its one set-up row. */
-  const clockRedo = (b: Block) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.map((e, i) => (b.at.includes(i) ? { ...e, sets: [{ ...(e.sets[0] || blankSet(e)), done: false }] } : e)) }); };
+  const clockRedo = (b: Block) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.map((e, i) => (b.at.includes(i) ? { ...e, sets: [{ ...(e.sets[0] || blankSet(e)), done: false, doneAt: undefined }] } : e)) }); };
 
   const exerciseFrom = (e: Exercise, prevEx?: WorkoutExercise): WorkoutExercise => {
     if (isTimed(e)) {
