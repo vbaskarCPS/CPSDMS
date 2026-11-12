@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-12-habit-start-workout", "date": "2026-11-12", "title": "Your gym habit ticks itself at Start workout",
+    "lines": ["A habit can now tick itself when you press Start workout in Training, the same moment your race timer stops.", "“Get to the gym and do the first set” is set up that way already.", "Throw the session away and the tick comes off again."] },
   { "id": "2026-11-12-race-start-workout", "date": "2026-11-12", "title": "Your race now finishes at Start workout", "for": "night",
     "lines": ["The gym race stops the moment you press Start workout in Training, not at your first set.", "Past days are worked out again the same way, so your best still compares like with like.", "Want the first set instead? Edit the timer in Settings › Arrange Today and pick Up to first set."] },
   { "id": "2026-11-11-race-timer", "date": "2026-11-11", "title": "Race your mornings", "for": "night",

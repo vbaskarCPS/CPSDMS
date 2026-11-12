@@ -269,6 +269,9 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     if (!w || !confirm('Discard this session?')) return;
     window.clearTimeout(timer.current); latest.current = null;
     void saveWorkout({ ...w, endedAt: w.startedAt, discarded: true }).then(() => nav('/workout', { replace: true }));
+    // a thrown-away session didn't start the gym after all: clear the Start-workout habit tick, unless another session
+    // that day still stands (the history holds that day's other sessions)
+    if (w.kind !== 'home' && !history.some(x => x.id !== w.id && x.date === w.date && !x.discarded && x.kind !== 'home')) void autoMark('gymStart', false, w.date);
   };
 
   const elapsed = useMemo(() => (w ? Math.round((Date.now() - new Date(w.startedAt).getTime()) / 60000) : 0), [w]);
