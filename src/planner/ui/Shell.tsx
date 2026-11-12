@@ -20,6 +20,7 @@ import { PlaceIcon } from '../features/icons';
 import { giveShot, SHOT_TO, type ShotKind } from '../lib/quickShot';
 import { groupOf, NAV_TO, pull, PULL_SLOP, RV_HOLD_MS, RV_HOLD_SLOP, SHOTS, type NavGroup } from './nav';
 import { RvMark } from './RvMark';
+import { startSounds } from '../features/sounds/store';
 
 interface Tab { group: NavGroup; label: string; Icon: LucideIcon }
 const TABS: Tab[] = [
@@ -153,6 +154,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const here = groupOf(useLocation().pathname);
   const nav = useNavigate();
   useEffect(() => startUs(), []);   // the chat between the two of them is kept fresh while someone is signed in
+  useEffect(() => startSounds(), []);   // …and its messages, Arvy's and the other notifications make their sound (features/sounds)
   // the bar's own camera: one hidden picker, opened by a drag; the screen it then goes to picks the photo up
   const camRef = useRef<HTMLInputElement>(null);
   const shooting = useRef<ShotKind>('meal');
