@@ -160,3 +160,6 @@
 .us-again { display: block; min-height: 44px; margin: 6px 0 0; padding: 0 18px; border: 1.5px solid var(--line); border-radius: 22px; background: var(--bg-2); color: var(--ink); font: 700 13.5px var(--sans); cursor: pointer; }
 .us-again:disabled { opacity: .5; cursor: default; }
 .us-asked .arvy-error { padding: 4px 4px 0; }
+.us-msg.mine .us-asked { display: flex; flex-direction: column; align-items: flex-end; }   /* under one's own message: on its side of the chat */
+/* Confirm and No thanks under a message in the chat: tall enough for a thumb */
+.us-arvy .arvy-confirm, .us-arvy .arvy-cancel { height: 44px; border-radius: 22px; }

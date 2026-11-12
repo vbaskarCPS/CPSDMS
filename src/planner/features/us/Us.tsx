@@ -335,7 +335,14 @@ export function Us() {
   // messages are being picked: the list stays where the finger left it
   const last = rows[rows.length - 1]?.msg;
   const tail = `${rows.length}:${last?.arvy?.state || ''}:${last?.arvy?.proposals?.length || 0}:${last?.ask?.state || ''}`;
-  useEffect(() => { if (open && !picking) endRef.current?.scrollIntoView({ block: 'end' }); }, [open, tail, sending]); // eslint-disable-line react-hooks/exhaustive-deps
+  // An answer of Arvy's can be taller than the chat: that one is brought in at its top, to be read from the start
+  useEffect(() => {
+    if (!open || picking) return;
+    const newest = rows[rows.length - 1];
+    const el = newest && isArvy(newest.msg) ? nodeOf(newest.key) : null;
+    if (el && bodyRef.current && el.offsetHeight > bodyRef.current.clientHeight - 24) el.scrollIntoView({ block: 'start' });
+    else endRef.current?.scrollIntoView({ block: 'end' });
+  }, [open, tail, sending]); // eslint-disable-line react-hooks/exhaustive-deps
   // …and when the quote or the bar takes room from under it. The list of things to ask takes a lot: the last
   // picked message, the one Arvy's offer will land under, is kept in view above it
   useEffect(() => {

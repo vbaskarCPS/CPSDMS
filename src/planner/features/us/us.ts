@@ -61,8 +61,9 @@ export async function refreshUs(): Promise<void> {
   busy = true;
   try {
     if (!loaded) seen = (await getDoc<{ at?: string }>('prefs', 'chatseen').catch(() => null))?.at || '';
-    const docs = await getDocs<ChatMsg>(CHAT_KIND, since());
-    rows = mergeRows(rows, docs.filter(d => d.data && d.data.id && d.data.by).map(d => ({ key: d.key, msg: d.data })));
+    // the demo keeps its chat nowhere: what is on screen is all there is, so it is left as it is
+    const docs = isDemo() ? null : await getDocs<ChatMsg>(CHAT_KIND, since());
+    if (docs) rows = mergeRows(rows, docs.filter(d => d.data && d.data.id && d.data.by).map(d => ({ key: d.key, msg: d.data })));
     loaded = true;
     if (open) markSeen();
     settleCutShort();

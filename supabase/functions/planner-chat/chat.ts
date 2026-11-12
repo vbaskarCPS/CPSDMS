@@ -568,6 +568,10 @@ export function cleanAnswer(raw: unknown, o: { today: string; members: { usernam
   return { text: clip(words, MAX_TEXT), links: cleanPlaces(r.links), sources: cleanSources(r.sources), proposals: answerProposals(r.changes, o) };
 }
 
+/** An answer in a line for the other phone's notification: its first words, without the marks Arvy sometimes puts
+ *  around a name (**bold**) or in front of a line ("- "). */
+export const answerLine = (text: string): string => pushLine({ text: text.replace(/\*\*|__|`/g, '').replace(/^\s*[-*\u2022]\s+/gm, '') });
+
 /** Arvy's answer, ready to save, or why it can't be. `asking` = what THIS household's chat holds under the key the
  *  phone gave (null = nothing: gone, made up, or another household's message), `user` = who is posting (from
  *  planner_me, never from the app).

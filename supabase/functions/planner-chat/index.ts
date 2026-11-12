@@ -37,7 +37,7 @@
 // What a message is and how Arvy's reading becomes proposals: chat.ts (shared with the app).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { sendPush, type VapidKeys } from './webpush.ts';
-import { ARVY_NAME, BUCKET, CHAT_KIND, MAX_ASK, MAX_IMAGE_BYTES, MAX_MEDIA, MAX_VIDEO_BYTES, MEDIA_TYPES, READ_SCHEMA, addProposals, arvyAnswer, askSystem, askText, askWords, askedNext, cleanAsk, cleanMessage, cleanPicked, isKey, onlyAsked, pickedFrom, proposalsFrom, pushLine, readSystem, readText, readingOf, replyFrom, resolveProposal, settleReading, type ChatMsg } from './chat.ts';
+import { ARVY_NAME, BUCKET, CHAT_KIND, MAX_ASK, MAX_IMAGE_BYTES, MAX_MEDIA, MAX_VIDEO_BYTES, MEDIA_TYPES, READ_SCHEMA, addProposals, answerLine, arvyAnswer, askSystem, askText, askWords, askedNext, cleanAsk, cleanMessage, cleanPicked, isKey, onlyAsked, pickedFrom, proposalsFrom, pushLine, readSystem, readText, readingOf, replyFrom, resolveProposal, settleReading, type ChatMsg } from './chat.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
 const FALLBACK = 'claude-sonnet-5-5';
@@ -272,7 +272,7 @@ Deno.serve(async req => {
           throw new Error(ie.message);
         }
         // the one who asked is looking at it; the other one hears that Arvy wrote
-        const tell = Promise.all(members.filter(m => m.id !== user.id).map(m => push(svc, m, { title: ARVY_NAME, body: pushLine({ text: next.msg.text }), tag: 'chat' })))
+        const tell = Promise.all(members.filter(m => m.id !== user.id).map(m => push(svc, m, { title: ARVY_NAME, body: answerLine(next.msg.text || ''), tag: 'chat' })))
           .catch(err => console.error('planner-chat after answer:', err instanceof Error ? err.message : String(err)));
         if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(tell); else await tell;
         return json({ ok: true, key: next.key, msg: next.msg, asked: { key, msg: next.asking } });

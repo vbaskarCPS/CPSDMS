@@ -299,7 +299,7 @@ export async function ask(lines: ChatLine[], question: string, path: string, spo
   const profile = profileOf(getPass()?.user.settings);
   const words = !question.trim() ? PIC_ONLY : !chat && asksWhatsNew(question) ? `${question}\n\n${newsNote(profile)}` : question;
   const msgs: Msg[] = [...history(lines, picsOf), { role: 'user', content: pics.length ? withPics(pics, words) : words }];
-  if (sent && pics.length) lastPics = { at: sent.at, pics };
+  if (sent && pics.length && !chat) lastPics = { at: sent.at, pics };   // (pictures from the shared chat are not kept for Arvy's own conversation)
   const ctx = chat ? { ...context(path, false), chat: true } : { ...context(path, spoken), about: await aboutMe() };   // in their shared chat: no notes about them
   const used: string[] = [];
   let navigate: string | undefined;

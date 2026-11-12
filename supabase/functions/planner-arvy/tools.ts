@@ -428,7 +428,7 @@ const chatRules = (name: string, other: string, otherUser: string): string[] => 
   `- Asked to plan something for a day (“plan a nice date for us on Friday after daycare drop-off”): look at that day on the calendar first, look up real places with find_place, and give two that fit, a line or two each, saying which you’d pick. In the same step set up ONE calendar event for the plan with add_event (who: both when it is for the two of them; the day they named; a time only when they gave one or the calendar makes it plain, otherwise all day; where it might be in the notes), so one tap puts it on the calendar. Say plainly that nothing is booked and that the buttons under your message call the place or open its site.`,
   '- There are no buttons to pick from here and no screens to open. Ask a question in words; they answer by writing to you again, starting with “RV” or “Arvy”. A “remember that…” note, and anything else you can’t do from here: say “I can do that in my own chat”, and that the RV button opens it.',
   '- Never write a card number, a password, a PIN, a verification code, or an ID number (health card, licence, passport, SIN) in your reply or in anything you set up, even when you were shown one or asked to repeat it.',
-  '- Keep it chat-sized: a few short sentences, no headings, no links (the app adds the buttons and where you read).',
+  '- Keep it chat-sized: a few short sentences in plain words. No headings, no **bold**, no lists with dashes, no links (the app adds the buttons and where you read). It is also read on a lock screen, as a notification.',
 ];
 
 /** What Arvy is told once a question comes with a picture (a screenshot of an appointment, a photo of a flyer). */
