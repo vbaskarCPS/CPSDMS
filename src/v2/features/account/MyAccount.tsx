@@ -2,7 +2,7 @@
 // Name, username, center and permissions are set by a Super Admin (Users), so they're shown, not edited.
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { KeyRound, UserRound } from 'lucide-react';
+import { Bell, KeyRound, UserRound } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { updateMyContact } from '../../lib/data';
 import { PERMISSIONS } from '../../lib/permissions';
@@ -69,6 +69,13 @@ export const MyAccount: React.FC = () => {
             {saved && <span className="v2-small" style={{ color: 'var(--green)', fontWeight: 700 }}>Saved</span>}
           </div>
         </form>
+      </Card>
+
+      <Card style={{ marginBottom: 14 }} title={<span className="v2-row" style={{ gap: 8 }}><Bell size={16} />Notifications</span>}>
+        <div className="v2-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <span className="v2-mut">What you’re told on your phone, about whom, and your quiet hours.</span>
+          <Btn kind="o" onClick={() => nav('/app/account/notifications')}>Notification settings</Btn>
+        </div>
       </Card>
 
       <Card title={<span className="v2-row" style={{ gap: 8 }}><KeyRound size={16} />Password</span>}>

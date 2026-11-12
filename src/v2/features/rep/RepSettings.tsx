@@ -1,9 +1,11 @@
-// src/v2/features/rep/RepSettings.tsx — the rep app's Settings (the gear in the header): follow-up emails.
+// src/v2/features/rep/RepSettings.tsx — the rep app's Settings (the gear in the header): follow-up emails, and phone
+// notifications (NotifyPanel: deal decided, new zone, follow-up due, meeting soon, new email).
 // Two switches, both off to start: an email when the rep sets a follow-up (with Add to calendar links), and an 8 AM
 // email listing that day's follow-ups. Both go to the rep's login email; saving also saves the phone's time zone.
 import React, { useEffect, useState } from 'react';
 import { repNotify, setRepNotify, type RepNotify } from '../../lib/rep';
 import { ErrorBox, Loading } from '../../ui';
+import { NotifyPanel } from '../account/NotifyPanel';
 
 const Switch: React.FC<{ on: boolean; busy: boolean; label: string; hint: string; onChange: (v: boolean) => void }> = ({ on, busy, label, hint, onChange }) => (
   <label className="v2-rep-switch">
@@ -46,6 +48,8 @@ export const RepSettings: React.FC = () => {
             onChange={v => save({ followup_set: s.followup_set, followup_morning: v })} />
         </div>
       )}
+      <div style={{ fontWeight: 800, margin: '16px 0 8px' }}>Phone notifications</div>
+      <NotifyPanel />
     </>
   );
 };

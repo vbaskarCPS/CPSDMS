@@ -18,6 +18,16 @@ interface Update {
 // newest first
 const UPDATES: Update[] = [
   {
+    id: '2026-11-12-phone-notifications',
+    title: 'Notifications on your phone',
+    intro: 'The app can now tell you on your phone when something needs you, even when it’s closed.',
+    steps: [
+      'Tap the gear, then Phone notifications, and tap Turn on.',
+      'You’ll hear when a deal is approved or turned down, when you get a new zone, when a follow-up is due, and 30 minutes before a meeting.',
+      'Switch any of them off, or set quiet hours, on the same screen.',
+    ],
+  },
+  {
     id: '2026-11-10-back-on-main-server',
     title: 'The app is back',
     intro: 'The app was closed for a short time on Nov 10 while we moved it back to its main server.',
