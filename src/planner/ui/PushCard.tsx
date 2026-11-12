@@ -98,7 +98,7 @@ export function PushCard() {
       )}
 
       <div>
-        <p className="pl-eyebrow" style={{ marginBottom: 6 }}>Reminders</p>
+        <p className="pl-eyebrow" style={{ marginBottom: 6 }}>Each reminder</p>
         <div className="pl-list">
           {list.map(x => (
             <div key={x.id} className="pl-item rem-item">
