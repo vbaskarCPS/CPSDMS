@@ -135,7 +135,8 @@ async function showPush(d) {
   return self.registration.showNotification(title, {
     body,
     icon: d.icon || '/icon-192.png',     // the planner sends its own icon
-    badge: d.badge || (planner ? '/planner-badge.png?v=2' : d.icon || '/icon-192.png'),
+    // the status-bar icon is drawn from the picture's transparency alone: a full-colour square shows as a blank box
+    badge: d.badge || (planner ? '/planner-badge.png?v=2' : '/badge-96.png'),
     tag: d.tag || undefined,
     renotify: !!d.tag,
     ...(planner ? { timestamp: Date.now(), vibrate: [70, 50, 70] } : {}),
