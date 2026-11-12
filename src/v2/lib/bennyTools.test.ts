@@ -95,6 +95,13 @@ describe('the Benny’s tools', () => {
   });
   describe('pace and strategy', () => {
     const ctx = { center_id: 'c1', today: '2026-11-11' };
+    it('answers are plain text: the chat draws no tables', () => {
+      for (const role of ['admin', 'rm'] as const) expect(rules(role)).toContain('No tables, no headings, no code: a table shows up as rows of | marks.');
+    });
+    it('a question about someone\u2019s usual goes to the main model', () => {
+      expect(needsMain('how is Kyle doing against his usual')).toBe('judge');
+      expect(needsMain('is that usual for him')).toBe('judge');
+    });
     it('the pace lookup is for super admins and route managers, and reads the map that is open', () => {
       expect(toolsFor('admin').map(x => x.name)).toContain('pace'); expect(toolsFor('rm').map(x => x.name)).toContain('pace');
       expect(toolCall('pace', {}, ctx)).toEqual({ fn: 'benny_pace', args: { p_center: 'c1', p_manager: null, p_worker: null, p_date: null, p_at: null } });
@@ -107,7 +114,11 @@ describe('the Benny’s tools', () => {
       for (const role of ['admin', 'rm'] as const) {
         const r = rules(role);
         expect(r).toContain('the times are when a knock or a job was ENTERED in the app');
-        expect(r).toContain('give both, each as "if ...", never as one forecast');
+        expect(r).toContain('Give both endings, each as "if ..." with its own how, never as one forecast');
+        expect(r).toContain('the lowest and the highest earlier day for each measure (lowest_and_highest)');
+        expect(r).toContain('a worker\'s gross is everything they logged (sales and prebooks done together), never the dollars of their sales');
+        expect(r).toContain('they are not idle, stopped or slow');
+        expect(r).toContain('say the zone with the first one ("as of 16:40 Pacific")');
         expect(r).toContain('ask one or two short questions about their approach that would change the answer');
         expect(r).toContain('Never give one right way, never judge a worker\'s character, never invent a fact about anyone.');
         expect(r).toContain('- Knock: a door a worker went to and tapped in the app with no sale');
