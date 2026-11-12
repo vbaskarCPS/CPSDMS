@@ -14,6 +14,7 @@ import { Camera, ChevronsUp, Compass, HeartPulse, MessagesSquare, Mic, Sparkles,
 import { Arvy } from '../features/arvy/Arvy';
 import { arvyHasNews, arvyIsHearing, arvyIsOpen, onArvyChange, openArvy, primeVoice, toggleArvy } from '../features/arvy/arvy';
 import { Us } from '../features/us/Us';
+import { Calls } from '../features/us/call/CallLayer';
 import { onUs, openUs, otherName, setUsOpen, startUs, usIsOpen, usUnread, usVersion } from '../features/us/us';
 import { PlaceIcon } from '../features/icons';
 import { giveShot, SHOT_TO, type ShotKind } from '../lib/quickShot';
@@ -174,6 +175,7 @@ export function Shell({ children }: { children: ReactNode }) {
       {children}
       <Arvy />
       <Us />
+      <Calls />{/* video calls between the two of them: the banner when the other one rings, and the call itself */}
       <input ref={camRef} type="file" accept="image/*" capture="environment" hidden tabIndex={-1} aria-hidden
         onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; giveShot(shooting.current, files); }} />
       <nav className="pl-nav" aria-label="Planner">
