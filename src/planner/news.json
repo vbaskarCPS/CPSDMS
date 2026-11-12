@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-12-race-start-workout", "date": "2026-11-12", "title": "Your race now finishes at Start workout", "for": "night",
+    "lines": ["The gym race stops the moment you press Start workout in Training, not at your first set.", "Past days are worked out again the same way, so your best still compares like with like.", "Want the first set instead? Edit the timer in Settings › Arrange Today and pick Up to first set."] },
   { "id": "2026-11-11-race-timer", "date": "2026-11-11", "title": "Race your mornings", "for": "night",
     "lines": ["New on Today: a race timer. Add it in Settings › Arrange Today.", "“Up to first set” runs from I’m up to your first set in the gym, with your best beside it.", "Or make your own with Start and Stop: out the door, kids to bed.", "Tap it to see the last 30 days."] },
   { "id": "2026-11-11-sounds", "date": "2026-11-11", "title": "A sound for each kind of notification",
