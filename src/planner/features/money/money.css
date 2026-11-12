@@ -19,6 +19,10 @@
 .mo-acct { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
 .mo-acct__icon { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); flex: none; }
 .mo-acct__icon svg { width: 20px; height: 20px; }
+/* "Waiting for the bank to approve?" after a connect that didn't finish */
+.mo-help { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--amber) 14%, var(--bg-2)); border: 1px solid var(--line); color: var(--ink); }
+.mo-help svg { width: 20px; height: 20px; flex: none; color: var(--amber-2); margin-top: 1px; }
+.mo-help p { margin: 0; font-size: 13px; line-height: 1.4; }
 .mo-file { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 22px 16px; border: 2px dashed var(--line); border-radius: var(--radius); text-align: center; cursor: pointer; }
 .mo-file input { display: none; }
 .mo-file svg { width: 28px; height: 28px; color: var(--accent); }

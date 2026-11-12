@@ -1,8 +1,10 @@
 // supabase/functions/planner-plaid/index.ts — the planner's bank connections through Plaid.
 //
 // From the app (planner token checked with planner_me; money belongs to the household):
-//   POST { token, action: 'link_token', redirectUri?, itemId? }  → { linkToken }  opens Plaid Link (itemId: reconnect that bank)
+//   POST { token, action: 'link_token', redirectUri?, itemId?, addAccounts? } → { linkToken }  opens Plaid Link (itemId: reconnect that bank;
+//                                                                   with addAccounts: choose which of its accounts are shared)
 //   POST { token, action: 'exchange', publicToken, institution? } → { itemId, accounts: [{ plaidId, name, mask, type, subtype, suggest }] }
+//   POST { token, action: 'accounts', itemId }                   → after addAccounts: the bank's accounts again, as 'exchange' returns them
 //   POST { token, action: 'map', itemId, map: { [plaidId]: plannerAccountId | 'new' | 'skip' } } → links the accounts, syncs
 //   POST { token, action: 'list' }                                → { items: [...] }  (no tokens, ever)
 //   POST { token, action: 'sync', itemId? }                       → pulls what's new for the household's banks
@@ -10,7 +12,8 @@
 //   POST { token, action: 'sandbox_link' }                        → test mode only: connects Plaid's test bank (then as 'exchange')
 // From Plaid (no planner token; checked with the Plaid-Verification JWT):
 //   POST { webhook_type, webhook_code, item_id, ... }             → TRANSACTIONS SYNC_UPDATES_AVAILABLE syncs that bank;
-//                                                                   ITEM errors mark it for reconnecting
+//                                                                   ITEM errors mark it for reconnecting; ITEM NEW_ACCOUNTS_AVAILABLE
+//                                                                   marks it so Money → Accounts offers to add them
 // From pg_cron (x-cron-key = planner_secrets.cron_key), daily:
 //   POST { action: 'tick' }                                       → syncs every active bank
 //
@@ -20,6 +23,7 @@
 // Deployed without JWT verification: the planner has no Supabase accounts, and Plaid can't send one.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { applySync, type PlaidTxn, type PlannerTxn } from '../_shared/plannerMoney.ts';
+import { itemAccounts, linkTokenBody, NEW_ACCOUNTS_KIND, plannerChoices, plannerType, refreshAccounts, suggestFor, type ItemAccount, type PlaidAccount, type PlannerAccount } from './lib.ts';
 
 const env = (k: string) => (Deno.env.get(k) || '').trim();
 const PLAID_ENV = env('PLAID_ENV') === 'production' ? 'production' : 'sandbox';
@@ -52,9 +56,6 @@ interface ItemRow {
   id: string; household_id: string; added_by: string; item_id: string; institution_id: string | null; institution_name: string | null;
   accounts: ItemAccount[]; cursor: string | null; status: string; error: string | null; last_sync_at: string | null; created_at: string;
 }
-interface ItemAccount { plaidId: string; name: string; mask: string | null; type: string; subtype: string | null; plannerId: string | null }
-interface PlannerAccount { id: string; name: string; type: 'chequing' | 'savings' | 'credit'; last4?: string; balance?: number; balanceAsOf?: string; order: number; archived?: boolean; plaid?: { itemId: string; plaidId: string; institution?: string; linkedAt: string; removedAt?: string } }
-interface PlaidAccount { account_id: string; name: string; official_name?: string | null; mask?: string | null; type: string; subtype?: string | null; balances?: { current?: number | null; available?: number | null; iso_currency_code?: string | null } }
 
 // ── household docs (service role writes them directly, under the household's user id) ──
 async function docs<T>(svc: SupabaseClient, owner: string, kind: string): Promise<{ key: string; data: T }[]> {
@@ -68,8 +69,6 @@ async function putDocs(svc: SupabaseClient, owner: string, list: { kind: string;
   const { error } = await svc.from('planner_docs').upsert(list.map(d => ({ user_id: owner, kind: d.kind, key: d.key, data: d.data, updated_at: now })), { onConflict: 'user_id,kind,key' });
   if (error) throw new Error(error.message);
 }
-const plannerType = (a: { type: string; subtype?: string | null }): PlannerAccount['type'] =>
-  a.type === 'credit' ? 'credit' : (a.subtype === 'savings' || a.subtype === 'cd' || a.subtype === 'money market' || a.subtype === 'hsa') ? 'savings' : 'chequing';
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto' }).format(new Date());
 
 // ── sync one bank: pull everything since its cursor, write the household's months and balances ──
@@ -160,8 +159,8 @@ async function verifyWebhook(jwt: string, rawBody: string): Promise<boolean> {
   return digest === claims.request_body_sha256;
 }
 
-const publicItem = (i: ItemRow) => ({
-  itemId: i.item_id, institution: i.institution_name || 'Bank', status: i.status, error: i.status === 'active' ? null : i.error,
+const publicItem = (i: ItemRow, newAccounts = false) => ({
+  itemId: i.item_id, newAccounts, institution: i.institution_name || 'Bank', status: i.status, error: i.status === 'active' ? null : i.error,
   lastSyncAt: i.last_sync_at, createdAt: i.created_at, accounts: i.accounts.map(a => ({ plaidId: a.plaidId, name: a.name, mask: a.mask, type: a.type, subtype: a.subtype, plannerId: a.plannerId })),
 });
 
@@ -190,6 +189,9 @@ Deno.serve(async req => {
         await svc.from('planner_bank_items').update({ status: 'login_required', error: (err?.error_message || code).slice(0, 300) }).eq('item_id', itemId);
       } else if (type === 'ITEM' && code === 'LOGIN_REPAIRED') {
         await svc.from('planner_bank_items').update({ status: 'active', error: null }).eq('item_id', itemId);
+      } else if (type === 'ITEM' && code === 'NEW_ACCOUNTS_AVAILABLE') {
+        // the bank has accounts this connection doesn't share yet: Money → Accounts offers "add them" until they're chosen
+        await putDocs(svc, (item as ItemRow).household_id, [{ kind: NEW_ACCOUNTS_KIND, key: itemId, data: { at: new Date().toISOString() } }]);
       } else if (type === 'ITEM' && code === 'USER_PERMISSION_REVOKED') {
         await svc.rpc('planner_plaid_forget', { p_item_id: itemId });
       }
@@ -219,20 +221,17 @@ Deno.serve(async req => {
 
     if (b.action === 'link_token') {
       const redirect = typeof b.redirectUri === 'string' && REDIRECTS.includes(b.redirectUri) ? b.redirectUri : undefined;
-      const body: Record<string, unknown> = {
-        user: { client_user_id: me.id }, client_name: me.settings?.app === 'roshplanner' ? 'Rosh Planner' : 'Vijay Planner',
-        country_codes: ['CA'], language: 'en', webhook: WEBHOOK_URL, ...(redirect ? { redirect_uri: redirect } : {}),
-      };
-      if (b.itemId) {   // reconnect ("update mode"): same bank, fresh sign-in
+      let accessToken: string | undefined;
+      if (b.itemId) {   // "update mode": same bank, fresh sign-in (and with addAccounts, its account list)
         const item = await itemOf(b.itemId);
         if (!item) return json({ error: 'Not found' }, 404);
-        const accessToken = (await svc.rpc('planner_plaid_token', { p_item_id: item.item_id })).data as string | null;
+        accessToken = ((await svc.rpc('planner_plaid_token', { p_item_id: item.item_id })).data as string | null) || undefined;
         if (!accessToken) return json({ error: 'Not found' }, 404);
-        body.access_token = accessToken;
-      } else {
-        body.products = ['transactions'];
-        body.transactions = { days_requested: 730 };
       }
+      const body = linkTokenBody({
+        userId: me.id, clientName: me.settings?.app === 'roshplanner' ? 'Rosh Planner' : 'Vijay Planner', webhook: WEBHOOK_URL,
+        redirect, accessToken, addAccounts: b.addAccounts === true,
+      });
       let r: { link_token: string; expiration: string };
       try { r = await plaid('/link/token/create', body); }
       catch (e) {
@@ -265,8 +264,7 @@ Deno.serve(async req => {
       }
       // keep the planner account a reconnect already linked
       const { data: before } = await svc.from('planner_bank_items').select('accounts').eq('item_id', ex.item_id).maybeSingle();
-      const kept = new Map(((before?.accounts || []) as ItemAccount[]).map(a => [a.plaidId, a.plannerId]));
-      const accounts: ItemAccount[] = got.accounts.map(a => ({ plaidId: a.account_id, name: a.name || a.official_name || 'Account', mask: a.mask || null, type: a.type, subtype: a.subtype || null, plannerId: kept.get(a.account_id) || null }));
+      const accounts = itemAccounts(got.accounts, (before?.accounts || []) as ItemAccount[]);
       const { error } = await svc.rpc('planner_plaid_save_item', {
         p_household: household, p_added_by: me.id, p_item_id: ex.item_id, p_access_token: ex.access_token,
         p_institution_id: instId, p_institution_name: instName, p_accounts: accounts,
@@ -274,14 +272,28 @@ Deno.serve(async req => {
       if (error) throw new Error(error.message);
       // suggest a planner account for each: the same last 4 digits and kind, not already connected elsewhere
       const planner = (await docs<PlannerAccount>(svc, household, 'account')).map(d => d.data).filter(a => !a.archived);
-      const suggest = (a: ItemAccount) => {
-        if (a.plannerId) return a.plannerId;
-        const t = plannerType(a);
-        const hit = planner.find(p => !(p.plaid && !p.plaid.removedAt && p.plaid.itemId !== ex.item_id) && p.type === t && a.mask && p.last4 === a.mask);
-        return hit ? hit.id : 'new';
-      };
-      return json({ itemId: ex.item_id, institution: instName, accounts: accounts.map(a => ({ ...a, suggest: suggest(a) })),
-        plannerAccounts: planner.map(p => ({ id: p.id, name: p.name, type: p.type, last4: p.last4 || null, linked: !!(p.plaid && !p.plaid.removedAt) })) });
+      return json({ itemId: ex.item_id, institution: instName, accounts: accounts.map(a => ({ ...a, suggest: suggestFor(a, planner, ex.item_id) })),
+        plannerAccounts: plannerChoices(planner, ex.item_id) });
+    }
+
+    // back from "Add or change accounts" (update mode with account selection): the access token is the same, so
+    // nothing to swap; read the bank's accounts again and offer the same choices as a first connect
+    if (b.action === 'accounts') {
+      const item = await itemOf(b.itemId);
+      if (!item) return json({ error: 'Not found' }, 404);
+      const accessToken = (await svc.rpc('planner_plaid_token', { p_item_id: item.item_id })).data as string | null;
+      if (!accessToken) return json({ error: 'Not found' }, 404);
+      return json(await refreshAccounts(item, {
+        accountsGet: async () => (await plaid<{ accounts: PlaidAccount[] }>('/accounts/get', { access_token: accessToken })).accounts,
+        plannerAccounts: async () => (await docs<PlannerAccount>(svc, household, 'account')).map(d => d.data),
+        saveItemAccounts: async accounts => {
+          const { error } = await svc.from('planner_bank_items').update({ accounts, status: 'active', error: null }).eq('item_id', item.item_id);
+          if (error) throw new Error(error.message);
+        },
+        putAccounts: list => putDocs(svc, household, list.map(a => ({ kind: 'account', key: a.id, data: a }))),
+        clearNewAccounts: async () => { await svc.from('planner_docs').delete().eq('user_id', household).eq('kind', NEW_ACCOUNTS_KIND).eq('key', item.item_id); },
+        now: () => new Date().toISOString(),
+      }));
     }
 
     if (b.action === 'map') {
@@ -316,7 +328,8 @@ Deno.serve(async req => {
 
     if (b.action === 'list') {
       const { data } = await svc.from('planner_bank_items').select('*').eq('household_id', household).neq('status', 'removed').order('created_at');
-      return json({ items: ((data || []) as ItemRow[]).map(publicItem), env: PLAID_ENV });
+      const fresh = new Set((await docs<unknown>(svc, household, NEW_ACCOUNTS_KIND)).map(d => d.key));
+      return json({ items: ((data || []) as ItemRow[]).map(i => publicItem(i, fresh.has(i.item_id))), env: PLAID_ENV });
     }
 
     if (b.action === 'sync') {

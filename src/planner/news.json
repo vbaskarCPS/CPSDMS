@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-12-bank-add-accounts", "date": "2026-11-12", "title": "Add a card to a bank that’s already connected",
+    "lines": ["Money › Banks: tap “Add or change accounts” on TD to share another TD account, like a credit card.", "Then choose where it goes, for example “Vijay and Rosh CCD”.", "Stuck waiting for the bank to approve? Open its app yourself, or ask for a code by text.", "Arvy can now tell you how to add a card and take you there."] },
   { "id": "2026-11-12-quiet-reminders", "date": "2026-11-12", "title": "Switch off a single reminder",
     "lines": ["Settings › Reminders now lists each reminder with its own switch.", "Off means no notification; the block stays in your day.", "Or just tell Arvy: “no reminder for the sauna”.", "Ask Arvy for a to-do “this week” and it picks the emptiest day for it."] },
   { "id": "2026-11-12-watch-connect", "date": "2026-11-12", "title": "Settings › Watch, ready for the watch app", "for": "night",

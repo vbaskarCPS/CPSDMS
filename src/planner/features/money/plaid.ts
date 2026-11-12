@@ -6,7 +6,7 @@ import { getPass, forgetPass, SignedOut } from '../../lib/auth';
 import { appBase } from '../../lib/app';
 
 export interface BankAccount { plaidId: string; name: string; mask: string | null; type: string; subtype: string | null; plannerId: string | null }
-export interface BankItem { itemId: string; institution: string; status: 'active' | 'login_required' | 'error'; error: string | null; lastSyncAt: string | null; createdAt: string; accounts: BankAccount[] }
+export interface BankItem { itemId: string; institution: string; newAccounts?: boolean; status: 'active' | 'login_required' | 'error'; error: string | null; lastSyncAt: string | null; createdAt: string; accounts: BankAccount[] }
 export interface Exchanged {
   itemId: string; institution: string | null;
   accounts: (BankAccount & { suggest: string })[];
@@ -41,7 +41,7 @@ interface PlaidGlobal {
   create: (o: {
     token: string; receivedRedirectUri?: string;
     onSuccess: (publicToken: string, meta: LinkMeta) => void;
-    onExit: (err: { display_message?: string; error_message?: string } | null) => void;
+    onExit: (err: { display_message?: string; error_message?: string } | null, meta?: LinkMeta) => void;
   }) => LinkHandler;
 }
 declare global { interface Window { Plaid?: PlaidGlobal } }
@@ -65,39 +65,46 @@ function loadLink(): Promise<PlaidGlobal> {
 export const redirectUri = () => `${location.origin}${appBase()}/plaid-oauth`;
 const PENDING = 'planner-plaid-link';
 
-export type LinkOutcome = { kind: 'new'; exchanged: Exchanged } | { kind: 'reconnected'; itemId: string } | { kind: 'closed'; message?: string };
+/** 'closed': Link ended without connecting; `institution` is the bank they'd picked, when Plaid says. */
+export type LinkOutcome = { kind: 'new'; exchanged: Exchanged } | { kind: 'reconnected'; itemId: string } | { kind: 'closed'; message?: string; institution?: string };
 
-/** Open Plaid Link: a new bank, or (itemId) a fresh sign-in for one already connected. */
-export async function openLink(itemId?: string): Promise<LinkOutcome> {
+/** Open Plaid Link: a new bank, or (itemId) a fresh sign-in for one already connected, or (itemId, addAccounts)
+ *  the bank's account list, to share more of its accounts (or fewer). */
+export async function openLink(itemId?: string, addAccounts = false): Promise<LinkOutcome> {
+  const add = !!itemId && addAccounts;
   const [{ linkToken }, Plaid] = await Promise.all([
-    invoke<{ linkToken: string }>({ action: 'link_token', itemId, redirectUri: redirectUri() }),
+    invoke<{ linkToken: string }>({ action: 'link_token', itemId, redirectUri: redirectUri(), ...(add ? { addAccounts: true } : {}) }),
     loadLink(),
   ]);
-  try { sessionStorage.setItem(PENDING, JSON.stringify({ linkToken, itemId: itemId || null })); } catch { /* private mode: OAuth banks need a second try */ }
-  return run(Plaid, linkToken, itemId);
+  try { sessionStorage.setItem(PENDING, JSON.stringify({ linkToken, itemId: itemId || null, addAccounts: add })); } catch { /* private mode: OAuth banks need a second try */ }
+  return run(Plaid, linkToken, itemId, undefined, add);
 }
+
+/** After "Add or change accounts": the bank's accounts again, to choose where each goes (as after a first connect). */
+export const bankAccounts = (itemId: string) => invoke<Exchanged>({ action: 'accounts', itemId });
 
 /** Back from a bank's own sign-in page (the /plaid-oauth route): finish the same Link session. */
 export async function resumeLink(): Promise<LinkOutcome> {
-  let saved: { linkToken: string; itemId: string | null } | null = null;
+  let saved: { linkToken: string; itemId: string | null; addAccounts?: boolean } | null = null;
   try { saved = JSON.parse(sessionStorage.getItem(PENDING) || 'null'); } catch { saved = null; }
   if (!saved?.linkToken) return { kind: 'closed', message: 'That bank sign-in expired. Start again from Accounts.' };
   const Plaid = await loadLink();
-  return run(Plaid, saved.linkToken, saved.itemId || undefined, location.href);
+  return run(Plaid, saved.linkToken, saved.itemId || undefined, location.href, !!saved.addAccounts);
 }
 
-function run(Plaid: PlaidGlobal, token: string, itemId?: string, receivedRedirectUri?: string): Promise<LinkOutcome> {
+function run(Plaid: PlaidGlobal, token: string, itemId?: string, receivedRedirectUri?: string, addAccounts = false): Promise<LinkOutcome> {
   return new Promise((resolve, reject) => {
     const done = () => { try { sessionStorage.removeItem(PENDING); } catch { /* fine */ } };
     const handler = Plaid.create({
       token, receivedRedirectUri,
       onSuccess: (publicToken, meta) => {
         done(); handler.destroy();
+        if (itemId && addAccounts) { bankAccounts(itemId).then(exchanged => resolve({ kind: 'new', exchanged }), reject); return; }   // same connection, new account list
         if (itemId) { resolve({ kind: 'reconnected', itemId }); return; }   // update mode: same connection, nothing to swap
         invoke<Exchanged>({ action: 'exchange', publicToken, institution: meta.institution || undefined })
           .then(exchanged => resolve({ kind: 'new', exchanged }), reject);
       },
-      onExit: err => { done(); handler.destroy(); resolve({ kind: 'closed', message: err?.display_message || err?.error_message || undefined }); },
+      onExit: (err, meta) => { done(); handler.destroy(); resolve({ kind: 'closed', message: err?.display_message || err?.error_message || undefined, institution: meta?.institution?.name || undefined }); },
     });
     handler.open();
   });
