@@ -9,7 +9,7 @@ import { useDoc } from '../../lib/useDoc';
 import { clock } from '../../lib/routine';
 import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Page, Header, Card, Button } from '../../ui/primitives';
-import { addDays, nowHM } from './dates';
+import { addDays, nowHM, saunaDue } from './dates';
 import { beep } from './sound';
 import { autoMark } from '../habits/auto';
 import { ProteinRoad } from '../food/ProteinRoad';
@@ -34,6 +34,9 @@ export function Sauna() {
   const saunaLeft = day.night.saunaStart ? routine.saunaMin * 60 - Math.floor((now - new Date(day.night.saunaStart).getTime()) / 1000) : 0;
   const hit = useRef(false);
   useEffect(() => { if (day.night.saunaStart && !day.ticks.sauna && saunaLeft <= 0 && !hit.current) { hit.current = true; beep(); window.setTimeout(beep, 1200); } }, [saunaLeft, day.night.saunaStart, day.ticks.sauna]);
+  // the timer ran out: tick it for you, at the time it ended (it can still be unticked)
+  const due = saunaDue(day.night.saunaStart, day.ticks.sauna, routine.saunaMin, now);
+  useEffect(() => { if (due) { setDay(d => (d.ticks.sauna ? d : { ...d, ticks: { ...d.ticks, sauna: due } })); void autoMark('sauna', true); } }, [due]); // eslint-disable-line react-hooks/exhaustive-deps
   const saunaDone = (on: boolean) => { setDay(d => ({ ...d, ticks: { ...d.ticks, sauna: on ? nowHM() : undefined } })); void autoMark('sauna', on); };
 
   const briefDone = !!day.brief.finishedAt;

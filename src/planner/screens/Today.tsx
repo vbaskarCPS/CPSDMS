@@ -17,7 +17,7 @@ import { useDoc } from '../lib/useDoc';
 import { adjustWords, blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, onRoutineChange, routineFor, routineMin, routineMinutes, routineNow, type Block, type BlockId, type Routine } from '../lib/routine';
 import { InstallHint } from '../ui/InstallHint';
 import { Stat } from '../ui/primitives';
-import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, streakOf, todosDone, wakeStreak, TodoList, MissedBedtime, isMorningHours, type Day } from '../features/plan';
+import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, saunaDue, streakOf, todosDone, wakeStreak, TodoList, MissedBedtime, isMorningHours, type Day } from '../features/plan';
 import { HabitsTodayCard, SlotHabits, SlotHabitsProvider, autoMark } from '../features/habits';
 import { WorkoutTodayCard, MissedGym, GymStatus } from '../features/workout';
 import { GuessMeals } from '../features/food/GuessMeals';
@@ -87,6 +87,9 @@ export function Today({ pass }: { pass: PlannerPass }) {
 
   useEffect(() => { void loadRoutine().then(setRoutine); return onRoutineChange(setRoutine); }, []);   // and when Arvy changes the routine
   useEffect(() => { const id = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(id); }, []);
+  // the sauna timer ran out while you were elsewhere: tick it for you, at the time it ended
+  const saunaEnded = loading ? null : saunaDue(day.night.saunaStart, day.ticks.sauna, eff.saunaMin, now.getTime());
+  useEffect(() => { if (saunaEnded) { set(d => (d.ticks.sauna ? d : { ...d, ticks: { ...d.ticks, sauna: saunaEnded } })); void autoMark('sauna', true); } }, [saunaEnded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // streaks over the last 60 days (today's doc from this screen, so a fresh tick counts straight away)
   useEffect(() => {

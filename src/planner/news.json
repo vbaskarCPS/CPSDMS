@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-12-sauna-auto", "date": "2026-11-12", "title": "The sauna ticks itself", "for": "night",
+    "lines": ["When the sauna timer runs out, Sauna is ticked for you at the time it ended, and the sauna habit with it.", "It works from Today too, if you’ve left the sauna screen. Tap it to untick if you didn’t go."] },
   { "id": "2026-11-12-race-today-fix", "date": "2026-11-12", "title": "Race timer fixed, and the gym habit has a 30-minute rule", "for": "night",
     "lines": ["The race timer kept running after Start workout: the planner wasn’t seeing that day’s own session. Fixed, and the same fix stops “Did you miss the gym today?” showing after you’ve been.", "“Get to the gym” now only ticks itself if you press Start workout within 30 minutes of I’m up.", "Today’s tick is taken off: you started at 6:29, 69 minutes after 5:20."] },
   { "id": "2026-11-12-voice-drag", "date": "2026-11-12", "title": "Talk instead of typing, and room to think",
