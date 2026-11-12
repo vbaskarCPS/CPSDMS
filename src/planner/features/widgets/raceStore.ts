@@ -5,7 +5,7 @@
 // today's own day comes straight from the Today screen when it's open there, so a tick shows at once.
 // A race started and stopped by hand writes its doc when Start and Stop are tapped.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { dayKey, getDoc, getDocs, onDocsChanged, putDocs } from '../../lib/docs';
+import { dayKey, getDayDocs, getDoc, getDocs, onDocsChanged, putDocs } from '../../lib/docs';
 import { addDays } from '../plan/dates';
 import { normalizeDay, type Day } from '../plan/types';
 import type { Workout } from '../workout/types';
@@ -32,7 +32,7 @@ async function read(w: Pick<Race, 'id' | 'race'>, today: string, daysFrom?: stri
   const [docs, dayDocs, workouts] = await Promise.all([
     getDocs<unknown>(RACE_KIND, raceKey(w.id, from), raceKey(w.id, today)),
     fromDay ? Promise.resolve([]) : getDocs<Day>('day', daysFrom || from, today),
-    fromDay ? Promise.resolve([]) : getDocs<Workout>('workout', `${daysFrom || from}~`, `${today}~~`),
+    fromDay ? Promise.resolve([]) : getDayDocs<Workout>('workout', daysFrom || from, today),
   ]);
   const kept: Record<string, RaceResult | null> = {};
   for (const d of docs) { const day = d.key.slice(w.id.length + 1); kept[day] = cleanResult(d.data); }
@@ -127,7 +127,7 @@ export function useRace(w: Race, live?: { key: string; day: Day } | null): RaceS
 
 /** A race timer taken off Today: its times go too. */
 export async function dropRace(id: string): Promise<void> {
-  const docs = await getDocs(RACE_KIND, `${id}~`, `${id}~~`).catch(() => []);
+  const docs = (await getDocs(RACE_KIND).catch(() => [])).filter(d => d.key.startsWith(`${id}~`));   // not a `~~` range: see getDayDocs
   if (docs.length) await putDocs(docs.map(d => ({ kind: RACE_KIND, key: d.key, data: null }))).catch(() => undefined);
 }
 

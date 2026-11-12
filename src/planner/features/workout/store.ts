@@ -1,5 +1,5 @@
 // src/planner/features/workout/store.ts — reading and writing the workout docs, plus the derived bits.
-import { dayKey, getDocs, putDoc, putDocs } from '../../lib/docs';
+import { dayKey, getDayDocs, getDocs, putDoc, putDocs } from '../../lib/docs';
 import { planFromText, type PlanResult } from '../../lib/ai';
 import { uid } from '../../ui/primitives';
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
@@ -52,7 +52,7 @@ export const saveCustomExercise = (e: Exercise) => putDoc('exercise', e.id, { ..
 
 /** Workouts between two days, newest first. */
 export async function loadWorkouts(from?: string, to?: string): Promise<Workout[]> {
-  const docs = await getDocs<Workout>('workout', from, to ? `${to}~~` : undefined);
+  const docs = await getDayDocs<Workout>('workout', from, to);
   return docs.map(d => d.data).filter(w => w && w.id && !w.discarded).sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1));
 }
 export const saveWorkout = (w: Workout) => putDoc('workout', workoutKey(w), w);

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Camera, Image, Loader2, Star, Utensils, X } from 'lucide-react';
 import { estimateFoodPhotos, estimateFoodText, shrinkImage, type FoodEstimate } from '../../lib/ai';
-import { dayKey, getDoc, getDocs, putDoc } from '../../lib/docs';
+import { dayKey, getDayDocs, getDoc, getDocs, putDoc } from '../../lib/docs';
 import { useQuickShot } from '../../lib/quickShot';
 import { Button, Card, Empty, Field, Header, Page, Segmented, TextArea, useToast, uid } from '../../ui/primitives';
 import { MealEditor, type Draft } from './MealEditor';
@@ -108,7 +108,7 @@ export function AddMeal() {
     try {
       const meal: Meal = { id: uid(), date: day, time: draft.time || nowTime(), name: draft.name.trim() || 'Meal', items: draft.items, totals: round(sum(draft.items)), thumb: draft.thumb, note: draft.note, source };
       if (!mode) {
-        const logged = (await getDocs<Meal>('meal', `${day}~`, `${day}~~`).catch(() => [])).map(d => d.data).filter(Boolean);
+        const logged = (await getDayDocs<Meal>('meal', day, day).catch(() => [])).map(d => d.data).filter(Boolean);
         const hit = likelySame(meal, logged);
         if (hit) { setSame(hit); setSaving(false); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
       }
