@@ -8,7 +8,7 @@
 // gets a mailbox out of it. When the sign-in at Google wasn't finished, the address says so (?problem=…), shown once.
 // The page also says exactly what Arvy can and can't do with a connected mailbox, and what Google's "hasn't verified
 // this app" screen is about (this is a private app for two people).
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Mail } from 'lucide-react';
 import { ago, cameBack, connectStart, disconnect, mailboxes, MailProblem, setWatch, type Mailbox } from './mail';
@@ -38,6 +38,7 @@ export function MailSettings() {
   const [working, setWorking] = useState<string | null>(null); // the mailbox being changed
   const [asking, setAsking] = useState<string | null>(null);   // "Disconnect this one?" is showing for it
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const left = useRef(false);                                  // Google's page was opened from this screen
   const now = Date.now();
 
   const load = useCallback(async () => {
@@ -65,12 +66,23 @@ export function MailSettings() {
     window.addEventListener('hashchange', arrived);
     return () => window.removeEventListener('hashchange', arrived);
   }, [load]);
+  // Back on this screen just as it was left (Back from Google's page, or a phone that showed Google's page on top
+  // of the planner): the button works again and the list is read afresh
+  useEffect(() => {
+    const back = () => {
+      if (!left.current || document.visibilityState !== 'visible') return;
+      left.current = false; setOpening(false); void load();
+    };
+    window.addEventListener('pageshow', back);
+    document.addEventListener('visibilitychange', back);
+    return () => { window.removeEventListener('pageshow', back); document.removeEventListener('visibilitychange', back); };
+  }, [load]);
   // the result is in the page now: take it out of the address, so going back or reloading doesn't show it again
   useEffect(() => { if (params.has('problem')) setParams({}, { replace: true }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const connect = async () => {
     setMsg(null); setOpening(true);
-    try { window.location.assign(await connectStart()); }   // Google's sign-in page, in this tab
+    try { const url = await connectStart(); left.current = true; window.location.assign(url); }   // Google's sign-in page, in this tab
     catch (e) { setOpening(false); setMsg({ text: e instanceof Error ? e.message : 'The sign-in page couldn’t be opened. Try again.', bad: !(e instanceof MailProblem && e.code === 'demo') }); }
   };
   const run = async (id: string, fn: () => Promise<string | void>) => {
