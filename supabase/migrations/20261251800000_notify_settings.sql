@@ -646,3 +646,15 @@ begin
   execute src;
 end $do$;
 revoke all on function public.notify_on_pending() from public, anon, authenticated;
+
+-- the Benny's "it's live" switch only for people who have the Benny (super admins and route managers)
+do $do$
+declare src text; was text;
+begin
+  src := replace(pg_get_functiondef('public.notify_get()'::regprocedure), E'\r', '');
+  was := src;
+  src := replace(src, $a$where notify_in_group(u, c.grp)));$a$, $b$where notify_in_group(u, c.grp)
+                  and (c.key <> 'all.benny_live' or notify_super(u) or notify_perm(u, 'route_manager') or notify_perm(u, 'rm_floater'))));$b$);
+  if src = was then raise exception 'notify_get: change did not apply'; end if;
+  execute src;
+end $do$;
