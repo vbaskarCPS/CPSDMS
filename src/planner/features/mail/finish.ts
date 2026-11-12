@@ -53,5 +53,10 @@ export function finishReturn(now: number = Date.now()): Promise<Finished> | null
 /** Forget anything waiting (the tests start clean). */
 export const forgetReturn = (): void => { held = null; running = null; };
 
-// the moment the planner loads: before the first screen is drawn, and before the router can pass the address on
-if (typeof window !== 'undefined') readReturn(window.location, window.history);
+// the moment the planner loads: before the first screen is drawn, and before the router can pass the address on.
+// And again if only the part after the # changes while the planner is open (no reload happens then): it is taken out
+// of the address just the same, and Settings › Email, when it is the screen showing, hands it over.
+if (typeof window !== 'undefined') {
+  readReturn(window.location, window.history);
+  window.addEventListener('hashchange', () => readReturn(window.location, window.history));
+}

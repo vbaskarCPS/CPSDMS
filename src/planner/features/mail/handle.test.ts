@@ -76,6 +76,7 @@ function world(env: Record<string, string> = ENV) {
   };
   const store: Store = {
     async startState(row) { for (const [h, s] of w.states) if (s.user_id === row.user_id && (s.used_at || Date.parse(s.expires_at) < w.now)) w.states.delete(h); w.states.set(row.state_hash, { ...row }); },
+    async peekState(hash) { const s = w.states.get(hash); return s ? { ...s } : null; },
     async claimState(hash, nowIso) { const s = w.states.get(hash); if (!s || s.used_at) return null; s.used_at = nowIso; return { ...s }; },
     async mailboxes(userId) { return w.boxes.filter(b => b.user_id === userId).map(b => ({ ...b })); },
     async mailbox(userId, id) { const b = w.boxes.find(x => x.id === id && x.user_id === userId); return b ? { ...b } : null; },
@@ -100,17 +101,23 @@ function world(env: Record<string, string> = ENV) {
   const json = async (o: Promise<Out>): Promise<Record<string, any>> => { const r = await o; if (!('json' in r)) throw new Error('not a JSON answer'); return { status: r.status, ...(r.json as object) }; };
   /** Tap Connect: the state value Google is given. */
   const start = async (token = 'tok-vijay', app?: string) => new URL((await json(post({ token, action: 'connect_start', provider: 'google', ...(app ? { app } : {}) }))).url).searchParams.get('state')!;
-  /** Connect a mailbox all the way: Connect, Google's page, back. */
+  /** What the callback handed the browser after the # of the address. */
+  const handed = (r: Out) => { const u = redirectOf(r); const f = new URLSearchParams(u ? u.hash.slice(1) : ''); return { code: f.get('mail_code') || '', state: f.get('mail_state') || '' }; };
+  /** The planner brings back what the browser was handed. */
+  const finish = (token: string, got: { code: string; state: string }, more: Record<string, unknown> = {}) => json(post({ token, action: 'connect_finish', ...got, ...more }));
+  /** Connect a mailbox all the way: Connect, Google's page, back to the planner, the finish. */
   const connect = async (token: string, email: string, refresh = `refresh-${email}`, scope = GRANTED) => {
     const code = `code-${email}-${w.calls.length}`;
     g.codes[code] = { email, refresh, scope }; g.refresh[refresh] = email;
-    const r = await back({ state: await start(token), code });
+    const r = await finish(token, handed(await back({ state: await start(token), code })));
     return { r, row: w.boxes.find(b => b.address === email && b.user_id === (token === 'tok-rosh' ? ROSH.id : VIJAY.id))! };
   };
   const google = () => w.calls.filter(c => /googleapis|accounts\.google/.test(c.url));
-  return { w, g, deps, post, back, json, start, connect, google, check: () => json(post({ action: 'check' }, 'cron-key-made-up')) };
+  return { w, g, deps, post, back, json, start, connect, handed, finish, google, check: () => json(post({ action: 'check' }, 'cron-key-made-up')) };
 }
-const redirectOf = (o: Out) => ('redirect' in o ? new URL(o.redirect) : null);
+function redirectOf(o: Out) { return 'redirect' in o ? new URL(o.redirect) : null; }
+const TOOK_TOO_LONG = 'That sign-in took too long. Tap Connect Gmail again.';
+const SOMEONE_ELSE = 'This sign-in was started from a different planner. Open Settings › Email in your own planner and tap Connect Gmail.';
 const everything = (x: { w: { logs: string[]; calls: { url: string }[] } }, ...answers: unknown[]) => JSON.stringify([x.w.logs, x.w.calls.map(c => c.url), answers]);
 
 beforeEach(() => { forgetAccess(); });
@@ -118,7 +125,7 @@ beforeEach(() => { forgetAccess(); });
 describe('who may ask', () => {
   it('nothing is answered without a planner token the server knows', async () => {
     const x = world();
-    for (const action of ['list', 'connect_start', 'inbox', 'read', 'send', 'watch', 'disconnect']) {
+    for (const action of ['list', 'connect_start', 'connect_finish', 'inbox', 'read', 'send', 'watch', 'disconnect']) {
       expect(await x.post({ action, provider: 'google', mailbox: 'x' })).toEqual({ status: 401, json: { error: 'signed_out' } });
       expect(await x.post({ token: 'not-a-token', action, provider: 'google', mailbox: 'x' })).toEqual({ status: 401, json: { error: 'signed_out' } });
     }
@@ -141,6 +148,7 @@ describe('email that isn’t set up yet', () => {
       const x = world({ ...ENV, [missing]: '' });
       expect(await x.json(x.post({ token: 'tok-vijay', action: 'list' }))).toEqual({ status: 200, mailboxes: [], ready: false });
       expect(await x.json(x.post({ token: 'tok-vijay', action: 'connect_start', provider: 'google' }))).toEqual({ status: 200, problem: NOT_SET_UP, code: 'not_set_up' });
+      expect(await x.finish('tok-vijay', { code: 'good-code', state: 'A'.repeat(43) })).toEqual({ status: 200, problem: NOT_SET_UP, code: 'not_set_up' });
       expect(await x.check()).toEqual({ status: 200, ok: true, skipped: 'not set up' });
       expect(x.google()).toHaveLength(0);
       expect(x.w.states.size).toBe(0);
@@ -186,11 +194,70 @@ describe('connecting a mailbox', () => {
     await x.start('tok-rosh', 'https://evil.example');
     expect([...x.w.states.values()][0].app).toBe('roshplanner');   // not what was sent: her own
   });
-  it('coming back stores the mailbox for the person who started, with its token locked, and returns to their Settings', async () => {
+  it('the callback connects nothing: it passes the browser on to the planner, with the code and the state after the #', async () => {
     const x = world();
     const state = await x.start();
-    const r = await x.back({ state, code: 'good-code', scope: GRANTED });
-    expect(r).toEqual({ redirect: 'https://planner.propertystars.app/vijayplanner/settings/mail?connected=vijay%40example.com' });
+    x.g.codes['4/0AbC-d_e.F'] = { email: 'vijay@example.com', refresh: 'refresh-1', scope: GRANTED };
+    const r = await x.back({ state, code: '4/0AbC-d_e.F', scope: GRANTED, authuser: '0', prompt: 'consent' });
+    const u = redirectOf(r)!;
+    expect(u.origin + u.pathname).toBe('https://planner.propertystars.app/vijayplanner/settings/mail');
+    expect(u.search).toBe('');                                                  // nothing in the part a server sees
+    expect([...new URLSearchParams(u.hash.slice(1)).entries()]).toEqual([['mail_code', '4/0AbC-d_e.F'], ['mail_state', state]]);   // and nothing else after the #
+    expect(x.handed(r)).toEqual({ code: '4/0AbC-d_e.F', state });
+    // Google was asked nothing, nothing is stored, and the state is still to be used
+    expect(x.google()).toHaveLength(0);
+    expect(x.w.boxes).toEqual([]);
+    expect([...x.w.states.values()][0].used_at).toBeNull();
+    expect(x.w.logs).toEqual([]);
+    // it may come round again (a page reloaded on the way): still nothing happens
+    expect(redirectOf(await x.back({ state, code: '4/0AbC-d_e.F' }))?.hash).toBe(u.hash);
+    expect(x.google()).toHaveLength(0);
+  });
+  it('Rosh’s sign-in is passed on to Rosh’s planner, whatever else the returning address says', async () => {
+    const x = world();
+    const state = await x.start('tok-rosh', 'roshplanner');
+    const u = redirectOf(await x.back({ state, code: 'rosh-code', app: 'vijayplanner', user: 'u-vijay', redirect: 'https://evil.example/' }))!;
+    expect(u.origin + u.pathname).toBe('https://planner.propertystars.app/roshplanner/settings/mail');
+    expect(u.search).toBe('');
+  });
+  it('stopping at Google’s page comes back as a plain problem, in the part of the address the page reads, and nothing is used up', async () => {
+    const x = world();
+    const state = await x.start();
+    for (const q of [{ state, error: 'access_denied' }, { state }, { state, code: '' }, { state, code: 'has a space' }, { state, code: 'x'.repeat(1025) }, { state, error: 'access_denied', code: 'good-code' }]) {
+      const u = redirectOf(await x.back(q as Record<string, string>))!;
+      expect(u.pathname).toBe('/vijayplanner/settings/mail');
+      expect(u.searchParams.get('problem')).toBe('The sign-in at Google wasn’t finished, so nothing was connected.');
+      expect(u.hash).toBe('');
+    }
+    expect(x.google()).toHaveLength(0);
+    expect([...x.w.states.values()][0].used_at).toBeNull();
+  });
+  it('a state nobody was given, one already used, or one from too long ago gets the same plain page', async () => {
+    const x = world();
+    const state = await x.start();
+    for (const q of [{}, { code: 'good-code' }, { state: '', code: 'good-code' }, { state: 'x'.repeat(43), code: 'good-code' }, { state: 'short', code: 'good-code' }, { state: `${'A'.repeat(42)}!`, code: 'good-code' }])
+      expect(await x.back(q as Record<string, string>)).toMatchObject({ status: 400, text: expect.stringMatching(/Connect Gmail again/) });
+    expect([...x.w.states.values()][0].used_at).toBeNull();   // the real one is untouched
+    // used: the planner finished it
+    await x.finish('tok-vijay', x.handed(await x.back({ state, code: 'good-code' })));
+    expect(x.w.boxes).toHaveLength(1);
+    expect(await x.back({ state, code: 'another-code' })).toMatchObject({ status: 400, text: expect.stringMatching(/already been used/) });
+    // from too long ago
+    const late = await x.start();
+    x.w.now = T0 + 10 * 60_000 + 1;
+    expect(await x.back({ state: late, code: 'good-code' })).toMatchObject({ status: 400 });
+    expect(x.google().filter(c => c.url.endsWith('/token'))).toHaveLength(1);   // the one finish, nothing else
+  });
+});
+
+describe('finishing: the planner brings the code back', () => {
+  /** Vijay taps Connect and comes back from Google: what his browser is holding. */
+  const cameBack = async (x: ReturnType<typeof world>, token = 'tok-vijay', code = 'good-code') => x.handed(await x.back({ state: await x.start(token), code }));
+  it('the person who started it, signed in to their planner: the mailbox is stored for them, its token locked', async () => {
+    const x = world();
+    const got = await cameBack(x);
+    const r = await x.finish('tok-vijay', got);
+    expect(r).toEqual({ status: 200, ok: true, connected: 'vijay@example.com', mailboxes: [{ id: x.w.boxes[0].id, provider: 'google', address: 'vijay@example.com', since: '2026-11-11T19:00:00.000Z', todos: true, checkedAt: null, problem: null, canSend: true, needsSignIn: false }] });
     const swap = x.w.calls.find(c => c.url === 'https://oauth2.googleapis.com/token')!;
     expect(Object.fromEntries(new URLSearchParams(swap.body))).toEqual({ grant_type: 'authorization_code', code: 'good-code', client_id: ENV.GOOGLE_OAUTH_CLIENT_ID, client_secret: SECRET, redirect_uri: REDIRECT });
     expect(x.w.boxes).toHaveLength(1);
@@ -201,76 +268,114 @@ describe('connecting a mailbox', () => {
     expect(row.token_enc).toMatch(/^v1\./);
     expect(JSON.stringify(x.w.boxes)).not.toContain('refresh-1');
     expect(await open(await mailKey(KEY), row.token_enc!, tokenOwner(row))).toBe('refresh-1');
-    // nothing about the sign-in is in the log, and no token is in an address or in what the browser is sent
+    expect([...x.w.states.values()][0].used_at).toBe('2026-11-11T19:00:00.000Z');   // used
+    // nothing about the sign-in is in the log; no token, code or state is in an address or in the answer
     expect(x.w.logs).toEqual([]);
-    expect(everything(x, r)).not.toMatch(/refresh-1|access-1|made-up-client-secret/);
+    expect(everything(x, r)).not.toMatch(/refresh-1|access-1|made-up-client-secret|good-code/);
+    expect(everything(x, r)).not.toContain(got.state);
     expect(x.w.calls.filter(c => c.url.includes('gmail.googleapis.com')).map(c => [c.url, c.headers.Authorization])).toEqual([['https://gmail.googleapis.com/gmail/v1/users/me/profile', 'Bearer access-1']]);
   });
-  it('a state works once: the same address opened again connects nothing', async () => {
+  it('someone else signed in on the browser that came back: refused before Google is asked anything, and the sign-in is spent', async () => {
     const x = world();
-    const state = await x.start();
-    await x.back({ state, code: 'good-code' });
-    const calls = x.google().length;
-    x.g.codes['second-code'] = { email: 'someone-else@example.com', refresh: 'refresh-2', scope: GRANTED };
-    const again = await x.back({ state, code: 'second-code' });
-    expect(again).toMatchObject({ status: 400, text: expect.stringMatching(/already been used/) });
-    expect(x.google()).toHaveLength(calls);    // Google wasn't asked
-    expect(x.w.boxes).toHaveLength(1);
-  });
-  it('a state is good for ten minutes: later than that nothing is connected, and it’s used up', async () => {
-    const x = world();
-    const state = await x.start();
-    x.w.now = T0 + 10 * 60_000 + 1;
-    const r = await x.back({ state, code: 'good-code' });
-    expect(redirectOf(r)?.searchParams.get('problem')).toBe('That sign-in took too long. Tap Connect Gmail again.');
+    const got = await cameBack(x);                         // Vijay started it…
+    const r = await x.finish('tok-rosh', got);             // …and it is Rosh's planner that brings the code back
+    expect(r).toEqual({ status: 200, problem: SOMEONE_ELSE, code: 'someone_else' });
+    expect(x.google()).toHaveLength(0);                    // the code was never swapped
+    expect(x.w.boxes).toEqual([]);
+    expect(x.w.logs).toEqual(['connect_finish: started by someone else']);
+    expect(everything(x, r)).not.toMatch(/good-code|u-vijay|u-rosh/);
+    expect(everything(x, r)).not.toContain(got.state);
+    // the state is burned: Vijay himself can't use it afterwards either
+    expect([...x.w.states.values()][0].used_at).not.toBeNull();
+    expect(await x.finish('tok-vijay', got)).toEqual({ status: 200, problem: TOOK_TOO_LONG, code: 'stale' });
     expect(x.google()).toHaveLength(0);
-    expect(x.w.boxes).toHaveLength(0);
-    x.w.now = T0 + 60_000;   // even with the clock put back, it has been used
-    expect(await x.back({ state, code: 'good-code' })).toMatchObject({ status: 400 });
+    expect(x.w.boxes).toEqual([]);
   });
-  it('a state nobody was given, or no state, connects nothing and asks Google nothing', async () => {
-    const x = world();
-    await x.start();
-    for (const q of [{}, { code: 'good-code' }, { state: '', code: 'good-code' }, { state: 'x'.repeat(43), code: 'good-code' }, { state: 'short', code: 'good-code' }, { state: `${'A'.repeat(42)}!`, code: 'good-code' }])
-      expect(await x.back(q as Record<string, string>)).toMatchObject({ status: 400, text: expect.stringMatching(/Connect Gmail again/) });
-    expect(x.google()).toHaveLength(0);
-    expect(x.w.boxes).toHaveLength(0);
-    expect([...x.w.states.values()][0].used_at).toBeNull();   // the real one is untouched
-  });
-  it('the mailbox goes to whoever started the sign-in, whatever the returning request says', async () => {
+  it('the mailbox goes to the person asking, who has to be the person who started: nothing in the request can say otherwise', async () => {
     const x = world();
     x.g.codes['rosh-code'] = { email: 'rosh.test@example.com', refresh: 'refresh-rosh', scope: GRANTED };
-    const state = await x.start('tok-rosh', 'roshplanner');
-    const r = await x.back({ state, code: 'rosh-code', user: 'u-vijay', user_id: 'u-vijay', app: 'vijayplanner', token: 'tok-vijay' });
-    expect(r).toEqual({ redirect: 'https://planner.propertystars.app/roshplanner/settings/mail?connected=rosh.test%40example.com' });
+    const got = await cameBack(x, 'tok-rosh', 'rosh-code');
+    const r = await x.finish('tok-rosh', got, { user: 'u-vijay', user_id: 'u-vijay', app: 'vijayplanner', mailbox: 'x', address: 'vijay@example.com' });
+    expect(r).toMatchObject({ ok: true, connected: 'rosh.test@example.com' });
     expect(x.w.boxes.map(b => [b.user_id, b.address])).toEqual([['u-rosh', 'rosh.test@example.com']]);
     expect((await x.json(x.post({ token: 'tok-vijay', action: 'list' }))).mailboxes).toEqual([]);
     expect((await x.json(x.post({ token: 'tok-rosh', action: 'list' }))).mailboxes).toHaveLength(1);
+    // and nobody who isn't signed in at all
+    const again = await cameBack(x, 'tok-rosh');
+    expect(await x.post({ action: 'connect_finish', ...again })).toEqual({ status: 401, json: { error: 'signed_out' } });
+    expect(await x.post({ token: 'not-a-token', action: 'connect_finish', ...again })).toEqual({ status: 401, json: { error: 'signed_out' } });
+    expect(x.w.boxes).toHaveLength(1);
   });
-  it('stopping at Google’s page, or Google refusing, comes back as a plain problem with nothing stored', async () => {
+  it('the same code and state a second time connects nothing more', async () => {
     const x = world();
-    expect(redirectOf(await x.back({ state: await x.start(), error: 'access_denied' }))?.searchParams.get('problem')).toBe('The sign-in at Google wasn’t finished, so nothing was connected.');
-    expect(redirectOf(await x.back({ state: await x.start() }))?.searchParams.get('problem')).toMatch(/wasn’t finished/);
+    const got = await cameBack(x);
+    await x.finish('tok-vijay', got);
+    const asked = x.google().length;
+    x.g.codes['good-code'] = { email: 'someone-else@example.com', refresh: 'refresh-2', scope: GRANTED };   // even if Google would take the code again
+    expect(await x.finish('tok-vijay', got)).toEqual({ status: 200, problem: TOOK_TOO_LONG, code: 'stale' });
+    expect(await x.finish('tok-vijay', { ...got, code: 'a-fresh-code' })).toEqual({ status: 200, problem: TOOK_TOO_LONG, code: 'stale' });
+    expect(x.google()).toHaveLength(asked);
+    expect(x.w.boxes).toHaveLength(1);
+  });
+  it('a sign-in is good for ten minutes: brought back later than that, nothing is connected and it’s used up', async () => {
+    const x = world();
+    const got = await cameBack(x);
+    x.w.now = T0 + 10 * 60_000 + 1;
+    expect(await x.finish('tok-vijay', got)).toEqual({ status: 200, problem: TOOK_TOO_LONG, code: 'stale' });
     expect(x.google()).toHaveLength(0);
-    const r = await x.back({ state: await x.start(), code: 'a-code-google-does-not-know' });
-    expect(redirectOf(r)?.pathname).toBe('/vijayplanner/settings/mail');
-    expect(redirectOf(r)?.searchParams.get('problem')).toBe('Google didn’t finish the sign-in. Tap Connect Gmail again.');
+    expect(x.w.boxes).toEqual([]);
+    x.w.now = T0 + 60_000;   // even with the clock put back, it has been used
+    expect(await x.finish('tok-vijay', got)).toMatchObject({ problem: TOOK_TOO_LONG });
+    // just inside the ten minutes it still works
+    const y = world(), late = await cameBack(y);
+    y.w.now = T0 + 9 * 60_000 + 59_000;
+    expect(await y.finish('tok-vijay', late)).toMatchObject({ ok: true, connected: 'vijay@example.com' });
+  });
+  it('a state nobody was given, or pieces that aren’t a code and a state at all: nothing is looked up or asked', async () => {
+    const x = world();
+    const got = await cameBack(x);
+    for (const bad of [{ code: 'good-code', state: 'B'.repeat(43) }, { code: 'good-code', state: '' }, { code: 'good-code', state: 'short' }, { code: '', state: got.state }, { code: 'has a space', state: got.state },
+      { code: 'x'.repeat(1025), state: got.state }, { code: 42, state: got.state }, { code: 'good-code' }, { state: got.state }, {}])
+      expect(await x.json(x.post({ token: 'tok-vijay', action: 'connect_finish', ...bad }))).toEqual({ status: 200, problem: TOOK_TOO_LONG, code: 'stale' });
+    expect(x.google()).toHaveLength(0);
+    expect([...x.w.states.values()][0].used_at).toBeNull();   // the real sign-in wasn't touched by any of that
+    expect(await x.finish('tok-vijay', got)).toMatchObject({ ok: true });
+  });
+  it('Google refusing the code, or not answering, comes back as a plain problem with nothing stored', async () => {
+    const x = world();
+    const r = await x.finish('tok-vijay', await cameBack(x, 'tok-vijay', 'a-code-google-does-not-know'));
+    expect(r).toEqual({ status: 200, problem: 'Google didn’t finish the sign-in. Tap Connect Gmail again.', code: 'refused' });
     // the log has Google's short code and nothing else: not its sentence, not the code, not the secret
-    expect(x.w.logs).toEqual(['callback: sign-in: 400 invalid_grant']);
+    expect(x.w.logs).toEqual(['connect_finish: sign-in: 400 invalid_grant']);
+    const got = await cameBack(x);
     x.g.down = true;
-    expect(redirectOf(await x.back({ state: await x.start(), code: 'good-code' }))?.searchParams.get('problem')).toBe('Google didn’t answer. Tap Connect Gmail again in a minute.');
-    expect(x.w.logs[1]).toBe('callback: sign-in: the request failed');
+    expect(await x.finish('tok-vijay', got)).toEqual({ status: 200, problem: 'Google didn’t answer. Tap Connect Gmail again in a minute.', code: 'down' });
+    expect(x.w.logs[1]).toBe('connect_finish: sign-in: the request failed');
     expect(x.w.boxes).toHaveLength(0);
   });
   it('without a way to stay connected, or without permission to read, nothing is stored and Google is told to forget it', async () => {
     const x = world();
     x.g.codes['no-refresh'] = { email: 'vijay@example.com', scope: GRANTED };
-    expect(redirectOf(await x.back({ state: await x.start(), code: 'no-refresh' }))?.searchParams.get('problem')).toMatch(/didn’t let the planner stay connected/);
+    expect(await x.finish('tok-vijay', await cameBack(x, 'tok-vijay', 'no-refresh'))).toMatchObject({ problem: expect.stringMatching(/didn’t let the planner stay connected/) });
     expect(x.g.revoked).toEqual(['access-1']);
+    expect(x.w.logs).toEqual(['connect_finish: Google gave no refresh token']);
     x.g.codes['send-only'] = { email: 'vijay@example.com', refresh: 'refresh-send-only', scope: 'openid https://www.googleapis.com/auth/gmail.send' };
-    expect(redirectOf(await x.back({ state: await x.start(), code: 'send-only' }))?.searchParams.get('problem')).toMatch(/wasn’t allowed to read this mailbox.*tick both boxes/);
+    expect(await x.finish('tok-vijay', await cameBack(x, 'tok-vijay', 'send-only'))).toMatchObject({ problem: expect.stringMatching(/wasn’t allowed to read this mailbox.*tick both boxes/) });
     expect(x.g.revoked).toEqual(['access-1', 'refresh-send-only']);
     expect(x.w.boxes).toHaveLength(0);
+  });
+  it('a key that is missing or isn’t 32 bytes: “Email isn’t set up yet”, the code is not swapped and the sign-in is not spent', async () => {
+    for (const key of ['', 'bm90LWEta2V5LWF0LWFsbA']) {
+      const x = world();
+      const got = await cameBack(x);
+      x.w.env.PLANNER_MAIL_KEY = key;
+      expect(await x.finish('tok-vijay', got)).toEqual({ status: 200, problem: NOT_SET_UP, code: 'not_set_up' });
+      expect(x.google()).toHaveLength(0);
+      expect(x.w.boxes).toEqual([]);
+      expect([...x.w.states.values()][0].used_at).toBeNull();
+      expect(x.w.logs).toEqual(key ? ['connect_finish: PLANNER_MAIL_KEY is not 32 bytes of base64'] : []);
+      expect(JSON.stringify(x.w.logs)).not.toContain(key || 'never');
+    }
   });
   it('the same address connected again is still one mailbox: the token is replaced, its to-dos switch is kept', async () => {
     const x = world();
@@ -288,12 +393,14 @@ describe('connecting a mailbox', () => {
   });
   it('a person can connect several, up to a limit', async () => {
     const x = world();
-    for (let i = 0; i < MAX_MAILBOXES; i++) expect(redirectOf((await x.connect('tok-rosh', `rosh${i}@example.com`)).r)?.searchParams.get('connected')).toBe(`rosh${i}@example.com`);
+    for (let i = 0; i < MAX_MAILBOXES; i++) expect((await x.connect('tok-rosh', `rosh${i}@example.com`)).r.connected).toBe(`rosh${i}@example.com`);
     const over = await x.connect('tok-rosh', 'one-too-many@example.com');
-    expect(redirectOf(over.r)?.searchParams.get('problem')).toBe('That’s as many mailboxes as one planner takes (6). Disconnect one first.');
+    expect(over.r).toEqual({ status: 200, problem: 'That’s as many mailboxes as one planner takes (6). Disconnect one first.', code: 'too_many' });
     expect(x.w.boxes).toHaveLength(MAX_MAILBOXES);
     expect(x.g.revoked).toEqual(['refresh-one-too-many@example.com']);
-    expect(redirectOf((await x.connect('tok-rosh', 'rosh0@example.com', 'refresh-again')).r)?.searchParams.get('connected')).toBe('rosh0@example.com');   // one she already has: fine
+    const again = await x.connect('tok-rosh', 'rosh0@example.com', 'refresh-again');   // one she already has: fine
+    expect(again.r.connected).toBe('rosh0@example.com');
+    expect(again.r.mailboxes).toHaveLength(MAX_MAILBOXES);
   });
 });
 

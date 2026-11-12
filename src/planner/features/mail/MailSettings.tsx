@@ -47,14 +47,23 @@ export function MailSettings() {
   useEffect(() => {
     // back from Google's page with a code: hand it over. finishReturn makes the call once however often this runs
     // (the same answer is given to a screen that is drawn twice), and its answer has the list in it.
-    const finish = finishReturn();
-    if (!finish) { setFinishing(false); void load(); return; }
-    setFinishing(true);
-    void finish.then(r => {
-      setFinishing(false);
-      if ('connected' in r) { setCame({ connected: r.connected }); setBoxes(r.mailboxes); setLoadErr(false); }
-      else { setCame({ problem: r.problem }); void load(); }
-    });
+    const finishNow = (): boolean => {
+      const finish = finishReturn();
+      if (!finish) return false;
+      setFinishing(true);
+      void finish.then(r => {
+        setFinishing(false);
+        if ('connected' in r) { setCame({ connected: r.connected }); setBoxes(r.mailboxes); setLoadErr(false); }
+        else { setCame({ problem: r.problem }); void load(); }
+      });
+      return true;
+    };
+    if (!finishNow()) { setFinishing(false); void load(); }
+    // the code arrived while this screen was already open (only the part after the # changed, so nothing reloaded):
+    // finish.ts, which listens first, has taken it out of the address; hand it over the same way
+    const arrived = () => { finishNow(); };
+    window.addEventListener('hashchange', arrived);
+    return () => window.removeEventListener('hashchange', arrived);
   }, [load]);
   // the result is in the page now: take it out of the address, so going back or reloading doesn't show it again
   useEffect(() => { if (params.has('problem')) setParams({}, { replace: true }); }, []); // eslint-disable-line react-hooks/exhaustive-deps

@@ -200,7 +200,8 @@ Deno.serve(async req => {
     const body = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
     if (req.method === 'POST') action = String(body.action || '?').slice(0, 30);
     const out = await handle({ method: req.method, path: url.pathname, query: url.searchParams, body, cronKey: req.headers.get('x-cron-key') || '' }, deps());
-    // back to the planner: nothing about the sign-in goes along but what the page shows
+    // on to the planner. Google's code and the state go along only after the # of that address, which a browser
+    // keeps to itself (it is not sent to the planner's site, and no-referrer keeps this address from being passed on)
     if ('redirect' in out) return new Response(null, { status: 302, headers: { Location: out.redirect, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
     if ('text' in out) return new Response(out.text, { status: out.status, headers: plain });
     return json(out.json, out.status);
