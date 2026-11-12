@@ -62,7 +62,7 @@ describe('before the first tap', () => {
     rows = [msg('a', 'rosh')]; tellUs();
     expect(played).toEqual([]);
     fire(winL, 'pointerdown');
-    expect(contexts.at(-1)?.state).toBe('running');
+    expect(contexts[contexts.length - 1]?.state).toBe('running');
     expect(winL.pointerdown?.length ?? 0).toBe(0);
   });
 });
