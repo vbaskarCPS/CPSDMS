@@ -17,11 +17,10 @@ const syncSummary = (r: SyncResult[]) => {
 
 /** For a connect that stalls at the bank's own approval step (its two-step sign-in, outside the planner). */
 function WaitingHelp({ bank }: { bank?: string }) {
-  const b = bank || 'your bank';
   return (
     <>
-      Waiting for {b} to approve? Open the {bank ? `${bank} app` : 'bank’s app'} yourself and look for the request, or choose to get a code by text instead.
-      {' '}If it’s your card on the other one’s {bank || 'bank'} sign-in, they can add it from their connected {bank || 'bank'} with “Add or change accounts”.
+      Waiting for {bank || 'your bank'} to approve? Open {bank ? 'its' : 'the bank’s'} app yourself and look for the request, or choose to get a code by text instead.
+      {' '}If the card is on someone else’s bank sign-in, they can add it from their connected bank with “Add or change accounts”.
     </>
   );
 }
@@ -101,8 +100,8 @@ export function ConnectedBanks({ onChange, resume }: { onChange: () => void; res
                     {' · '}{it.accounts.filter(a => a.plannerId).length} of {it.accounts.length} account{it.accounts.length === 1 ? '' : 's'} tracked
                   </small>
                   {it.newAccounts && it.status === 'active' && (
-                    <Button small primary disabled={!!busy} onClick={() => void connect(it.itemId, true)} style={{ marginTop: 6 }}>
-                      <ListPlus style={{ width: 16, height: 16 }} /> {busy === `add:${it.itemId}` ? 'Opening…' : `New accounts at ${it.institution}: add them`}
+                    <Button small primary disabled={!!busy} onClick={() => void connect(it.itemId, true)} style={{ marginTop: 6 }} aria-label={`New accounts at ${it.institution}: add them`}>
+                      <ListPlus style={{ width: 16, height: 16 }} /> {busy === `add:${it.itemId}` ? 'Opening…' : 'New accounts: add them'}
                     </Button>
                   )}
                   <div className="pl-row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
@@ -130,7 +129,7 @@ export function ConnectedBanks({ onChange, resume }: { onChange: () => void; res
           You sign in to your bank inside Plaid’s window; the planner never sees your bank password. New transactions come in on their own once they post.
           For a connected account, the bank’s transactions replace its CSV imports (the imports are kept, just hidden).
         </p>
-        {!stuck && <p className="pl-muted" style={{ fontSize: 12, marginBottom: 0 }}><WaitingHelp /></p>}
+        {!stuck && <p className="pl-muted" style={{ fontSize: 12, margin: '8px 0 0' }}><WaitingHelp /></p>}
       </Card>
 
       <MapSheet data={mapping} onClose={() => setMapping(null)} onDone={async (msg, tone) => { setMapping(null); say(msg, tone); await load(); onChange(); }} />
