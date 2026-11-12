@@ -14,6 +14,10 @@ vi.mock('../../lib/docs', () => ({
     .filter(([id, data]) => id.startsWith(`${kind}|`) && data !== null)   // like the server: a removed doc (null) isn't returned
     .map(([id, data]) => ({ key: id.slice(kind.length + 1), data: structuredClone(data) }))
     .filter(d => (!from || d.key >= from) && (!to || d.key <= to)),
+  getDayDocs: async (kind: string, from?: string, to?: string) => [...store.entries()]
+    .filter(([id, data]) => id.startsWith(`${kind}|`) && data !== null)
+    .map(([id, data]) => ({ key: id.slice(kind.length + 1), data: structuredClone(data) }))
+    .filter(d => (!from || d.key.slice(0, 10) >= from) && (!to || d.key.slice(0, 10) <= to)),
   putDoc: async (kind: string, key: string, data: unknown) => { store.set(k(kind, key), data); },
   putDocs: async (docs: { kind: string; key: string; data: unknown }[]) => { for (const d of docs) store.set(k(d.kind, d.key), d.data); },
 }));

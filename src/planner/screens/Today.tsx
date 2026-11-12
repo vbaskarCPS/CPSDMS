@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Settings as Cog, Check, Sunrise, Moon, Flame, ChevronRight } from 'lucide-react';
 import type { PlannerPass } from '../lib/auth';
-import { dayKey, docsChanged, getDocs, putDoc } from '../lib/docs';
+import { dayKey, docsChanged, getDayDocs, getDocs, putDoc } from '../lib/docs';
 import { loadTemplates, releaseHeld, saveTemplate } from '../features/workout/store';
 import { useDoc } from '../lib/useDoc';
 import { adjustWords, blocks, clock, currentBlock, fastState, loadRoutine, minutesOf, onRoutineChange, routineFor, routineMin, routineMinutes, routineNow, type Block, type BlockId, type Routine } from '../lib/routine';
@@ -53,7 +53,7 @@ const morningStreak = (days: Record<string, Day>) => streakOf(days, d => !!d?.mo
 async function fastByDay(from: string, to: string, eatOpen: string): Promise<Record<string, boolean>> {
   const out: Record<string, boolean> = {};
   try {
-    const meals = await getDocs<{ time?: string }>('meal', `${from}~`, `${to}~~`);
+    const meals = await getDayDocs<{ time?: string }>('meal', from, to);
     for (const m of meals) {
       const [d, t = m.data?.time || ''] = m.key.split('~');
       const ok = !t || minutesOf(t) >= minutesOf(eatOpen) || minutesOf(t) < 240;   // after-midnight = still "today"
@@ -137,7 +137,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
       if (m && fromRoad(m)) await putDoc('meal', s.eaten, null).catch(() => undefined);
       return;
     }
-    const meals = (await getDocs<Meal>('meal', `${today}~`, `${today}~~`).catch(() => [])).map(d => d.data).filter(Boolean);
+    const meals = (await getDayDocs<Meal>('meal', today, today).catch(() => [])).map(d => d.data).filter(Boolean);
     const hits = alreadyLoggedFor(s, meals, day.protein?.slots || [], nowHM());
     if (hits.length) { setAlready({ slotId: s.id, meals: hits.slice(0, 2) }); return; }
     await logSlot(s);

@@ -9,6 +9,22 @@ export async function getDocs<T = unknown>(kind: string, from?: string, to?: str
   return d.ok && d.docs ? d.docs : [];
 }
 
+/** The day after a 'YYYY-MM-DD' day key. */
+const dayAfter = (day: string): string => {
+  const [y, m, d] = day.split('-').map(Number);
+  const n = new Date(Date.UTC(y, m - 1, d + 1));
+  return n.toISOString().slice(0, 10);
+};
+/** Docs whose keys start with a day ('YYYY-MM-DD~…', like meals and workouts), from one day to another, both included.
+ *  Why not `${to}~~` as the end: the database sorts keys the English way, which skips punctuation, so '2026-11-12~ab'
+ *  sorts after '2026-11-12~~' and today's own docs were left out (found 12 Nov: the race timer didn't see a workout
+ *  started that morning). The range now ends at the next day's bare date, which sorts right either way, and the keys
+ *  are checked here too. */
+export async function getDayDocs<T = unknown>(kind: string, from?: string, to?: string): Promise<Doc<T>[]> {
+  const ok = (k: string) => { const day = k.slice(0, 10); return (!from || day >= from) && (!to || day <= to); };
+  return (await getDocs<T>(kind, from, to ? dayAfter(to) : undefined)).filter(d => ok(d.key));
+}
+
 export async function getDoc<T = unknown>(kind: string, key: string): Promise<T | null> {
   const docs = await getDocs<T>(kind, key, key);
   return docs[0]?.data ?? null;
