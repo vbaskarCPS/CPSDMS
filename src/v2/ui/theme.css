@@ -786,3 +786,27 @@
 .v2-ai-reply { white-space: pre-wrap; overflow-wrap: anywhere; }
 .v2-ai-steps { margin: 0; padding-left: 18px; }
 @media (max-width: 640px) { .v2-bug-row { grid-template-columns: 1fr; gap: 2px; } .v2-bug-detail { padding-left: 14px; } .v2-bug-h { flex-wrap: wrap; } .v2-bug-t { flex-basis: 100%; } }
+
+/* Settings › Notifications (NotifyPanel) */
+.v2-nt { display: flex; flex-direction: column; gap: 12px; }
+.v2-nt-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 6px 14px; }
+.v2-nt-h { margin: 10px 0 2px; font-size: 13px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; color: var(--mut); }
+.v2-nt-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.v2-nt-h + .v2-nt-row, .v2-nt-card > .v2-nt-row:first-child { border-top: 0; }
+.v2-nt-row .v2-toggle { margin-top: 2px; }
+.v2-nt-rt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.v2-nt-rt > span { font-size: 12.5px; color: var(--mut); }
+.v2-nt-row.off .v2-nt-rt > b { color: var(--mut); font-weight: 600; }
+.v2-nt-seg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.v2-nt-seg button { min-height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.v2-nt-seg button.on { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 700; }
+.v2-nt-device { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px; }
+.v2-nt-ic { width: 36px; height: 36px; border-radius: 18px; display: grid; place-items: center; background: var(--soft); color: var(--mut); flex-shrink: 0; }
+.v2-nt-ic.on { background: rgba(5,150,105,.15); color: var(--green); }
+.v2-nt-dt { flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.v2-nt-dt > span { font-size: 12.5px; color: var(--mut); }
+.v2-nt-dt .v2-nt-note { color: var(--ink); font-weight: 600; margin-top: 4px; }
+.v2-nt-times { display: flex; gap: 12px; flex-wrap: wrap; padding: 0 0 12px; }
+.v2-nt-times label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mut); }
+.v2-nt-times input { width: 130px; }
+.v2-nt-foot { font-size: 12px; color: var(--mut); margin: 0 4px; }
