@@ -247,12 +247,18 @@ async function gymClasses(input: AnyDoc): Promise<ToolOut> {
 
 /** A business or a place, from Google Maps. The server asks Google (it has the key); the answer and the links for the
  *  buttons are made here, from what the server read out of Google's answer and nothing else. Google not answering (no
- *  key, refused, too slow) is an error: Arvy says it couldn't reach Google Maps, and it goes in the improvements log. */
+ *  key, refused, too slow) is an error: Arvy says it couldn't reach Google Maps, and it goes in the improvements log.
+ *  The month's look-ups being used up isn't one (the server says so itself, with `broken` false: each person has an
+ *  allowance, so Google never bills): nothing is broken and there is nothing to fix, so Arvy tells them as it is. */
 async function findPlace(input: AnyDoc): Promise<ToolOut> {
   const ask = placesAsk(input);
   if (!ask) return { result: { error: 'Nothing to look for: say what, and where if they named a place.' }, error: true };
-  const r = await invoke<{ places?: Place[]; problem?: string; why?: string }>({ action: 'places', query: ask.query, near: ask.near, open_now: ask.openNow }, 'planner-arvy');
+  const r = await invoke<{ places?: Place[]; problem?: string; broken?: boolean; why?: string }>({ action: 'places', query: ask.query, near: ask.near, open_now: ask.openNow }, 'planner-arvy');
   if (!Array.isArray(r?.places)) {
+    if (r?.problem && r.broken === false) {
+      return { result: { problem: r.problem, ...(r.why ? { why: r.why } : {}),
+        note: 'Nothing was looked up, and nothing is broken: their look-ups on Google Maps for this month are used up. Tell them so plainly, with when they start again, and don’t guess a phone number, an address or hours.' } };
+    }
     return { result: { problem: r?.problem || 'Google Maps couldn’t be reached.', ...(r?.why ? { why: r.why } : {}),
       note: 'Nothing was looked up. Tell them plainly that you couldn’t reach Google Maps just now, and don’t guess a phone number, an address or hours.' }, error: true };
   }

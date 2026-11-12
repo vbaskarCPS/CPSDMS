@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-11-places-allowance", "date": "2026-11-11", "title": "Place look-ups have a monthly allowance",
+    "lines": ["Arvy can look up 450 places a month on Google Maps for each of you. That keeps it free.", "Days you don’t use it carry over: the allowance is for the whole month.", "If a month runs out, Arvy tells you. It starts again on the 1st."] },
   { "id": "2026-11-11-video-calls", "date": "2026-11-11", "title": "Video calls, in your chat",
     "lines": ["Your chat has a video button at the top. Tap it to call.", "The other one gets a notification. Tap it, then Answer. With the planner open, a banner drops in and rings.", "Mute, camera off, flip the camera and hang up are at the bottom of the call.", "If it says “Couldn’t connect”, try again on Wi-Fi and tell Arvy: that’s the sign we need to add a relay."] },
   { "id": "2026-11-11-emoji-christmas", "date": "2026-11-11", "title": "Christmas emoji, a full set",
