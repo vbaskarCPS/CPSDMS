@@ -3,6 +3,8 @@
 //   Protein left · Habits done · Steps · Next block
 // They draw from the last Today the watch loaded (Today.kt keeps it) and the steps Health.kt keeps, fetching a fresh
 // Today when there's time. Tapping one opens the app.
+// The rings carry a colour from the look chosen on the phone (Look.kt): protein the accent, habits the green, steps
+// the second colour. The planner's face draws its rings in it; a face that doesn't read it keeps its own colours.
 package app.propertystars.planner.watch
 
 import android.app.PendingIntent
@@ -10,6 +12,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import androidx.wear.tiles.TileService
+import androidx.wear.watchface.complications.data.ColorRamp
 import androidx.wear.watchface.complications.data.ComplicationData
 import androidx.wear.watchface.complications.data.ComplicationType
 import androidx.wear.watchface.complications.data.LongTextComplicationData
@@ -43,9 +46,15 @@ abstract class PlannerSpot : SuspendingComplicationDataSourceService() {
     /** What this spot shows, from the Today summary (null before the first load) and today's steps. */
     abstract fun make(type: ComplicationType, today: JSONObject?, steps: Int): ComplicationData?
 
-    protected fun ranged(value: Float, max: Float, short: String, title: String, says: String): RangedValueComplicationData =
+    /** The look's colours, for the rings. */
+    protected val look: WatchColors get() = Look.colorsFor(this)
+
+    /** A ring: value of max, in `color` (one colour all the way round: the ramp is that colour twice). */
+    protected fun ranged(value: Float, max: Float, short: String, title: String, says: String, color: Int): RangedValueComplicationData =
         RangedValueComplicationData.Builder(value.coerceIn(0f, maxOf(max, 1f)), 0f, maxOf(max, 1f), text(says))
-            .setText(text(short)).setTitle(text(title)).setTapAction(open()).build()
+            .setText(text(short)).setTitle(text(title)).setTapAction(open())
+            .setColorRamp(ColorRamp(intArrayOf(color, color), true))
+            .build()
 
     protected fun short(short: String, title: String, says: String): ShortTextComplicationData =
         ShortTextComplicationData.Builder(text(short), text(says)).setTitle(text(title)).setTapAction(open()).build()
@@ -77,7 +86,7 @@ class ProteinSpot : PlannerSpot() {
         val goal = today?.optInt("proteinGoal", 160) ?: 160
         val left = maxOf(0, goal - eaten)
         return when (type) {
-            ComplicationType.RANGED_VALUE -> ranged(eaten.toFloat(), goal.toFloat(), "${left}g", "protein", "$left grams of protein left")
+            ComplicationType.RANGED_VALUE -> ranged(eaten.toFloat(), goal.toFloat(), "${left}g", "protein", "$left grams of protein left", look.accent)
             ComplicationType.SHORT_TEXT -> short("${left}g", "protein", "$left grams of protein left")
             else -> null
         }
@@ -89,7 +98,7 @@ class HabitsSpot : PlannerSpot() {
         val done = today?.optInt("habitsDone") ?: 0
         val all = today?.optInt("habits") ?: 0
         return when (type) {
-            ComplicationType.RANGED_VALUE -> ranged(done.toFloat(), all.toFloat(), "$done/$all", "habits", "$done of $all habits done")
+            ComplicationType.RANGED_VALUE -> ranged(done.toFloat(), all.toFloat(), "$done/$all", "habits", "$done of $all habits done", look.good)
             ComplicationType.SHORT_TEXT -> short("$done/$all", "habits", "$done of $all habits done")
             else -> null
         }
@@ -100,7 +109,7 @@ class StepsSpot : PlannerSpot() {
     override fun make(type: ComplicationType, today: JSONObject?, steps: Int): ComplicationData? {
         val label = if (steps >= 1000) "%.1fk".format(steps / 1000f) else steps.toString()
         return when (type) {
-            ComplicationType.RANGED_VALUE -> ranged(steps.toFloat(), Health.STEP_GOAL.toFloat(), label, "steps", "$steps steps today")
+            ComplicationType.RANGED_VALUE -> ranged(steps.toFloat(), Health.STEP_GOAL.toFloat(), label, "steps", "$steps steps today", look.second)
             ComplicationType.SHORT_TEXT -> short(label, "steps", "$steps steps today")
             else -> null
         }

@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.material.Text
@@ -74,12 +75,18 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 
-private val Orange = Color(0xFFFF9A4D)
-private val Blue = Color(0xFF8FC1FF)
-private val Green = Color(0xFF7EE0A8)
-private val Card = Color(0xFF1C1C1C)
-private val Muted = Color(0xFFBDBDBD)
-private val Faint = Color(0xFF8E8E8E)
+// The colours come from the look chosen in the phone's Theme Studio (Look.kt). Each one reads Look.colors, a Compose
+// state, so every screen on show redraws when the look changes. The names are the watch's old ones: Orange is the
+// look's accent, Blue its second colour; Ink is the main words, OnOrange / OnBlue the words on those buttons.
+private val Orange: Color get() = Color(Look.colors.accent)
+private val Blue: Color get() = Color(Look.colors.second)
+private val Green: Color get() = Color(Look.colors.good)
+private val Card: Color get() = Color(Look.colors.card)
+private val Muted: Color get() = Color(Look.colors.muted)
+private val Faint: Color get() = Color(Look.colors.faint)
+private val Ink: Color get() = Color(Look.colors.ink)
+private val OnOrange: Color get() = Color(Look.colors.onAccent)
+private val OnBlue: Color get() = Color(Look.colors.onSecond)
 
 private enum class Screen { Pair, Today, Habits, Workout, Rest, Timers }
 
@@ -87,7 +94,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val planner = Planner(this)
+        Look.load(this)                      // the last look, before the first frame
         setContent { App(planner) }
+    }
+
+    /** Opening the app, or coming back to it: the look may have changed on the phone meanwhile. */
+    override fun onResume() {
+        super.onResume()
+        lifecycleScope.launch { if (Look.refresh(this@MainActivity)) Spots.refresh(this@MainActivity) }
     }
 }
 
@@ -148,7 +162,7 @@ private fun Face(scroll: Boolean = false, content: @Composable ColumnScope.() ->
         val top = maxHeight * 0.3f
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxWidth().height(top), contentAlignment = Alignment.BottomCenter) {
-                Text(time, fontSize = 30.sp, color = Color.White, modifier = Modifier.padding(bottom = 6.dp))
+                Text(time, fontSize = 30.sp, color = Ink, modifier = Modifier.padding(bottom = 6.dp))
             }
             Box(Modifier.fillMaxWidth().padding(horizontal = 36.dp).height(1.dp).background(Color(0xFF222222)))
             Column(
@@ -179,7 +193,7 @@ private fun Stat(value: String, label: String) {
         Modifier.width(54.dp).clip(RoundedCornerShape(14.dp)).background(Card).padding(vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(value, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         Text(label, color = Muted, fontSize = 9.sp, maxLines = 1)
     }
 }
@@ -204,14 +218,14 @@ private fun PairScreen(planner: Planner, onDone: () -> Unit) {
         onDone()
     }
     Face {
-        Text("Connect to your planner", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        Text("Connect to your planner", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
         when (val s = state) {
             is PairState.Showing -> {
                 Message("On your phone: Settings › Watch, then enter")
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     s.code.forEach { c ->
                         Box(Modifier.size(width = 28.dp, height = 36.dp).clip(RoundedCornerShape(8.dp)).background(Card), contentAlignment = Alignment.Center) {
-                            Text(c.toString(), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                            Text(c.toString(), color = Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -243,7 +257,7 @@ private fun TodayScreen(planner: Planner, onSignedOut: () -> Unit, open: (Screen
         val s = summary
         if (s == null) { Message(problem ?: "Loading…"); return@Face }
         Text("NOW", color = Orange, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Text(s.now?.label ?: "—", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+        Text(s.now?.label ?: "—", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
         s.now?.until?.let { Text("until ${clock(it)}", color = Muted, fontSize = 11.sp) }
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Stat("${s.proteinLeft} g", "protein left")
@@ -253,10 +267,10 @@ private fun TodayScreen(planner: Planner, onSignedOut: () -> Unit, open: (Screen
         }
         s.next?.let { Text("Next · ${it.label} ${clock(it.at)}", color = Blue, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Pill("Workout", Orange, Color(0xFF1A0E00)) { open(Screen.Workout) }
-            Pill("Habits", Card, Color.White) { open(Screen.Habits) }
+            Pill("Workout", Orange, OnOrange) { open(Screen.Workout) }
+            Pill("Habits", Card, Ink) { open(Screen.Habits) }
         }
-        Pill("Timers", Card, Color.White) { open(Screen.Timers) }
+        Pill("Timers", Card, Ink) { open(Screen.Timers) }
         problem?.let { Message(it, Faint) }
     }
 }
@@ -307,7 +321,7 @@ private fun HabitsScreen(planner: Planner, onSignedOut: () -> Unit) {
                         Modifier.size(16.dp).clip(CircleShape)
                             .then(if (r.done) Modifier.background(Green) else Modifier.border(1.5.dp, Color(0xFF6E6E6E), CircleShape)),
                     )
-                    Text(r.text, color = Color.White, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(r.text, color = Ink, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Text(if (r.habit) "habit" else "to-do", color = Muted, fontSize = 9.sp)
                 }
             }
@@ -504,13 +518,13 @@ private fun TimersScreen(planner: Planner, onSignedOut: () -> Unit) {
         if (sauna.done == null && !buzzed && tick >= st + sauna.minutes * 60_000L) {
             buzzed = true
             buzz(context)
-            act { timers.saunaDone() }
+            act { timers.saunaDone(st + sauna.minutes * 60_000L) }
         }
     }
     Face(scroll = true) {
         val n = now
         if (n == null) { Message(problem ?: "Loading…"); return@Face }
-        if (n.up == null) Pill("I'm up", Orange, Color(0xFF1A0E00), Modifier.width(110.dp)) { act { timers.imUp() } }
+        if (n.up == null) Pill("I'm up", Orange, OnOrange, Modifier.width(110.dp)) { act { timers.imUp() } }
         n.race?.let { r ->
             Column(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Card).padding(vertical = 6.dp),
@@ -522,7 +536,7 @@ private fun TimersScreen(planner: Planner, onSignedOut: () -> Unit) {
                     r.finishMs != null -> mmss(r.finishMs - r.startMs)
                     else -> mmss(tick - r.startMs)
                 }
-                Text(shown, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Light)
+                Text(shown, color = Ink, fontSize = 26.sp, fontWeight = FontWeight.Light)
                 Text(
                     when {
                         r.startMs == null -> "Starts when you tick I'm up"
@@ -547,13 +561,13 @@ private fun TimersScreen(planner: Planner, onSignedOut: () -> Unit) {
                             left != null -> mmss(left)
                             else -> "${s.minutes}:00"
                         },
-                        color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                        color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
                     )
                 }
                 when {
                     s.done != null -> {}
-                    s.startMs == null -> Pill("Start", Blue, Color(0xFF001A33)) { act { timers.startSauna() } }
-                    else -> Pill("Out", Card, Color.White) { act { timers.saunaDone() } }
+                    s.startMs == null -> Pill("Start", Blue, OnBlue) { act { timers.startSauna() } }
+                    else -> Pill("Out", Card, Ink) { act { timers.saunaDone() } }
                 }
             }
         }
