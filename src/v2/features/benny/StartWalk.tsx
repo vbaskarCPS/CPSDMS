@@ -6,7 +6,7 @@ import React, { useEffect, useState } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import { loadWalk, saveRollCall } from '../../lib/bennyWalkLoad';
 import {
-  dealRandom, groupKey, groupName, joinGroups, moneyLine, nextStep, splitGroup, toggleOut, walkAsk,
+  dealRandom, groupKey, groupName, joinGroups, mapChoices, moneyLine, nextStep, splitGroup, toggleOut, walkAsk,
   type CartWay, type CrewWay, type WalkState,
 } from '../../lib/bennyWalk';
 
@@ -23,6 +23,7 @@ export const StartWalk: React.FC<{
   onAsk: (text: string, money: { productCostPercent: number; noTaxOnCash: boolean; line: string }) => void;
 }> = ({ state: s, done, busy, onChange, onAsk }) => {
   const [pick, setPick] = useState<string | null>(null);
+  const [find, setFind] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [roll, setRoll] = useState<Record<string, boolean>>(() => Object.fromEntries((s.crew || []).map(w => [w.rowId, w.here])));
@@ -99,7 +100,9 @@ export const StartWalk: React.FC<{
             const k = groupKey(g); const mine = s.maps[k] || [];
             return <div key={k} className="benny-mapsfor">
               <span className="benny-sub">{groupName(g, s.managers)}</span>
-              <div className="benny-opts">{s.areas.map(a => <Opt key={a} on={mine.includes(a)}
+              <input className="benny-walk-in" placeholder="Find a map, e.g. north van 1" value={find[k] || ''} onChange={e => setFind(f => ({ ...f, [k]: e.target.value }))} aria-label={`Find a map for ${groupName(g, s.managers)}`} />
+              {!(find[k] || '').trim() && (s.recent || []).length > 0 && <span className="benny-mut">Last day’s maps:</span>}
+              <div className="benny-opts">{mapChoices(s.areas, mine, find[k] || '', s.recent).map(a => <Opt key={a} on={mine.includes(a)}
                 onClick={() => onChange({ ...s, maps: { ...s.maps, [k]: mine.includes(a) ? mine.filter(x => x !== a) : [...mine, a] } })}>{a}</Opt>)}</div>
             </div>;
           })}

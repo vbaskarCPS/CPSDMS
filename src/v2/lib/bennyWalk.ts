@@ -17,6 +17,7 @@ export interface WalkState {
   groups: string[][];                      // who's going out: each group is one team (manager ids); two in a group = together
   maps: Record<string, string[]>;          // group key (ids joined by +) → map names
   areas: string[];                         // the center's maps
+  recent?: string[];                       // the maps of the last day started, offered first
   crews?: CrewWay; carts?: CartWay; rules?: string;
   money?: WalkMoney;
   crew?: WalkWorker[];                     // the roll call
@@ -83,13 +84,23 @@ export function walkAsk(s: WalkState, random?: string[][]): string {
 }
 
 /** The product cost and tax the center's last started day used (same service), or null when there's none. */
-export async function lastSettings(centerId: string, service: string): Promise<{ settings: PlanSettings; day: string } | null> {
+export async function lastSettings(centerId: string, service: string): Promise<{ settings: PlanSettings; day: string; maps: string[] } | null> {
   try {
-    const { data } = await db.from('sessions').select('settings, day:days!inner(day, center_id)').eq('day.center_id', centerId)
+    const { data } = await db.from('sessions').select('settings, routes, day:days!inner(day, center_id)').eq('day.center_id', centerId)
       .order('day(day)', { ascending: false }).limit(10);
-    const rows = (data || []) as unknown as { settings: PlanSettings; day: { day: string } }[];
+    const rows = (data || []) as unknown as { settings: PlanSettings; routes: { area?: string }[] | null; day: { day: string } }[];
     const hit = rows.filter(r => r.settings && typeof r.settings.productCostPercent === 'number' && (!r.settings.service || r.settings.service === service))
       .sort((a, b) => b.day.day.localeCompare(a.day.day))[0];
-    return hit ? { settings: hit.settings, day: hit.day.day } : null;
+    return hit ? { settings: hit.settings, day: hit.day.day, maps: [...new Set((hit.routes || []).map(r => r.area).filter((a): a is string => !!a))] } : null;
   } catch { return null; }
+}
+
+/** The maps to show for a search: the chosen ones, then what matches the words typed (or, with nothing typed, the last
+ *  day's maps), at most 12 more. "north van 1" finds NORTH VANCOUVER #1. */
+export function mapChoices(all: string[], chosen: string[], find: string, recent: string[] = []): string[] {
+  const words = find.toLowerCase().replace(/#/g, ' ').split(/\s+/).filter(Boolean);
+  const hits = words.length
+    ? all.filter(a => { const w = a.toLowerCase().replace(/#/g, ' ').split(/\s+/).filter(Boolean); return words.every(x => w.some(y => /^\d+$/.test(x) ? y === x : y.startsWith(x))); })
+    : recent.filter(r => all.includes(r));
+  return [...chosen, ...hits.filter(a => !chosen.includes(a)).slice(0, 12)];
 }

@@ -27,7 +27,7 @@ export async function loadWalk(center: WalkCenter, date: string): Promise<WalkSt
   return {
     step: firstStep(roadTrip), date, roadTrip,
     managers: managers.map(m => ({ id: m.id, name: m.full_name })), groups: [], maps: {},
-    areas: areas.map(a => a.name),
+    areas: areas.map(a => a.name), recent: last?.maps || [],
     crew: roster.map(r => ({ rowId: r.id, hireId: r.hire_id, name: fullName(r.hire.person), here: roadTrip ? !!r.confirmed_at : (r.attendance ?? 'showed') === 'showed' }))
       .sort((a, b) => a.name.localeCompare(b.name)),
     money: {

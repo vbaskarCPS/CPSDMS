@@ -181,8 +181,10 @@ export const Benny: React.FC<{
         ...(floating ? { following: following!.map(f => f.id), following_names: following!.map(f => f.name) } : {}),
       });
       // a Start the day card made from the walk-through carries the product cost and tax chosen there
-      const money = walkMoney.current; walkMoney.current = null;
+      // (kept through the Benny's follow-up questions, until its card comes)
+      const money = walkMoney.current;
       const proposal = money && r.proposal?.kind === 'start_day' ? { ...r.proposal, money } : r.proposal;
+      if (proposal?.kind === 'start_day') walkMoney.current = null;
       setMsgs(m => [...m, { role: 'assistant', text: r.reply || 'Done.', map: r.map, proposal, ...(r.logged ? { logged: true } : {}) }]);
       setDemo(d => (d === 1 || d === 2 ? 3 : d));
       if (spoken && !mute) say(r.reply);
