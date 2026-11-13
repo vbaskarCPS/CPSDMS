@@ -28,6 +28,7 @@ import { MoneyTodayCard } from '../features/money';
 import { CycleTodayCard } from '../features/cycle';
 import { CalendarTodayCard } from '../features/calendar';
 import { ShopTodayCard } from '../features/shop';
+import { StepsTodayCard } from '../features/watch';
 import { TodayWidgets, foldsAway, useTodayWidgets } from '../features/widgets';
 import { MailTodos } from '../features/mail';
 
@@ -344,6 +345,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
       train: <WorkoutTodayCard pass={pass} />,
       food: <FoodTodayCard pass={pass} />,
       money: <MoneyTodayCard pass={pass} />,
+      steps: <StepsTodayCard />,
       }} />
     </main></SlotHabitsProvider>
   );
