@@ -17,6 +17,7 @@ import { BookContractors } from './BookContractors';
 import { TeamBoard } from './TeamBoard';
 import { MapRoutePicker } from './MapRoutePicker';
 import { appShowedDates, countBefore } from '../../lib/payoutEngine';
+import { lastSettings } from '../../lib/bennyWalk';
 import { AddLiveRoutes } from './day/AddLiveRoutes';
 
 type Step = 1 | 2 | 3;
@@ -84,6 +85,8 @@ export const StartSession: React.FC = () => {
     const svc = (seasonInfo.data?.season?.service || centerService(center?.services)) as Service;
     setService(svc);
     setSettings(s => ({ ...s, productCostPercent: card.productCostPercent, noTaxOnCash: card.noTaxOnCashDefault }));
+    // product cost and tax as the last day started here (same service), not a default
+    if (center) void lastSettings(center.id, svc).then(last => { if (last) setSettings(s => ({ ...s, productCostPercent: last.settings.productCostPercent, noTaxOnCash: !!last.settings.noTaxOnCash })); });
     setPrefilled(true);
   }, [prefilled, dayRoster.data, managers.loading, managers.data, seasonInfo.loading, seasonInfo.data, firstMgr, card]);
 

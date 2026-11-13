@@ -147,3 +147,29 @@
 @media (max-width:760px){.benny-root .benny-orb{width:48px;height:48px}}
 @media (prefers-reduced-motion:reduce){.benny-root .benny-orb{transition:none}.benny-root .benny-orb.hearing{animation:none}}
 .benny-root .benny-dot{color:#fff;background:radial-gradient(circle at 30% 25%,#fb923c,#ea580c 65%,#c2410c)}
+/* the start-the-day walk-through (StartWalk.tsx) */
+.benny-root .benny-walk{margin-top:8px;padding:12px;border:1px solid #fed7aa;background:#fff7ed;border-radius:12px;display:flex;flex-direction:column;gap:8px}
+.benny-root .benny-walk>b{font-size:15px}
+.benny-root .benny-walk p{margin:0;white-space:pre-line}
+.benny-root .benny-opts{display:flex;flex-wrap:wrap;gap:6px}
+.benny-root .benny-opt{display:inline-flex;align-items:center;gap:5px;min-height:38px;padding:0 12px;border-radius:19px;border:1px solid #cbd5e1;background:#fff;color:#0f172a;font-size:13px;font-family:inherit;cursor:pointer}
+.benny-root .benny-opt.on{background:#f97316;border-color:#f97316;color:#1a0d03;font-weight:600}
+.benny-root .benny-opt:disabled{opacity:.5;cursor:default}
+.benny-root .benny-opt:focus-visible{outline:2px solid #fb923c;outline-offset:2px}
+.benny-root .benny-sub{font-size:12px;font-weight:700;color:#7c2d12}
+.benny-root .benny-mapsfor{display:flex;flex-direction:column;gap:6px}
+.benny-root .benny-walk-in{height:38px;padding:0 10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit;background:#fff;color:#0f172a;min-width:0}
+.benny-root .benny-money{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.benny-root .benny-money label{display:flex;align-items:center;gap:6px}
+.benny-root .benny-money input{width:80px}
+.benny-root .benny-teams{display:flex;flex-direction:column;gap:6px}
+.benny-root .benny-team{display:flex;align-items:center;gap:6px;padding:4px 6px 4px 4px;border:1px dashed #fdba74;border-radius:10px;background:#fff}
+.benny-root .benny-team.pick{border-style:solid;border-color:#f97316;box-shadow:0 0 0 2px rgba(249,115,22,.25)}
+.benny-root .benny-team-n{flex:1;text-align:left;border:0;background:none;font:inherit;font-weight:600;color:#0f172a;padding:6px;cursor:pointer}
+.benny-root .benny-roll{display:flex;flex-direction:column;gap:4px;max-height:320px;overflow:auto}
+.benny-root .benny-roll-r{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 10px;border:1px solid #e2e8f0;border-radius:10px;background:#f1f5f9;color:#64748b;font:inherit;text-align:left;cursor:pointer}
+.benny-root .benny-roll-r.on{background:#fff;color:#0f172a}
+.benny-root .benny-roll-x{display:grid;place-items:center;width:20px;height:20px;border-radius:5px;border:1.5px solid #94a3b8;flex:none}
+.benny-root .benny-roll-r.on .benny-roll-x{background:#16a34a;border-color:#16a34a;color:#fff}
+.benny-root .benny-roll-s{margin-left:auto;font-size:12px}
+.benny-root .benny-err{color:#b91c1c}

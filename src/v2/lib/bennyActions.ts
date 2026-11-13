@@ -35,6 +35,7 @@ import { STOP_WORD } from './bennyDrive';
 import { textOf, textsTitle, type TextPerson, type TextsCheck, type TextsState } from './bennyTexts';
 import { removeCard, removedSaid, type RemoveCheck, type RemoveDone } from './bennyRemove';
 import { addJobCard, addJobLines, addedSaid, type AddJobCheck } from './bennyAddJob';
+import { lastSettings } from './bennyWalk';
 import { queueHref } from './payoutQueue';
 import { cartContext, dayLines, listCarts, saveDay } from './payoutCarts';
 import { bonusName, bonusesSaid, liveBonusPatch, withBonuses, type BonusCheck, type LiveNow } from './bennyBonus';
@@ -146,7 +147,7 @@ export type BennyProposal =
   | { kind: 'pin'; check: PinCheck }
   | { kind: 'stops'; check: StopsCheck }
   | { kind: 'booking_emails'; check: EmailsCheck }
-  | { kind: 'start_day'; check: StartDayCheck; team_mode?: TeamMode }
+  | { kind: 'start_day'; check: StartDayCheck; team_mode?: TeamMode; /** product cost and tax chosen in the walk-through */ money?: { productCostPercent: number; noTaxOnCash: boolean; line: string } }
   | { kind: 'give_route'; check: GiveCheck }
   | { kind: 'partner'; check: MoveCheck }
   | { kind: 'solo'; check: MoveCheck }
@@ -190,6 +191,7 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
             `${first(a)}’s crew (${a.crew!.length}${a.crew_avg != null ? `, average ${Number(a.crew_avg).toFixed(1)} equiv a day` : ''}): ${crewNames(a.crew!, c.assign.flatMap(x => x.crew || []))}`) : []),
           ...(c.notes || []),
           `Prebooks on these routes: ${c.open_prebooks}`,
+          p.money ? p.money.line : 'Product cost and tax: as the last day started',
           ...(c.live_map_on && c.live_map_on !== c.date ? [`The live map moves from ${c.live_map_on} to this day (that day stays open to close).`] : []),
         ],
         action: 'Start the day',
@@ -408,6 +410,13 @@ export async function startDayFromBenny(p: Extract<BennyProposal, { kind: 'start
   const stale = crewProblems(c, roster, managers);
   if (stale.length) throw new Error(stale[0]);
   const plan = buildBennyPlan(c, p.team_mode || 'roster', roster, managers, card, service, season?.year || Number(c.date.slice(0, 4)), appDays);
+  // product cost and tax: as chosen on the walk-through, else as the last day started here (never a made-up default)
+  if (p.money) plan.settings = { ...plan.settings, productCostPercent: p.money.productCostPercent, noTaxOnCash: p.money.noTaxOnCash };
+  else {
+    const last = await lastSettings(center.id, service);
+    if (last) plan.settings = { ...plan.settings, productCostPercent: last.settings.productCostPercent, noTaxOnCash: !!last.settings.noTaxOnCash,
+      emailReceipts: last.settings.emailReceipts ?? true, liveCard: last.settings.liveCard ?? true };
+  }
   const problems = planProblems(plan);
   if (problems.length) throw new Error(problems[0]);
   await startSession(plan, day.id, center.id);

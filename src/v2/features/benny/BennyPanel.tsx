@@ -14,13 +14,14 @@ import { Check, Mic, Send, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { askBenny, bennyNews, bennyNewsSeen, canListen, demoDue, listen, primeVoice, readDemo, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
 import { claimNews, newsText } from '../../lib/bennyNews';
-import { bennyMorning, bennyMorningSeen, fromMorningLink, morningText, openDayHref, START_ASK, whatsNewText } from '../../lib/bennyMorning';
+import { bennyMorning, bennyMorningSeen, fromMorningLink, morningText, openDayHref, whatsNewText } from '../../lib/bennyMorning';
 import { describe, doProposal, emailsPreset, payoutsStart, textOpened, type BennyProposal } from '../../lib/bennyActions';
 import { bonusReplaced } from '../../lib/bennyBonus';
 import { BennyMapCard } from './BennyMap';
 import { TextsCard } from './BennyTexts';
 import { NotifyRow } from './BennyNotify';
 import { BennyMark } from './BennyMark';
+import { loadWalk, StartWalk } from './StartWalk';
 import './benny.css';
 
 const MUTE = 'benny.mute';
@@ -168,23 +169,42 @@ export const Benny: React.FC<{
     });
   }, []);
 
+  const walkMoney = useRef<NonNullable<Extract<BennyProposal, { kind: 'start_day' }>['money']> | null>(null);
   const send = useCallback(async (q: string, spoken: boolean) => {
     const ask = q.trim(); if (!ask || busy) return;
     const next: BennyMsg[] = [...msgs, { role: 'user', text: ask, spoken }];
-    setMsgs(next); setText(''); setBusy(true);
+    setMsgs(m => [...m, next[next.length - 1]]); setText(''); setBusy(true);
     try {
       const r = await askBenny(next.slice(-16), {
         center_id: cid || undefined, center_name: centerName, today: todayLocal(), path: loc.pathname,
         screen: variant === 'fab' ? 'rm' : undefined, rm_manager: rmManager || undefined, user_name: profile?.full_name,
         ...(floating ? { following: following!.map(f => f.id), following_names: following!.map(f => f.name) } : {}),
       });
-      setMsgs(m => [...m, { role: 'assistant', text: r.reply || 'Done.', map: r.map, proposal: r.proposal, ...(r.logged ? { logged: true } : {}) }]);
+      // a Start the day card made from the walk-through carries the product cost and tax chosen there
+      const money = walkMoney.current; walkMoney.current = null;
+      const proposal = money && r.proposal?.kind === 'start_day' ? { ...r.proposal, money } : r.proposal;
+      setMsgs(m => [...m, { role: 'assistant', text: r.reply || 'Done.', map: r.map, proposal, ...(r.logged ? { logged: true } : {}) }]);
       setDemo(d => (d === 1 || d === 2 ? 3 : d));
       if (spoken && !mute) say(r.reply);
     } catch (e) {
       setMsgs(m => [...m, { role: 'assistant', text: e instanceof Error ? e.message : 'Something went wrong', error: true }]);
     } finally { setBusy(false); }
   }, [msgs, busy, cid, centerName, loc.pathname, mute, variant, rmManager, followKey, profile?.full_name, say]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "help me start the day": the walk-through, one question at a time (it reads the day, crew, managers and maps first)
+  const startWalk = useCallback(async () => {
+    if (!cid) return;
+    setMsgs(m => [...m, { role: 'user', text: 'Help me start the day' }]);
+    setBusy(true);
+    try {
+      const w = await loadWalk({ id: cid, region: center?.id === cid ? center.region : null, services: center?.id === cid ? center.services : null }, todayLocal());
+      setMsgs(m => [...m, typeof w === 'string' ? { role: 'assistant', text: w }
+        : { role: 'assistant', text: `Let’s start ${new Date(`${w.date}T12:00:00`).toLocaleDateString('en-CA', { weekday: 'long', month: 'short', day: 'numeric' })}, one question at a time. Nothing changes until you tap Start the day at the end${w.roadTrip ? ' (or Save roll call)' : ''}.`, walk: w }]);
+    } catch (e) {
+      setMsgs(m => [...m, { role: 'assistant', text: e instanceof Error ? e.message : 'I couldn’t read the day', error: true }]);
+    } finally { setBusy(false); }
+  }, [cid, center]);
+  const canStart = !!profile && (profile.is_super_admin || can('workerbook'));
 
   // the mic's "done talking" arrives later: it must send with the chat as it is then, not as it was when listening began
   const sendRef = useRef(send);
@@ -312,6 +332,7 @@ export const Benny: React.FC<{
                 <p>{floating ? `Ask about the team${following!.length === 1 ? '' : 's'} you’re following (${following!.map(f => f.name.split(' ')[0]).join(', ')}), or tell me a change: “give Wilson route 35”, “drop a pin at Wilson”, “plan my pickup order”. You confirm every change first.`
                   : variant === 'fab' ? 'Ask about your team and routes, or tell me a change: “partner up Wilson with Michael A”, “give Wilson route 35”. You confirm every change first.'
                   : 'Ask about today, people, bookings or maps, or start a day. You confirm every change first. Tell me when something’s broken and I’ll let Vijay know.'}</p>
+                {variant === 'bar' && canStart && <button type="button" className="benny-chip" onClick={() => void startWalk()}>Help me start the day</button>}
                 {suggestions.map(s => <button key={s} type="button" className="benny-chip" onClick={() => void send(s, false)}>{s}</button>)}
               </div>
             )}
@@ -330,9 +351,12 @@ export const Benny: React.FC<{
                       if (o.center_id !== cid) setCenterId(o.center_id);
                       stopSpeaking(); setOpen(false); nav(openDayHref(o));
                     }}>Open {o.center} {new Date(`${o.day}T12:00:00`).toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} to close it</button>)}
-                    {m.morning.can_start && <button type="button" className={m.morning.open.length ? 'benny-alt' : 'benny-go'} disabled={busy} onClick={() => void send(START_ASK, false)}>Yes, help me start the day</button>}
+                    {m.morning.can_start && <button type="button" className={m.morning.open.length ? 'benny-alt' : 'benny-go'} disabled={busy} onClick={() => void startWalk()}>Yes, help me start the day</button>}
                   </div>
                 )}
+                {m.walk && <StartWalk state={m.walk} done={!!m.walkDone} busy={busy}
+                  onChange={w => setMsgs(all => all.map((x, j) => j === i ? { ...x, walk: w } : x))}
+                  onAsk={(q, money) => { walkMoney.current = money; setMsgs(all => all.map((x, j) => j === i ? { ...x, walkDone: true } : x)); void sendRef.current(q, false); }} />}
                 {m.asks?.length ? <div className="benny-morning-b">{m.asks.map(q => <button key={q} type="button" className="benny-chip" disabled={busy} onClick={() => void send(q, false)}>{q}</button>)}</div> : null}
                 {m.map && <BennyMapCard spec={m.map} centerId={cid} />}
                 {m.proposal?.kind === 'texts' && <TextsCard check={m.proposal.check} state={m.texts} outcome={m.outcome}
