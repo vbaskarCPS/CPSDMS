@@ -1,5 +1,6 @@
 // src/v2/lib/benny.ts — The Benny, the in-app assistant: the call to its server (benny-assist) and the
 // browser's own speech: speech to text for the mic, and text to speech for spoken answers.
+import type { MorningReport } from './bennyMorning';
 import { db } from './client';
 import type { BennyProposal } from './bennyActions';
 import { byRoad, withOrder } from './bennyDrive';
@@ -20,6 +21,10 @@ export interface BennyMsg {
   news?: string;
   /** this answer logged a bug or a request for them: they are offered a notification for when it's live */
   logged?: boolean;
+  /** the morning report this message is (its buttons: what's new, a day to close, help starting the day) */
+  morning?: MorningReport;
+  /** questions to try, shown as buttons under the message */
+  asks?: string[];
 }
 export interface BennyContext {
   center_id?: string; center_name?: string; today: string; path: string; screen?: string;

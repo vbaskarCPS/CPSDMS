@@ -13,7 +13,7 @@
 @keyframes benny-pulse{50%{box-shadow:0 0 0 11px rgba(249,115,22,.12)}}
 @media (prefers-reduced-motion:reduce){.benny-root .benny-mic.on{animation:none}}
 
-.benny-root .benny-panel{position:fixed;z-index:58;top:58px;right:0;bottom:0;width:min(440px,100vw);background:#f8fafc;color:#0f172a;
+.benny-root .benny-panel{position:fixed;z-index:58;top:var(--v2-bar-h,72px);right:0;bottom:0;width:min(440px,100vw);background:#f8fafc;color:#0f172a;
   display:flex;flex-direction:column;border-left:1px solid #1e2b42;box-shadow:-10px 0 30px rgba(0,0,0,.3)}
 @media (max-width:640px){
   .benny-root .benny-panel{top:auto;left:0;width:auto;height:78vh;height:78dvh;border-left:0;border-radius:18px 18px 0 0;box-shadow:0 -8px 24px rgba(15,23,42,.25)}
@@ -64,7 +64,7 @@
 /* the route manager map's button and sheet */
 /* the phone RM map says where its own round Menu button is (--benny-fab-bottom); the Benny sits just above it */
 .benny-root .benny-fab{position:fixed;z-index:25;right:var(--benny-fab-right,18px);bottom:var(--benny-fab-bottom,44px);width:56px;height:56px;border-radius:28px;border:0;
-  background:#f97316;color:#1a0d03;box-shadow:0 6px 18px rgba(249,115,22,.45);display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none}
+  background:radial-gradient(circle at 30% 25%,#fb923c,#ea580c 65%,#c2410c);color:#fff;box-shadow:0 6px 18px rgba(249,115,22,.45),inset 0 -3px 0 rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none}
 .benny-root .benny-fab:focus-visible{outline:3px solid #fff;outline-offset:2px}
 .benny-root .benny-panel.sheet{z-index:70;top:auto;left:auto;right:0;bottom:0;width:min(440px,100vw);height:min(560px,78dvh);border-radius:18px 18px 0 0;border-left:0;
   box-shadow:0 -8px 24px rgba(15,23,42,.25)}
@@ -128,3 +128,22 @@
 .benny-root .benny-notify .benny-alt{height:40px}
 .benny-root .benny-notify.on{background:#f0fdf4;border-color:#bbf7d0;color:#14532d}
 .benny-root .benny-notify.on>svg{color:#15803d}
+/* the morning report's buttons, and questions to try under a message */
+.benny-root .benny-morning-b{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.benny-root .benny-morning-b .benny-go{flex:none;min-width:0;height:40px;padding:0 14px}
+.benny-root .benny-morning-b .benny-alt{height:40px}
+.benny-root .benny-morning-b .benny-chip{margin:0}
+
+/* the top bar's Benny: a round orange button with the B-sparkle mark (tap to type, hold to talk), a white dot when it said something */
+.benny-root .benny-orb{position:relative;flex:none;display:grid;place-items:center;width:56px;height:56px;border-radius:50%;border:0;padding:0;cursor:pointer;color:#fff;
+  background:radial-gradient(circle at 30% 25%,#fb923c,#ea580c 65%,#c2410c);box-shadow:0 6px 18px rgba(249,115,22,.45),inset 0 -3px 0 rgba(0,0,0,.18);
+  touch-action:none;user-select:none;-webkit-user-select:none;transition:transform .12s ease}
+.benny-root .benny-orb:hover{transform:scale(1.04)}
+.benny-root .benny-orb:active{transform:scale(.96)}
+.benny-root .benny-orb.on{box-shadow:0 0 0 3px #fdba74,0 6px 18px rgba(249,115,22,.45),inset 0 -3px 0 rgba(0,0,0,.18)}
+.benny-root .benny-orb.hearing{animation:benny-pulse 1.2s ease-in-out infinite}
+.benny-root .benny-orb:focus-visible{outline:3px solid #fdba74;outline-offset:2px}
+.benny-root .benny-orb-dot{position:absolute;top:3px;right:3px;width:12px;height:12px;border-radius:6px;background:#fff;border:2px solid #ea580c}
+@media (max-width:760px){.benny-root .benny-orb{width:48px;height:48px}}
+@media (prefers-reduced-motion:reduce){.benny-root .benny-orb{transition:none}.benny-root .benny-orb.hearing{animation:none}}
+.benny-root .benny-dot{color:#fff;background:radial-gradient(circle at 30% 25%,#fb923c,#ea580c 65%,#c2410c)}

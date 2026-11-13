@@ -11,6 +11,7 @@ import { MsLogo, MsTab } from '../ui/MsLogo';
 import { visibleComponents, findByPath, homeOf } from './nav';
 import { ContractorCardProvider } from '../features/workerbook/ContractorCard';
 import { Benny } from '../features/benny/BennyPanel';
+import { DayChip } from './DayChip';
 
 export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { profile, centers, center, setCenterId, can, signOut } = useAuth();
@@ -51,7 +52,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
           </> : <b>Home</b>}
         </span>
         <span className="v2-spacer" />
-        {!brand && <Benny />}
+        {!brand && (profile?.is_super_admin || can('workerbook')) && <DayChip centerId={center?.id || null} />}
         {brand ? null : centers.length > 1 ? (
           <select className="v2-select-pill" value={center?.id || ''} onChange={e => setCenterId(e.target.value)} aria-label="Command center">
             {centers.map(c => <option key={c.id} value={c.id}>{c.display_name}</option>)}
@@ -61,6 +62,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
         <Link to="/app/account" className="v2-pill v2-acct" title={`${profile?.full_name} · My account`} aria-label="My account">
           <UserRound size={14} /><span className="v2-hide-sm">{profile?.username}</span>
         </Link>
+        {!brand && <Benny />}
         <button type="button" className="v2-gbtn" onClick={() => signOut().then(() => nav('/app/login'))} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
       </header>
 

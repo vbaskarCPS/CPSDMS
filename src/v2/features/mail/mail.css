@@ -309,7 +309,7 @@
 
 /* where the inbox sits: the MainstreetAI admin page and the staff Email component fill the page under the bar */
 .v2-ms-mail, .v2-staff-mail { height: calc(100vh - 110px); min-height: 480px; display: flex; flex-direction: column; }
-.v2-staff-mail { height: calc(100vh - 59px); height: calc(100dvh - 59px); }
+.v2-staff-mail { height: calc(100vh - var(--v2-bar-h, 72px) - 1px); height: calc(100dvh - var(--v2-bar-h, 72px) - 1px); }
 .v2-mail-app .side-foot .v2-push { flex-wrap: wrap; }
 .v2-mail-app .side-foot .v2-push .tx { flex-basis: calc(100% - 50px); }
 .v2-mail-app .side-foot .v2-push button { margin-left: 46px; }

@@ -10,21 +10,25 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Check, Mic, Send, Sparkles, Volume2, VolumeX, X } from 'lucide-react';
+import { Check, Mic, Send, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { askBenny, bennyNews, bennyNewsSeen, canListen, demoDue, listen, primeVoice, readDemo, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
 import { claimNews, newsText } from '../../lib/bennyNews';
+import { bennyMorning, bennyMorningSeen, fromMorningLink, morningText, openDayHref, START_ASK, whatsNewText } from '../../lib/bennyMorning';
 import { describe, doProposal, emailsPreset, payoutsStart, textOpened, type BennyProposal } from '../../lib/bennyActions';
 import { bonusReplaced } from '../../lib/bennyBonus';
 import { BennyMapCard } from './BennyMap';
 import { TextsCard } from './BennyTexts';
 import { NotifyRow } from './BennyNotify';
+import { BennyMark } from './BennyMark';
 import './benny.css';
 
 const MUTE = 'benny.mute';
 const HOLD_MS = 350;
 const NEWS_EVERY_MS = 120000;
 let newsAt = 0;   // when this page last asked what's new (the Benny can be on a page twice)
+let morningOn = '';   // the day this page showed the morning report (only one of the Benny's places shows it)
+let morningAt = 0;
 const keyFor = (variant: string) => `benny.chat.v2.${variant}`;
 const load = (k: string): BennyMsg[] => { try { return JSON.parse(sessionStorage.getItem(k) || '[]'); } catch { return []; } };
 const save = (k: string, m: BennyMsg[]) => { try { sessionStorage.setItem(k, JSON.stringify(m.slice(-30))); } catch { /* private mode */ } };
@@ -59,7 +63,7 @@ export const Benny: React.FC<{
   /** the floater map: the managers followed there (rmManager is then the floater's own id), and the center it is open at */
   following?: { id: string; name: string }[] | null; centerLabel?: string | null;
 }> = ({ variant = 'bar', rmManager, rmName, centerId, following, centerLabel }) => {
-  const { profile, center, can } = useAuth();
+  const { profile, center, can, setCenterId } = useAuth();
   const loc = useLocation();
   const nav = useNavigate();
   const floating = variant === 'fab' && !!following?.length;
@@ -70,6 +74,7 @@ export const Benny: React.FC<{
   const [busy, setBusy] = useState(false);
   const [doing, setDoing] = useState<number | null>(null);
   const [hearing, setHearing] = useState<null | 'tap' | 'hold'>(null);
+  const [unread, setUnread] = useState(false);   // the white dot: the Benny said something while it was closed
   const [mute, setMute] = useState(() => { try { return localStorage.getItem(MUTE) === '1'; } catch { return false; } });
   const rec = useRef<ReturnType<typeof listen> | null>(null);
   const held = useRef<number | null>(null);
@@ -87,6 +92,12 @@ export const Benny: React.FC<{
 
   // a tap on a texts card (a Text button, a changed text) is kept with the chat but mustn't move the list: the row tapped stays where it is
   useEffect(() => { save(KEY, msgs); if (still.current) still.current = false; else list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' }); }, [msgs, KEY]);
+  const seenLen = useRef(msgs.length);
+  useEffect(() => {
+    if (open) { setUnread(false); seenLen.current = msgs.length; return; }
+    if (msgs.length > seenLen.current && msgs[msgs.length - 1]?.role === 'assistant') setUnread(true);
+    seenLen.current = msgs.length;
+  }, [msgs, open]);
   useEffect(() => { try { localStorage.setItem(MUTE, mute ? '1' : '0'); } catch { /* none */ } if (mute) stopSpeaking(); }, [mute]);
   useEffect(() => {
     if (!open) return;
@@ -122,13 +133,25 @@ export const Benny: React.FC<{
       setOpen(true);
       void bennyNewsSeen(fresh.map(n => n.id));
     };
-    const t = window.setTimeout(() => void check(), 2500);
-    const back = () => { if (document.visibilityState === 'visible') void check(); };
+    // the morning report: once a day, when its notification went out (or they tapped it)
+    const morning = async (force: boolean) => {
+      if (!force && Date.now() - morningAt < NEWS_EVERY_MS) return;
+      morningAt = Date.now();
+      const r = await bennyMorning(force);
+      if (gone || !r || !(r.due || force) || morningOn === r.today) return;
+      morningOn = r.today;
+      setMsgs(m => [...m, { role: 'assistant' as const, text: morningText(r, profile?.full_name), morning: r }]);
+      setOpen(true);
+      void bennyMorningSeen(false);
+    };
+    const t = window.setTimeout(() => { void check(); void morning(fromMorningLink(window.location.search)); }, 2500);
+    const back = () => { if (document.visibilityState === 'visible') { void check(); void morning(false); } };
     document.addEventListener('visibilitychange', back);
     // the app is open when the notification lands: the notice shows right away (the service worker says a push arrived)
     const pushed = (e: MessageEvent) => {
       const d = e.data as { type?: string; tag?: string } | null;
       if (d?.type === 'push-arrived' && String(d.tag || '').startsWith('benny-live-')) { newsAt = 0; void check(); }
+      if (d?.type === 'push-arrived' && d.tag === 'n-all.morning') { morningAt = 0; void morning(false); }
     };
     const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
     sw?.addEventListener('message', pushed);
@@ -232,6 +255,7 @@ export const Benny: React.FC<{
       window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
       window.clearTimeout(t);
       if (talking) rec.current?.stop();
+      else if (variant === 'bar' && open) { setOpen(false); rec.current?.cancel(); stopSpeaking(); }
       else { setOpen(true); setTimeout(() => input.current?.focus(), 50); }
     };
     window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
@@ -257,22 +281,23 @@ export const Benny: React.FC<{
   return (
     <span className="benny-root" style={{ display: 'contents' }}>
       {variant === 'bar' ? <>
-        <button type="button" className={`benny-ask${open ? ' on' : ''}`} onClick={() => { setOpen(o => !o); setTimeout(() => input.current?.focus(), 50); }} aria-expanded={open} aria-label="Ask the Benny">
-          <Sparkles size={15} /><span className="v2-hide-sm">Ask the Benny</span>
+        <button type="button" className={`benny-orb${open ? ' on' : ''}${hearing ? ' hearing' : ''}`} onPointerDown={fabDown} onContextMenu={e => e.preventDefault()}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o); setTimeout(() => input.current?.focus(), 50); } }}
+          aria-expanded={open} aria-label={`The Benny: tap to type, hold to talk${unread ? ' (something new)' : ''}`} title={mic ? 'The Benny · tap to type, hold to talk' : 'The Benny'}>
+          <BennyMark size="60%" />{unread && !open && <i className="benny-orb-dot" aria-hidden="true" />}
         </button>
-        <span className="v2-hide-sm">{micBtn()}</span>
       </> : !open && (
         <button type="button" className="benny-fab" onPointerDown={fabDown} onContextMenu={e => e.preventDefault()}
           onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(true); setTimeout(() => input.current?.focus(), 50); } }}
           aria-label="The Benny: tap to type, hold to talk" title="Tap to type · hold to talk">
-          <Sparkles size={24} />
+          <BennyMark size={30} />{unread && <i className="benny-orb-dot" aria-hidden="true" />}
         </button>
       )}
       {/* on the page's top layer, so the top bar's own stacking doesn't trap it */}
       {open && createPortal(
         <div className="benny-root"><aside className={`benny-panel${variant === 'fab' ? ' sheet' : ''}`} aria-label="The Benny">
           <div className="benny-h">
-            <span className="benny-dot" aria-hidden="true"><Sparkles size={14} /></span><b>The Benny</b>
+            <span className="benny-dot" aria-hidden="true"><BennyMark size={17} /></span><b>The Benny</b>
             {(variant === 'fab' ? <span className="v2-small benny-mut" title={floating ? following!.map(f => f.name).join(', ') : undefined}>{whose}</span>
               : centerName && <span className="v2-small benny-mut">{centerName}</span>)}
             <span className="v2-spacer" />
@@ -294,6 +319,21 @@ export const Benny: React.FC<{
               <div key={i} className={`benny-msg ${m.role}${m.error ? ' err' : ''}${m.news ? ' news' : ''}`}>
                 <div className="benny-bubble"><Rich text={m.text} /></div>
                 {i === offerAt && <NotifyRow when={m.news ? 'news' : 'logged'} />}
+                {m.morning && (
+                  <div className="benny-morning-b">
+                    {m.morning.new.length > 0 && <button type="button" className="benny-go" onClick={() => {
+                      const list = m.morning!.new;
+                      setMsgs(all => [...all, { role: 'assistant', text: whatsNewText(list), asks: list.map(x => x.ask).filter((x): x is string => !!x) }]);
+                      void bennyMorningSeen(true);
+                    }}>See what’s new ({m.morning.new.length})</button>}
+                    {m.morning.open.map(o => <button key={o.center_id + o.day} type="button" className="benny-alt" onClick={() => {
+                      if (o.center_id !== cid) setCenterId(o.center_id);
+                      stopSpeaking(); setOpen(false); nav(openDayHref(o));
+                    }}>Open {o.center} {new Date(`${o.day}T12:00:00`).toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} to close it</button>)}
+                    {m.morning.can_start && <button type="button" className={m.morning.open.length ? 'benny-alt' : 'benny-go'} disabled={busy} onClick={() => void send(START_ASK, false)}>Yes, help me start the day</button>}
+                  </div>
+                )}
+                {m.asks?.length ? <div className="benny-morning-b">{m.asks.map(q => <button key={q} type="button" className="benny-chip" disabled={busy} onClick={() => void send(q, false)}>{q}</button>)}</div> : null}
                 {m.map && <BennyMapCard spec={m.map} centerId={cid} />}
                 {m.proposal?.kind === 'texts' && <TextsCard check={m.proposal.check} state={m.texts} outcome={m.outcome}
                   // a Text button opens Messages by itself (it is a link); here the tap is marked, and the text kept for that worker
