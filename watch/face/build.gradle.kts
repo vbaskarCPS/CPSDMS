@@ -21,12 +21,19 @@ android {
         // (the R class): likely why the watch wouldn't apply the face. Shrinking takes it out, as Google's samples do
         // for both builds ("Adds minifyEnabled to debug builds to exclude Dex files"). Resources
         // are never shrunk: the watch looks them up by name from watchface.xml.
+        // Android Studio switches shrinking off for any build it can debug ("BuildType 'debug' is both debuggable and
+        // has 'isMinifyEnabled' set to true", 13 Nov), which would leave the classes.dex in. A watch face has nothing
+        // to debug, so its debug build is made not debuggable: then it is shrunk and the dex goes, and ▶ still
+        // installs it as before.
         debug {
+            isDebuggable = false
             isMinifyEnabled = true
+            isShrinkResources = false
         }
         release {
             isMinifyEnabled = true
             isShrinkResources = false
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 }
