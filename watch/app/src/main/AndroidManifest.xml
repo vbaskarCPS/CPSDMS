@@ -123,6 +123,24 @@
                 android:value="900" />
         </service>
 
+        <!-- not for showing: the look's colours for the planner face (Spots.kt ThemeSpot) -->
+        <service
+            android:name=".ThemeSpot"
+            android:exported="true"
+            android:icon="@drawable/ic_spot"
+            android:label="Planner colours"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="900" />
+        </service>
+
         <!-- steps and heart rate in the background (Health.kt) -->
         <service
             android:name=".HealthListener"

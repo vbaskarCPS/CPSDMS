@@ -11,7 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "app.propertystars.planner.watch.face"
-        minSdk = 34              // Watch Face Format 2 needs Wear OS 5 (Android 14, API 34)
+        minSdk = 34              // the face is Watch Face Format 4, which needs Wear OS 6 (API 36); 34 kept as compileSdk is 35
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"

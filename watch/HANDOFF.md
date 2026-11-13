@@ -79,6 +79,15 @@ mirror it), `src/planner/features/habits/auto.ts`, `src/planner/features/look/` 
   earlier suspects (`Transform` on `Arc` endAngle, `Variant` in `PartText`, `ellipsis`, `RoundRectangle`,
   `[MINUTE_Z]`, `[DAY_OF_WEEK_S]`, `[MONTH_S]`, a third-party `primaryProvider`) are all valid. If it still won't
   apply: README › The planner watch face (logcat filters `watchface` and `runtime`).
+- **The face wears the look (13 Nov)**: Watch Face Format 4. A hidden, fixed spot (`slotId 9`, app `Spots.kt`
+  ThemeSpot, SHORT_TEXT) sends nine colours as "#rrggbb …" (`Look.kt` LookMath.faceColors: bg, card, ink, ink2, track,
+  ring1–3, spare); the face picks each out with `extractColorFromColors([COMPLICATION.TEXT], false, i/8)` on a 1×1
+  placeholder's tintColor and publishes it with `<Reference name="c_…">`, used as `[REFERENCE.c_…]` in Transforms on
+  the background, fonts, the "next" bar and the rings. Always-on: black, white time and date. The spot refreshes the
+  look itself every 15 min, and when the app or tile sees a new look. Google's technique: "Further explorations with
+  Watch Face Push" (Android Developers Blog, Aug 2025). Not yet seen on the watch.
+- Health: `Health.register` now also calls `flushAsync()` so steps arrive when the app opens. Steps were 0 on 13 Nov
+  while heart rate came through: check the Physical activity permission.
 - **Face apply error found on the watch (13 Nov)**: `FavoriteOperationException: Error 0` was caused by
   `defaultSystemProviderType="EMPTY"` on the three planner spots: the watch requires the fallback type to be one of
   the slot's `supportedTypes`. Fixed (SHORT_TEXT on all three). Galaxy watch tip: Wi-Fi debugging drops while the

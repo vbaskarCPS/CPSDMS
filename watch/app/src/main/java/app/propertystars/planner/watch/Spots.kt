@@ -4,7 +4,9 @@
 // They draw from the last Today the watch loaded (Today.kt keeps it) and the steps Health.kt keeps, fetching a fresh
 // Today when there's time. Tapping one opens the app.
 // The rings carry a colour from the look chosen on the phone (Look.kt): protein the accent, habits the green, steps
-// the second colour. The planner's face draws its rings in it; a face that doesn't read it keeps its own colours.
+// the second colour. A face that doesn't read it keeps its own colours.
+// ThemeSpot is not for showing: it carries the look's colours to the planner's own face (face/…/watchface.xml), which
+// paints its background, words and rings with them, so the face wears the look chosen in the phone's Theme Studio.
 package app.propertystars.planner.watch
 
 import android.app.PendingIntent
@@ -26,7 +28,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 object Spots {
-    private val all = listOf(ProteinSpot::class.java, HabitsSpot::class.java, StepsSpot::class.java, NextSpot::class.java)
+    private val all = listOf(ProteinSpot::class.java, HabitsSpot::class.java, StepsSpot::class.java, NextSpot::class.java, ThemeSpot::class.java)
 
     /** Redraw the tile and every spot (after a tick, a set, new steps). */
     fun refresh(ctx: Context) {
@@ -132,4 +134,25 @@ class NextSpot : PlannerSpot() {
             else -> null
         }
     }
+}
+
+/** The look's colours for the planner face: nine colours as "#rrggbb …" (Look.kt LookMath.faceColors says which is
+ *  which). A hidden spot on the face that can't be swapped out, so it's always this one. It fetches the look itself every
+ *  15 minutes (UPDATE_PERIOD_SECONDS), and the app and the tile redraw it when the look changes. No tap: it isn't seen. */
+class ThemeSpot : SuspendingComplicationDataSourceService() {
+    private fun make(colors: IntArray): ComplicationData {
+        val list = LookMath.colorList(colors)
+        return ShortTextComplicationData.Builder(PlainComplicationText.Builder(list).build(), PlainComplicationText.Builder("Planner colours").build())
+            .setTitle(PlainComplicationText.Builder("CONFIGURED").build())
+            .build()
+    }
+
+    override suspend fun onComplicationRequest(request: ComplicationRequest): ComplicationData? {
+        if (request.complicationType != ComplicationType.SHORT_TEXT) return null
+        if (Planner(this).signedIn) withTimeoutOrNull(4_000) { try { Look.refresh(this@ThemeSpot) } catch (_: Exception) { false } }
+        return make(Look.faceColorsFor(this))
+    }
+
+    override fun getPreviewData(type: ComplicationType): ComplicationData? =
+        if (type == ComplicationType.SHORT_TEXT) make(LookMath.faceColors(Look.FACE_PALETTES["own-night"]!!)) else null
 }

@@ -30,6 +30,10 @@ data class WatchColors(
 /** The look's own colours, as looks.ts has them. */
 data class LookPalette(val accent: Int, val accentInk: Int, val ink: Int, val ink2: Int, val amber: Int)
 
+/** A look's full colours as looks.ts has them, for the planner watch face, which wears the look's own background
+ *  (Spots.kt ThemeSpot sends them; face/…/watchface.xml paints with them). */
+data class FacePalette(val bg: Int, val bg2: Int, val ink: Int, val ink2: Int, val line: Int, val accent: Int, val amber: Int, val amber2: Int)
+
 /** The sums: contrast as the phone works it out (looks.ts `contrast`), and colours lightened until they read on black.
  *  Plain numbers only, no Android, so a plain test can check them (src/test/java/…/LookTest.kt). */
 object LookMath {
@@ -159,6 +163,22 @@ object LookMath {
         )
     }
 
+    /** The nine colours the planner face paints with, in this order (the face reads them by place: 0, 1/8, 2/8 … 1):
+     *  background, the "next" bar, the time and the main words, the date and the small words, the ring tracks,
+     *  the protein ring, the habits ring, the steps ring, and the time once more (spare). On the look's own background:
+     *  the second colour is whichever of the look's two ambers stands out more, and a ring colour that doesn't stand
+     *  3 : 1 (the least for shapes) against the background is swapped for the look's ink. */
+    fun faceColors(p: FacePalette, custom: Int? = null): IntArray {
+        fun shows(c: Int) = if (contrast(c, p.bg) >= 3.0) c or (0xFF shl 24) else p.ink or (0xFF shl 24)
+        val accent = shows(custom ?: p.accent)
+        val second = shows(if (contrast(p.amber, p.bg) >= contrast(p.amber2, p.bg)) p.amber else p.amber2)
+        val third = shows(p.ink2)
+        return intArrayOf(p.bg, p.bg2, p.ink, p.ink2, p.line, accent, second, third, p.ink).map { it or (0xFF shl 24) }.toIntArray()
+    }
+
+    /** Colours as the face's colour list: "#rrggbb #rrggbb …". */
+    fun colorList(cs: IntArray): String = cs.joinToString(" ") { "#%06x".format(it and 0xFFFFFF) }
+
     /** '#rrggbb' (or 'rrggbb') as a colour, or null. */
     fun hex(s: String?): Int? {
         val h = s?.trim()?.removePrefix("#") ?: return null
@@ -198,6 +218,47 @@ object Look {
         "own-night" to P(0xFFFFD166, 0xFF101C3A, 0xFFEEF2FF, 0xFFAAB4D4, 0xFFFFD166),
         "own-morning" to P(0xFFFF6FA8, 0xFF2A1545, 0xFFFDEEF7, 0xFFCDB5D9, 0xFFFF6FA8),
     )
+
+    private fun F(bg: Long, bg2: Long, ink: Long, ink2: Long, line: Long, accent: Long, amber: Long, amber2: Long) =
+        FacePalette(bg.toInt(), bg2.toInt(), ink.toInt(), ink2.toInt(), line.toInt(), accent.toInt(), amber.toInt(), amber2.toInt())
+
+    /** looks.ts LOOKS[id].palette in full (bg, bg2, ink, ink2, line, accent, amber, amber2), and the planner's own looks
+     *  in their dark colours, as above: for the planner watch face. */
+    val FACE_PALETTES: Map<String, FacePalette> = mapOf(
+        "woodland" to F(0xFFEEF0E1, 0xFFFCF9EF, 0xFF33261A, 0xFF5F4F3F, 0xFFD6D8BE, 0xFF4A6741, 0xFFE3B1AA, 0xFF8A4640),
+        "cottagecore" to F(0xFFF6EDDA, 0xFFFFFAF0, 0xFF47312A, 0xFF6F574B, 0xFFE4D4B9, 0xFFA14A60, 0xFFF0D98A, 0xFF7A5F1C),
+        "pastels" to F(0xFFFDF0F6, 0xFFFFFFFF, 0xFF43345C, 0xFF6D5F88, 0xFFF0DCEA, 0xFF7A55B0, 0xFFFFB7D0, 0xFFA8366A),
+        "christmas" to F(0xFFF6EFE0, 0xFFFFFAF0, 0xFF213328, 0xFF4B5C50, 0xFFE0D4BB, 0xFF9A1F2E, 0xFFDCB95C, 0xFF775810),
+        "autumn" to F(0xFFF4E8D3, 0xFFFDF6E8, 0xFF3A2212, 0xFF684A33, 0xFFE2CFAE, 0xFFA8481A, 0xFFE6AB55, 0xFF85500F),
+        "academia" to F(0xFF211812, 0xFF2C2119, 0xFFF1E4C9, 0xFFC6B596, 0xFF4B3A2C, 0xFFC9A55A, 0xFFD8B56A, 0xFFE2C686),
+        "celestial" to F(0xFF131230, 0xFF1D1B44, 0xFFEFEAFF, 0xFFC4BCE4, 0xFF37346A, 0xFFE2C275, 0xFFE9CC86, 0xFFF0D898),
+        "minimal" to F(0xFFF3EFE8, 0xFFFBF9F5, 0xFF2A2927, 0xFF68625A, 0xFFE3DDD2, 0xFF2F2E2B, 0xFFCDBDA6, 0xFF71624C),
+        "french" to F(0xFFF1EBE4, 0xFFFCF8F2, 0xFF37303D, 0xFF675D6C, 0xFFDED4C9, 0xFF52668A, 0xFFE6BCB8, 0xFF8A494E),
+        "botanical" to F(0xFFECF1E4, 0xFFFCFDF8, 0xFF1D3122, 0xFF4A614F, 0xFFD3DCC8, 0xFF2D6943, 0xFFE3A784, 0xFF86481F),
+        "countryside" to F(0xFFF3EEDD, 0xFFFDFAF0, 0xFF2D3322, 0xFF595E46, 0xFFDDD6BD, 0xFF566A37, 0xFFDCC078, 0xFF735618),
+        "regency" to F(0xFFE7EDF4, 0xFFFBFCFD, 0xFF212E48, 0xFF535F78, 0xFFD0D9E5, 0xFF3C5C8C, 0xFFDAC38E, 0xFF6F571A),
+        "coastal" to F(0xFFF4F0E6, 0xFFFFFDF8, 0xFF1B2D43, 0xFF4E6076, 0xFFDDD8C9, 0xFF2B5983, 0xFFE6CFA4, 0xFF785B25),
+        "spring" to F(0xFFF3F8EB, 0xFFFFFFFF, 0xFF24402D, 0xFF536C5C, 0xFFDBE8D2, 0xFFBF386A, 0xFFF6D860, 0xFF7A5F00),
+        "fairy" to F(0xFF10241E, 0xFF183228, 0xFFF0F7E6, 0xFFB3CAB1, 0xFF2D4B3E, 0xFFF0B3E0, 0xFFF3E38A, 0xFFF5EAA8),
+        "halloween" to F(0xFF1B1423, 0xFF271D32, 0xFFF6EAD8, 0xFFC6B6C9, 0xFF40304F, 0xFFF39A3D, 0xFFF4E3A1, 0xFFF7C98B),
+        "winter" to F(0xFFE8F1F8, 0xFFFFFFFF, 0xFF19314E, 0xFF4D6682, 0xFFCFDFEC, 0xFF2D6C9C, 0xFFCBD8E4, 0xFF46627C),
+        "mediterranean" to F(0xFFF7F2E7, 0xFFFFFDF7, 0xFF12305A, 0xFF486083, 0xFFE0DAC8, 0xFF1C5CBB, 0xFFF7D154, 0xFF765900),
+        "retro70s" to F(0xFFF6E7C8, 0xFFFFF6E0, 0xFF3A1E0E, 0xFF6C492D, 0xFFE6CF9F, 0xFFDE6824, 0xFFF0B632, 0xFF875800),
+        "stationery" to F(0xFFF6F1E6, 0xFFFFFDF8, 0xFF32302D, 0xFF68645D, 0xFFDDD5C5, 0xFFC43E2C, 0xFFF4CF7C, 0xFF775610),
+        "coquette" to F(0xFFFDEEF0, 0xFFFFFAFA, 0xFF482030, 0xFF784E5E, 0xFFF3D4DA, 0xFFBD2D56, 0xFFF1DCC9, 0xFF9F304C),
+        "own-night" to F(0xFF101C3A, 0xFF182650, 0xFFEEF2FF, 0xFFAAB4D4, 0xFF26355F, 0xFFFFD166, 0xFFFFD166, 0xFFFFE08A),
+        "own-morning" to F(0xFF2A1545, 0xFF382058, 0xFFFDEEF7, 0xFFCDB5D9, 0xFF4D2F6E, 0xFFFF6FA8, 0xFFFF6FA8, 0xFFFFA3C9),
+    )
+
+    /** The face's colours for the kept look (Spots.kt ThemeSpot). */
+    fun faceColorsFor(context: Context): IntArray {
+        val planner = Planner(context)
+        val choice = kept(planner)
+        val id = choice?.optString("id")?.ifEmpty { null }
+        val pal = FACE_PALETTES[id ?: ""]?.takeIf { id != null && !id.startsWith("own") }
+            ?: FACE_PALETTES[if (planner.profile == "morning") "own-morning" else "own-night"]!!
+        return LookMath.faceColors(pal, LookMath.hex(choice?.optString("accent")))
+    }
 
     /** The palette for a look id from prefs/look ('own' or anything unknown = the planner's own for this profile). */
     fun paletteFor(id: String?, profile: String): LookPalette =

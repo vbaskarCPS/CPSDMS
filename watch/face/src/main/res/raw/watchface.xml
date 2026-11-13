@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The planner watch face (Watch Face Format 2: Wear OS 5 and later). Top: the time and the date. Then what's next in the planner, and three
+  The planner watch face (Watch Face Format 4: Wear OS 6 and later). It wears the look chosen in the phone's Theme
+  Studio: background, words and rings (the hidden spot below). Top: the time and the date. Then what's next in the planner, and three
   rings: protein, habits, steps. The rings and the "next" line are spots (complications) filled by the planner app
   (app.propertystars.planner.watch …Spot): press and hold the face › Customize to put other spots there instead.
-  The rings take the colour the spot sends (the look chosen on the phone, app/…/Look.kt); a spot from another app that
-  sends none gets this face's own colours.
-  Always-on: only the time and date stay, dimmed.
+  Always-on: only the time and date stay, white on black.
   Check it with Google's validator (watch/README.md › The planner watch face) after any change.
 -->
 <WatchFace width="450" height="450">
@@ -14,17 +13,99 @@
 
     <Scene backgroundColor="#ff000000">
 
+        <!-- the look's colours: a hidden spot from the planner app (Spots.kt ThemeSpot) sends them as a list,
+             "#bg #card #ink #ink2 #track #ring1 #ring2 #ring3 #spare" (Look.kt LookMath.faceColors); each is picked out
+             by its place and published as [REFERENCE.c_…] for the rest of the face (Watch Face Format 4). Until the
+             spot answers, the defaults are the face's old dark colours. -->
+        <ComplicationSlot slotId="9" x="0" y="0" width="2" height="2" supportedTypes="SHORT_TEXT" isCustomizable="FALSE">
+            <DefaultProviderPolicy
+                defaultSystemProvider="EMPTY" defaultSystemProviderType="SHORT_TEXT"
+                primaryProvider="app.propertystars.planner.watch/app.propertystars.planner.watch.ThemeSpot"
+                primaryProviderType="SHORT_TEXT" />
+            <BoundingBox x="0" y="0" width="2" height="2" />
+            <Complication type="SHORT_TEXT">
+                <PartDraw x="0" y="0" width="1" height="1" tintColor="#ff000000">
+                    <Transform target="tintColor" value="extractColorFromColors([COMPLICATION.TEXT], false, 0.0)" />
+                    <Reference source="tintColor" name="c_bg" defaultValue="#ff000000" />
+                    <Rectangle x="0" y="0" width="1" height="1"><Fill color="#ffffffff" /></Rectangle>
+                </PartDraw>
+                <PartDraw x="0" y="0" width="1" height="1" tintColor="#ff1c1c1c">
+                    <Transform target="tintColor" value="extractColorFromColors([COMPLICATION.TEXT], false, 0.125)" />
+                    <Reference source="tintColor" name="c_card" defaultValue="#ff1c1c1c" />
+                    <Rectangle x="0" y="0" width="1" height="1"><Fill color="#ffffffff" /></Rectangle>
+                </PartDraw>
+                <PartDraw x="0" y="0" width="1" height="1" tintColor="#ffffffff">
+                    <Transform target="tintColor" value="extractColorFromColors([COMPLICATION.TEXT], false, 0.25)" />
+                    <Reference source="tintColor" name="c_ink" defaultValue="#ffffffff" />
+                    <Rectangle x="0" y="0" width="1" height="1"><Fill color="#ffffffff" /></Rectangle>
+                </PartDraw>
+                <PartDraw x="0" y="0" width="1" height="1" tintColor="#ffbdbdbd">
+                    <Transform target="tintColor" value="extractColorFromColors([COMPLICATION.TEXT], false, 0.375)" />
+                    <Reference source="tintColor" name="c_ink2" defaultValue="#ffbdbdbd" />
+                    <Rectangle x="0" y="0" width="1" height="1"><Fill color="#ffffffff" /></Rectangle>
+                </PartDraw>
+                <PartDraw x="0" y="0" width="1" height="1" tintColor="#ff2a2a2a">
+                    <Transform target="tintColor" value="extractColorFromColors([COMPLICATION.TEXT], false, 0.5)" />
+                    <Reference source="tintColor" name="c_track" defaultValue="#ff2a2a2a" />
+                    <Rectangle x="0" y="0" width="1" height="1"><Fill color="#ffffffff" /></Rectangle>
+                </PartDraw>
+                <PartDraw x="0" y="0" width="1" height="1" tintColor="#ffff9a4d">
+                    <Transform target="tintColor" value="extractColorFromColors([COMPLICATION.TEXT], false, 0.625)" />
+                    <Reference source="tintColor" name="c_ring1" defaultValue="#ffff9a4d" />
+                    <Rectangle x="0" y="0" width="1" height="1"><Fill color="#ffffffff" /></Rectangle>
+                </PartDraw>
+                <PartDraw x="0" y="0" width="1" height="1" tintColor="#ff7ee0a8">
+                    <Transform target="tintColor" value="extractColorFromColors([COMPLICATION.TEXT], false, 0.75)" />
+                    <Reference source="tintColor" name="c_ring2" defaultValue="#ff7ee0a8" />
+                    <Rectangle x="0" y="0" width="1" height="1"><Fill color="#ffffffff" /></Rectangle>
+                </PartDraw>
+                <PartDraw x="0" y="0" width="1" height="1" tintColor="#ff8fc1ff">
+                    <Transform target="tintColor" value="extractColorFromColors([COMPLICATION.TEXT], false, 0.875)" />
+                    <Reference source="tintColor" name="c_ring3" defaultValue="#ff8fc1ff" />
+                    <Rectangle x="0" y="0" width="1" height="1"><Fill color="#ffffffff" /></Rectangle>
+                </PartDraw>
+            </Complication>
+        </ComplicationSlot>
+
+        <!-- the look's background (black when always-on) -->
+        <PartDraw x="0" y="0" width="450" height="450">
+            <Rectangle x="0" y="0" width="450" height="450">
+                <Fill color="#ff000000"><Transform target="color" value="[REFERENCE.c_bg]" /></Fill>
+            </Rectangle>
+            <Variant mode="AMBIENT" target="alpha" value="0" />
+        </PartDraw>
+
+
         <!-- the time -->
         <PartText x="0" y="48" width="450" height="112">
+            <Text align="CENTER">
+                <Font family="SYNC_TO_DEVICE" size="104" weight="LIGHT" color="#ffffffff"><Transform target="color" value="[REFERENCE.c_ink]" />
+                    <Template>%s:%s<Parameter expression="[HOUR_1_12]" /><Parameter expression="[MINUTE_Z]" /></Template>
+                </Font>
+            </Text>
+            <Variant mode="AMBIENT" target="alpha" value="0" />
+        </PartText>
+        <!-- the time, always-on: white on black -->
+        <PartText alpha="0" x="0" y="48" width="450" height="112">
             <Text align="CENTER">
                 <Font family="SYNC_TO_DEVICE" size="104" weight="LIGHT" color="#ffffffff">
                     <Template>%s:%s<Parameter expression="[HOUR_1_12]" /><Parameter expression="[MINUTE_Z]" /></Template>
                 </Font>
             </Text>
+            <Variant mode="AMBIENT" target="alpha" value="255" />
         </PartText>
 
         <!-- the date -->
         <PartText x="0" y="160" width="450" height="34">
+            <Text align="CENTER">
+                <Font family="SYNC_TO_DEVICE" size="24" color="#ffbdbdbd"><Transform target="color" value="[REFERENCE.c_ink2]" />
+                    <Template>%s %s %s<Parameter expression="[DAY_OF_WEEK_S]" /><Parameter expression="[MONTH_S]" /><Parameter expression="[DAY]" /></Template>
+                </Font>
+            </Text>
+            <Variant mode="AMBIENT" target="alpha" value="0" />
+        </PartText>
+        <!-- the date, always-on -->
+        <PartText alpha="0" x="0" y="160" width="450" height="34">
             <Text align="CENTER">
                 <Font family="SYNC_TO_DEVICE" size="24" color="#ffbdbdbd">
                     <Template>%s %s %s<Parameter expression="[DAY_OF_WEEK_S]" /><Parameter expression="[MONTH_S]" /><Parameter expression="[DAY]" /></Template>
@@ -44,13 +125,13 @@
             <Complication type="LONG_TEXT">
                 <PartDraw x="0" y="0" width="280" height="44">
                     <RoundRectangle x="0" y="0" width="280" height="44" cornerRadiusX="22" cornerRadiusY="22">
-                        <Fill color="#ff1c1c1c" />
+                        <Fill color="#ff1c1c1c"><Transform target="color" value="[REFERENCE.c_card]" /></Fill>
                     </RoundRectangle>
                     <Variant mode="AMBIENT" target="alpha" value="0" />
                 </PartDraw>
                 <PartText x="12" y="0" width="256" height="44">
                     <Text align="CENTER" ellipsis="TRUE">
-                        <Font family="SYNC_TO_DEVICE" size="22" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" color="#ffffffff"><Transform target="color" value="[REFERENCE.c_ink]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -60,7 +141,7 @@
             <Complication type="SHORT_TEXT">
                 <PartText x="0" y="0" width="280" height="44">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" color="#ffffffff"><Transform target="color" value="[REFERENCE.c_ink]" />
                             <Template>%s %s<Parameter expression="[COMPLICATION.TITLE]" /><Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -80,37 +161,21 @@
             <Complication type="RANGED_VALUE">
                 <PartDraw x="0" y="0" width="96" height="96">
                     <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                        <Stroke color="#ff2a2a2a" thickness="8" />
+                        <Stroke color="#ff2a2a2a" thickness="8"><Transform target="color" value="[REFERENCE.c_track]" /></Stroke>
                     </Arc>
                     <Variant mode="AMBIENT" target="alpha" value="0" />
                 </PartDraw>
-                <!-- the ring in the spot's own colour (the planner app sends the look's colour), else this face's -->
-                <Condition>
-                    <Expressions>
-                        <Expression name="ramp"><![CDATA[[COMPLICATION.RANGED_VALUE_COLORS] != null]]></Expression>
-                    </Expressions>
-                    <Compare expression="ramp">
-                        <PartDraw x="0" y="0" width="96" height="96">
-                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
-                                <WeightedStroke colors="[COMPLICATION.RANGED_VALUE_COLORS]" interpolate="[COMPLICATION.RANGED_VALUE_COLORS_INTERPOLATE]" thickness="8" cap="ROUND" />
-                            </Arc>
-                            <Variant mode="AMBIENT" target="alpha" value="0" />
-                        </PartDraw>
-                    </Compare>
-                    <Default>
-                        <PartDraw x="0" y="0" width="96" height="96">
-                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
-                                <Stroke color="#ffff9a4d" thickness="8" cap="ROUND" />
-                            </Arc>
-                            <Variant mode="AMBIENT" target="alpha" value="0" />
-                        </PartDraw>
-                    </Default>
-                </Condition>
+                <!-- the ring in the look's colour (Spots.kt ThemeSpot) -->
+                <PartDraw x="0" y="0" width="96" height="96">
+                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                        <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                        <Stroke color="#ffff9a4d" thickness="8" cap="ROUND"><Transform target="color" value="[REFERENCE.c_ring1]" /></Stroke>
+                    </Arc>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartDraw>
                 <PartText x="0" y="26" width="96" height="28">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff"><Transform target="color" value="[REFERENCE.c_ink]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -118,7 +183,7 @@
                 </PartText>
                 <PartText x="0" y="54" width="96" height="18">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="13" color="#ffbdbdbd">
+                        <Font family="SYNC_TO_DEVICE" size="13" color="#ffbdbdbd"><Transform target="color" value="[REFERENCE.c_ink2]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
                         </Font>
                     </Text>
@@ -128,7 +193,7 @@
             <Complication type="SHORT_TEXT">
                 <PartText x="0" y="26" width="96" height="44">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff"><Transform target="color" value="[REFERENCE.c_ink]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -147,37 +212,21 @@
             <Complication type="RANGED_VALUE">
                 <PartDraw x="0" y="0" width="96" height="96">
                     <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                        <Stroke color="#ff2a2a2a" thickness="8" />
+                        <Stroke color="#ff2a2a2a" thickness="8"><Transform target="color" value="[REFERENCE.c_track]" /></Stroke>
                     </Arc>
                     <Variant mode="AMBIENT" target="alpha" value="0" />
                 </PartDraw>
-                <!-- the ring in the spot's own colour (the planner app sends the look's colour), else this face's -->
-                <Condition>
-                    <Expressions>
-                        <Expression name="ramp"><![CDATA[[COMPLICATION.RANGED_VALUE_COLORS] != null]]></Expression>
-                    </Expressions>
-                    <Compare expression="ramp">
-                        <PartDraw x="0" y="0" width="96" height="96">
-                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
-                                <WeightedStroke colors="[COMPLICATION.RANGED_VALUE_COLORS]" interpolate="[COMPLICATION.RANGED_VALUE_COLORS_INTERPOLATE]" thickness="8" cap="ROUND" />
-                            </Arc>
-                            <Variant mode="AMBIENT" target="alpha" value="0" />
-                        </PartDraw>
-                    </Compare>
-                    <Default>
-                        <PartDraw x="0" y="0" width="96" height="96">
-                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
-                                <Stroke color="#ff7ee0a8" thickness="8" cap="ROUND" />
-                            </Arc>
-                            <Variant mode="AMBIENT" target="alpha" value="0" />
-                        </PartDraw>
-                    </Default>
-                </Condition>
+                <!-- the ring in the look's colour (Spots.kt ThemeSpot) -->
+                <PartDraw x="0" y="0" width="96" height="96">
+                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                        <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                        <Stroke color="#ff7ee0a8" thickness="8" cap="ROUND"><Transform target="color" value="[REFERENCE.c_ring2]" /></Stroke>
+                    </Arc>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartDraw>
                 <PartText x="0" y="26" width="96" height="28">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff"><Transform target="color" value="[REFERENCE.c_ink]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -185,7 +234,7 @@
                 </PartText>
                 <PartText x="0" y="54" width="96" height="18">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="13" color="#ffbdbdbd">
+                        <Font family="SYNC_TO_DEVICE" size="13" color="#ffbdbdbd"><Transform target="color" value="[REFERENCE.c_ink2]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
                         </Font>
                     </Text>
@@ -195,7 +244,7 @@
             <Complication type="SHORT_TEXT">
                 <PartText x="0" y="26" width="96" height="44">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff"><Transform target="color" value="[REFERENCE.c_ink]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -214,37 +263,21 @@
             <Complication type="RANGED_VALUE">
                 <PartDraw x="0" y="0" width="96" height="96">
                     <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                        <Stroke color="#ff2a2a2a" thickness="8" />
+                        <Stroke color="#ff2a2a2a" thickness="8"><Transform target="color" value="[REFERENCE.c_track]" /></Stroke>
                     </Arc>
                     <Variant mode="AMBIENT" target="alpha" value="0" />
                 </PartDraw>
-                <!-- the ring in the spot's own colour (the planner app sends the look's colour), else this face's -->
-                <Condition>
-                    <Expressions>
-                        <Expression name="ramp"><![CDATA[[COMPLICATION.RANGED_VALUE_COLORS] != null]]></Expression>
-                    </Expressions>
-                    <Compare expression="ramp">
-                        <PartDraw x="0" y="0" width="96" height="96">
-                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
-                                <WeightedStroke colors="[COMPLICATION.RANGED_VALUE_COLORS]" interpolate="[COMPLICATION.RANGED_VALUE_COLORS_INTERPOLATE]" thickness="8" cap="ROUND" />
-                            </Arc>
-                            <Variant mode="AMBIENT" target="alpha" value="0" />
-                        </PartDraw>
-                    </Compare>
-                    <Default>
-                        <PartDraw x="0" y="0" width="96" height="96">
-                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
-                                <Stroke color="#ff8fc1ff" thickness="8" cap="ROUND" />
-                            </Arc>
-                            <Variant mode="AMBIENT" target="alpha" value="0" />
-                        </PartDraw>
-                    </Default>
-                </Condition>
+                <!-- the ring in the look's colour (Spots.kt ThemeSpot) -->
+                <PartDraw x="0" y="0" width="96" height="96">
+                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                        <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                        <Stroke color="#ff8fc1ff" thickness="8" cap="ROUND"><Transform target="color" value="[REFERENCE.c_ring3]" /></Stroke>
+                    </Arc>
+                    <Variant mode="AMBIENT" target="alpha" value="0" />
+                </PartDraw>
                 <PartText x="0" y="26" width="96" height="28">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff"><Transform target="color" value="[REFERENCE.c_ink]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -252,7 +285,7 @@
                 </PartText>
                 <PartText x="0" y="54" width="96" height="18">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="13" color="#ffbdbdbd">
+                        <Font family="SYNC_TO_DEVICE" size="13" color="#ffbdbdbd"><Transform target="color" value="[REFERENCE.c_ink2]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
                         </Font>
                     </Text>
@@ -262,7 +295,7 @@
             <Complication type="SHORT_TEXT">
                 <PartText x="0" y="26" width="96" height="44">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff"><Transform target="color" value="[REFERENCE.c_ink]" />
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>

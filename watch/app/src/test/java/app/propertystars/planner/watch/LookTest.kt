@@ -70,4 +70,19 @@ class LookTest {
         assertEquals(Look.PALETTES.getValue("own-night"), Look.paletteFor("own", "night"))
         assertEquals(Look.PALETTES.getValue("woodland"), Look.paletteFor("woodland", "night"))
     }
+
+    @Test
+    fun theFaceGetsNineColoursAndEveryRingShowsOnItsBackground() {
+        for ((id, p) in Look.FACE_PALETTES) {
+            val cs = LookMath.faceColors(p)
+            assertEquals(id, 9, cs.size)
+            assertEquals(id, p.bg or (0xFF shl 24), cs[0])
+            for (ring in 5..7) assertTrue("$id ring $ring", LookMath.contrast(cs[ring], p.bg) >= 3.0)
+            // the list the face reads: nine "#rrggbb", spaces between
+            val list = LookMath.colorList(cs)
+            assertTrue(list, Regex("^(#[0-9a-f]{6} ){8}#[0-9a-f]{6}$").matches(list))
+        }
+        assertEquals(23, Look.FACE_PALETTES.size)
+        assertEquals("#101c3a", LookMath.colorList(LookMath.faceColors(Look.FACE_PALETTES["own-night"]!!)).substringBefore(' '))
+    }
 }
