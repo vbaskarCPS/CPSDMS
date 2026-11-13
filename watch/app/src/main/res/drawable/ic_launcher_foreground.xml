@@ -1,6 +1,32 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <!-- a four-point sparkle in the planner's orange -->
-    <path android:fillColor="#FF9A4D"
-        android:pathData="M54,26 C56,44 64,52 82,54 C64,56 56,64 54,82 C52,64 44,56 26,54 C44,52 52,44 54,26 Z" />
+    <!-- The planner's mark: RV with a sparkle (src/planner/ui/RvMark.tsx, viewBox 5 0 90 84), in gold, inside a gold
+         bevelled ring like the RV button on the phone. Kept inside the middle 72 of 108 so a round mask never cuts it. -->
+    <path android:pathData="M54,22 A32,32 0 1,1 53.99,22 Z M54,26.5 A27.5,27.5 0 1,0 54.01,26.5 Z" android:fillType="evenOdd">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="32" android:startY="24" android:endX="76" android:endY="84">
+                <item android:offset="0" android:color="#FFFFF1C1" />
+                <item android:offset="0.45" android:color="#FFE7B04B" />
+                <item android:offset="1" android:color="#FF8A5A12" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <group android:translateX="34" android:translateY="37.2" android:scaleX="0.4" android:scaleY="0.4">
+        <group android:translateX="2" android:translateY="22" android:scaleX="0.8" android:scaleY="0.8">
+            <group android:translateX="-44">
+                <path android:fillColor="#FFF3C46A" android:fillType="evenOdd"
+                    android:pathData="M53,74 V24 H72 C83,24 89,30 89,39.5 C89,46.5 85.6,51.2 79.8,53.4 L91,74 H76.5 L67.5,55.5 H66 V74 Z M66,35 V45.5 H70.5 C74.2,45.5 76,43.6 76,40.2 C76,36.8 74.2,35 70.5,35 Z" />
+            </group>
+            <group android:translateX="38">
+                <path android:fillColor="#FFF3C46A" android:pathData="M9,24 H24 L34,56 L44,24 H58 L41,74 H26 Z" />
+            </group>
+        </group>
+        <group android:translateX="1" android:translateY="-2">
+            <path android:fillColor="#FFF3C46A" android:pathData="M72,4 C73.8,16.5 78.5,21.2 91,23 C78.5,24.8 73.8,29.5 72,42 C70.2,29.5 65.5,24.8 53,23 C65.5,21.2 70.2,16.5 72,4 Z" />
+        </group>
+        <group android:translateX="-4" android:translateY="-1">
+            <path android:fillColor="#FFF3C46A" android:pathData="M44,8 C44.8,13.4 46.6,15.2 52,16 C46.6,16.8 44.8,18.6 44,24 C43.2,18.6 41.4,16.8 36,16 C41.4,15.2 43.2,13.4 44,8 Z" />
+        </group>
+    </group>
 </vector>
