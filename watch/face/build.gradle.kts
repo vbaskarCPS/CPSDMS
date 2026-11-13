@@ -1,5 +1,6 @@
 // The planner's own watch face, in Watch Face Format (no code: the watch draws it from res/raw/watchface.xml).
 // Its rings and its "next" line are the planner app's spots (app/…/Spots.kt), so install the app as well.
+// Set up as Google's own Watch Face Format samples are (github.com/android/wear-os-samples, WatchFaceFormat).
 plugins {
     id("com.android.application")
 }
@@ -10,14 +11,29 @@ android {
 
     defaultConfig {
         applicationId = "app.propertystars.planner.watch.face"
-        minSdk = 33
+        minSdk = 34              // the face is Watch Face Format 4, which needs Wear OS 6 (API 36); 34 kept as compileSdk is 35
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
     }
     buildTypes {
+        // A Watch Face Format package must hold no code, yet even with none of ours a build puts a classes.dex in
+        // (the R class): likely why the watch wouldn't apply the face. Shrinking takes it out, as Google's samples do
+        // for both builds ("Adds minifyEnabled to debug builds to exclude Dex files"). Resources
+        // are never shrunk: the watch looks them up by name from watchface.xml.
+        // Android Studio switches shrinking off for any build it can debug ("BuildType 'debug' is both debuggable and
+        // has 'isMinifyEnabled' set to true", 13 Nov), which would leave the classes.dex in. A watch face has nothing
+        // to debug, so its debug build is made not debuggable: then it is shrunk and the dex goes, and ▶ still
+        // installs it as before.
+        debug {
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = false
+        }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = false
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 }

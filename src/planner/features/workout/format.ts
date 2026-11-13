@@ -3,7 +3,7 @@
 // an exercise gets (weight × reps, reps only, left / right, a timer, a timer per side). No React, no network.
 // Sessions made before formats existed carry none of the flags, so sides / no-weight are also worked out from the
 // exercise's name and its written target ("8 per side", "5 each direction").
-import { fmtSec, isUnilateral, type Exercise, type Format, type GroupKind, type SetLog, type SetMode } from './types';
+import { fmtSec, isUnilateral, type Exercise, type Format, type GroupKind, type SetHr, type SetLog, type SetMode } from './types';
 import type { PlanExercise } from '../../lib/ai';
 
 /** The bits of a template or session exercise these helpers read. */
@@ -175,4 +175,16 @@ export function sessionLines(exercises: Fx[], libOf: (id?: string) => Exercise |
     for (const i of b.at) { const e = exercises[i]; out.push(`    ${e.name}: ${b.kind === 'emom' || b.kind === 'amrap' ? (e.mode === 'time' ? fmtSec(e.targetSec || 30) : `${e.targetReps} reps${hasSides(e, libOf(e.exerciseId)) && !SIDES.test(e.targetReps || '') ? ' per side' : ''}`) : targetLine(e, libOf(e.exerciseId))}`); }
   }
   return out.length > max ? [...out.slice(0, max), `  …and ${out.length - max} more lines`] : out;
+}
+
+/** The watch's heart rate on a done set, short: "♥ 142 / 156 · −28" (average / peak · how far it fell in the rest
+ *  after), and the same in words for a screen reader. Null when the set has none. */
+export function hrLine(hr?: SetHr | null): { text: string; words: string } | null {
+  if (!hr || !(hr.avg > 0) || !(hr.max > 0)) return null;
+  const avg = Math.round(hr.avg), max = Math.round(hr.max);
+  const rec = typeof hr.rec === 'number' && hr.rec >= 0 ? Math.round(hr.rec) : null;
+  return {
+    text: `♥ ${avg} / ${max}${rec !== null ? ` · −${rec}` : ''}`,
+    words: `Heart rate ${avg} average, ${max} at the top${rec !== null ? `, down ${rec} in the rest after` : ''}`,
+  };
 }

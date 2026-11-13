@@ -5,13 +5,11 @@
 //    from the results the phone keeps ('race' / <widget id>~<day>). A race started and stopped by hand stays on the phone.
 //  · Sauna: Start writes the start on the day (night.saunaStart); when its minutes are up it's ticked (ticks.sauna) with
 //    the habits set to tick with it, the same as the phone does.
+//  · Habits that tick with these follow their rules (Today.kt HabitRules, from features/habits/rules.ts).
 package app.propertystars.planner.watch
 
 import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
-import java.util.Locale
 
 data class RaceNow(val title: String, val startMs: Long?, val finishMs: Long?, val bestMs: Long?)
 data class SaunaNow(val minutes: Int, val startMs: Long?, val done: String?)
@@ -19,40 +17,14 @@ data class TimersNow(val up: String?, val race: RaceNow?, val sauna: SaunaNow?)
 
 class Timers(private val planner: Planner) {
 
-    private fun ms(iso: String?): Long? {
-        if (iso.isNullOrEmpty() || !Regex("^\\d{4}-\\d{2}-\\d{2}T").containsMatchIn(iso)) return null
-        for (f in listOf("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", "yyyy-MM-dd'T'HH:mm:ssXXX", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", "yyyy-MM-dd'T'HH:mm:ss'Z'")) {
-            try {
-                val p = SimpleDateFormat(f, Locale.US)
-                if (f.endsWith("'Z'")) p.timeZone = java.util.TimeZone.getTimeZone("UTC")
-                return p.parse(iso)?.time
-            } catch (_: Exception) { }
-        }
-        return null
-    }
+    private fun ms(iso: String?): Long? = HabitRules.ms(iso)
+    private fun upMs(day: String, ticks: JSONObject?): Long? = HabitRules.upMs(day, ticks)
 
-    /** A planner day's 'HH:MM' as a moment (before 4 am = the small hours after that date). */
-    private fun momentOf(day: String, hm: String?): Long? {
-        if (hm == null || !Regex("^([01]\\d|2[0-3]):[0-5]\\d$").matches(hm)) return null
-        val d = SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(day) ?: return null
-        val c = Calendar.getInstance().apply { time = d }
-        val h = hm.substring(0, 2).toInt()
-        if (h < 4) c.add(Calendar.DAY_OF_MONTH, 1)
-        c.set(Calendar.HOUR_OF_DAY, h); c.set(Calendar.MINUTE, hm.substring(3).toInt()); c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
-        return c.timeInMillis
-    }
-
-    private fun upMs(day: String, ticks: JSONObject?): Long? {
-        val at = ms(ticks?.optString("upAt"))
-        if (at != null && Planner.dayKey(Date(at)) == day) return at
-        return momentOf(day, ticks?.optString("up"))
-    }
-
-    /** Started within 30 minutes of I'm up (habits/auto.ts GYM_START_WITHIN_MIN)? No Up that day: no. */
-    fun startedInTime(day: String, ticks: JSONObject?, startMs: Long): Boolean {
-        val up = upMs(day, ticks) ?: return false
-        return startMs >= up && startMs - up <= 30 * 60_000L
-    }
+    /** Started in time for Start workout's own rule: within 30 minutes of I'm up (habits/auto.ts startedInTime, the
+     *  same check every habit rule goes through). No Up that day: no. A habit that sets its own rules ("by 6:00",
+     *  "within 45 minutes") is judged by those in Today.markAuto("gymStart", startMs), which is the call that ticks. */
+    fun startedInTime(day: String, ticks: JSONObject?, startMs: Long): Boolean =
+        HabitRules.countsFor(HabitRules.TRIGGER_RULES.getValue("gymStart"), day, startMs, upMs(day, ticks))
 
     private fun finishMs(kind: String, workouts: List<JSONObject>, from: Long): Long? {
         var best: Long? = null
@@ -126,10 +98,11 @@ class Timers(private val planner: Planner) {
         val d = planner.doc("day", day) ?: JSONObject()
         val ticks = d.optJSONObject("ticks") ?: JSONObject()
         if (ticks.optString("up").isNotEmpty()) return
+        val at = System.currentTimeMillis()
         ticks.put("up", Planner.hhmmNow()).put("upAt", Planner.isoNow())
         d.put("ticks", ticks)
         planner.put("day", day, d)
-        Today(planner).markAuto("wake")
+        Today(planner).markAuto("wake", at, at)       // as auto.ts markWake: the moment is the Up itself
     }
 
     suspend fun startSauna() {
@@ -141,5 +114,7 @@ class Timers(private val planner: Planner) {
         planner.put("day", day, d)
     }
 
-    suspend fun saunaDone() = Today(planner).tickBlock("sauna")
+    /** The sauna is ticked. `at` = when it ended, for the habits' rules: the end of its minutes when it ran out (even if
+     *  the watch only noticed later, as the phone does), else now ("Out"). */
+    suspend fun saunaDone(at: Long = System.currentTimeMillis()) = Today(planner).tickBlock("sauna", "sauna", at)
 }

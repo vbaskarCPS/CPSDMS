@@ -6,7 +6,7 @@ import { dayKey, getDocs } from './docs';
 import { adjustWords, blocks, cleanAdjust, loadRoutine } from './routine';
 import { memoryContext } from './memory';
 import { eventsOn, type CalEvent } from '../features/calendar/types';
-import { trainingState, type MealLite } from '../features/workout/trainingState';
+import { hrShort, sessionEffort, trainingState, type MealLite } from '../features/workout/trainingState';
 import { LIBRARY } from '../features/workout/library';
 import type { Exercise, Workout } from '../features/workout/types';
 
@@ -52,11 +52,12 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
   for (const h of activeHabits) habitNames[h.id] = h.name;
 
   const ws = workouts.map(d => d.data).filter(w => w && w.endedAt && !w.discarded).sort((a, b) => (b.startedAt > a.startedAt ? 1 : -1));
-  const fmtSet = (s: AnyDoc) => (s.seconds && !s.reps ? `${s.seconds}s` : `${s.weight}x${s.reps}${s.repsR !== undefined ? `/${s.repsR}` : ''}${s.rpe ? `@${s.rpe}` : ''}`);
+  // a set: 135x8@8, then the watch's heart rate when it was on (hr avg/peak, rec = how far it fell in the rest after)
+  const fmtSet = (s: AnyDoc) => `${s.seconds && !s.reps ? `${s.seconds}s` : `${s.weight}x${s.reps}${s.repsR !== undefined ? `/${s.repsR}` : ''}${s.rpe ? `@${s.rpe}` : ''}`}${hrShort(s.hr)}`;
   const sessions = ws.map((w, i) => i < fullSessions
     ? { date: w.date, name: w.name, minutes: w.endedAt ? Math.round((new Date(w.endedAt).getTime() - new Date(w.startedAt).getTime()) / 60000) : undefined, notes: w.notes || undefined, prs: w.prs?.length ? w.prs : undefined,
         coach_review: w.review || undefined, next_prescription: w.next || undefined,
-        formats: formatsOf(w.exercises || []),
+        formats: formatsOf(w.exercises || []), effort: sessionEffort(w as Workout),
         exercises: (w.exercises || []).map((e: AnyDoc) => ({ name: e.name, ...(e.group ? { block: `${e.groupKind || 'superset'} ${e.group}` } : {}), ...(e.style ? { style: e.style } : {}), ...(/assist|counter[- ]?weight/i.test(e.name || '') ? { weight_means: 'assistance (counterweight): less is harder, progress = less assist' } : {}), target: e.targetReps, rest: e.restSec, sets: (e.sets || []).filter((s: AnyDoc) => s.done).map(fmtSet), my_note: e.comment || undefined, plan_cue: e.note || undefined })) }
     : { date: w.date, name: w.name, exercises: (w.exercises || []).map((e: AnyDoc) => `${e.name}: ${(e.sets || []).filter((s: AnyDoc) => s.done).map(fmtSet).join(', ')}${e.comment ? ` ("${e.comment}")` : ''}`) });
   const inProgress = workouts.map(d => d.data).find(w => w && !w.endedAt && !w.discarded);
@@ -89,7 +90,7 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
     meals_recent: meals.map(d => d.data).filter(Boolean).map((m: AnyDoc) => ({ date: m.date, time: m.time, name: m.name, kcal: m.totals?.kcal, protein: m.totals?.protein, note: m.note || undefined })),
     calendar_next_14_days: (() => { const evs = events.map(d => d.data as CalEvent).filter(e => e && e.title); const out: Record<string, string[]> = {}; for (let i = 0; i < 14; i++) { const date = calDate(i); const on = eventsOn(evs, date); if (on.length) out[date] = on.map(e => `${e.time ? e.time + ' ' : 'all day: '}${e.title} (${e.who})`); } return out; })(),
     workout_templates: templates.map(d => d.data).filter(t => t && !t.archived).map((t: AnyDoc) => ({ name: t.name, days: t.days, planned_for_date: t.plannedFor, focus: t.focus, minutes: t.minutes, formats: formatsOf(t.exercises || []), exercises: (t.exercises || []).map((e: AnyDoc) => `${e.group ? `[${e.groupKind || 'superset'} ${e.group}] ` : ''}${e.name} ${e.style && e.repsBySet ? `${e.style} ${e.repsBySet.join('-')}` : `${e.targetSets}x${e.targetReps || e.targetSec + 's'}`}${e.style === 'intervals' ? ` intervals, rest ${e.restSec}s` : ''}`) })),
-    workout_in_progress: inProgress ? { name: inProgress.name, started: inProgress.startedAt, exercises: (inProgress.exercises || []).map((e: AnyDoc) => ({ name: e.name, sets: (e.sets || []).map((s: AnyDoc) => `${fmtSet(s)}${s.done ? '' : ' (not done)'}`), my_note: e.comment || undefined })) } : undefined,
+    workout_in_progress: inProgress ? { name: inProgress.name, started: inProgress.startedAt, effort: sessionEffort(inProgress as Workout), exercises: (inProgress.exercises || []).map((e: AnyDoc) => ({ name: e.name, sets: (e.sets || []).map((s: AnyDoc) => `${fmtSet(s)}${s.done ? '' : ' (not done)'}`), my_note: e.comment || undefined })) } : undefined,
     training_state,
     workouts_recent_full_then_condensed: sessions,
     watch_health_recent: health.length ? health.map(d => ({ date: d.key, steps: d.data?.steps, resting_hr: d.data?.restingHr })) : undefined,

@@ -36,6 +36,8 @@ object Health {
             HealthServices.getClient(ctx.applicationContext).passiveMonitoringClient
                 .setPassiveListenerServiceAsync(HealthListener::class.java, config)
         } catch (_: Exception) { /* no sensor permission yet: asked for when the app opens */ }
+        // send what the watch has counted so far now, rather than at its next batch (which can be many minutes away)
+        try { HealthServices.getClient(ctx.applicationContext).passiveMonitoringClient.flushAsync() } catch (_: Exception) { }
     }
 
     fun stepsToday(ctx: Context): Int {

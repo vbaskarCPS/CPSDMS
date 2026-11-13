@@ -1,4 +1,8 @@
 [
+  { "id": "2026-11-13-watch-sets", "date": "2026-11-13", "title": "The watch follows your session", "for": "night",
+    "lines": ["Supersets, circuits, pyramids, timed holds, EMOM and AMRAP run in order on the watch.", "See what’s next while you rest, and rate each set 7 to 10.", "A set ticked on the watch shows on the phone in a couple of seconds, and a rest started on either counts down on both.", "Heart rate and recovery are saved on every set, and Arvy uses them to judge rest times and next weights."] },
+  { "id": "2026-11-13-watch-look", "date": "2026-11-13", "title": "Your watch wears your look", "for": "night",
+    "lines": ["The watch uses the colours of the look you picked in Theme Studio, and its icon is the RV sparkle.", "The Planner watch face goes on now and wears your look too: its background, time, words and rings follow the look you pick on the phone (black with a white time when the screen dims).", "Habits that tick themselves from the watch follow the same rules as on the phone."] },
   { "id": "2026-11-13-slot-something-else", "date": "2026-11-13", "title": "“Ate something else” ticks the slot",
     "lines": ["On Today’s protein road, “Ate something else” now ticks that shake or meal once you log what you had, and brings you back to Today.", "If it’s already in your log and you tap “Don’t add”, that one counts for the slot."] },
   { "id": "2026-11-12-watch-health", "date": "2026-11-12", "title": "Your watch's steps reach the assistant", "for": "night",
