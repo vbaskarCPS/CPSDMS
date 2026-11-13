@@ -25,7 +25,7 @@ export async function loadWalk(center: WalkCenter, date: string): Promise<WalkSt
   const last = await lastSettings(center.id, service);
   const roadTrip = type === 'road_trip';
   return {
-    step: firstStep(roadTrip), date, roadTrip,
+    step: firstStep(roadTrip), date, roadTrip, centerId: center.id,
     managers: managers.map(m => ({ id: m.id, name: m.full_name })), groups: [], maps: {},
     areas: areas.map(a => a.name), recent: last?.maps || [],
     crew: roster.map(r => ({ rowId: r.id, hireId: r.hire_id, name: fullName(r.hire.person), here: roadTrip ? !!r.confirmed_at : (r.attendance ?? 'showed') === 'showed' }))

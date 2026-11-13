@@ -37,6 +37,7 @@ import { BookingEmails } from './features/bookings/BookingEmails';
 import { EmailTemplates } from './features/bookings/EmailTemplates';
 import { MyAccount } from './features/account/MyAccount';
 import { NotificationsPage } from './features/account/NotifyPanel';
+import { DraftPage } from './features/benny/DraftPage';
 import { Zones } from './features/mainstreet/Zones';
 import { Campaigns } from './features/mainstreet/Campaigns';
 import { Reps, Dashboard as MsDashboard } from './features/mainstreet/Reps';
@@ -148,6 +149,7 @@ const V2Routes: React.FC = () => (
     <Route path="mainstreet/inbox" element={<Guard perm="mainstreet_admin"><div className="v2-ms-mail"><MailApp admin /></div></Guard>} />
     <Route path="account" element={<Guard><MyAccount /></Guard>} />
     <Route path="account/notifications" element={<Guard><NotificationsPage /></Guard>} />
+    <Route path="draft/:id" element={<Guard><DraftPage /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />
   </Routes>
 );

@@ -5,8 +5,11 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import { loadWalk, saveRollCall } from '../../lib/bennyWalkLoad';
+import { ManagerBoard } from './ManagerBoard';
+import { DraftCard } from './DraftCard';
+import { draftCrews, draftStart } from '../../lib/bennyDraft';
 import {
-  dealRandom, groupKey, groupName, joinGroups, mapChoices, moneyLine, nextStep, splitGroup, toggleOut, walkAsk,
+  dealRandom, groupKey, groupName, mapChoices, moneyLine, nextStep, walkAsk,
   type CartWay, type CrewWay, type WalkState,
 } from '../../lib/bennyWalk';
 
@@ -22,7 +25,6 @@ export const StartWalk: React.FC<{
   onChange: (s: WalkState) => void;
   onAsk: (text: string, money: { productCostPercent: number; noTaxOnCash: boolean; line: string }) => void;
 }> = ({ state: s, done, busy, onChange, onAsk }) => {
-  const [pick, setPick] = useState<string | null>(null);
   const [find, setFind] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -30,9 +32,15 @@ export const StartWalk: React.FC<{
   useEffect(() => { setErr(null); }, [s.step]);
   const go = (patch: Partial<WalkState>) => { const n = { ...s, ...patch }; onChange({ ...n, step: nextStep(n) }); };
   const here = (s.crew || []).filter(w => w.here);
-  const name = (id: string) => s.managers.find(m => m.id === id)?.name || '?';
   if (done) return null;
 
+  const money = () => ({ productCostPercent: s.money!.productCostPercent, noTaxOnCash: s.money!.noTaxOnCash, line: moneyLine(s.money!) });
+  const startDraft = async () => {
+    if (!s.centerId) return;
+    setSaving(true); setErr(null);
+    try { const d = await draftStart(s.centerId, s.date, s.groups, s.rules); onChange({ ...s, draft: d.id, step: 'draft' }); }
+    catch (e) { setErr(e instanceof Error ? e.message : 'The draft didn’t start'); } finally { setSaving(false); }
+  };
   const saveRoll = async () => {
     setSaving(true); setErr(null);
     try {
@@ -71,24 +79,9 @@ export const StartWalk: React.FC<{
       }
       case 'who': return <>
         <b>{s.roadTrip ? '2' : '1'} · Who’s going out?</b>
-        <p>Tap the managers going out. Then, to put two together as one team, tap one and then the other.</p>
-        <div className="benny-opts">
-          {s.managers.map(m => <Opt key={m.id} on={s.groups.some(g => g.includes(m.id))} onClick={() => { setPick(null); onChange({ ...s, groups: toggleOut(s.groups, m.id) }); }}>{m.name}</Opt>)}
-          {!s.managers.length && <span className="benny-mut">Nobody can manage on {pretty(s.date)}: no route managers at this center, or they’re all off.</span>}
-        </div>
-        {s.groups.length > 1 && <div className="benny-teams">
-          {s.groups.map(g => (
-            <div key={groupKey(g)} className={`benny-team${g.some(id => id === pick) ? ' pick' : ''}`}>
-              <button type="button" className="benny-team-n" onClick={() => {
-                if (!pick) setPick(g[0]);
-                else if (g.includes(pick)) setPick(null);
-                else { onChange({ ...s, groups: joinGroups(s.groups, pick, g[0]) }); setPick(null); }
-              }}>{groupName(g, s.managers)}{pick && !g.includes(pick) ? <span className="benny-mut"> · tap to join {name(pick).split(' ')[0]}</span> : null}</button>
-              {g.length > 1 && <button type="button" className="benny-link" onClick={() => onChange({ ...s, groups: splitGroup(s.groups, g) })}>Split</button>}
-            </div>))}
-        </div>}
-        {s.groups.length === 1 && s.groups[0].length > 1 && <div className="benny-teams"><div className="benny-team"><span className="benny-team-n">{groupName(s.groups[0], s.managers)} together</span>
-          <button type="button" className="benny-link" onClick={() => onChange({ ...s, groups: splitGroup(s.groups, s.groups[0]) })}>Split</button></div></div>}
+        {s.managers.length
+          ? <ManagerBoard managers={s.managers} groups={s.groups} onChange={groups => onChange({ ...s, groups })} />
+          : <span className="benny-mut">Nobody can manage on {pretty(s.date)}: no route managers at this center, or they’re all off.</span>}
         <div className="benny-card-b"><button type="button" className="benny-go" disabled={!s.groups.length} onClick={() => go({})}>
           {s.groups.length ? `Next: ${s.groups.length === 1 ? 'one team' : `${s.groups.length} teams`}` : 'Pick who’s going out'}</button></div>
       </>;
@@ -115,7 +108,8 @@ export const StartWalk: React.FC<{
         return <>
           <b>Crews: who goes with whom?</b>
           <div className="benny-opts">{ways.map(([w, l]) => <Opt key={w} on={s.crews === w} onClick={() => onChange({ ...s, crews: w })}>{l}</Opt>)}
-            <Opt disabled onClick={() => undefined}>Live draft (coming next)</Opt></div>
+            <Opt on={s.crews === 'draft'} onClick={() => onChange({ ...s, crews: 'draft' })}>Live draft (each picks on their phone)</Opt></div>
+          {s.crews === 'draft' && <span className="benny-mut">A coin toss says who picks first, then it snakes. Whoever’s turn it is gets a notification; you can pick for anyone.</span>}
           <label className="benny-sub" htmlFor="benny-walk-rules">Anything to keep in mind? (optional)</label>
           <input id="benny-walk-rules" className="benny-walk-in" value={s.rules || ''} placeholder="e.g. don’t give Franklyn Kyle or David" onChange={e => onChange({ ...s, rules: e.target.value })} />
           <div className="benny-card-b"><button type="button" className="benny-go" disabled={!s.crews} onClick={() => go({})}>Next</button></div>
@@ -151,10 +145,13 @@ export const StartWalk: React.FC<{
           <b>Ready</b>
           <p>{s.groups.map(g => `${groupName(g, s.managers)}: ${(s.maps[groupKey(g)] || []).join(', ')}`).join('\n')}</p>
           <div className="benny-card-b">
-            <button type="button" className="benny-go" disabled={busy} onClick={() => onAsk(walkAsk(s, random), { productCostPercent: s.money!.productCostPercent, noTaxOnCash: s.money!.noTaxOnCash, line: moneyLine(s.money!) })}>Make the Start the day card</button>
+            {s.crews === 'draft'
+              ? <button type="button" className="benny-go" disabled={busy || saving} onClick={() => void startDraft()}>{saving ? <Loader2 size={15} className="spin" /> : 'Start the live draft'}</button>
+              : <button type="button" className="benny-go" disabled={busy} onClick={() => onAsk(walkAsk(s, random), money())}>Make the Start the day card</button>}
           </div>
         </>;
       }
+      case 'draft': return s.draft ? <DraftCard id={s.draft} onDone={d => onAsk(walkAsk(s, draftCrews(d)), money())} /> : null;
       default: return null;
     }
   })();
