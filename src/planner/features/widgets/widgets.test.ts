@@ -18,8 +18,8 @@ const week: Added = { id: 'x-week1', kind: 'habitweek' };
 
 describe('Today before anyone arranges it', () => {
   it('is in the order it has always been: Vijay’s without the cycle card, Rosh’s with it', () => {
-    expect(defaultOrder('night')).toEqual(['streaks', 'plan', 'calendar', 'shop', 'habits', 'train', 'food', 'money']);
-    expect(defaultOrder('morning')).toEqual(['streaks', 'plan', 'calendar', 'shop', 'cycle', 'habits', 'train', 'food', 'money']);
+    expect(defaultOrder('night')).toEqual(['streaks', 'plan', 'calendar', 'shop', 'habits', 'train', 'food', 'money', 'steps']);
+    expect(defaultOrder('morning')).toEqual(['streaks', 'plan', 'calendar', 'shop', 'cycle', 'habits', 'train', 'food', 'money', 'steps']);
     expect(order(EMPTY, 'night')).toEqual(defaultOrder('night'));
     expect(order(EMPTY, 'morning')).toEqual(defaultOrder('morning'));
   });
@@ -45,22 +45,22 @@ describe('Today before anyone arranges it', () => {
 describe('a saved order', () => {
   it('is followed', () => {
     const p = saved({ order: ['plan', 'streaks', 'money', 'calendar', 'shop', 'habits', 'train', 'food'] });
-    expect(order(p)).toEqual(['plan', 'streaks', 'money', 'calendar', 'shop', 'habits', 'train', 'food']);
+    expect(order(p)).toEqual(['plan', 'streaks', 'money', 'steps', 'calendar', 'shop', 'habits', 'train', 'food']);
   });
   it('a block it doesn’t mention still shows, at its usual place: after the block that comes before it on the original page', () => {
     // saved before "shop" and "train" existed
-    expect(order(saved({ order: ['money', 'plan', 'calendar', 'streaks', 'habits', 'food'] }))).toEqual(['money', 'plan', 'calendar', 'shop', 'streaks', 'habits', 'train', 'food']);
+    expect(order(saved({ order: ['money', 'plan', 'calendar', 'streaks', 'habits', 'food'] }))).toEqual(['money', 'steps', 'plan', 'calendar', 'shop', 'streaks', 'habits', 'train', 'food']);
     // the first block on the page is the one missing: it goes in front of the one that follows it
     expect(order(saved({ order: ['plan', 'calendar', 'shop', 'habits', 'train', 'food', 'money'] }))).toEqual(defaultOrder('night'));
-    expect(order(saved({ order: ['money', 'food', 'plan'] })).slice(0, 4)).toEqual(['money', 'food', 'streaks', 'plan']);
+    expect(order(saved({ order: ['money', 'food', 'plan'] })).slice(0, 5)).toEqual(['money', 'steps', 'food', 'streaks', 'plan']);
     // with most of the page missing, each still follows the one before it
-    expect(order(saved({ order: ['calendar', 'plan'] }))).toEqual(['calendar', 'shop', 'habits', 'train', 'food', 'money', 'streaks', 'plan']);
+    expect(order(saved({ order: ['calendar', 'plan'] }))).toEqual(['calendar', 'shop', 'habits', 'train', 'food', 'money', 'steps', 'streaks', 'plan']);
     // a new block always shows, even for someone who switched others off
     expect(arrange(saved({ order: ['plan'], off: ['streaks', 'calendar'] }), 'night').find(i => i.id === 'shop')?.on).toBe(true);
   });
   it('entries it doesn’t know are passed over, and one named twice counts once', () => {
     const p = saved({ order: ['food', 'weather', 'plan', 'food', 'x-gone', 'plan', 'streaks'] });
-    expect(order(p)).toEqual(['food', 'money', 'plan', 'calendar', 'shop', 'habits', 'train', 'streaks']);
+    expect(order(p)).toEqual(['food', 'money', 'steps', 'plan', 'calendar', 'shop', 'habits', 'train', 'streaks']);
     expect(new Set(order(p)).size).toBe(order(p).length);
   });
   it('Rosh’s cycle card has no place on Vijay’s page, and comes back at its usual place on hers', () => {
@@ -80,23 +80,23 @@ describe('a saved order', () => {
 describe('moving a block', () => {
   it('one place up or down, and Today follows', () => {
     const p = move(EMPTY, 'night', 'habits', -1);
-    expect(order(p)).toEqual(['streaks', 'plan', 'calendar', 'habits', 'shop', 'train', 'food', 'money']);
+    expect(order(p)).toEqual(['streaks', 'plan', 'calendar', 'habits', 'shop', 'train', 'food', 'money', 'steps']);
     expect(order(move(p, 'night', 'habits', 1))).toEqual(defaultOrder('night'));
     expect(shown(p)).toEqual(order(p));
   });
   it('the top one can’t go up and the bottom one can’t go down', () => {
     expect(move(EMPTY, 'night', 'streaks', -1)).toBe(EMPTY);
-    expect(move(EMPTY, 'night', 'money', 1)).toBe(EMPTY);
+    expect(move(EMPTY, 'night', 'steps', 1)).toBe(EMPTY);
     expect(move(EMPTY, 'night', 'nothing', 1)).toBe(EMPTY);
   });
   it('dragged straight to a place', () => {
-    expect(order(moveTo(EMPTY, 'night', 'money', 0))).toEqual(['money', 'streaks', 'plan', 'calendar', 'shop', 'habits', 'train', 'food']);
-    expect(order(moveTo(EMPTY, 'night', 'streaks', 7)).slice(-1)).toEqual(['streaks']);
-    expect(moveTo(EMPTY, 'night', 'streaks', 8)).toBe(EMPTY);
+    expect(order(moveTo(EMPTY, 'night', 'money', 0))).toEqual(['money', 'streaks', 'plan', 'calendar', 'shop', 'habits', 'train', 'food', 'steps']);
+    expect(order(moveTo(EMPTY, 'night', 'streaks', 8)).slice(-1)).toEqual(['streaks']);
+    expect(moveTo(EMPTY, 'night', 'streaks', 9)).toBe(EMPTY);
     expect(moveTo(EMPTY, 'night', 'plan', 1)).toBe(EMPTY);
   });
   it('the whole order is written down, so a later update can’t shuffle what was arranged', () => {
-    expect(move(EMPTY, 'morning', 'cycle', -1).order).toEqual(['streaks', 'plan', 'calendar', 'cycle', 'shop', 'habits', 'train', 'food', 'money']);
+    expect(move(EMPTY, 'morning', 'cycle', -1).order).toEqual(['streaks', 'plan', 'calendar', 'cycle', 'shop', 'habits', 'train', 'food', 'money', 'steps']);
   });
 });
 
@@ -105,9 +105,9 @@ describe('switching a block off and back on', () => {
     const off = setOn(move(EMPTY, 'night', 'food', -1), 'food', false);
     expect(arrange(off, 'night').find(i => i.id === 'food')?.on).toBe(false);
     expect(order(off)).toContain('food');
-    expect(shown(off)).toEqual(['streaks', 'plan', 'calendar', 'shop', 'habits', 'train', 'money']);
+    expect(shown(off)).toEqual(['streaks', 'plan', 'calendar', 'shop', 'habits', 'train', 'money', 'steps']);
     const on = setOn(off, 'food', true);
-    expect(shown(on)).toEqual(['streaks', 'plan', 'calendar', 'shop', 'habits', 'food', 'train', 'money']);
+    expect(shown(on)).toEqual(['streaks', 'plan', 'calendar', 'shop', 'habits', 'food', 'train', 'money', 'steps']);
     expect(on.off).toEqual([]);
     expect(setOn(setOn(EMPTY, 'food', false), 'food', false).off).toEqual(['food']);
   });
@@ -125,9 +125,9 @@ describe('switching a block off and back on', () => {
 });
 
 describe('sizes', () => {
-  it('the blocks with two sizes: the plan, calendar, cycle, habits and food; the rest have one', () => {
-    expect(BLOCKS.filter(b => b.sizes).map(b => b.id)).toEqual(['plan', 'calendar', 'cycle', 'habits', 'food']);
-    expect(arrange(EMPTY, 'morning').filter(i => i.resizable).map(i => i.id)).toEqual(['plan', 'calendar', 'cycle', 'habits', 'food']);
+  it('the blocks with two sizes: the plan, calendar, cycle, habits, food and steps; the rest have one', () => {
+    expect(BLOCKS.filter(b => b.sizes).map(b => b.id)).toEqual(['plan', 'calendar', 'cycle', 'habits', 'food', 'steps']);
+    expect(arrange(EMPTY, 'morning').filter(i => i.resizable).map(i => i.id)).toEqual(['plan', 'calendar', 'cycle', 'habits', 'food', 'steps']);
   });
   it('compact is remembered, full is the usual and isn’t written down', () => {
     const p = setSize(EMPTY, 'habits', 'compact');
@@ -206,7 +206,7 @@ describe('widgets a person adds', () => {
     p = remove(p, 'x-note1');
     expect(p.added).toEqual([]);
     expect(p.size).toEqual({});
-    expect(order(p)).toEqual(['streaks', 'plan', 'calendar', 'shop', 'habits', 'train', 'money', 'food']);
+    expect(order(p)).toEqual(['streaks', 'plan', 'calendar', 'shop', 'habits', 'train', 'money', 'food', 'steps']);
     expect(remove(p, 'x-note1')).toEqual(p);
   });
 });
@@ -242,7 +242,7 @@ describe('the saved shape', () => {
     p = setSize(setOn(move(p, 'morning', 'cycle', -1), 'money', false), 'plan', 'compact');
     expect(p).toEqual({
       v: 1,
-      order: ['x-xmas1', 'x-note1', 'streaks', 'plan', 'calendar', 'cycle', 'shop', 'habits', 'train', 'food', 'money'],
+      order: ['x-xmas1', 'x-note1', 'streaks', 'plan', 'calendar', 'cycle', 'shop', 'habits', 'train', 'food', 'money', 'steps'],
       off: ['money'],
       size: { plan: 'compact' },
       added: [{ id: 'x-note1', kind: 'note', paper: 'bright' }, { id: 'x-xmas1', kind: 'countdown', title: 'Christmas', date: '2026-12-25', yearly: true, occasion: 'christmas' }],

@@ -12,7 +12,7 @@ import { upcoming } from '../us/occasions';
 import { isRaceKind, RACES, type RaceKind } from './race';
 
 /** The planner's own blocks on Today. The day's plan holds the routine and the to-do list. */
-export type TodayBlockId = 'streaks' | 'plan' | 'calendar' | 'shop' | 'cycle' | 'habits' | 'train' | 'food' | 'money';
+export type TodayBlockId = 'streaks' | 'plan' | 'calendar' | 'shop' | 'cycle' | 'habits' | 'train' | 'food' | 'money' | 'steps';
 export type Size = 'full' | 'compact';
 /** `only` = on one kind of planner only; `always` = can't be switched off; `sizes` = what each size shows, when it has two. */
 export interface TodayBlock { id: TodayBlockId; name: string; about: string; only?: Profile; always?: boolean; sizes?: Record<Size, string> }
@@ -28,6 +28,8 @@ export const BLOCKS: TodayBlock[] = [
   { id: 'train', name: 'Train', about: 'Today’s session' },
   { id: 'food', name: 'Food', about: 'Calories and protein so far', sizes: { full: 'With the ring', compact: 'One line' } },
   { id: 'money', name: 'Money', about: 'This month’s spending' },
+  // only drawn on a planner with a watch connected (features/watch/StepsCard.tsx)
+  { id: 'steps', name: 'Steps', about: 'Today’s steps from your watch, once one is connected', sizes: { full: 'With the bar to 10,000', compact: 'One line' } },
 ];
 export const blocksFor = (profile: Profile): TodayBlock[] => BLOCKS.filter(b => !b.only || b.only === profile);
 /** Today as it is before anyone arranges it. */

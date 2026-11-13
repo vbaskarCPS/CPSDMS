@@ -1,13 +1,14 @@
 // src/planner/features/widgets/Compact.tsx — the one-line size of the planner's own cards on Today (Calendar, Habits,
-// Cycle, Food), for someone who picked "Compact" on the Arrange Today screen. Each is a single row like the Shopping
+// Cycle, Food, Steps), for someone who picked "Compact" on the Arrange Today screen. Each is a single row like the Shopping
 // card: the name, today's headline, tap to go in. The headline is the one the menu pages already show (screens/Hub.tsx),
 // from each feature's own hook, so the full card's code is not touched.
 import { Link } from 'react-router-dom';
-import { CalendarDays, ChevronRight, Heart, Repeat, Utensils, type LucideIcon } from 'lucide-react';
+import { CalendarDays, ChevronRight, Footprints, Heart, Repeat, Utensils, type LucideIcon } from 'lucide-react';
 import { useCalendarLine } from '../calendar';
 import { useCycleLine } from '../cycle';
 import { useFoodLine } from '../food';
 import { useHabitsLine } from '../habits';
+import { useWatchSteps } from '../watch';
 import type { TodayBlockId } from './widgets';
 
 /** `line` = today's headline; null while it loads. */
@@ -26,6 +27,12 @@ const CalendarLine = () => <Line to="/calendar" Icon={CalendarDays} name="Calend
 const HabitsLine = () => <Line to="/habits" Icon={Repeat} name="Habits" line={useHabitsLine()} />;
 const CycleLine = () => <Line to="/cycle" Icon={Heart} name="Cycle" line={useCycleLine()} />;
 const FoodLine = () => <Line to="/food" Icon={Utensils} name="Food" line={useFoodLine()} />;
+// nothing at all without a watch connected
+function StepsLine() {
+  const s = useWatchSteps();
+  if (s && !s.paired) return null;
+  return <Line to="/health" Icon={Footprints} name="Steps" line={s ? (s.view.steps ? `${s.view.steps.toLocaleString('en-CA')} · ${s.view.line}` : s.view.line) : null} />;
+}
 
 /** The blocks that have a one-line size. (The day's plan has a compact size too, but it folds itself: screens/Today.tsx.) */
-export const COMPACT: Partial<Record<TodayBlockId, () => JSX.Element>> = { calendar: CalendarLine, habits: HabitsLine, cycle: CycleLine, food: FoodLine };
+export const COMPACT: Partial<Record<TodayBlockId, () => JSX.Element | null>> = { calendar: CalendarLine, habits: HabitsLine, cycle: CycleLine, food: FoodLine, steps: StepsLine };
