@@ -1,7 +1,8 @@
 // Workout.kt — the session that's on today (started on the phone: Training › Start workout), one set at a time.
 // The session is the phone's own doc ('workout' / <date>~<id>); the watch marks sets done in it exactly as the phone's
-// live screen does (weight, reps, done, doneAt) and adds the heart rate it measured ("hr": { avg, max }), so the phone
-// shows the set at once and finishes the session as usual (Complete workout, the coach's review).
+// live screen does (weight, reps, repsR, rpe, done, doneAt) and adds the heart rate it measured (per set and for the
+// session), so the phone shows the set at once and finishes the session as usual (Complete workout, the coach's review).
+// The order sets come in (supersets, circuits, EMOM / AMRAP …) is Formats.kt; the writes and the shared rest are Sync.kt.
 // A session can also be started on the watch: today's template (store.ts todaysTemplate / sessionToday), with the
 // coach's prescription from last time when there is one (nextRx), else last time's numbers, else the plan's.
 // (The phone's progression rule, nextTarget, isn't ported: started on the watch, a move with no prescription repeats
@@ -12,23 +13,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Date
 import java.util.UUID
-
-/** The next set to do. weight and reps start at what the phone filled in (last time's numbers, or the coach's). */
-data class NextSet(
-    val workoutKey: String,
-    val exerciseIndex: Int,
-    val setIndex: Int,
-    val exercise: String,
-    val setCount: Int,
-    val targetReps: String,
-    val weight: Double,
-    val reps: Int,
-    val timed: Boolean,
-    val seconds: Int,
-    val noLoad: Boolean,
-    val restSec: Int,
-    val lastDone: String?,
-)
 
 class Workout(private val planner: Planner) {
 
@@ -142,70 +126,54 @@ class Workout(private val planner: Planner) {
             .put("name", tpl.optString("name")).put("exercises", out).put("startedOn", "watch")
         if (tpl.optBoolean("home")) w.put("kind", "home")
         val key = "$day~$id"
+        val startedMs = System.currentTimeMillis()
         planner.put("workout", key, w)
-        // Start workout within 30 minutes of I'm up ticks the habits set to that (habits/auto.ts markGymStart)
-        if (!tpl.optBoolean("home")) {
-            val ticks = planner.doc("day", day)?.optJSONObject("ticks")
-            if (Timers(planner).startedInTime(day, ticks, System.currentTimeMillis())) Today(planner).markAuto("gymStart")
-        }
+        // Start workout ticks the habits set to that, each by its own rules ("by" a time, "within N minutes of I'm up"):
+        // Today.markAuto checks them against the moment the session started (habits/auto.ts markGymStart)
+        if (!tpl.optBoolean("home")) Today(planner).markAuto("gymStart", startedMs)
         return key
     }
 
-    /** The first set not yet done, in order. null = every set is done (complete it on the phone). */
-    fun nextSet(key: String, w: JSONObject): NextSet? {
-        val exs = w.optJSONArray("exercises") ?: return null
-        var lastDone: String? = null
-        for (ei in 0 until exs.length()) {
-            val ex = exs.optJSONObject(ei) ?: continue
-            val sets = ex.optJSONArray("sets") ?: continue
-            for (si in 0 until sets.length()) {
-                val s = sets.optJSONObject(si) ?: continue
-                if (s.optBoolean("done")) {
-                    lastDone = if (ex.optString("mode") == "time") "${s.optInt("seconds")} s" else "${fmtW(s.optDouble("weight", 0.0))} × ${s.optInt("reps")}"
-                    continue
-                }
-                val timed = ex.optString("mode") == "time"
-                val target = ex.optString("targetReps", "8-12")
-                val reps = s.optInt("reps").takeIf { it > 0 } ?: Regex("\\d+").find(target)?.value?.toIntOrNull() ?: 8
-                return NextSet(
-                    workoutKey = key, exerciseIndex = ei, setIndex = si,
-                    exercise = ex.optString("name"), setCount = sets.length(), targetReps = target,
-                    weight = s.optDouble("weight", 0.0), reps = reps,
-                    timed = timed, seconds = s.optInt("seconds").takeIf { it > 0 } ?: 30,
-                    noLoad = ex.optBoolean("noLoad"),
-                    restSec = if (timed) ex.optInt("restSec", 0) else ex.optInt("restSec", 0).takeIf { it > 0 } ?: 90,
-                    lastDone = lastDone,
+    companion object {
+        /** The session's exercises as Formats.kt reads them (the doc itself stays as it is, for writing back). */
+        fun parse(w: JSONObject): List<FEx> {
+            val exs = w.optJSONArray("exercises") ?: return emptyList()
+            return (0 until exs.length()).mapNotNull { i ->
+                val e = exs.optJSONObject(i) ?: return@mapNotNull null
+                val sets = e.optJSONArray("sets") ?: JSONArray()
+                FEx(
+                    name = e.optString("name"),
+                    exerciseId = e.optString("exerciseId"),
+                    mode = if (e.optString("mode") == "time") "time" else "reps",
+                    targetReps = e.optString("targetReps"),
+                    note = e.optString("note"),
+                    restSec = e.optInt("restSec", 0),
+                    sets = (0 until sets.length()).map { j ->
+                        val s = sets.optJSONObject(j) ?: JSONObject()
+                        FSet(
+                            weight = s.optDouble("weight", 0.0).takeIf { !it.isNaN() } ?: 0.0,
+                            reps = s.optInt("reps", 0),
+                            repsR = if (s.has("repsR") && !s.isNull("repsR")) s.optInt("repsR") else null,
+                            seconds = s.optInt("seconds", 0),
+                            done = s.optBoolean("done"),
+                            doneAt = s.optString("doneAt"),
+                            rpe = if (s.has("rpe") && !s.isNull("rpe")) s.optDouble("rpe").takeIf { !it.isNaN() } else null,
+                            prevWeight = s.optJSONObject("prev")?.optDouble("weight", 0.0)?.takeIf { !it.isNaN() } ?: 0.0,
+                        )
+                    },
+                    sides = if (e.has("sides") && !e.isNull("sides")) e.optBoolean("sides") else null,
+                    noLoad = if (e.has("noLoad") && !e.isNull("noLoad")) e.optBoolean("noLoad") else null,
+                    style = e.optString("style"),
+                    repsBySet = e.optJSONArray("repsBySet")?.let { a -> (0 until a.length()).map { a.optDouble(it).toInt() }.filter { it > 0 } } ?: emptyList(),
+                    weightBySet = e.optJSONArray("weightBySet")?.let { a -> (0 until a.length()).map { a.optDouble(it) }.filter { !it.isNaN() } } ?: emptyList(),
+                    group = e.optString("group"),
+                    groupKind = e.optString("groupKind"),
+                    groupSec = e.optInt("groupSec", 0),
                 )
             }
         }
-        return null
-    }
 
-    /** Mark a set done, read fresh so a set ticked on the phone meanwhile isn't undone. */
-    suspend fun logSet(next: NextSet, weight: Double, reps: Int, heart: HeartSummary?) {
-        val w = planner.doc("workout", next.workoutKey) ?: return
-        val ex = w.optJSONArray("exercises")?.optJSONObject(next.exerciseIndex) ?: return
-        val s = ex.optJSONArray("sets")?.optJSONObject(next.setIndex) ?: return
-        if (next.timed) {
-            s.put("seconds", next.seconds)
-        } else {
-            s.put("weight", weight).put("reps", reps)
-            if (ex.optBoolean("sides")) s.put("repsR", reps)
-        }
-        s.put("done", true).put("doneAt", Planner.isoNow())
-        heart?.let { h ->
-            val old = w.optJSONObject("hr")
-            val n0 = old?.optInt("samples", 0) ?: 0
-            val n = n0 + h.samples
-            val avg = if (n0 == 0) h.avg else ((old!!.optInt("avg") * n0 + h.avg * h.samples) / n)
-            val max = maxOf(old?.optInt("max", 0) ?: 0, h.max)
-            w.put("hr", JSONObject().put("avg", avg).put("max", max).put("samples", n))
-        }
-        planner.put("workout", next.workoutKey, w)
-    }
-
-    companion object {
-        fun fmtW(w: Double): String = if (w % 1.0 == 0.0) w.toInt().toString() else "%.1f".format(w)
+        fun fmtW(w: Double): String = Formats.fmtW(w)
         /** How much one press (or one bezel click) changes the weight. */
         fun step(units: String): Double = if (units == "kg") 2.5 else 5.0
     }
