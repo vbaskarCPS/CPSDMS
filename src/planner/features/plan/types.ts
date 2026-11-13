@@ -176,3 +176,11 @@ export function frequentTodos(days: Partial<Day>[], exclude: string[] = [], min 
     .map(([, v]) => { const top = Object.entries(v.times).sort((a, b) => b[1] - a[1])[0]; return { text: v.text, days: v.days, time: top && top[1] * 2 >= v.days ? top[0] : undefined }; });
 }
 export const todosDone = (d: Day) => d.todos.length > 0 && d.todos.every(t => t.done);
+
+/** I'm up filled in at `at` if it's still empty (the Miracle Morning and the Brief do this when they start); a day
+ *  already up is left as it is. The exact moment goes in upAt, for the race timer and the habits' rules. */
+export function fillUp<D extends { ticks: Ticks }>(d: D, at: Date): D {
+  if (d.ticks.up) return d;
+  const hm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  return { ...d, ticks: { ...d.ticks, up: hm, upAt: at.toISOString() } };
+}

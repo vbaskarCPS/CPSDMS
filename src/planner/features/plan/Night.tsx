@@ -45,7 +45,7 @@ export function Night() {
   const saunaHit = useRef(false);
   useEffect(() => { if (day.night.saunaStart && !day.ticks.sauna && saunaLeft <= 0 && !saunaHit.current) { saunaHit.current = true; beep(); } }, [saunaLeft, day.night.saunaStart, day.ticks.sauna]);
   const saunaEnded = saunaDue(day.night.saunaStart, day.ticks.sauna, routine.saunaMin, now);   // ran out: ticked for you
-  useEffect(() => { if (saunaEnded) { set(d => (d.ticks.sauna ? d : { ...d, ticks: { ...d.ticks, sauna: saunaEnded } })); void autoMark('sauna', true); } }, [saunaEnded]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (saunaEnded) { set(d => (d.ticks.sauna ? d : { ...d, ticks: { ...d.ticks, sauna: saunaEnded } })); void autoMark('sauna', true, today, 'done', { at: Date.parse(day.night.saunaStart || '') + routine.saunaMin * 60_000 }); } }, [saunaEnded]); // eslint-disable-line react-hooks/exhaustive-deps
   const overCap = capSec > 0 && unwindSec >= capSec;
   useEffect(() => {
     if (unwinding && overCap && !capHit.current) { capHit.current = true; beep(); }
@@ -55,7 +55,7 @@ export function Night() {
   const avg = dayAverage(day.scores);
   const reviewN = Object.values(day.night.review).filter(v => v.trim()).length;
   const reviewWas = useRef<boolean | null>(null);
-  useEffect(() => { if (loading) return; const full = reviewN === 3; if (reviewWas.current !== null && reviewWas.current !== full) void autoMark('review', full); reviewWas.current = full; }, [reviewN, loading]);
+  useEffect(() => { if (loading) return; const full = reviewN === 3; if (reviewWas.current !== null && reviewWas.current !== full) void autoMark('review', full, today, 'done', { at: Date.now() }); reviewWas.current = full; }, [reviewN, loading]);
   const prioDone = day.priorities.filter(p => p.done).length;
   const prioSet = day.priorities.filter(p => p.text.trim()).length;
 
@@ -84,7 +84,7 @@ export function Night() {
   const lightsOut = async () => {
     if (isMorningHours()) { setAskBed(true); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }   // that was last night
     set(d => ({ ...d, ticks: { ...d.ticks, lightsOut: nowHM() } }));
-    void autoMark('lightsOut', true);
+    void autoMark('lightsOut', true, today, 'done', { at: Date.now() });
     await flush();
   };
 

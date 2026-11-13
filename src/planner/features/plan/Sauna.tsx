@@ -36,8 +36,8 @@ export function Sauna() {
   useEffect(() => { if (day.night.saunaStart && !day.ticks.sauna && saunaLeft <= 0 && !hit.current) { hit.current = true; beep(); window.setTimeout(beep, 1200); } }, [saunaLeft, day.night.saunaStart, day.ticks.sauna]);
   // the timer ran out: tick it for you, at the time it ended (it can still be unticked)
   const due = saunaDue(day.night.saunaStart, day.ticks.sauna, routine.saunaMin, now);
-  useEffect(() => { if (due) { setDay(d => (d.ticks.sauna ? d : { ...d, ticks: { ...d.ticks, sauna: due } })); void autoMark('sauna', true); } }, [due]); // eslint-disable-line react-hooks/exhaustive-deps
-  const saunaDone = (on: boolean) => { setDay(d => ({ ...d, ticks: { ...d.ticks, sauna: on ? nowHM() : undefined } })); void autoMark('sauna', on); };
+  useEffect(() => { if (due) { setDay(d => (d.ticks.sauna ? d : { ...d, ticks: { ...d.ticks, sauna: due } })); void autoMark('sauna', true, today, 'done', { at: Date.parse(day.night.saunaStart || '') + routine.saunaMin * 60_000 }); } }, [due]); // eslint-disable-line react-hooks/exhaustive-deps
+  const saunaDone = (on: boolean) => { setDay(d => ({ ...d, ticks: { ...d.ticks, sauna: on ? nowHM() : undefined } })); void autoMark('sauna', on, today, 'done', { at: Date.now() }); };
 
   const briefDone = !!day.brief.finishedAt;
 

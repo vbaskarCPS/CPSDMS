@@ -1,7 +1,8 @@
 // src/planner/features/habits/HabitRow.tsx — one habit on the list: check circle, name, streak, nudge.
 import { useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, Flame, AlertTriangle } from 'lucide-react';
+import { Check, Flame, AlertTriangle, Clock } from 'lucide-react';
+import { rulesLine, rulesOf } from './rules';
 import type { Habit, HabitMark } from './types';
 import { currentStreak, isDue, missedLastDue, type Logs } from './streak';
 
@@ -10,6 +11,7 @@ export function HabitRow({ h, logs, today, mark, linkTo = true }: { h: Habit; lo
   const due = isDue(h, today);
   const streak = currentStreak(h, logs, today);
   const nudge = due && !m && missedLastDue(h, logs, today);
+  const rule = h.auto ? rulesLine(rulesOf(h)) : '';   // "by 5:05 am": when it has to happen to tick itself
   const press = useRef<number | undefined>(undefined);
   const longPressed = useRef(false);
 
@@ -24,6 +26,7 @@ export function HabitRow({ h, logs, today, mark, linkTo = true }: { h: Habit; lo
       <span className="hb-row__meta">
         <span className={`hb-streak ${streak ? '' : 'is-zero'}`}><Flame aria-hidden /> {streak} day{streak === 1 ? '' : 's'}</span>
         {nudge && <span className="hb-nudge"><AlertTriangle aria-hidden /> Missed yesterday — don't miss twice</span>}
+        {rule && <span className="hb-rule"><Clock aria-hidden /> {rule}</span>}
         {!due && <span className="pl-muted" style={{ fontSize: 12 }}>Not today</span>}
       </span>
     </>

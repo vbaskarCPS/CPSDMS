@@ -2,6 +2,7 @@
 import type { FoodItem } from '../../lib/ai';
 import { dayKey, getDocs, putDoc, type Doc } from '../../lib/docs';
 import { uid } from '../../ui/primitives';
+import { checkProteinGoal } from '../habits/proteinGoal';
 
 export type { FoodItem };
 export interface Totals { kcal: number; protein: number; carbs: number; fat: number }
@@ -62,8 +63,9 @@ export async function loadTargets(): Promise<Targets | null> {
   const d = await getDocs<Targets>('foodprefs', 'targets', 'targets');
   return d[0]?.data ?? null;
 }
-export async function saveMeal(m: Meal): Promise<void> { await putDoc('meal', mealKey(m), m); }
-export async function removeMeal(m: Meal): Promise<void> { await putDoc('meal', mealKey(m), null); }
+// after every save or removal, a habit set to "the day's protein goal is logged" looks at the day again (not waited for)
+export async function saveMeal(m: Meal): Promise<void> { await putDoc('meal', mealKey(m), m); void checkProteinGoal(m.date); }
+export async function removeMeal(m: Meal): Promise<void> { await putDoc('meal', mealKey(m), null); void checkProteinGoal(m.date); }
 export async function saveFavourite(name: string, items: FoodItem[], thumb?: string, existing?: FavMeal): Promise<FavMeal> {
   const f: FavMeal = existing
     ? { ...existing, name, items, totals: round(sum(items)), thumb: thumb ?? existing.thumb, uses: existing.uses + 1, lastUsed: new Date().toISOString() }

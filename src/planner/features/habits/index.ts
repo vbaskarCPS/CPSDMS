@@ -5,7 +5,8 @@ import { HabitsList } from './HabitsList';
 import { HabitForm } from './HabitForm';
 import { HabitDetail } from './HabitDetail';
 export { HabitsTodayCard, useHabitsLine } from './HabitsTodayCard';
-export { autoMark } from './auto';
+export { autoMark, markWake } from './auto';
+export { checkProteinGoal } from './proteinGoal';
 export { SlotHabits, SlotHabitsProvider } from './SlotHabits';
 export { onHabitTicked } from './ticked';
 

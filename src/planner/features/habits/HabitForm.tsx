@@ -5,6 +5,7 @@ import { Page, Header, Card, Button, Field, Input, TextArea, useToast, uid } fro
 import { getDoc, getDocs, putDoc } from '../../lib/docs';
 import { emptyHabit, DAY_SHORT, type Habit } from './types';
 import { AUTO_LABELS, type AutoTrigger } from './auto';
+import { MORNING_TRIGGERS, TRIGGER_RULES, rulesLine, rulesOf } from './rules';
 import { Sparkles } from 'lucide-react';
 import { planHabit } from '../../lib/ai';
 import { blocks, loadRoutine, routineNow, type Block, type Routine } from '../../lib/routine';
@@ -148,11 +149,28 @@ export function HabitForm() {
         <Card className="hb-law">
           <div className="hb-law__title"><span className="hb-law__n">4</span><div><h3>Make it satisfying</h3><p className="hb-law__blurb">The streak and the weekly scorecard are your reward. Never miss twice: one off day is fine, two in a row resets the chain.</p></div></div>
           <Field label="Ticks itself when…" hint="Tie it to something the planner already records, so you never have to tick it by hand.">
-            <select className="pl-input" value={h.auto || ''} onChange={e => set({ auto: (e.target.value || undefined) as Habit['auto'] })}>
+            <select className="pl-input" value={h.auto || ''} onChange={e => { const auto = (e.target.value || undefined) as Habit['auto']; set({ auto, ...(auto && MORNING_TRIGGERS.includes(auto) ? {} : { withinUpMin: undefined }), ...(auto ? {} : { by: undefined }) }); }}>
               <option value="">I tick it by hand</option>
               {(Object.keys(AUTO_LABELS) as AutoTrigger[]).map(k => <option key={k} value={k}>{AUTO_LABELS[k]}</option>)}
             </select>
           </Field>
+          {h.auto && (
+            <>
+              <Field label="Only counts if done by" hint="Later than this, it doesn't tick itself (you can still tick it by hand). Leave it empty for any time.">
+                <div className="pl-row">
+                  <Input type="time" aria-label="Only counts if done by" value={h.by || ''} onChange={e => set({ by: e.target.value || undefined })} style={{ flex: 1, minWidth: 0 }} />
+                  {h.by && <Button small ghost type="button" onClick={() => set({ by: undefined })}>Any time</Button>}
+                </div>
+              </Field>
+              {MORNING_TRIGGERS.includes(h.auto) && (
+                <Field label="Only counts within this many minutes of I'm up" hint={TRIGGER_RULES[h.auto]?.withinUpMin ? `${TRIGGER_RULES[h.auto]!.withinUpMin} minutes unless you change it.` : 'Leave it empty for any time after I\'m up.'}>
+                  <Input inputMode="numeric" aria-label="Minutes after I'm up" value={h.withinUpMin ?? ''} placeholder={TRIGGER_RULES[h.auto]?.withinUpMin ? String(TRIGGER_RULES[h.auto]!.withinUpMin) : 'any time'}
+                    onChange={e => { const n = Math.round(Number(e.target.value.replace(/\D/g, ''))); set({ withinUpMin: n > 0 ? Math.min(n, 720) : undefined }); }} />
+                </Field>
+              )}
+              {rulesLine(rulesOf(h)) && <p className="hb-sentence">It ticks itself only if it's done <em>{rulesLine(rulesOf(h))}</em>.</p>}
+            </>
+          )}
         </Card>
 
         {toast}

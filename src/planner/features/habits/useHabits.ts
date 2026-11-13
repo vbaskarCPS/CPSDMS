@@ -6,6 +6,7 @@ import { addDays, type Logs } from './streak';
 import type { Habit, HabitLog, HabitMark } from './types';
 import { seedHabitsIfEmpty } from './seed';
 import { habitTicked } from './ticked';
+import { handMarked } from './auto';
 
 export const LOG_DAYS = 84;
 
@@ -42,7 +43,8 @@ export function useHabits() {
       if (m) next[habitId] = m; else delete next[habitId];
       return { ...prev, [key]: next };
     });
-    try { await putDoc('habitlog', key, next); habitTicked(); }
+    // marked by hand: a trigger that ticked it earlier no longer owns the tick (auto.ts)
+    try { await putDoc('habitlog', key, next); habitTicked(); void handMarked(habitId, key); }
     catch (e) { setError(e instanceof Error ? e.message : 'Could not save'); void reload(); }
   }, [today, reload]);
 

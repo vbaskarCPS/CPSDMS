@@ -15,8 +15,14 @@ export interface Habit {
   archived?: boolean;
   order: number;
   anchor?: { block: string; when: 'before' | 'after' };   // stacked on a slot of the routine (lib/routine blocks)
-  auto?: 'wake' | 'brief' | 'daycare' | 'fast' | 'dinner' | 'gymStart' | 'gym' | 'sauna' | 'review' | 'shake' | 'lightsOut';   // ticks itself when this happens (auto.ts)
+  auto?: AutoTrigger;   // ticks itself when this happens (auto.ts)
+  // rules for a habit that ticks itself (rules.ts); left out = it counts whenever it happens
+  by?: string;           // 'HH:MM': only if it happened by this time that planner day
+  withinUpMin?: number;  // only if it happened within this many minutes of I'm up
 }
+
+/** What can tick a habit by itself (auto.ts says what each one is). */
+export type AutoTrigger = 'wake' | 'brief' | 'daycare' | 'fast' | 'dinner' | 'gymStart' | 'gym' | 'sauna' | 'review' | 'shake' | 'lightsOut' | 'protein';
 
 /** key = YYYY-MM-DD → { [habitId]: mark } */
 export type HabitLog = Record<string, HabitMark>;
