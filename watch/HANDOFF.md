@@ -81,7 +81,7 @@ mirror it), `src/planner/features/habits/auto.ts`, `src/planner/features/look/` 
   apply: README › The planner watch face (logcat filters `watchface` and `runtime`).
 - **Face apply error found on the watch (13 Nov)**: `FavoriteOperationException: Error 0` was caused by
   `defaultSystemProviderType="EMPTY"` on the three planner spots: the watch requires the fallback type to be one of
-  the slot's `supportedTypes`. Fixed (LONG_TEXT / RANGED_VALUE). Galaxy watch tip: Wi-Fi debugging drops while the
+  the slot's `supportedTypes`. Fixed (SHORT_TEXT on all three). Galaxy watch tip: Wi-Fi debugging drops while the
   watch's Bluetooth is on; turn Bluetooth off while installing.
 - Not tested on the watch yet: spots on a Samsung face, background steps upload, race/sauna, starting a session,
   everything from batch 3.

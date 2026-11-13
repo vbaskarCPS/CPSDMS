@@ -37,7 +37,7 @@
         <ComplicationSlot slotId="0" x="85" y="204" width="280" height="44"
             supportedTypes="LONG_TEXT SHORT_TEXT" isCustomizable="TRUE">
             <DefaultProviderPolicy
-                defaultSystemProvider="EMPTY" defaultSystemProviderType="LONG_TEXT"
+                defaultSystemProvider="EMPTY" defaultSystemProviderType="SHORT_TEXT"
                 primaryProvider="app.propertystars.planner.watch/app.propertystars.planner.watch.NextSpot"
                 primaryProviderType="LONG_TEXT" />
             <BoundingBox x="0" y="0" width="280" height="44" />
@@ -73,7 +73,7 @@
         <ComplicationSlot slotId="1" x="58" y="268" width="96" height="96"
             supportedTypes="RANGED_VALUE SHORT_TEXT" isCustomizable="TRUE">
             <DefaultProviderPolicy
-                defaultSystemProvider="EMPTY" defaultSystemProviderType="RANGED_VALUE"
+                defaultSystemProvider="EMPTY" defaultSystemProviderType="SHORT_TEXT"
                 primaryProvider="app.propertystars.planner.watch/app.propertystars.planner.watch.ProteinSpot"
                 primaryProviderType="RANGED_VALUE" />
             <BoundingOval x="0" y="0" width="96" height="96" />
@@ -140,7 +140,7 @@
         <ComplicationSlot slotId="2" x="177" y="268" width="96" height="96"
             supportedTypes="RANGED_VALUE SHORT_TEXT" isCustomizable="TRUE">
             <DefaultProviderPolicy
-                defaultSystemProvider="EMPTY" defaultSystemProviderType="RANGED_VALUE"
+                defaultSystemProvider="EMPTY" defaultSystemProviderType="SHORT_TEXT"
                 primaryProvider="app.propertystars.planner.watch/app.propertystars.planner.watch.HabitsSpot"
                 primaryProviderType="RANGED_VALUE" />
             <BoundingOval x="0" y="0" width="96" height="96" />

@@ -52,7 +52,7 @@ doesn't accept (now `SEMI_BOLD`). Neither could be tried on the watch from here.
 Found on the watch (13 Nov, logcat `watchface`, WearServices): `IllegalArgumentException: defaultDataSourcePolicy.
 systemDataSourceFallbackDefaultType EMPTY must be in the supportedTypes`. Google's validator doesn't catch it, but the
 watch refuses the face. Every spot's `defaultSystemProviderType` must be one of its own `supportedTypes`, even when
-`defaultSystemProvider` is `EMPTY` (now LONG_TEXT for the "next" line, RANGED_VALUE for the rings).
+`defaultSystemProvider` is `EMPTY` (now SHORT_TEXT, which every spot supports).
 
 ## First time on the watch
 
