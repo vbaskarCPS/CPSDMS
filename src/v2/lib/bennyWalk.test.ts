@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dealRandom, groupName, joinGroups, moneyLine, nextStep, splitGroup, toggleOut, walkAsk, type WalkState } from './bennyWalk';
+import { dealRandom, mapChoices, groupName, joinGroups, moneyLine, nextStep, splitGroup, toggleOut, walkAsk, type WalkState } from './bennyWalk';
 
 const managers = [{ id: 'f', name: 'Franklyn Mitchell' }, { id: 'j', name: 'Jovan Chung' }, { id: 'v', name: 'Vijay Baskaran' }];
 const base: WalkState = { step: 'attendance', date: '2026-11-13', roadTrip: true, managers, groups: [], maps: {}, areas: ['MISSION #1', 'NORTH VANCOUVER #1'] };
@@ -40,5 +40,12 @@ describe('start-the-day walk', () => {
   });
   it('says product cost and tax', () => {
     expect(moneyLine({ productCostPercent: 20, noTaxOnCash: true, taxName: 'GST', taxRate: 5, from: '2026-11-12' })).toBe('Product cost 20% · GST 5% · no tax on cash');
+  });
+  it('finds maps by words', () => {
+    const all = ['NORTH VANCOUVER #1', 'NORTH VANCOUVER #2', 'NORTH DELTA #1', 'MISSION #1', 'MISSION #10'];
+    expect(mapChoices(all, [], 'north van 1')).toEqual(['NORTH VANCOUVER #1']);
+    expect(mapChoices(all, [], 'mission 1')).toEqual(['MISSION #1']);
+    expect(mapChoices(all, ['MISSION #1'], '', ['NORTH DELTA #1', 'GONE #3'])).toEqual(['MISSION #1', 'NORTH DELTA #1']);
+    expect(mapChoices(all, [], 'north')).toHaveLength(3);
   });
 });
