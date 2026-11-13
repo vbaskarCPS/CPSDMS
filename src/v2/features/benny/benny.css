@@ -197,6 +197,8 @@
 .benny-root .benny-draft-rules{margin:0;font-size:13px;color:#7c2d12}
 .benny-root .benny-draft-turn{font-weight:700;padding:8px 10px;border-radius:10px;background:#fff;border:1px solid #e2e8f0}
 .benny-root .benny-draft-turn.mine{background:#f97316;border-color:#f97316;color:#1a0d03}
+.benny-root .benny-draft-turn.mine .benny-mut{color:#1a0d03;opacity:.75}
+.benny-root .benny-mboard>.benny-mut{white-space:normal;overflow:visible}
 .benny-root .benny-draft-teams{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
 .benny-root .benny-draft-team{padding:8px;border-radius:10px;background:#fff;border:1px solid #e2e8f0}
 .benny-root .benny-draft-team.on{border-color:#f97316;box-shadow:0 0 0 2px rgba(249,115,22,.25)}
