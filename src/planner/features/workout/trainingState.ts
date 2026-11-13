@@ -1,8 +1,9 @@
 // src/planner/features/workout/trainingState.ts — the numbers a strength coach works out before prescribing anything,
 // computed from the planner so Arvy reasons from facts instead of guessing: how recovered you are (sleep,
 // food, how hard the last sessions were), how much each muscle has been trained this week and how long ago, whether
-// lifts are progressing or stalling, pain mentioned in notes, and how long since an easier week. Pure, so it's tested.
-import { e1rm, isAssisted, type Exercise, type Muscle, type Workout } from './types';
+// lifts are progressing or stalling, pain mentioned in notes, and how long since an easier week, and (from the watch)
+// how hard the sets were on the heart and how well it came down in the rests. Pure, so it's tested.
+import { e1rm, isAssisted, type Exercise, type Muscle, type SetHr, type Workout } from './types';
 
 type Ticks = { up?: string; lightsOut?: string };
 export interface DayLite { date: string; ticks?: Ticks }
@@ -15,6 +16,30 @@ const mins = (t: string) => { const [h, m] = t.split(':').map(Number); return h 
 const PAIN = /\b(pain|painful|hurt|hurts|tweak|tweaked|strain|pinch|sharp|ache|aching|sore|injur|swollen|click|knee|hip|back|shoulder|elbow|wrist)\w*/i;
 /** A logged set that counts as a working ("hard") set: done, real load or reps, not an obvious warm-up. */
 const hard = (s: { done: boolean; reps: number; weight: number; seconds?: number; rpe?: number }) => s.done && (s.reps > 0 || (s.seconds || 0) > 0) && (s.rpe === undefined || s.rpe >= 6);
+
+/** A set's heart rate for Arvy, short: " hr142/156 rec28" (average / peak, how far it fell in the rest after). */
+export const hrShort = (hr?: SetHr | null): string => (hr && hr.avg > 0 ? ` hr${Math.round(hr.avg)}/${Math.round(hr.max)}${typeof hr.rec === 'number' ? ` rec${Math.round(hr.rec)}` : ''}` : '');
+
+/** Falls measured over at least a minute (the watch stops at 120 s), so they compare: a 30 s rest always falls less. */
+const fairRec = (hr?: SetHr): hr is SetHr & { rec: number } => typeof hr?.rec === 'number' && (hr.recSec === undefined || hr.recSec >= 60);
+const mean = (a: number[]) => Math.round(a.reduce((t, x) => t + x, 0) / a.length);
+
+/** One line on how hard a session was, from the watch and the RPE picks: the average heart rate in the sets, how far it
+ *  fell on average in the 60-120 s after a set, and the sets that were very hard (RPE 9+) or that it barely came down
+ *  after (under 15 bpm). Undefined when there's none of that. */
+export function sessionEffort(w: Pick<Workout, 'exercises'>): string | undefined {
+  const done = (w.exercises || []).flatMap(e => (e.sets || []).map((s, i) => ({ name: e.name, s, n: i + 1 })).filter(x => x.s.done));
+  const hrs = done.filter(x => x.s.hr && x.s.hr.avg > 0).map(x => x.s.hr!);
+  const recs = done.filter(x => fairRec(x.s.hr));
+  const parts: string[] = [];
+  if (hrs.length) parts.push(`set HR avg ${mean(hrs.map(h => h.avg))}, peak ${Math.max(...hrs.map(h => h.max))}`);
+  if (recs.length) parts.push(`HR fell ${mean(recs.map(x => x.s.hr!.rec!))} bpm on average in the 60-120 s after a set (${recs.length} sets)`);
+  const hard = done.filter(x => (x.s.rpe ?? 0) >= 9).map(x => `${x.name} set ${x.n} RPE ${x.s.rpe}`);
+  const slow = recs.filter(x => x.s.hr!.rec! < 15).map(x => `${x.name} set ${x.n} (fell ${Math.round(x.s.hr!.rec!)})`);
+  if (hard.length) parts.push(`RPE 9+: ${hard.slice(0, 6).join(', ')}${hard.length > 6 ? ` +${hard.length - 6} more` : ''}`);
+  if (slow.length) parts.push(`slow recovery (under 15 bpm): ${slow.slice(0, 6).join(', ')}${slow.length > 6 ? ` +${slow.length - 6} more` : ''}`);
+  return parts.length ? parts.join('; ') : undefined;
+}
 
 /** Hours slept the night after day `d`: lights out on d (after midnight still counts as d), up on the next day. */
 export function sleepHours(d: DayLite, next?: DayLite): number | null {
@@ -87,6 +112,10 @@ export function trainingState(o: {
   let streak = 0; for (let i = 0; ; i++) { const d = new Date(toDate(today).getTime() - (i + (trainedDates.includes(today) ? 0 : 1)) * MS_DAY).toISOString().slice(0, 10); if (trainedDates.includes(d)) streak++; else break; }
   const rpes = (list: Workout[]) => list.flatMap(w => w.exercises.flatMap(e => e.sets.filter(s => s.done && s.rpe).map(s => s.rpe!)));
   const avgOf = (a: number[]) => (a.length ? Math.round(a.reduce((t, x) => t + x, 0) / a.length * 10) / 10 : null);
+  // the watch's heart rate per set, this week (only there once sets have been logged with the watch on)
+  const week = inLast(7).flatMap(w => w.exercises.flatMap(e => e.sets.filter(s => s.done && s.hr && s.hr.avg > 0).map(s => s.hr!)));
+  const weekRec = week.filter(fairRec).map(h => h.rec);
+  const heart = week.length ? { avg_set_hr_last_7_days: avgOf(week.map(h => h.avg)), ...(weekRec.length ? { avg_hr_fall_after_sets_last_7_days: avgOf(weekRec) } : {}) } : {};
 
   // ── progress per lift: best e1RM per session, first vs latest in the window, plus RPE drift ──
   const lifts = new Map<string, { name: string; pts: { date: string; e1: number; rpe?: number }[]; assisted: boolean }>();
@@ -131,7 +160,7 @@ export function trainingState(o: {
       sessions_last_7_days: inLast(7).length, sessions_last_28_days: inLast(28).length,
       training_days_in_a_row: streak, trained_today: trainedDates.includes(today),
       avg_rpe_last_7_days: avgOf(rpes(inLast(7))), avg_rpe_prior_3_weeks: avgOf(rpes(ws.filter(w => { const d = daysBetween(w.date, today); return d >= 7 && d < 28; }))),
-      hard_sets_by_week_newest_first: weeks, weeks_since_easier_week: since,
+      hard_sets_by_week_newest_first: weeks, weeks_since_easier_week: since, ...heart,
     },
     muscles, progress, pain_or_niggles_last_14_days: pain,
   };

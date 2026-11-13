@@ -2,6 +2,9 @@
 // The session is shown as blocks (format.ts): an exercise on its own, a superset or circuit logged round by round,
 // or an EMOM / AMRAP run against a clock. Each exercise gets the tracker that fits it: weight × reps, reps only,
 // left / right, a countdown (each side in turn when it's a per-side hold), or intervals that run themselves.
+// The watch can log the same session at the same time: every save is one change applied to the newest copy, and the
+// screen looks for the watch's changes every 2 s while it's open (sync.ts). The rest timer lives on the session, so a
+// rest started on either one runs on both.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronDown, ChevronUp, Plus, Trophy, Trash2, Repeat2, Clock, Sparkles, Flame, PlayCircle, Check, RotateCcw } from 'lucide-react';
@@ -11,7 +14,7 @@ import { Page, Header, Card, Button, Sheet, Stat, TextArea, useToast } from '../
 import { LIBRARY, findExercise, isLower, isTimed } from './library';
 import { stepFor } from './progression';
 import { coach } from '../../lib/ai';
-import { daysAgo, detectPRs, exerciseHistory, loadCustomExercises, loadWorkouts, saveWorkout } from './store';
+import { daysAgo, detectPRs, exerciseHistory, loadCustomExercises, loadWorkouts } from './store';
 import { dayKey, getDoc, putDoc } from '../../lib/docs';
 import { normalizeDay, nowHM, type Day } from '../plan';
 import { routineNow } from '../../lib/routine';
@@ -48,13 +51,18 @@ function parsePlan(jsonText: string, w: Workout): Record<string, NextRx> | undef
     return Object.keys(out).length ? out : undefined;
   } catch { return undefined; }
 }
-import { durationMin, fmtNum, fmtSec, isAssisted, setsDone, volumeOf, type Exercise, type NextRx, type SetLog, type Workout, type WorkoutExercise } from './types';
+import { durationMin, fmtNum, fmtSec, isAssisted, setsDone, volumeOf, workoutKey, type Exercise, type NextRx, type SetLog, type Workout, type WorkoutExercise } from './types';
 import { BlockClock, CheckBig, ExercisePicker, IntervalRunner, RestTimer, Stepper, TimedSet } from './parts';
-import { blockHow, blocksOf, blockTitle, hasSides, isIntervals, isNoLoad, repsTarget, styleLabel, targetLine, type Block } from './format';
+import { blockHow, blocksOf, blockTitle, hasSides, hrLine, isIntervals, isNoLoad, repsTarget, styleLabel, targetLine, type Block } from './format';
+import * as S from './sync';
 import { useUnits } from './WorkoutHome';
 
 const RPES = [7, 8, 9, 10];
 const RESTS = [60, 90, 120, 180];
+
+const blockDone = (w: Workout, b: Block) => b.at.every(i => (w.exercises[i]?.sets || []).every(x => x.done));
+/** The block to open: the first with a set still to do (the first one when all are done). */
+const firstOpen = (w: Workout) => { const i = w.exercises.findIndex(e => e.sets.some(s => !s.done)); return i < 0 ? 0 : Math.max(0, blocksOf(w.exercises).findIndex(b => b.at.includes(i))); };
 
 export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   const { id } = useParams();
@@ -66,25 +74,43 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   const [missing, setMissing] = useState(false);
   const [open, setOpen] = useState(0);
   const [picker, setPicker] = useState<null | { mode: 'add' } | { mode: 'swap'; index: number }>(null);
-  const [rest, setRest] = useState<{ endsAt: number; total: number } | null>(null);
   const [summary, setSummary] = useState<Workout | null>(null);
   const [howTo, setHowTo] = useState<{ id: string; name: string; note?: string } | null>(null);
   const [toast, say] = useToast();
-  const timer = useRef<number | undefined>(undefined);
   const latest = useRef<Workout | null>(null);
+  const sync = useRef<S.SessionSync | null>(null);
+  const restEnd = useRef<number | null>(null);   // the end of the rest on screen, kept until its timer has beeped
 
   useEffect(() => {
     let on = true;
+    let stop = () => {};
     Promise.all([loadWorkouts(daysAgo(365)), loadCustomExercises()]).then(([all, c]) => {
       if (!on) return;
       const raw = all.find(x => x.id === id) || null;
       const found = raw ? normalizeModes(raw) : null;
       setW(found); latest.current = found; setHistory(all.filter(x => x.id !== id)); setCustom(c);
-      if (!found) setMissing(true);
-      else { const i = found.exercises.findIndex(e => e.sets.some(s => !s.done)); setOpen(i < 0 ? 0 : Math.max(0, blocksOf(found.exercises).findIndex(b => b.at.includes(i)))); }
+      if (!found) { setMissing(true); return; }
+      setOpen(firstOpen(found));
+      if (found.endedAt) return;
+      // the watch's changes: a newer copy replaces this one when nothing here is waiting to be saved (a number being
+      // typed keeps its text: the box holds it until it's left)
+      const s = S.sessionSync(S.sessionIO(workoutKey(found)), {
+        base: () => latest.current,
+        onError: () => say("Couldn't save", 'bad'),
+        onRemote: doc => {
+          const cur = latest.current; if (!cur || doc.id !== cur.id) return;
+          const next = normalizeModes(doc);
+          latest.current = next; setW(next);
+          // the block that was open is finished there (the watch ticked its last set): on to the next one
+          setOpen(o => { const bs = blocksOf(next.exercises); const b = bs[o]; return b && !blockDone(cur, b) && blockDone(next, b) ? firstOpen(next) : o; });
+          if (next.discarded) nav('/workout', { replace: true });
+        },
+      });
+      sync.current = s;
+      stop = S.pollWhileOpen(() => { void s.poll(); }, () => !!latest.current && !latest.current.endedAt);
     });
-    return () => { on = false; };
-  }, [id]);
+    return () => { on = false; stop(); void sync.current?.flush(); };
+  }, [id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const readOnly = !!w?.endedAt;
   // coaching for the next set: an instant local line, then the coach's own line when it arrives
@@ -111,74 +137,70 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     }).catch(() => { if (seq === tipSeq.current) setTip(null); });
   };
 
-  const persist = useCallback((next: Workout, now = false) => {
-    latest.current = next; setW(next);
-    window.clearTimeout(timer.current);
-    if (now) void saveWorkout(next).catch(() => say("Couldn't save", 'bad'));
-    else timer.current = window.setTimeout(() => { void saveWorkout(next).catch(() => say("Couldn't save", 'bad')); }, 1000);
-  }, [say]);
-  useEffect(() => () => { window.clearTimeout(timer.current); if (latest.current) void saveWorkout(latest.current); }, []);
-
-  // every change starts from the newest copy (a clock that runs on its own reports rounds between renders)
-  const patchEx = (ei: number, fn: (e: WorkoutExercise) => WorkoutExercise): Workout | null => {
+  /** Make a change: on this copy now, and saved onto the newest copy of the session (now, or after a second of quiet
+   *  while typing). Every change starts from the newest copy (a clock that runs on its own reports rounds between renders). */
+  const apply = useCallback((c: S.Change, now = false): Workout | null => {
     const cur = latest.current; if (!cur) return null;
-    const next = { ...cur, exercises: cur.exercises.map((e, i) => (i === ei ? fn(e) : e)) };
-    persist(next); return next;
-  };
-  const patchSet = (ei: number, si: number, p: Partial<SetLog>) => patchEx(ei, e => ({ ...e, sets: e.sets.map((s, j) => (j === si ? { ...s, ...p } : s)) }));
+    const next = c(cur);
+    latest.current = next; setW(next);
+    void sync.current?.change(c, now);
+    return next;
+  }, []);
+  const exId = (ei: number) => latest.current?.exercises[ei]?.exerciseId ?? '';
+  const patchEx = (ei: number, fn: (e: WorkoutExercise) => WorkoutExercise, now = false) => apply(S.onExercise(ei, exId(ei), fn), now);
+  const patchSet = (ei: number, si: number, p: Partial<SetLog>, now = false) => apply(S.patchSet(ei, exId(ei), si, p), now);
   /** After a set is done: the rest clock, and on to the next block when this one is finished. In a superset or
    *  circuit the rest comes after the round (one set of each), not between its exercises. */
   const afterDone = (next: Workout, ei: number, si: number, rest = true) => {
     const bs = blocksOf(next.exercises); const bi = bs.findIndex(b => b.at.includes(ei)); const b = bs[bi]; if (!b) return;
     const ex = next.exercises[ei];
     if (rest) {
-      if (b.kind === 'single') { const sec = ex.mode === 'time' ? (ex.restSec || 0) : (ex.restSec || 90); if (sec > 0) setRest({ endsAt: Date.now() + sec * 1000, total: sec }); }
+      if (b.kind === 'single') { const sec = ex.mode === 'time' ? (ex.restSec || 0) : (ex.restSec || 90); if (sec > 0) apply(S.startRest(sec, { ei, si }), true); }
       else if (b.at.every(i => !next.exercises[i].sets[si] || next.exercises[i].sets[si].done)) {
         const sec = Math.max(0, ...b.at.map(i => next.exercises[i].restSec || 0));
-        if (sec > 0) setRest({ endsAt: Date.now() + sec * 1000, total: sec });
+        if (sec > 0) apply(S.startRest(sec, { ei, si }), true);
       }
     }
     if (b.at.every(i => next.exercises[i].sets.every(x => x.done)) && bi < bs.length - 1) window.setTimeout(() => setOpen(bi + 1), 400);
   };
   // doneAt: the moment a set is done, for the race timer on Today (features/widgets/race.ts)
-  const timedDone = (ei: number, si: number, seconds: number) => { const next = patchSet(ei, si, { done: true, doneAt: new Date().toISOString(), seconds }); if (next) { afterDone(next, ei, si); coachSet(next, ei, si); } };
+  const timedDone = (ei: number, si: number, seconds: number) => { const next = apply(S.all(S.patchSet(ei, exId(ei), si, { done: true, doneAt: new Date().toISOString(), seconds }), S.setStarted(ei, si)), true); if (next) { afterDone(next, ei, si); coachSet(next, ei, si); } };
   /** A round of self-running intervals just ended (the runner keeps its own rest). */
-  const intervalRound = (ei: number, si: number, seconds: number) => { const next = patchSet(ei, si, { done: true, doneAt: new Date().toISOString(), seconds }); if (next) afterDone(next, ei, si, false); };
+  const intervalRound = (ei: number, si: number, seconds: number) => { const next = patchSet(ei, si, { done: true, doneAt: new Date().toISOString(), seconds }, true); if (next) afterDone(next, ei, si, false); };
   const setRestSec = (ei: number, restSec: number) => { patchEx(ei, e => ({ ...e, restSec })); };
   const setComment = (ei: number, comment: string) => { patchEx(ei, e => ({ ...e, comment })); };
   const toggleDone = (ei: number, si: number) => {
     const s = latest.current?.exercises[ei]?.sets[si]; if (!s) return;
-    const done = !s.done;
-    const next = patchSet(ei, si, { done, doneAt: done ? new Date().toISOString() : undefined });
-    if (done && next) { coachSet(next, ei, si); afterDone(next, ei, si); }
+    if (s.done) { apply(S.patchSet(ei, exId(ei), si, {}, true), true); return; }   // Undo: the only way a done set comes undone
+    const next = apply(S.all(S.patchSet(ei, exId(ei), si, { done: true, doneAt: new Date().toISOString() }), S.setStarted(ei, si)), true);
+    if (next) { coachSet(next, ei, si); afterDone(next, ei, si); }
   };
   const blankSet = (ex: WorkoutExercise): SetLog => {
     const lastSet = ex.sets[ex.sets.length - 1];
     return ex.mode === 'time' ? { weight: 0, reps: 0, seconds: lastSet?.seconds ?? 60, done: false } : { weight: lastSet?.weight ?? 0, reps: lastSet?.reps ?? 8, ...(lastSet?.repsR !== undefined ? { repsR: lastSet.repsR } : {}), done: false };
   };
-  const addSet = (ei: number) => { patchEx(ei, e => ({ ...e, sets: [...e.sets, blankSet(e)] })); };
+  const wasDone = (ei: number, si: number) => !!latest.current?.exercises[ei]?.sets[si]?.done;
+  const addSet = (ei: number) => { apply(S.addSet(ei, exId(ei), blankSet), true); };
   /** One more round of a superset or circuit: a set of each. */
-  const addRound = (b: Block) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.map((e, i) => (b.at.includes(i) ? { ...e, sets: [...e.sets, blankSet(e)] } : e)) }); };
-  const removeRound = (b: Block, si: number) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.map((e, i) => (b.at.includes(i) ? { ...e, sets: e.sets.filter((_, j) => j !== si) } : e)) }); };
-  const removeSet = (ei: number, si: number) => { patchEx(ei, e => ({ ...e, sets: e.sets.filter((_, j) => j !== si) })); };
-  const removeExercise = (ei: number) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.filter((_, i) => i !== ei) }); };
+  const addRound = (b: Block) => { apply(S.all(...b.at.map(ei => S.addSet(ei, exId(ei), blankSet))), true); };
+  const removeRound = (b: Block, si: number) => { apply(S.all(...b.at.map(ei => S.removeSet(ei, exId(ei), si, wasDone(ei, si)))), true); };
+  const removeSet = (ei: number, si: number) => { apply(S.removeSet(ei, exId(ei), si, wasDone(ei, si)), true); };
+  const removeExercise = (ei: number) => { apply(S.removeExercise(ei, exId(ei)), true); };
   /** The clock of an EMOM or AMRAP stopped: log what was done as sets (so volume, history and the review count it).
    *  AMRAP: every exercise did `count` rounds. EMOM: the minutes go round the exercises in turn. */
   const clockDone = (b: Block, count: number) => {
-    const cur = latest.current; if (!cur || count <= 0) return;
+    if (!latest.current || count <= 0) return;
     const doneAt = new Date().toISOString();
-    const exercises = cur.exercises.map((e, i) => {
-      const k = b.at.indexOf(i); if (k < 0) return e;
+    const next = apply(S.all(...b.at.map((ei, k) => S.onExercise(ei, exId(ei), e => {
       const n = b.kind === 'emom' ? Math.ceil((count - k) / b.at.length) : count;
       if (n <= 0) return e;
       const first = e.sets[0] || blankSet(e);
       return { ...e, sets: Array.from({ length: Math.min(n, 60) }, () => ({ ...first, done: true, doneAt })) };
-    });
-    const next = { ...cur, exercises }; persist(next, true);
-    afterDone(next, b.at[0], 0, false);
+    }))), true);
+    if (next) afterDone(next, b.at[0], 0, false);
   };
   /** Run a clocked block again: back to its one set-up row. */
-  const clockRedo = (b: Block) => { const cur = latest.current; if (!cur) return; persist({ ...cur, exercises: cur.exercises.map((e, i) => (b.at.includes(i) ? { ...e, sets: [{ ...(e.sets[0] || blankSet(e)), done: false, doneAt: undefined }] } : e)) }); };
+  const clockRedo = (b: Block) => { apply(S.all(...b.at.map(ei => S.onExercise(ei, exId(ei), e => ({ ...e, sets: [{ ...(e.sets[0] || blankSet(e)), done: false, doneAt: undefined }] })))), true); };
 
   const exerciseFrom = (e: Exercise, prevEx?: WorkoutExercise): WorkoutExercise => {
     if (isTimed(e)) {
@@ -195,8 +217,8 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   const inPlace = (e: WorkoutExercise, old: WorkoutExercise): WorkoutExercise => ({ ...e, ...(old.group ? { group: old.group, groupKind: old.groupKind, groupSec: old.groupSec } : {}) });
   const onPick = (e: Exercise) => {
     if (!w || !picker) return;
-    if (picker.mode === 'add') { persist({ ...w, exercises: [...w.exercises, exerciseFrom(e)] }); setOpen(blocksOf(w.exercises).length); }
-    else persist({ ...w, exercises: w.exercises.map((x, i) => (i === picker.index ? inPlace(exerciseFrom(e, x), x) : x)) });
+    if (picker.mode === 'add') { apply(S.addExercise(exerciseFrom(e)), true); setOpen(blocksOf(w.exercises).length); }
+    else { const old = w.exercises[picker.index]; if (old) apply(S.onExercise(picker.index, old.exerciseId, x => inPlace(exerciseFrom(e, x), x)), true); }
     setPicker(null);
   };
 
@@ -221,17 +243,16 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
       const review = (m ? reply.slice(0, m.index) : reply).replace(/PART 1:?/i, '').replace(/\s+/g, ' ').trim();
       const next = m ? parsePlan(m[1], done) : undefined;
       if (!review) return;
-      const cur = latest.current && latest.current.id === done.id ? latest.current : done;
-      const saved = { ...cur, review, next };
-      persist(saved, true); setSummary(s => (s ? { ...s, review, next } : s));
+      apply(S.patchSession({ review, next }), true); setSummary(s => (s ? { ...s, review, next } : s));
     }).catch(() => undefined).finally(() => setReviewing(false));
   };
   const finish = () => {
     if (!w) return;
-    const done: Workout = { ...w, endedAt: new Date().toISOString(), exercises: w.exercises.map(e => ({ ...e, sets: e.sets.filter(s => s.done) })).filter(e => e.sets.length) };
-    setRest(null);
-    done.prs = detectPRs(done, history);
-    persist(done, true); setSummary(done);
+    // finished on the newest copy, so a set the watch ticked a moment ago counts
+    const endedAt = new Date().toISOString();
+    const done = apply(d => { const f: Workout = { ...d, endedAt, rest: null, exercises: d.exercises.map(e => ({ ...e, sets: e.sets.filter(s => s.done) })).filter(e => e.sets.length) }; f.prs = detectPRs(f, history); return f; }, true);
+    if (!done) return;
+    setSummary(done);
     reviewSession(done);
     // the routine's gym block is done — or, for the home challenge after a missed gym day, the small version of it:
     // the gym stays unticked, the gym habit gets a 'mini' (keeps the streak) and the day notes the challenge was done
@@ -267,8 +288,9 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   }, [w, history, readOnly]);
   const discard = () => {
     if (!w || !confirm('Discard this session?')) return;
-    window.clearTimeout(timer.current); latest.current = null;
-    void saveWorkout({ ...w, endedAt: w.startedAt, discarded: true }).then(() => nav('/workout', { replace: true }));
+    const s = sync.current; latest.current = null;
+    s?.drop();
+    void s?.change(d => ({ ...d, endedAt: d.startedAt, discarded: true, rest: null }), true).then(() => nav('/workout', { replace: true }));
     // a thrown-away session didn't start the gym after all: clear the Start-workout habit tick, unless another session
     // that day still stands (the history holds that day's other sessions)
     if (w.kind !== 'home' && !history.some(x => x.id !== w.id && x.date === w.date && !x.discarded && x.kind !== 'home')) void autoMark('gymStart', false, w.date);
@@ -280,6 +302,10 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
   if (!w) return <Page><Header back="/workout" title="Loading…" /></Page>;
 
   const blocks = blocksOf(w.exercises);
+  // the rest that's running, from the session (started here or on the watch)
+  const rest = readOnly ? null : S.restView(w.rest, Date.now(), restEnd.current);
+  if (rest && rest.endsAt > Date.now()) restEnd.current = rest.endsAt;
+  const restOver = (end?: number) => { restEnd.current = null; apply(S.endRest(end === undefined ? undefined : new Date(end).toISOString()), true); };
   const libOf = (ex: WorkoutExercise) => findExercise(ex.exerciseId, custom);
   const howToBtn = (ex: WorkoutExercise, label?: ReactNode) => (
     <button type="button" className="wo-ex__howto" aria-label={`How to do ${ex.name}`} onClick={e => { e.stopPropagation(); setHowTo({ id: ex.exerciseId, name: ex.name, note: ex.note }); }}>{label}{ex.name} <PlayCircle size={15} /></button>);
@@ -291,6 +317,8 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
     ? (ex.comment ? <p className="wo-lastnote" key={`n${ei}`}>{named ? `${ex.name}: ` : 'Note: '}{ex.comment}</p> : null)
     : <TextArea key={`n${ei}`} rows={1} className="wo-comment" placeholder={named ? `Note on ${ex.name}…` : 'Note for next time (felt easy, go up 5 lb; left shoulder pinched…)'} value={ex.comment || ''} onChange={e => setComment(ei, e.target.value)} />);
 
+  /** The watch's heart rate under a done set: average / peak · how far it fell after. */
+  const heart = (s: SetLog) => { const h = s.done ? hrLine(s.hr) : null; return h && <p className="wo-hr" title={h.words}><span aria-hidden>{h.text}</span><span className="wo-hr__words">{h.words}</span></p>; };
   /** One set of one exercise, with the tracker that fits it. `tag` replaces the set number (A1, B2…) inside a block. */
   const setRow = (ex: WorkoutExercise, ei: number, si: number, o: { tag?: string; onRemove?: () => void; rpe?: boolean } = {}) => {
     const s = ex.sets[si]; if (!s) return null;
@@ -303,6 +331,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
           <div className="wo-set__n">{o.tag ?? si + 1}</div>
           <TimedSet target={s.seconds || 60} done={s.done} disabled={readOnly} sides={uni} onTarget={sec => patchSet(ei, si, { seconds: sec })} onDone={sec => timedDone(ei, si, sec)} />
           {remove && <div className="wo-set__prev">{remove}</div>}
+          {heart(s)}
         </div>
       );
     }
@@ -324,8 +353,10 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
           {bare && !readOnly && si === 0 && <button type="button" className="wo-addload" onClick={() => patchEx(ei, e => ({ ...e, noLoad: false }))}>+ weight</button>}
           {remove}
         </div>
+        {heart(s)}
         {o.rpe !== false && (!readOnly || s.rpe) && (
-          <div className="wo-rpe">RPE {RPES.map(r => <button key={r} type="button" className={s.rpe === r ? 'is-on' : ''} disabled={readOnly} onClick={() => patchSet(ei, si, { rpe: s.rpe === r ? undefined : r })}>{r}</button>)}</div>
+          // the watch picks in half steps (8.5): that one shows among the phone's, picked
+          <div className="wo-rpe">RPE {[...new Set([...RPES, ...(s.rpe ? [s.rpe] : [])])].sort((a, b) => a - b).map(r => <button key={r} type="button" className={s.rpe === r ? 'is-on' : ''} disabled={readOnly} onClick={() => patchSet(ei, si, { rpe: s.rpe === r ? undefined : r })}>{r}</button>)}</div>
         )}
       </div>
     );
@@ -474,7 +505,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
 
       <Card>
         <h3 style={{ marginBottom: 6 }}>Notes</h3>
-        <TextArea value={w.notes || ''} readOnly={readOnly} placeholder="How did it go? Sleep, energy, tweaks…" onChange={e => persist({ ...w, notes: e.target.value })} />
+        <TextArea value={w.notes || ''} readOnly={readOnly} placeholder="How did it go? Sleep, energy, tweaks…" onChange={e => apply(S.patchSession({ notes: e.target.value }))} />
       </Card>
 
       {!readOnly && <Button block primary onClick={finish} disabled={setsDone(w) === 0}><Sparkles size={18} /> Complete workout</Button>}
@@ -484,7 +515,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
 
       <ExerciseSheet exerciseId={howTo?.id ?? null} name={howTo?.name || ''} note={howTo?.note} custom={custom} onClose={() => setHowTo(null)} />
       <ExercisePicker open={!!picker} onClose={() => setPicker(null)} onPick={onPick} custom={custom} onCustomAdded={e => setCustom(c => [...c, e])} />
-      <RestTimer endsAt={rest?.endsAt ?? null} total={rest?.total ?? 0} onDone={() => setRest(null)} onExtend={() => setRest(r => (r ? { endsAt: r.endsAt + 30000, total: r.total + 30 } : r))} onSkip={() => setRest(null)} />
+      <RestTimer endsAt={rest?.endsAt ?? null} total={rest?.total ?? 0} onDone={() => restOver(rest?.endsAt)} onExtend={() => { apply(S.addRest(30), true); }} onSkip={() => restOver()} />
 
       <Sheet open={!!summary} onClose={() => nav('/workout', { replace: true })} title="Session done">
         {summary && (
