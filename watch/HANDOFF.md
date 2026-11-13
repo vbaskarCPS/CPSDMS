@@ -79,6 +79,10 @@ mirror it), `src/planner/features/habits/auto.ts`, `src/planner/features/look/` 
   earlier suspects (`Transform` on `Arc` endAngle, `Variant` in `PartText`, `ellipsis`, `RoundRectangle`,
   `[MINUTE_Z]`, `[DAY_OF_WEEK_S]`, `[MONTH_S]`, a third-party `primaryProvider`) are all valid. If it still won't
   apply: README › The planner watch face (logcat filters `watchface` and `runtime`).
+- **Face apply error found on the watch (13 Nov)**: `FavoriteOperationException: Error 0` was caused by
+  `defaultSystemProviderType="EMPTY"` on the three planner spots: the watch requires the fallback type to be one of
+  the slot's `supportedTypes`. Fixed (LONG_TEXT / RANGED_VALUE). Galaxy watch tip: Wi-Fi debugging drops while the
+  watch's Bluetooth is on; turn Bluetooth off while installing.
 - Not tested on the watch yet: spots on a Samsung face, background steps upload, race/sauna, starting a session,
   everything from batch 3.
 
