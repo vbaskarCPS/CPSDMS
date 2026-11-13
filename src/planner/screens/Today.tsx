@@ -243,7 +243,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
                     {s.what
                       ? <button type="button" className={`pl-btn pl-btn--small ${s.eaten ? 'pl-btn--ghost' : due ? 'pl-btn--primary' : ''}`} onClick={() => void ateIt(s)}>{s.eaten ? 'Undo' : 'Ate it'}</button>
                       : <Link to="/plan/sauna" className="pl-btn pl-btn--small pl-btn--ghost">Plan it <ChevronRight /></Link>}
-                    {!s.eaten && already?.slotId !== s.id && <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">Ate something else</Link>}
+                    {!s.eaten && already?.slotId !== s.id && <Link to={`/food/add?slot=${encodeURIComponent(s.id)}`} className="pl-btn pl-btn--small pl-btn--ghost">Ate something else</Link>}
                   </div>
                   {already?.slotId === s.id && (
                     <div className="today-already" role="group" aria-label="Already logged">
