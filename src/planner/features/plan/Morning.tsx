@@ -8,9 +8,9 @@ import { useDoc } from '../../lib/useDoc';
 import { clock } from '../../lib/routine';
 import { useTodayRoutine } from '../../lib/useTodayRoutine';
 import { Page, Header, Card, Button, useToast } from '../../ui/primitives';
-import { nowHM } from './dates';
 import { beep } from './sound';
-import { emptyDay, normalizeDay, type Day, type MorningRoutine } from './types';
+import { emptyDay, fillUp, normalizeDay, type Day, type MorningRoutine } from './types';
+import { markWake } from '../habits/auto';
 
 type StageId = 'stretch' | 'meditate' | 'workout';
 const STAGES: { id: StageId; label: string; prompts: string[] }[] = [
@@ -77,7 +77,10 @@ export function Morning() {
 
   const start = () => {
     if (!stage) return;
-    set(d => ({ ...d, ticks: { ...d.ticks, up: d.ticks.up || nowHM(), upAt: d.ticks.up ? d.ticks.upAt : new Date().toISOString() }, morningRoutine: { ...d.morningRoutine, startedAt: d.morningRoutine.startedAt || new Date().toISOString() } }));
+    // starting fills in I'm up when it's empty, and ticks the habits set to I'm up, at this moment
+    const at = new Date(), firstUp = !day.ticks.up;
+    set(d => ({ ...fillUp(d, at), morningRoutine: { ...d.morningRoutine, startedAt: d.morningRoutine.startedAt || at.toISOString() } }));
+    if (firstUp) void markWake(at.getTime(), today);
     endAt.current = Date.now() + left * 1000; setRunning(true);
   };
   const pause = () => { setRunning(false); };
