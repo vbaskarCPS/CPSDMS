@@ -6,9 +6,9 @@
   --l-violet: #6d28d9; --l-indigo: #4338ca; --l-cyan: #0e7490; --l-orange: #c2410c; }
 .v2-legacy-panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; min-height: 500px;
   display: flex; flex-direction: column; overflow: hidden; }
-.v2-legacy-full .h-screen { height: calc(100vh - 58px); }
+.v2-legacy-full .h-screen { height: calc(100vh - var(--v2-bar-h, 72px)); }
 /* a payout opened from a line-up has a strip above it (.v2-queue, 44px) */
-.v2-legacy-full.queued .h-screen { height: calc(100vh - 58px - 44px); }
+.v2-legacy-full.queued .h-screen { height: calc(100vh - var(--v2-bar-h, 72px) - 44px); }
 
 /* ---------- surfaces ---------- */
 .v2-legacy .bg-gray-900, .v2-legacy .bg-cps-dark, .v2-legacy .bg-cps-light { background-color: var(--bg); }

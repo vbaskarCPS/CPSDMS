@@ -5,7 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import { Bell, BellOff, BellRing, Loader2, Moon, Send, Share } from 'lucide-react';
 import { enablePush, pushState, type PushState } from '../../lib/push';
-import { clock, grouped, MINUTES, notifyGet, notifyQuietSet, notifySet, notifyTest, SCOPE_LABEL, type NotifyEvent, type NotifySettings, type Scope } from '../../lib/notify';
+import { clock, grouped, MINUTES, notifyGet, notifyMorningSet, notifyQuietSet, notifySet, notifyTest, SCOPE_LABEL, type NotifyEvent, type NotifySettings, type Scope } from '../../lib/notify';
 import { ErrorBox, Loading, Toggle } from '../../ui';
 
 const Device: React.FC<{ devices: number; onOn: () => void }> = ({ devices, onOn }) => {
@@ -42,7 +42,7 @@ const Device: React.FC<{ devices: number; onOn: () => void }> = ({ devices, onOn
   );
 };
 
-const Row: React.FC<{ e: NotifyEvent; busy: boolean; onChange: (next: Partial<NotifyEvent>) => void }> = ({ e, busy, onChange }) => (
+const Row: React.FC<{ e: NotifyEvent; busy: boolean; onChange: (next: Partial<NotifyEvent>) => void; children?: React.ReactNode }> = ({ e, busy, onChange, children }) => (
   <div className={`v2-nt-row${e.on ? '' : ' off'}`}>
     <div className="v2-nt-rt">
       <b>{e.label}</b>
@@ -61,6 +61,7 @@ const Row: React.FC<{ e: NotifyEvent; busy: boolean; onChange: (next: Partial<No
               onClick={() => onChange({ minutes: m })}>{m < 60 ? `${m} min` : m === 60 ? '1 hr' : `${m / 60} hr`}</button>))}
         </div>
       )}
+      {e.on && children}
     </div>
     <Toggle on={e.on} disabled={busy} label={e.label} onChange={v => onChange({ on: v })} />
   </div>
@@ -104,6 +105,11 @@ export const NotifyPanel: React.FC = () => {
     setS({ ...s, quiet: q }); setBusy(true); setError(null);
     try { await notifyQuietSet(q); } catch (err) { setS(before); setError(err); } finally { setBusy(false); }
   };
+  const morning = async (at: string) => {
+    const before = s;
+    setS({ ...s, morning: at }); setBusy(true); setError(null);
+    try { await notifyMorningSet(at); } catch (err) { setS(before); setError(err); } finally { setBusy(false); }
+  };
   return (
     <div className="v2-nt">
       <Device devices={s.devices} onOn={() => void load()} />
@@ -111,7 +117,12 @@ export const NotifyPanel: React.FC = () => {
       {grouped(s.events).map(g => (
         <section key={g.group} className="v2-nt-card">
           <h2 className="v2-nt-h">{g.label}</h2>
-          {g.events.map(e => <Row key={e.key} e={e} busy={busy} onChange={next => void change(e, next)} />)}
+          {g.events.map(e => <Row key={e.key} e={e} busy={busy} onChange={next => void change(e, next)}>
+            {e.key === 'all.morning' && (
+              <div className="v2-nt-times" style={{ marginTop: 8, paddingBottom: 0 }}><label>At <input type="time" className="v2-input" value={s.morning || '07:30'} disabled={busy}
+                onChange={ev => { if (ev.target.value) void morning(ev.target.value); }} /></label></div>
+            )}
+          </Row>)}
         </section>
       ))}
       <Quiet s={s} onSave={q => void quiet(q)} busy={busy} />
