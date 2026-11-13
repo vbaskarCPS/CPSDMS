@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "PlannerWatch"
 include(":app")
+include(":face")

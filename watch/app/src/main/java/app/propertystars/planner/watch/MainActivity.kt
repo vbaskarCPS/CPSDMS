@@ -4,6 +4,7 @@
 //   Habits     today's habits and to-dos, ticked with a tap
 //   Workout    the next set of the session that's on: weight and reps (buttons or the bezel), Done
 //   Rest       the rest countdown, which buzzes at the end, then back to Workout
+//   Timers     I'm up, the race timer, the sauna
 // Swiping right goes back to Today.
 package app.propertystars.planner.watch
 
@@ -23,6 +24,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -64,7 +67,6 @@ import androidx.compose.ui.unit.sp
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.material.Text
-import androidx.wear.tiles.TileService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -79,7 +81,7 @@ private val Card = Color(0xFF1C1C1C)
 private val Muted = Color(0xFFBDBDBD)
 private val Faint = Color(0xFF8E8E8E)
 
-private enum class Screen { Pair, Today, Habits, Workout, Rest }
+private enum class Screen { Pair, Today, Habits, Workout, Rest, Timers }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,10 +91,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Ask the Today tile to draw itself again (after a tick or a set). */
-private fun refreshTile(context: Context) {
-    try { TileService.getUpdater(context).requestUpdate(TodayTileService::class.java) } catch (_: Exception) { }
-}
+/** Ask the Today tile and the watch-face spots to draw themselves again (after a tick or a set). */
+private fun refreshTile(context: Context) = Spots.refresh(context)
 
 private fun buzz(context: Context) {
     val v = context.getSystemService(Vibrator::class.java) ?: return
@@ -105,6 +105,7 @@ private fun App(planner: Planner) {
     var restSec by remember { mutableIntStateOf(90) }
     var restNote by remember { mutableStateOf("") }
     if (screen != Screen.Today && screen != Screen.Pair) BackHandler { screen = Screen.Today }
+    if (screen != Screen.Pair) AskForSensors()
     val signedOut = { screen = Screen.Pair }
     when (screen) {
         Screen.Pair -> PairScreen(planner) { screen = Screen.Today }
@@ -115,13 +116,31 @@ private fun App(planner: Planner) {
             screen = if (sec > 0) Screen.Rest else Screen.Workout
         }
         Screen.Rest -> RestScreen(restSec, restNote) { screen = Screen.Workout }
+        Screen.Timers -> TimersScreen(planner, onSignedOut = signedOut)
+    }
+}
+
+/** Once: steps (activity) and heart rate (body sensors), then heart rate in the background. Then daily health starts. */
+@Composable
+private fun AskForSensors() {
+    val context = LocalContext.current
+    val granted = { p: String -> context.checkSelfPermission(p) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    val background = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { Health.register(context, granted(Manifest.permission.BODY_SENSORS)) }
+    val first = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        val body = r[Manifest.permission.BODY_SENSORS] == true || granted(Manifest.permission.BODY_SENSORS)
+        Health.register(context, body)
+        if (body && android.os.Build.VERSION.SDK_INT >= 33 && !granted("android.permission.BODY_SENSORS_BACKGROUND")) background.launch("android.permission.BODY_SENSORS_BACKGROUND")
+    }
+    LaunchedEffect(Unit) {
+        val need = listOf(Manifest.permission.ACTIVITY_RECOGNITION, Manifest.permission.BODY_SENSORS).filter { !granted(it) }
+        if (need.isEmpty()) Health.register(context, true) else first.launch(need.toTypedArray())
     }
 }
 
 // ───────────────────────── layout: the time on top, the screen below ─────────────────────────
 
 @Composable
-private fun Face(content: @Composable ColumnScope.() -> Unit) {
+private fun Face(scroll: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
     val time by produceState(initialValue = clockNow()) {
         while (true) { value = clockNow(); delay(5_000) }
     }
@@ -133,7 +152,9 @@ private fun Face(content: @Composable ColumnScope.() -> Unit) {
             }
             Box(Modifier.fillMaxWidth().padding(horizontal = 36.dp).height(1.dp).background(Color(0xFF222222)))
             Column(
-                Modifier.fillMaxWidth().weight(1f).padding(start = 22.dp, end = 22.dp, top = 8.dp),
+                Modifier.fillMaxWidth().weight(1f)
+                    .then(if (scroll) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+                    .padding(start = 22.dp, end = 22.dp, top = 8.dp, bottom = if (scroll) 24.dp else 0.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 content = content,
@@ -212,13 +233,13 @@ private fun TodayScreen(planner: Planner, onSignedOut: () -> Unit, open: (Screen
     var problem by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         while (true) {
-            try { summary = today.load(); problem = null; refreshTile(context) }
+            try { summary = today.load(); problem = null; refreshTile(context); try { Health.upload(context) } catch (_: Exception) { } }
             catch (_: SignedOut) { onSignedOut(); return@LaunchedEffect }
             catch (_: Exception) { problem = "No connection" }
             delay(60_000)
         }
     }
-    Face {
+    Face(scroll = true) {
         val s = summary
         if (s == null) { Message(problem ?: "Loading…"); return@Face }
         Text("NOW", color = Orange, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
@@ -227,12 +248,15 @@ private fun TodayScreen(planner: Planner, onSignedOut: () -> Unit, open: (Screen
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Stat("${s.proteinLeft} g", "protein left")
             Stat("${s.habitsDone} / ${s.habits.size}", "habits")
+            val steps = Health.stepsToday(context)
+            Stat(if (steps >= 1000) "%.1fk".format(steps / 1000f) else "$steps", "steps")
         }
         s.next?.let { Text("Next · ${it.label} ${clock(it.at)}", color = Blue, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Pill("Workout", Orange, Color(0xFF1A0E00)) { open(Screen.Workout) }
             Pill("Habits", Card, Color.White) { open(Screen.Habits) }
         }
+        Pill("Timers", Card, Color.White) { open(Screen.Timers) }
         problem?.let { Message(it, Faint) }
     }
 }
@@ -305,6 +329,8 @@ private fun WorkoutScreen(planner: Planner, onSignedOut: () -> Unit, onRest: (In
     var reps by remember { mutableIntStateOf(0) }
     var bpm by remember { mutableIntStateOf(0) }
     var saving by remember { mutableStateOf(false) }
+    var offer by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    var reload by remember { mutableIntStateOf(0) }
     val heart = remember { Heart(context) { bpm = it } }
     val focus = remember { FocusRequester() }
     var turned by remember { mutableStateOf(0f) }
@@ -318,10 +344,15 @@ private fun WorkoutScreen(planner: Planner, onSignedOut: () -> Unit, onRest: (In
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose { heart.stop(); window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(reload) {
         try {
             val live = workout.live()
-            if (live == null) { status = "No session on. Start one on your phone: Training › Start workout."; return@LaunchedEffect }
+            if (live == null) {
+                offer = workout.todaysTemplate()
+                status = if (offer == null) "No session planned. Set one up in Training on your phone." else ""
+                return@LaunchedEffect
+            }
+            offer = null
             val n = workout.nextSet(live.first, live.second)
             if (n == null) { status = "Every set is done. Complete the workout on your phone."; return@LaunchedEffect }
             next = n; weight = n.weight; reps = n.reps
@@ -332,6 +363,23 @@ private fun WorkoutScreen(planner: Planner, onSignedOut: () -> Unit, onRest: (In
     val step = Workout.step(planner.units)
     Face {
         val n = next
+        val o = offer
+        if (n == null && o != null) {
+            Text("TODAY'S SESSION", color = Orange, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            Text(o.optString("name"), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 2)
+            Text("${o.optJSONArray("exercises")?.length() ?: 0} exercises", color = Muted, fontSize = 11.sp)
+            Pill(if (saving) "Starting…" else "Start workout", Orange, Color(0xFF1A0E00), Modifier.width(130.dp)) {
+                if (saving) return@Pill
+                saving = true
+                scope.launch {
+                    try { workout.start(o); refreshTile(context); reload++ }
+                    catch (_: SignedOut) { onSignedOut() } catch (_: Exception) { status = "Couldn't start. Try again." }
+                    saving = false
+                }
+            }
+            if (status.isNotEmpty()) Message(status, Faint)
+            return@Face
+        }
         if (n == null) { Message(status); return@Face }
         Text(n.exercise, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
         Text(
@@ -420,5 +468,96 @@ private fun RestScreen(seconds: Int, note: String, onDone: () -> Unit) {
             Pill("+30 s", Card, Color.White) { endsAt += 30_000L }
             Pill("Skip", Blue, Color(0xFF001A33)) { onDone() }
         }
+    }
+}
+
+// ───────────────────────── Timers ─────────────────────────
+
+private fun mmss(ms: Long): String {
+    val t = maxOf(0L, ms / 1000)
+    return if (t >= 3600) "%d:%02d:%02d".format(t / 3600, (t % 3600) / 60, t % 60) else "%d:%02d".format(t / 60, t % 60)
+}
+
+@Composable
+private fun TimersScreen(planner: Planner, onSignedOut: () -> Unit) {
+    val timers = remember { Timers(planner) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var now by remember { mutableStateOf<TimersNow?>(null) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    var tick by remember { mutableStateOf(System.currentTimeMillis()) }
+    var reload by remember { mutableIntStateOf(0) }
+    var buzzed by remember { mutableStateOf(false) }
+    LaunchedEffect(reload) {
+        try { now = timers.load(); problem = null } catch (_: SignedOut) { onSignedOut() } catch (_: Exception) { problem = "No connection" }
+    }
+    LaunchedEffect(Unit) { while (true) { tick = System.currentTimeMillis(); delay(500) } }
+    val act: (suspend () -> Unit) -> Unit = { f ->
+        scope.launch {
+            try { f(); refreshTile(context); reload++ } catch (_: SignedOut) { onSignedOut() } catch (_: Exception) { problem = "Couldn't save. Try again." }
+        }
+    }
+    // the sauna: when its minutes are up, buzz and tick it
+    val sauna = now?.sauna
+    LaunchedEffect(sauna, tick / 1000) {
+        val st = sauna?.startMs ?: return@LaunchedEffect
+        if (sauna.done == null && !buzzed && tick >= st + sauna.minutes * 60_000L) {
+            buzzed = true
+            buzz(context)
+            act { timers.saunaDone() }
+        }
+    }
+    Face(scroll = true) {
+        val n = now
+        if (n == null) { Message(problem ?: "Loading…"); return@Face }
+        if (n.up == null) Pill("I'm up", Orange, Color(0xFF1A0E00), Modifier.width(110.dp)) { act { timers.imUp() } }
+        n.race?.let { r ->
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Card).padding(vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(r.title.uppercase(), color = Orange, fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, maxLines = 1)
+                val shown = when {
+                    r.startMs == null -> "—"
+                    r.finishMs != null -> mmss(r.finishMs - r.startMs)
+                    else -> mmss(tick - r.startMs)
+                }
+                Text(shown, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Light)
+                Text(
+                    when {
+                        r.startMs == null -> "Starts when you tick I'm up"
+                        r.finishMs != null -> r.bestMs?.let { "Done · best ${mmss(it)}" } ?: "Done"
+                        else -> r.bestMs?.let { "Best ${mmss(it)}" } ?: "Running"
+                    },
+                    color = Muted, fontSize = 10.sp,
+                )
+            }
+        }
+        sauna?.let { s ->
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Card).padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("SAUNA", color = Blue, fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    val left = s.startMs?.let { it + s.minutes * 60_000L - tick }
+                    Text(
+                        when {
+                            s.done != null -> "Done ${clock(s.done)}"
+                            left != null -> mmss(left)
+                            else -> "${s.minutes}:00"
+                        },
+                        color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                when {
+                    s.done != null -> {}
+                    s.startMs == null -> Pill("Start", Blue, Color(0xFF001A33)) { act { timers.startSauna() } }
+                    else -> Pill("Out", Card, Color.White) { act { timers.saunaDone() } }
+                }
+            }
+        }
+        if (n.race == null && sauna == null && n.up != null) Message("No race timer or sauna today. Add a race timer on Today in the planner.")
+        problem?.let { Message(it, Faint) }
     }
 }

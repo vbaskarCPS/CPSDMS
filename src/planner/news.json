@@ -1,6 +1,8 @@
 [
   { "id": "2026-11-13-slot-something-else", "date": "2026-11-13", "title": "“Ate something else” ticks the slot",
     "lines": ["On Today’s protein road, “Ate something else” now ticks that shake or meal once you log what you had, and brings you back to Today.", "If it’s already in your log and you tap “Don’t add”, that one counts for the slot."] },
+  { "id": "2026-11-12-watch-health", "date": "2026-11-12", "title": "Your watch's steps reach the assistant", "for": "night",
+    "lines": ["With the planner on your Galaxy Watch, your steps and resting heart rate are saved each day.", "Ask the assistant about them, or how your workout heart rate went: it can see both."] },
   { "id": "2026-11-12-habit-rules", "date": "2026-11-12", "title": "Habits that tick themselves, on time",
     "lines": ["A habit that ticks itself can now say “only counts if done by” a time, or “within so many minutes of I’m up”. Set it in the habit’s editor.", "The rule shows on the habit’s card, like “by 5:05 am”.", "New: a habit can tick itself when the day’s protein goal is logged.", "The Miracle Morning and the Brief now tick your “I’m up” habit too."] },
   { "id": "2026-11-12-bank-add-accounts", "date": "2026-11-12", "title": "Add a card to a bank that’s already connected",

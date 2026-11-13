@@ -10,6 +10,10 @@
     <!-- heart rate during a workout (older and newer names of the same permission) -->
     <uses-permission android:name="android.permission.BODY_SENSORS" />
     <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <!-- heart rate in the background (resting heart rate), and steps -->
+    <uses-permission android:name="android.permission.BODY_SENSORS_BACKGROUND" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE_BACKGROUND" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
 
     <application
         android:allowBackup="false"
@@ -50,5 +54,79 @@
                 android:name="androidx.wear.tiles.PREVIEW"
                 android:resource="@drawable/tile_preview" />
         </service>
+
+        <service
+            android:name=".ProteinSpot"
+            android:exported="true"
+            android:icon="@drawable/ic_spot"
+            android:label="Protein left"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="RANGED_VALUE,SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="900" />
+        </service>
+
+        <service
+            android:name=".HabitsSpot"
+            android:exported="true"
+            android:icon="@drawable/ic_spot"
+            android:label="Habits done"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="RANGED_VALUE,SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="900" />
+        </service>
+
+        <service
+            android:name=".StepsSpot"
+            android:exported="true"
+            android:icon="@drawable/ic_spot"
+            android:label="Steps"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="RANGED_VALUE,SHORT_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="900" />
+        </service>
+
+        <service
+            android:name=".NextSpot"
+            android:exported="true"
+            android:icon="@drawable/ic_spot"
+            android:label="Next in the planner"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,LONG_TEXT" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="900" />
+        </service>
+
+        <!-- steps and heart rate in the background (Health.kt) -->
+        <service
+            android:name=".HealthListener"
+            android:exported="true"
+            android:permission="com.google.android.wearable.healthservices.permission.PASSIVE_DATA_BINDING" />
     </application>
 </manifest>

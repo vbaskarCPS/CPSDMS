@@ -74,6 +74,8 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
   } catch { training_state = undefined; }
 
   const todayAdjust = cleanAdjust(days.find(d => d.key === today)?.data?.adjust);
+  // steps and resting heart rate from the Galaxy Watch (watch/: Health.kt), one doc per calendar day
+  const health = await getDocs<AnyDoc>('health', calDate(-14), calDate(0)).catch(() => []);
   return {
     today, weekday: new Date().toLocaleDateString([], { weekday: 'long' }), units,
     now: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -90,6 +92,7 @@ export async function lifeContext(units: string, opts: { workoutsDays?: number; 
     workout_in_progress: inProgress ? { name: inProgress.name, started: inProgress.startedAt, exercises: (inProgress.exercises || []).map((e: AnyDoc) => ({ name: e.name, sets: (e.sets || []).map((s: AnyDoc) => `${fmtSet(s)}${s.done ? '' : ' (not done)'}`), my_note: e.comment || undefined })) } : undefined,
     training_state,
     workouts_recent_full_then_condensed: sessions,
+    watch_health_recent: health.length ? health.map(d => ({ date: d.key, steps: d.data?.steps, resting_hr: d.data?.restingHr })) : undefined,
     body_weight: weights.map(d => ({ date: d.key, weight: d.data?.weight })).filter(x => x.weight > 0).slice(-12),
     cycle: routine.profile === 'morning' ? { periods_recent: periods.map(d => d.data).slice(-6), logs_recent: cycleLogs.map(d => ({ date: d.key, ...(d.data || {}) })) } : undefined,
   };
