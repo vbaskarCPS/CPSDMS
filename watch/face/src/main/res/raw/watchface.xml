@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The planner watch face (Watch Face Format 1). Top: the time and the date. Then what's next in the planner, and three
+  The planner watch face (Watch Face Format 2: Wear OS 5 and later). Top: the time and the date. Then what's next in the planner, and three
   rings: protein, habits, steps. The rings and the "next" line are spots (complications) filled by the planner app
   (app.propertystars.planner.watch …Spot): press and hold the face › Customize to put other spots there instead.
+  The rings take the colour the spot sends (the look chosen on the phone, app/…/Look.kt); a spot from another app that
+  sends none gets this face's own colours.
   Always-on: only the time and date stay, dimmed.
+  Check it with Google's validator (watch/README.md › The planner watch face) after any change.
 -->
 <WatchFace width="450" height="450">
     <Metadata key="CLOCK_TYPE" value="DIGITAL" />
@@ -79,15 +82,35 @@
                     <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
                         <Stroke color="#ff2a2a2a" thickness="8" />
                     </Arc>
-                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                        <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
-                        <Stroke color="#ffff9a4d" thickness="8" cap="ROUND" />
-                    </Arc>
                     <Variant mode="AMBIENT" target="alpha" value="0" />
                 </PartDraw>
+                <!-- the ring in the spot's own colour (the planner app sends the look's colour), else this face's -->
+                <Condition>
+                    <Expressions>
+                        <Expression name="ramp"><![CDATA[[COMPLICATION.RANGED_VALUE_COLORS] != null]]></Expression>
+                    </Expressions>
+                    <Compare expression="ramp">
+                        <PartDraw x="0" y="0" width="96" height="96">
+                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                                <WeightedStroke colors="[COMPLICATION.RANGED_VALUE_COLORS]" interpolate="[COMPLICATION.RANGED_VALUE_COLORS_INTERPOLATE]" thickness="8" cap="ROUND" />
+                            </Arc>
+                            <Variant mode="AMBIENT" target="alpha" value="0" />
+                        </PartDraw>
+                    </Compare>
+                    <Default>
+                        <PartDraw x="0" y="0" width="96" height="96">
+                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                                <Stroke color="#ffff9a4d" thickness="8" cap="ROUND" />
+                            </Arc>
+                            <Variant mode="AMBIENT" target="alpha" value="0" />
+                        </PartDraw>
+                    </Default>
+                </Condition>
                 <PartText x="0" y="26" width="96" height="28">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -105,7 +128,7 @@
             <Complication type="SHORT_TEXT">
                 <PartText x="0" y="26" width="96" height="44">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -126,15 +149,35 @@
                     <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
                         <Stroke color="#ff2a2a2a" thickness="8" />
                     </Arc>
-                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                        <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
-                        <Stroke color="#ff7ee0a8" thickness="8" cap="ROUND" />
-                    </Arc>
                     <Variant mode="AMBIENT" target="alpha" value="0" />
                 </PartDraw>
+                <!-- the ring in the spot's own colour (the planner app sends the look's colour), else this face's -->
+                <Condition>
+                    <Expressions>
+                        <Expression name="ramp"><![CDATA[[COMPLICATION.RANGED_VALUE_COLORS] != null]]></Expression>
+                    </Expressions>
+                    <Compare expression="ramp">
+                        <PartDraw x="0" y="0" width="96" height="96">
+                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                                <WeightedStroke colors="[COMPLICATION.RANGED_VALUE_COLORS]" interpolate="[COMPLICATION.RANGED_VALUE_COLORS_INTERPOLATE]" thickness="8" cap="ROUND" />
+                            </Arc>
+                            <Variant mode="AMBIENT" target="alpha" value="0" />
+                        </PartDraw>
+                    </Compare>
+                    <Default>
+                        <PartDraw x="0" y="0" width="96" height="96">
+                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                                <Stroke color="#ff7ee0a8" thickness="8" cap="ROUND" />
+                            </Arc>
+                            <Variant mode="AMBIENT" target="alpha" value="0" />
+                        </PartDraw>
+                    </Default>
+                </Condition>
                 <PartText x="0" y="26" width="96" height="28">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -152,7 +195,7 @@
             <Complication type="SHORT_TEXT">
                 <PartText x="0" y="26" width="96" height="44">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -173,15 +216,35 @@
                     <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
                         <Stroke color="#ff2a2a2a" thickness="8" />
                     </Arc>
-                    <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
-                        <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
-                        <Stroke color="#ff8fc1ff" thickness="8" cap="ROUND" />
-                    </Arc>
                     <Variant mode="AMBIENT" target="alpha" value="0" />
                 </PartDraw>
+                <!-- the ring in the spot's own colour (the planner app sends the look's colour), else this face's -->
+                <Condition>
+                    <Expressions>
+                        <Expression name="ramp"><![CDATA[[COMPLICATION.RANGED_VALUE_COLORS] != null]]></Expression>
+                    </Expressions>
+                    <Compare expression="ramp">
+                        <PartDraw x="0" y="0" width="96" height="96">
+                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                                <WeightedStroke colors="[COMPLICATION.RANGED_VALUE_COLORS]" interpolate="[COMPLICATION.RANGED_VALUE_COLORS_INTERPOLATE]" thickness="8" cap="ROUND" />
+                            </Arc>
+                            <Variant mode="AMBIENT" target="alpha" value="0" />
+                        </PartDraw>
+                    </Compare>
+                    <Default>
+                        <PartDraw x="0" y="0" width="96" height="96">
+                            <Arc centerX="48" centerY="48" width="84" height="84" startAngle="0" endAngle="360">
+                                <Transform target="endAngle" value="([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN]) * 360" />
+                                <Stroke color="#ff8fc1ff" thickness="8" cap="ROUND" />
+                            </Arc>
+                            <Variant mode="AMBIENT" target="alpha" value="0" />
+                        </PartDraw>
+                    </Default>
+                </Condition>
                 <PartText x="0" y="26" width="96" height="28">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -199,7 +262,7 @@
             <Complication type="SHORT_TEXT">
                 <PartText x="0" y="26" width="96" height="44">
                     <Text align="CENTER">
-                        <Font family="SYNC_TO_DEVICE" size="22" weight="BOLD" color="#ffffffff">
+                        <Font family="SYNC_TO_DEVICE" size="22" weight="SEMI_BOLD" color="#ffffffff">
                             <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
