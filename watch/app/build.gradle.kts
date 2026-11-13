@@ -65,4 +65,7 @@ dependencies {
 
     // heart rate from the watch's sensor
     implementation("androidx.health:health-services-client:1.0.0-rc02")
+
+    // the plain tests in src/test (session order, next up, heart-rate sums): run on the computer, no watch needed
+    testImplementation("junit:junit:4.13.2")
 }
