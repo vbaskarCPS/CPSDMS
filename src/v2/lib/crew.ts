@@ -42,30 +42,14 @@ export async function roadTripCenters(): Promise<{ id: string; display_name: str
 }
 
 /**
- * A road trip's day runs off the crew, not bookings: a day that hasn't started gets everyone
- * active in the crew on its roster, and anyone no longer in the crew comes off it (unless
- * something was already recorded for them that day).
+ * A road trip's day runs off the crew, not bookings: a day that hasn't started gets everyone active in the crew on its
+ * roster, ticked as working, and anyone no longer in the crew comes off it (unless something was already recorded for
+ * them that day). The database does it (wb_sync_crew_day), every hour for today and tomorrow on its own, and here when
+ * a day is opened, so the day is filled whether or not anyone opens it.
  */
 export async function syncCrewDay(centerId: string, date: string): Promise<{ added: number; removed: number }> {
-  const { getDay, listRoster, book, removeFromDay, confirmRows } = await import('./workerbook');
-  const crew = (await crewList(centerId)).here.filter(r => r.status === 'active');
-  const day = await getDay(centerId, date);
-  if (day && day.state !== 'planned') return { added: 0, removed: 0 };
-  const rows = day ? await listRoster(day.id) : [];
-  const have = new Set(rows.map(r => r.hire_id));
-  const want = new Set(crew.map(r => r.hire_id));
-  const add = crew.filter(r => !have.has(r.hire_id)).map(r => r.hire_id);
-  const added = add.length ? await book(centerId, date, add) : 0;
-  const drop = rows.filter(r => !want.has(r.hire_id) && !r.attendance && !r.team && !r.next_action && !r.next_day);
-  for (const r of drop) await removeFromDay(r.id);
-  // Everyone on a road-trip day is down as working unless someone unticks them (stored as the
-  // roster's confirmation, which road trips don't otherwise use). New rows start ticked; a day
-  // that nobody has ticked yet (filled before this existed) gets everyone ticked once.
-  const after = (added || drop.length) ? await listRoster((await getDay(centerId, date))!.id) : rows;
-  const kept = after.filter(r => want.has(r.hire_id));
-  const fresh = kept.filter(r => !r.confirmed_at && (!have.has(r.hire_id) || !rows.some(x => x.confirmed_at)));
-  await confirmRows(fresh.map(r => r.id));
-  return { added: added + fresh.length, removed: drop.length };
+  const r = must(await db.rpc('app_sync_crew_day', { p_center: centerId, p_day: date })) as { added?: number; ticked?: number; removed?: number };
+  return { added: (r?.added || 0) + (r?.ticked || 0), removed: r?.removed || 0 };
 }
 
 /**
