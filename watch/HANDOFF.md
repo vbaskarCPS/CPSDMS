@@ -98,6 +98,8 @@ mirror it), `src/planner/features/habits/auto.ts`, `src/planner/features/look/` 
    black (lighten dark accents). Refresh when the look changes.
 7. **Fix the watch face** (above).
 
+Note: main since added rules to habits that tick themselves ("only counts if done by" a time, "within N minutes of I'm up": `features/habits/auto.ts`). The watch's `Today.markAuto` and the 30-minute gym-start check in `Timers.startedInTime` don't follow those rules yet: port them.
+
 Also on the earlier list, not started: the assistant on the watch (press and talk, reply with Confirm / Undo, as on the
 phone's Arvy).
 

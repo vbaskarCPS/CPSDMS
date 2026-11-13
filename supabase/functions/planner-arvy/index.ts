@@ -39,7 +39,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { gymClassesFrom, gymClubsFor, gymFeedUrl, type GymClass, type GymClubClasses } from './gym.ts';
 import { placesLookUp, placesMemory, type PlacesDocs } from './places.ts';
-import { canWeb, cleanMessages, contextText, DAYPLAN_SCHEMA, dayplanSystem, hasPictures, isCoaching, speakable, system, toolsFor, voiceFor, webOut, webRaw, WEB_SEARCH, type ArvyCtx, type Profile } from './tools.ts';
+import { cachedMessages, cachedSystem, canWeb, cleanMessages, contextText, DAYPLAN_SCHEMA, dayplanSystem, hasPictures, isCoaching, speakable, system, toolsFor, voiceFor, webOut, webRaw, WEB_SEARCH, type ArvyCtx, type Profile } from './tools.ts';
 
 const MODEL = Deno.env.get('ARVY_MODEL') || 'claude-sonnet-5-5';
 const FALLBACK = 'claude-sonnet-5-5';
@@ -75,7 +75,7 @@ async function claude(sys: string, messages: unknown[], tools: unknown[], coachi
       res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-        body: JSON.stringify({ model, max_tokens: coaching ? 3000 : pictures ? 2400 : web ? 1800 : 1200, system: sys, messages: said.length ? [...messages, { role: 'assistant', content: said }] : messages, tools }),
+        body: JSON.stringify({ model, max_tokens: coaching ? 3000 : pictures ? 2400 : web ? 1800 : 1200, system: cachedSystem(sys), messages: said.length ? [...cachedMessages(messages), { role: 'assistant', content: said }] : cachedMessages(messages), tools }),
         signal: AbortSignal.timeout(coaching || web || pictures ? 110000 : 60000),
       });
       data = await res.json().catch(() => ({}));

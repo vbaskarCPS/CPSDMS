@@ -39,7 +39,7 @@ export function saunaDue(start: string | undefined, ticked: string | undefined, 
   const e = new Date(end);
   return `${String(e.getHours()).padStart(2, '0')}:${String(e.getMinutes()).padStart(2, '0')}`;
 }
-export const nowHM = (): string => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+export const nowHM = (d = new Date()): string => { return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
 /** Up by the wake target plus the grace? (ticks.up is the time the "Up" block was ticked.) A day whose plan was
  *  changed ahead (sick: up at 7) is judged against that day's time. */

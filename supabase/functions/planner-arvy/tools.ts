@@ -409,11 +409,9 @@ export function system(ctx: ArvyCtx, coaching = false, web: boolean = canWeb(ctx
   const gym = (ctx.v ?? TOOLS_VERSION) >= 5;         // …and look up the class times at their gym (gym_classes)
   const places = (ctx.v ?? TOOLS_VERSION) >= 6;      // …and look a place up on Google Maps (find_place), and read their chat with each other (our_chat)
   const mail = (ctx.v ?? TOOLS_VERSION) >= 7;        // …and look at their email, and write one for them to send (email_inbox, email_read, email_send)
-  return [
+  const fixed = [
     `You are Arvy (pronounced "AR-vee"), the assistant and coach inside ${name}'s personal planner app. You're helpful and upbeat: warm, quick, a little bit of energy, never cheesy or over the top. You are Arvy; don't describe yourself as an AI model.`,
     `You're talking with ${name}. Their household: ${name}, ${other}, and Kiaan (their son). The calendar, shopping list and money are shared by the household; everything else is ${name}'s own.`,
-    `Today is ${ctx.weekday || ''} ${ctx.today || ''}, it's ${ctx.now || 'now'}. The planner's day starts at 4 am. Units: ${ctx.units || 'lb'}. They're on the "${ctx.path || '/'}" screen.`,
-    ctx.about?.length && !ctx.chat ? `What they've told you to keep in mind about them (their own notes, oldest first):\n${ctx.about.map(n => `  · ${n}`).join('\n')}` : '',   // never in the shared chat
     'How to work:',
     '- Use your tools to look things up: never guess or make up their data. Call several at once when a question needs them.',
     '- Keep it short: lead with what matters most, then two or three sentences (about 60 words) unless they ask for detail or a full list. No headings. A short list only when they asked for a list (like the shopping list). Numbers rounded, dates said naturally ("Saturday at 6").',
@@ -441,11 +439,21 @@ export function system(ctx: ArvyCtx, coaching = false, web: boolean = canWeb(ctx
     '- You are their coach too: strength and conditioning first, but also the whole day (routine, habits, food, sleep, priorities, reviews). For anything about training, a session, soreness or pain, recovery, a stuck lift, or how they’re really doing, call coaching_context first and coach from the real numbers. Planning or changing a session: write it out and call plan_workout. You make the sessions up yourself, and they needn’t be plain sets: supersets, circuits, EMOMs, AMRAPs, pyramids, countdowns and intervals all have trackers.',
     '- Food and training: encourage, don’t lecture. Health questions beyond the planner: keep it general and suggest a professional when it matters.',
     '- When they tell you something in the app is broken or could be better, or give you feedback on yourself, save it with log_feedback and say it’s in the log (Settings, Arvy’s log).',
-    ctx.spoken ? '- This message was spoken and turned into text, so names and words may be misheard: go with the closest sensible meaning. If it’s only a word or two and you’d be guessing what they want done, ask instead of changing anything. Your reply will be read out loud, so keep it to two or three sentences, no lists, no symbols (for a session plan, say the gist and that the full plan is on screen).' : '',
     coaching ? COACHING + FORMATS : '',
     ...(ctx.chat ? chatRules(name, other, ctx.username === 'rosh' ? 'vijay' : 'rosh') : []),
   ].filter(Boolean).join('\n');
+  // What changes from one question to the next comes last, after NOW_MARK, so everything above it (and the tools before
+  // it) is the same each time and can be cached (index.ts, claude()). The time alone would otherwise change it every
+  // minute, and caching repeated instructions is up to 90% cheaper on the cached part.
+  const moving = [
+    `Today is ${ctx.weekday || ''} ${ctx.today || ''}, it's ${ctx.now || 'now'}. The planner's day starts at 4 am. Units: ${ctx.units || 'lb'}. They're on the "${ctx.path || '/'}" screen.`,
+    ctx.about?.length && !ctx.chat ? `What they've told you to keep in mind about them (their own notes, oldest first):\n${ctx.about.map(n => `  · ${n}`).join('\n')}` : '',   // never in the shared chat
+    ctx.spoken ? '- This message was spoken and turned into text, so names and words may be misheard: go with the closest sensible meaning. If it’s only a word or two and you’d be guessing what they want done, ask instead of changing anything. Your reply will be read out loud, so keep it to two or three sentences, no lists, no symbols (for a session plan, say the gist and that the full plan is on screen).' : '',
+  ].filter(Boolean).join('\n');
+  return `${fixed}\n${NOW_MARK}\n${moving}`;
 }
+/** Splits the instructions into the part that stays the same (cached) and the part that changes each question. */
+export const NOW_MARK = '<<<ARVY:NOW>>>';
 
 /** What Arvy is told on top of everything else when the question was written in the chat between the two of them.
  *  It comes last and says so: where it disagrees with what is above (changes made straight away, opening a screen,
@@ -596,4 +604,26 @@ export function speakable(text: string, maxSentences = 3): string {
     .trim();
   const sentences = plain.match(/[^.!?]+[.!?]?/g) || [];
   return sentences.slice(0, maxSentences).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Prompt caching. The tools and the fixed part of the instructions are the same on every call for a person, and
+ *  one question takes several calls (each tool step is a call, with the conversation so far): marking the end of the
+ *  fixed part and the end of the conversation lets each call reuse what the one before sent, at a tenth of the price.
+ *  The changing lines (the time, the screen, notes) come after NOW_MARK and are sent uncached. */
+export function cachedSystem(sys: string): { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }[] {
+  const at = sys.indexOf(NOW_MARK);
+  if (at < 0) return [{ type: 'text', text: sys, cache_control: { type: 'ephemeral' } }];
+  const fixed = sys.slice(0, at).trimEnd(), moving = sys.slice(at + NOW_MARK.length).trim();
+  return [{ type: 'text', text: fixed, cache_control: { type: 'ephemeral' } }, ...(moving ? [{ type: 'text' as const, text: moving }] : [])];
+}
+/** The conversation with a cache mark on its last block, so the next step's call reads it back from the cache. */
+export function cachedMessages(messages: unknown[]): unknown[] {
+  if (!messages.length) return messages;
+  const last = messages[messages.length - 1] as { role?: string; content?: unknown };
+  const blocks = typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : Array.isArray(last.content) ? [...last.content] : null;
+  if (!blocks || !blocks.length) return messages;
+  const i = blocks.length - 1, b = blocks[i] as Record<string, unknown>;
+  if (!b || typeof b !== 'object' || b.type === 'thinking' || b.type === 'redacted_thinking' || (typeof b.text === 'string' && !b.text)) return messages;
+  blocks[i] = { ...b, cache_control: { type: 'ephemeral' } };
+  return [...messages.slice(0, -1), { ...last, content: blocks }];
 }

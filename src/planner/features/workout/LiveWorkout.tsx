@@ -254,7 +254,7 @@ export function LiveWorkout({ pass }: { pass: PlannerPass }) {
           return;
         }
         if (!d.ticks.gym) await putDoc('day', k, { ...d, ticks: { ...d.ticks, gym: nowHM() } });
-        void autoMark('gym', true, k);
+        void autoMark('gym', true, k, 'done', { at: Date.now() });   // the workout was completed just now
       } catch { /* the Today screen can be ticked by hand */ }
     })();
   };

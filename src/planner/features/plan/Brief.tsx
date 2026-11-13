@@ -8,9 +8,8 @@ import { dayKey } from '../../lib/docs';
 import { useDoc } from '../../lib/useDoc';
 import { loadRoutine, routineNow, type Routine } from '../../lib/routine';
 import { Button, useToast } from '../../ui/primitives';
-import { nowHM } from './dates';
-import { emptyDay, normalizeDay, syncPriorities, type Day } from './types';
-import { autoMark } from '../habits/auto';
+import { emptyDay, fillUp, normalizeDay, syncPriorities, type Day } from './types';
+import { autoMark, markWake } from '../habits/auto';
 import { briefHints, todosFromBrief, type BriefHints } from '../../lib/ai';
 import { TodoList } from './TodoList';
 import { useFrequentTodos } from './useFrequentTodos';
@@ -92,8 +91,9 @@ export function Brief() {
   useEffect(() => {
     if (loading || started.current) return;
     started.current = true;
-    const t = nowHM();
-    if (!day.brief.startedAt || !day.ticks.up) set(d => ({ ...d, brief: { ...d.brief, startedAt: d.brief.startedAt || new Date().toISOString() }, ticks: { ...d.ticks, up: d.ticks.up || t, upAt: d.ticks.up ? d.ticks.upAt : new Date().toISOString() } }));
+    const at = new Date();
+    if (!day.brief.startedAt || !day.ticks.up) set(d => ({ ...fillUp(d, at), brief: { ...d.brief, startedAt: d.brief.startedAt || at.toISOString() } }));
+    if (!day.ticks.up) void markWake(at.getTime(), today);   // Up filled in here ticks the habits set to I'm up
   }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(id); }, []);
   useEffect(() => { window.setTimeout(() => focus.current?.focus(), 50); }, [step]);
@@ -123,8 +123,9 @@ export function Brief() {
 
   const finish = async () => {
     const secs = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    set(d => ({ ...d, brief: { ...d.brief, finishedAt: new Date().toISOString(), seconds: secs } }));
-    void autoMark('brief', true);
+    const at = new Date();
+    set(d => ({ ...d, brief: { ...d.brief, finishedAt: at.toISOString(), seconds: secs } }));
+    void autoMark('brief', true, today, 'done', { at: at.getTime() });
     await flush();
     say(`Brief done in ${fmt(secs)}. ${day.todos.length ? `${day.todos.length} on the list.` : ''} Go get Kiaan.`, 'good');
     window.setTimeout(() => nav('/'), 700);

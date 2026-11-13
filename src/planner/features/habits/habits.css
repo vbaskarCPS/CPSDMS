@@ -8,6 +8,9 @@
 .hb-streak { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: var(--amber-2); }
 .hb-streak svg { width: 13px; height: 13px; }
 .hb-streak.is-zero { color: var(--ink-2); }
+/* the rule a self-ticking habit is held to ("by 5:05 am") */
+.hb-rule { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--ink-2); }
+.hb-rule svg { width: 12px; height: 12px; }
 .hb-mini { min-height: 26px; padding: 0 9px; font-size: 11px; font-weight: 700; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2); color: var(--ink-2); cursor: pointer; }
 .hb-mini.is-on { background: var(--amber); color: #1b2a2b; border-color: transparent; }
 .pl-check.is-mini { background: var(--amber); border-color: var(--amber); color: #1b2a2b; }

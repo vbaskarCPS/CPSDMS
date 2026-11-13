@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Moon } from 'lucide-react';
 import { dayKey } from '../../lib/docs';
+import { momentOf } from '../widgets/race';
 import { useDoc } from '../../lib/useDoc';
 import { clock, routineMinutes, type Routine } from '../../lib/routine';
 import { Button, Card, Input } from '../../ui/primitives';
@@ -47,7 +48,7 @@ export function MissedBedtime({ routine, open, onClose }: { routine: Routine; op
     if (!time) return;
     update(d => { const n = normalizeDay(d); return { ...n, ticks: { ...n.ticks, lightsOut: time } }; });
     await flush();
-    void autoMark('lightsOut', true, night);
+    void autoMark('lightsOut', true, night, 'done', { at: momentOf(night, time) });   // the time given for last night
     markAsked(night);
     setSaved(time);
   }

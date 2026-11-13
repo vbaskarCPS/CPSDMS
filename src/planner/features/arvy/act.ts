@@ -30,7 +30,8 @@ import { workoutKey, type Template } from '../workout/types';
 import { planExercisesFrom, sessionLines } from '../workout/format';
 import { findExercise } from '../workout/library';
 import { adjustWords, blocks, clock, loadRoutine, mergeAdjust, saveRoutine, SKIPPABLE, type AddedBlock, type AdjustTime, type DayAdjust, type Routine } from '../../lib/routine';
-import { autoMark } from '../habits/auto';
+import { autoMark, handMarked } from '../habits/auto';
+import { checkProteinGoal } from '../habits/proteinGoal';
 import type { Budget } from '../money/types';
 import { quietOf, reminderList, REMINDER_NAMES } from '../../../../supabase/functions/planner-push/reminders';
 import { mailboxes, MailProblem, pickMailbox, readMail, sendMail } from '../mail/mail';
@@ -336,7 +337,7 @@ async function logMeal(input: AnyIn): Promise<Change> {
   return {
     kinds: ['meal'], confirm: false,
     lines: [`Food ${date === dayKey() ? 'today' : pretty(date)} ${time12(time)}: ${meal.name} — ${totals.kcal} kcal, ${totals.protein} g protein (${est.items.map(i => i.name).join(', ')})`],
-    apply: async () => { const key = mealKey(meal); const undo = await snapshot('meal', [key]); await putDocs([{ kind: 'meal', key, data: meal }]); return undo; },
+    apply: async () => { const key = mealKey(meal); const undo = await snapshot('meal', [key]); await putDocs([{ kind: 'meal', key, data: meal }]); void checkProteinGoal(date); return async () => { await undo(); void checkProteinGoal(date); }; },   // the protein-goal habit looks again
   };
 }
 
@@ -354,6 +355,7 @@ async function markHabit(input: AnyIn): Promise<Change> {
       const log: HabitLog = { ...((await getDoc<HabitLog>('habitlog', date)) || {}) };
       if (mark === 'clear') delete log[h.id]; else log[h.id] = mark as HabitLog[string];
       await putDocs([{ kind: 'habitlog', key: date, data: log }]);
+      void handMarked(h.id, date);   // marked on purpose: no trigger takes it back
       return undo;
     },
   };
@@ -519,7 +521,8 @@ async function logFavourite(input: AnyIn): Promise<Change> {
       const key = mealKey(meal);
       const u1 = await snapshot('meal', [key]); const u2 = await snapshot('favmeal', [f.id]);
       await putDocs([{ kind: 'meal', key, data: meal }, { kind: 'favmeal', key: f.id, data: { ...f, uses: (f.uses || 0) + 1, lastUsed: new Date().toISOString() } }]);
-      return async () => { await u1(); await u2(); };
+      void checkProteinGoal(date);   // the protein-goal habit looks again (and after an undo)
+      return async () => { await u1(); await u2(); void checkProteinGoal(date); };
     },
   };
 }

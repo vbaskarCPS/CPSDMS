@@ -24,6 +24,9 @@ export function AddMeal() {
   const nav = useNavigate();
   const [params] = useSearchParams();
   const day = params.get('day') || dayKey();
+  // "Ate something else" on a protein-road slot (Today): what's logged here is that slot's food, so it ticks the slot
+  // and goes back to Today (Vijay, 13 Nov: logging the shake this way left the slot unticked)
+  const slotId = params.get('slot');
   const [mode, setMode] = useState<Mode>('photo');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +104,17 @@ export function AddMeal() {
     setTips(undefined); setSource('favourite');
   };
 
+  /** "Don't add": the food is already in the log. From a protein-road slot, that logged meal is the slot's food. */
+  const keepSame = async () => {
+    const was = same; setSame(null);
+    if (slotId && was) {
+      const d = await getDoc<Day>('day', day).catch(() => null);
+      const hit = d?.protein?.slots.find(x => x.id === slotId);
+      const key = mealKey(was);
+      if (d?.protein && hit && !hit.eaten && !d.protein.slots.some(x => x.eaten === key)) await putDoc('day', day, { ...d, protein: { ...d.protein, slots: d.protein.slots.map(x => (x.id === slotId ? { ...x, eaten: key } : x)) } }).catch(() => undefined);
+    }
+    nav(slotId ? '/' : '/food', { replace: true });
+  };
   /** mode: undefined = check for a double first; 'replace' = this replaces `same`; 'both' = keep both. */
   const save = async (mode?: 'replace' | 'both') => {
     if (!draft || saving) return;
@@ -123,17 +137,22 @@ export function AddMeal() {
         }
       }
       setSame(null);
+      if (slotId) {
+        const d = await getDoc<Day>('day', day).catch(() => null);
+        const hit = d?.protein?.slots.find(x => x.id === slotId);
+        if (d?.protein && hit && !hit.eaten) await putDoc('day', day, { ...d, protein: { ...d.protein, slots: d.protein.slots.map(x => (x.id === slotId ? { ...x, eaten: mealKey(meal) } : x)) } });
+      }
       if (draft.saveFav) await saveFavourite(meal.name, meal.items, meal.thumb);
       else if (fav) await saveFavourite(fav.name, fav.items, fav.thumb, fav);   // count the use
       show(`Logged ${meal.totals.kcal} kcal`, 'good');
-      nav(day === dayKey() ? '/food' : `/food?day=${day}`, { replace: true });
+      nav(slotId ? '/' : day === dayKey() ? '/food' : `/food?day=${day}`, { replace: true });
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not save.'); setSaving(false); }
   };
 
   if (draft) {
     return (
       <Page>
-        <Header title="Check the plate" eyebrow="Nothing is saved until you tap Save" back="/food/add" />
+        <Header title="Check the plate" eyebrow="Nothing is saved until you tap Save" back={slotId ? `/food/add?slot=${encodeURIComponent(slotId)}` : '/food/add'} />
         {error && <p className="pl-error">{error}</p>}
         {same && (
           <Card accent>
@@ -144,7 +163,7 @@ export function AddMeal() {
             <div className="pl-row" style={{ flexWrap: 'wrap', gap: 8 }}>
               <Button small primary onClick={() => void save('replace')} disabled={saving}>Same food: use this one</Button>
               <Button small onClick={() => void save('both')} disabled={saving}>Different: add both</Button>
-              <Button small ghost onClick={() => { setSame(null); nav('/food', { replace: true }); }}>Don’t add</Button>
+              <Button small ghost onClick={() => { void keepSame(); }}>Don’t add</Button>
             </div>
           </Card>
         )}

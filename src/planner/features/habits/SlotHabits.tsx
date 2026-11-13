@@ -4,6 +4,7 @@ import { createContext, useContext, type ReactNode } from 'react';
 import { Check } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useHabits } from './useHabits';
+import { rulesLine, rulesOf } from './rules';
 
 type Ctx = ReturnType<typeof useHabits> | null;
 const HabitsCtx = createContext<Ctx>(null);
@@ -24,7 +25,7 @@ export function SlotHabits({ block, when }: { block: string; when: 'before' | 'a
         return (
           <div key={h.id} className={`today-slot-habit ${m === 'done' ? 'is-done' : m ? 'is-part' : ''}`}>
             <button type="button" className={`pl-check ${m === 'done' ? 'is-on' : ''}`} aria-label={m === 'done' ? 'Undo' : 'Done'} onClick={() => void mark(h.id, m === 'done' ? undefined : 'done')}><Check /></button>
-            <Link to={`/habits/${h.id}`} className="pl-grow"><small>{when} · </small><b>{h.name}</b>{h.auto && <small> · ticks itself</small>}</Link>
+            <Link to={`/habits/${h.id}`} className="pl-grow"><small>{when} · </small><b>{h.name}</b>{h.auto && <small> · ticks itself{rulesLine(rulesOf(h)) ? ` ${rulesLine(rulesOf(h))}` : ''}</small>}</Link>
           </div>
         );
       })}

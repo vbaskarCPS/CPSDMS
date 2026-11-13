@@ -18,7 +18,7 @@ import { adjustWords, blocks, clock, currentBlock, fastState, loadRoutine, minut
 import { InstallHint } from '../ui/InstallHint';
 import { Stat } from '../ui/primitives';
 import { addDays, emptyDay, lightsOutStreak, normalizeDay, nowHM, reviewDone, saunaDue, streakOf, todosDone, wakeStreak, TodoList, MissedBedtime, isMorningHours, type Day } from '../features/plan';
-import { HabitsTodayCard, SlotHabits, SlotHabitsProvider, autoMark } from '../features/habits';
+import { HabitsTodayCard, SlotHabits, SlotHabitsProvider, autoMark, checkProteinGoal, markWake } from '../features/habits';
 import { WorkoutTodayCard, MissedGym, GymStatus } from '../features/workout';
 import { GuessMeals } from '../features/food/GuessMeals';
 import { FoodTodayCard, alreadyLoggedFor, fromRoad, mealKey, saveMeal, slotMeal } from '../features/food';
@@ -86,10 +86,12 @@ export function Today({ pass }: { pass: PlannerPass }) {
   const raceDay = useMemo(() => (loading || loadError ? null : { key: today, day }), [loading, loadError, today, day]);
 
   useEffect(() => { void loadRoutine().then(setRoutine); return onRoutineChange(setRoutine); }, []);   // and when Arvy changes the routine
+  // the protein goal may have been reached on the other phone (or a meal taken off there): the habit looks again
+  useEffect(() => { void checkProteinGoal(today); }, [today]);
   useEffect(() => { const id = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(id); }, []);
   // the sauna timer ran out while you were elsewhere: tick it for you, at the time it ended
   const saunaEnded = loading ? null : saunaDue(day.night.saunaStart, day.ticks.sauna, eff.saunaMin, now.getTime());
-  useEffect(() => { if (saunaEnded) { set(d => (d.ticks.sauna ? d : { ...d, ticks: { ...d.ticks, sauna: saunaEnded } })); void autoMark('sauna', true); } }, [saunaEnded]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (saunaEnded) { set(d => (d.ticks.sauna ? d : { ...d, ticks: { ...d.ticks, sauna: saunaEnded } })); void autoMark('sauna', true, today, 'done', { at: Date.parse(day.night.saunaStart || '') + eff.saunaMin * 60_000 }); } }, [saunaEnded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // streaks over the last 60 days (today's doc from this screen, so a fresh tick counts straight away)
   useEffect(() => {
@@ -137,7 +139,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
       setSlot(s.id, undefined);
       // only remove the meal the slot logged itself; one logged from Food stays in the log
       const m = (await getDocs<Meal>('meal', s.eaten, s.eaten).catch(() => []))[0]?.data;
-      if (m && fromRoad(m)) await putDoc('meal', s.eaten, null).catch(() => undefined);
+      if (m && fromRoad(m)) { await putDoc('meal', s.eaten, null).catch(() => undefined); void checkProteinGoal(today); }
       return;
     }
     const meals = (await getDayDocs<Meal>('meal', today, today).catch(() => [])).map(d => d.data).filter(Boolean);
@@ -156,13 +158,14 @@ export function Today({ pass }: { pass: PlannerPass }) {
     const on = !day.ticks[k];
     if (id === 'lightsOut' && on && isMorningHours()) { setAskBed(true); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     // Up also keeps the exact moment, for the race timer (features/widgets/race.ts); undoing Up clears both
-    set(d => ({ ...d, ticks: { ...d.ticks, [k]: on ? nowHM() : undefined, ...(k === 'up' ? { upAt: on ? new Date().toISOString() : undefined } : {}) } }));
-    // habits tied to this tick
-    if (id === 'wake') void autoMark('wake', on);
-    else if (id === 'gym' || id === 'sauna' || id === 'shake' || id === 'lightsOut') void autoMark(id, on);
+    const at = new Date();
+    set(d => ({ ...d, ticks: { ...d.ticks, [k]: on ? nowHM(at) : undefined, ...(k === 'up' ? { upAt: on ? at.toISOString() : undefined } : {}) } }));
+    // habits tied to this tick, held to their rules by this moment ("by 5:05")
+    if (id === 'wake') void (on ? markWake(at.getTime(), today) : autoMark('wake', false, today));
+    else if (id === 'gym' || id === 'sauna' || id === 'shake' || id === 'lightsOut') void autoMark(id, on, today, 'done', { at: at.getTime() });
     else if (id === 'dinner') {
-      void autoMark('dinner', on);
-      if (routine.fast) void fastByDay(today, today, eff.eatOpen).then(k2 => autoMark('fast', on && k2[today] !== false));
+      void autoMark('dinner', on, today, 'done', { at: at.getTime() });
+      if (routine.fast) void fastByDay(today, today, eff.eatOpen).then(k2 => autoMark('fast', on && k2[today] !== false, today, 'done', { at: at.getTime() }));
     }
   };
   // a block added for today only: ticked on the block itself
@@ -240,7 +243,7 @@ export function Today({ pass }: { pass: PlannerPass }) {
                     {s.what
                       ? <button type="button" className={`pl-btn pl-btn--small ${s.eaten ? 'pl-btn--ghost' : due ? 'pl-btn--primary' : ''}`} onClick={() => void ateIt(s)}>{s.eaten ? 'Undo' : 'Ate it'}</button>
                       : <Link to="/plan/sauna" className="pl-btn pl-btn--small pl-btn--ghost">Plan it <ChevronRight /></Link>}
-                    {!s.eaten && already?.slotId !== s.id && <Link to="/food/add" className="pl-btn pl-btn--small pl-btn--ghost">Ate something else</Link>}
+                    {!s.eaten && already?.slotId !== s.id && <Link to={`/food/add?slot=${encodeURIComponent(s.id)}`} className="pl-btn pl-btn--small pl-btn--ghost">Ate something else</Link>}
                   </div>
                   {already?.slotId === s.id && (
                     <div className="today-already" role="group" aria-label="Already logged">
