@@ -191,3 +191,18 @@
 .benny-root .benny-mt-nm{font-size:12px;font-weight:600}
 .benny-root .benny-mt-full{font-size:11px;color:#64748b;max-width:160px;text-align:center}
 .benny-root .benny-mt .benny-link{padding:2px 4px}
+/* the live crew draft (DraftCard.tsx) */
+.benny-root .benny-draft{margin-top:8px;padding:12px;border:1px solid #fed7aa;background:#fff7ed;border-radius:12px;display:flex;flex-direction:column;gap:8px;color:#0f172a}
+.benny-root .benny-draft-h{display:flex;flex-direction:column;gap:2px}
+.benny-root .benny-draft-rules{margin:0;font-size:13px;color:#7c2d12}
+.benny-root .benny-draft-turn{font-weight:700;padding:8px 10px;border-radius:10px;background:#fff;border:1px solid #e2e8f0}
+.benny-root .benny-draft-turn.mine{background:#f97316;border-color:#f97316;color:#1a0d03}
+.benny-root .benny-draft-teams{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.benny-root .benny-draft-team{padding:8px;border-radius:10px;background:#fff;border:1px solid #e2e8f0}
+.benny-root .benny-draft-team.on{border-color:#f97316;box-shadow:0 0 0 2px rgba(249,115,22,.25)}
+.benny-root .benny-draft-team ol{margin:6px 0 0;padding-left:20px;font-size:13px}
+.benny-root .benny-draft-pool{display:flex;flex-direction:column;gap:4px;max-height:360px;overflow:auto}
+.benny-root .benny-draft-w{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:10px;background:#fff;border:1px solid #e2e8f0}
+.benny-root .benny-draft-wn{font-weight:600}
+.benny-root .benny-draft-w .benny-mut{font-size:12px;margin-left:auto}
+.benny-root .benny-draft-w .benny-go{flex:none;min-width:0;height:34px;padding:0 14px}
