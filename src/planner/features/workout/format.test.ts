@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('../../lib/docs', () => ({ dayKey: () => '2026-11-10', getDocs: vi.fn(async () => []), putDoc: vi.fn(), putDocs: vi.fn() }));
 vi.mock('../../lib/ai', () => ({ planFromText: vi.fn() }));
-import { blockHow, blocksOf, blockTitle, cleanFormat, hasSides, isIntervals, isNoLoad, planExercisesFrom, sessionLines, settleGroups, styleLabel, targetLine } from './format';
+import { blockHow, blocksOf, blockTitle, cleanFormat, hasSides, hrLine, isIntervals, isNoLoad, planExercisesFrom, sessionLines, settleGroups, styleLabel, targetLine } from './format';
 import { foldWarmups, newExercise, startFromTemplate, templateFromPlan } from './store';
 import type { Exercise, Template, TemplateExercise, Workout } from './types';
 
@@ -138,5 +138,19 @@ describe('tidying', () => {
     expect(newExercise('KB Suitcase Carry')).toMatchObject({ equipment: 'kettlebell', muscles: ['core'], unilateral: true });
     expect(newExercise('Treadmill Sprint', { timed: true })).toMatchObject({ equipment: 'cardio', type: 'cardio', timed: true });
     expect(newExercise('Incline Dumbbell Press').unilateral).toBeUndefined();
+  });
+});
+
+describe('the heart rate under a done set', () => {
+  it('average / peak · how far it fell after', () => {
+    expect(hrLine({ avg: 141.6, max: 156, rec: 28, recSec: 90, n: 40 })?.text).toBe('♥ 142 / 156 · −28');
+    expect(hrLine({ avg: 141.6, max: 156, rec: 28 })?.words).toBe('Heart rate 142 average, 156 at the top, down 28 in the rest after');
+  });
+  it('without the fall until the watch has measured it', () => {
+    expect(hrLine({ avg: 130, max: 149 })?.text).toBe('♥ 130 / 149');
+  });
+  it('nothing when the set has no heart rate', () => {
+    expect(hrLine(undefined)).toBeNull();
+    expect(hrLine({ avg: 0, max: 0 })).toBeNull();
   });
 });

@@ -56,3 +56,32 @@ describe('inferMuscles', () => {
     expect(inferMuscles('Deep squat')).toEqual(['quads', 'glutes']);
   });
 });
+
+describe('heart rate and effort from the watch, for Arvy', () => {
+  const hrSet = (rpe: number | undefined, avg: number, max: number, rec?: number, recSec?: number) => ({ weight: 135, reps: 8, rpe, done: true, hr: { avg, max, rec, recSec } });
+  const w = (date: string): Workout => ({ id: date, date, startedAt: `${date}T18:00:00`, endedAt: `${date}T19:00:00`, name: 'Upper', exercises: [
+    { exerciseId: 'bench-press', name: 'Bench', restSec: 120, sets: [hrSet(8, 130, 148, 32, 90), hrSet(9, 138, 156, 12, 120), hrSet(9.5, 142, 160, 8, 30)] },
+    { exerciseId: 'barbell-row', name: 'Row', restSec: 90, sets: [{ weight: 95, reps: 10, done: true }, { weight: 95, reps: 10, done: false, hr: { avg: 99, max: 99 } }] },
+  ] });
+  it('a set reads short: weight x reps @RPE, then hr average/peak and the fall', async () => {
+    const { hrShort } = await import('./trainingState');
+    expect(hrShort({ avg: 141.6, max: 156, rec: 28 })).toBe(' hr142/156 rec28');
+    expect(hrShort({ avg: 130, max: 149 })).toBe(' hr130/149');
+    expect(hrShort(undefined)).toBe('');
+  });
+  it('one line per session: set HR, the fall over a fair window, the very hard sets and the slow recoveries', async () => {
+    const { sessionEffort } = await import('./trainingState');
+    // the 30 s fall is left out of the average and of "slow": too short to compare
+    expect(sessionEffort(w('2026-11-06'))).toBe('set HR avg 137, peak 160; HR fell 22 bpm on average in the 60-120 s after a set (2 sets); RPE 9+: Bench set 2 RPE 9, Bench set 3 RPE 9.5; slow recovery (under 15 bpm): Bench set 2 (fell 12)');
+  });
+  it('nothing to say without the watch or RPE', async () => {
+    const { sessionEffort } = await import('./trainingState');
+    expect(sessionEffort({ exercises: [{ exerciseId: 'x', name: 'X', restSec: 60, sets: [{ weight: 50, reps: 10, done: true }] }] })).toBeUndefined();
+  });
+  it('this week\'s averages sit with the load, only when the watch was on', () => {
+    const base = { today: '2026-11-07', units: 'lb', exercises: LIBRARY, days: [], meals: [] };
+    const st = trainingState({ ...base, workouts: [w('2026-11-06')] });
+    expect(st.load).toMatchObject({ avg_set_hr_last_7_days: 136.7, avg_hr_fall_after_sets_last_7_days: 22 });
+    expect('avg_set_hr_last_7_days' in trainingState({ ...base, workouts: [] }).load).toBe(false);
+  });
+});

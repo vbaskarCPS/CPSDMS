@@ -319,6 +319,7 @@ easier week), progress (e1RM per lift: up / flat / stalled / down), pain_or_nigg
   to a pain-free variation or range (tempo, lighter, partial range, machine). Dull muscle soreness is fine to train around
   (other muscles, or lighter). Anything that sounds like an injury, swelling, numbness or pain lasting over a week → see a
   physiotherapist or doctor; stay conservative. Use pain_or_niggles: don't load what's sore without saying how you adapted.
+- Sets may carry rpe (effort 6-10) and, from the watch, hr avg/peak and rec (how far heart rate fell after the set: bigger = better recovered; each session's effort line sums them): use them to judge effort, rest length and next weights.
 - Every plan says in one line why it fits today (e.g. "6 h sleep, chest trained 2 days ago → upper pull + legs, RPE 7").
   Quote the real numbers. Never invent data that isn't in the context.
 COACHING ANSWERS: quote their real numbers and their own notes; never say you lack data that is in the context. These can

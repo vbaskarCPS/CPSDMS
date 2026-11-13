@@ -38,7 +38,11 @@ export interface Template { id: string; name: string; days?: number[]; exercises
   /** done away from the gym (a stretch routine, mobility, a bodyweight session at home): it's the day's session on a day with no gym */ home?: boolean }
 
 // doneAt = the moment the set was ticked done (ISO), for the race timer (features/widgets/race.ts); older sets have none
-export interface SetLog { weight: number; reps: number; rpe?: number; done: boolean; doneAt?: string; prev?: { weight: number; reps: number; repsR?: number }; seconds?: number; repsR?: number }
+// hr = heart rate during the set, measured by the watch only (the phone never writes it): avg / max bpm from the moment
+// the set became the current one to its tick, n readings; rec = max minus the lowest bpm in the rest after it (up to
+// 120 s, over recSec seconds): how far the heart rate fell, bigger = better recovered
+export interface SetHr { avg: number; max: number; rec?: number; recSec?: number; n?: number }
+export interface SetLog { weight: number; reps: number; rpe?: number; done: boolean; doneAt?: string; prev?: { weight: number; reps: number; repsR?: number }; seconds?: number; repsR?: number; hr?: SetHr }
 // Unilateral exercises (one-arm row, split squat…): reps = left side, repsR = right side, one weight.
 export interface WorkoutExercise extends Format { exerciseId: string; name: string; restSec: number; targetReps?: string; sets: SetLog[]; mode?: SetMode; note?: string; comment?: string; lastComment?: string; coachCue?: string }
 // coachCue = what the coach prescribed for this exercise when the previous session was completed (the numbers are already prefilled)
@@ -47,7 +51,11 @@ export interface WorkoutExercise extends Format { exerciseId: string; name: stri
 export interface NextRx { weight?: number; reps?: number; repsR?: number; sets?: number; seconds?: number; restSec?: number; cue?: string }
 // review = the coach's paragraph written when the session was completed; next = its per-exercise prescriptions (by exerciseId)
 // kind 'home' = the back-on-track challenge done at home after a missed gym day (homeChallenge.ts): it doesn't tick the gym
-export interface Workout { id: string; date: string; startedAt: string; endedAt?: string; templateId?: string; name: string; exercises: WorkoutExercise[]; notes?: string; prs?: string[]; discarded?: boolean; review?: string; next?: Record<string, NextRx>; kind?: 'home' }
+/** The rest that's running, on the session so the phone and the watch both show it: ends at endsAt (ISO), `total`
+ *  seconds long, after set `si` of exercise `ei`, started by either side. null (or left out) = no rest running. */
+export interface RestRun { endsAt: string; total: number; after?: { ei: number; si: number }; by: 'watch' | 'phone' }
+// rest = the running rest timer (features/workout/sync.ts); syncAt = when either side last wrote it (for looking at, not for spotting changes)
+export interface Workout { id: string; date: string; startedAt: string; endedAt?: string; templateId?: string; name: string; exercises: WorkoutExercise[]; notes?: string; prs?: string[]; discarded?: boolean; review?: string; next?: Record<string, NextRx>; kind?: 'home'; rest?: RestRun | null; syncAt?: string }
 
 export interface BodyWeight { weight: number }
 export interface CoachChat { messages: { role: 'user' | 'assistant'; content: string; at?: string }[] }
