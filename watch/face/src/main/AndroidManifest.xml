@@ -3,6 +3,7 @@
 
     <uses-feature android:name="android.hardware.type.watch" />
 
+    <!-- a watch face is pictures and words only: no code at all (hasCode false, and no classes.dex: see build.gradle.kts) -->
     <application
         android:hasCode="false"
         android:icon="@drawable/preview"
@@ -12,8 +13,10 @@
             android:name="com.google.android.wearable.standalone"
             android:value="true" />
 
+        <!-- Watch Face Format 2 (Wear OS 5 and later; the Galaxy Watch Ultra has it): the rings take the spots'
+             colours (WeightedStroke and COMPLICATION.RANGED_VALUE_COLORS are version 2). minSdk 34 goes with it. -->
         <property
             android:name="com.google.wear.watchface.format.version"
-            android:value="1" />
+            android:value="2" />
     </application>
 </manifest>

@@ -28,7 +28,7 @@ batch is **one big build**: do everything below in one branch / one PR, so Vijay
 | Module | What |
 |---|---|
 | `app` | The watch app (Kotlin + Compose for Wear OS), the Today tile, the spots (complications), background health |
-| `face` | The planner watch face, Watch Face Format 1 (`face/src/main/res/raw/watchface.xml`), no code |
+| `face` | The planner watch face, Watch Face Format 2 (`face/src/main/res/raw/watchface.xml`), no code, minSdk 34 |
 
 App files (`app/src/main/java/app/propertystars/planner/watch/`):
 
@@ -53,6 +53,14 @@ App files (`app/src/main/java/app/propertystars/planner/watch/`):
 - `MainActivity.kt`: the screens. **Design rule: the top 30% of every screen is the time**, the rest is the screen's own
   (`Face(scroll = …) { … }`). Screens: Pair, Today, Habits, Workout, Rest, Timers. Swipe right = back to Today.
 - `TodayTileService.kt`: the tile.
+- `Look.kt` (batch 3): the Theme Studio look (`prefs` / `look` → `all`; palettes copied from `looks.ts`), kept in the
+  watch's storage, colours made readable on black (`LookMath`: accent 6 : 1, words at least 4.5 : 1). Screens read
+  `Look.colors` (a Compose state) through the old names `Orange`, `Blue`, `Green`, `Card`, `Muted`, `Faint` plus
+  `Ink`, `OnOrange`, `OnBlue`. Fetched in `MainActivity.onResume` and on each tile request.
+- `Today.kt` `HabitRules` (batch 3): port of `features/habits/rules.ts`; `markAuto(trigger, at, up)` applies each
+  habit's rules and writes `habitauto` like `auto.ts`; ticking by hand clears it (`handMarked`).
+- Tests (batch 3): `app/src/test/java/…/LookTest.kt`, `HabitRulesTest.kt` (JUnit 4; needs
+  `testImplementation("junit:junit:4.13.2")` in `app/build.gradle.kts`).
 
 Phone data shapes to know: `src/planner/features/workout/types.ts` (Workout, WorkoutExercise, SetLog with `rpe?`,
 `group` / `groupKind` 'superset' | 'circuit' | 'emom' | 'amrap', `style` pyramid etc., `repsBySet`, `weightBySet`,
@@ -63,16 +71,18 @@ mirror it), `src/planner/features/habits/auto.ts`, `src/planner/features/look/` 
 
 - Installed and working on the watch: pairing, Today, Habits, Workout (log set), Rest, tile; batch 2 (face, spots,
   timers, health, start workout) built and installed.
-- **The Planner watch face won't apply** (Android Studio: `set-watchface failed … FavoriteOperationException: Error 0`;
-  tapping it on the watch does nothing). Likely the watch rejects something in `watchface.xml`. Get Vijay to filter
-  Logcat by `watchface` while picking it, and fix what it names. Suspects to check against the Watch Face Format spec:
-  `Transform` on `Arc` endAngle, `Variant` inside `PartText`, `ellipsis` on `Text`, `RoundRectangle` attributes, font
-  `weight` values, `[MINUTE_Z]` / `[DAY_OF_WEEK_S]` / `[MONTH_S]`, and that a third-party `primaryProvider` is allowed.
-  Google's WFF validator (github.com/google/watchface) can check the file. Also try applying it from the Galaxy
-  Wearable phone app.
-- Not tested on the watch yet: spots on a Samsung face, background steps upload, race/sauna, starting a session.
+- Batch 3 (one PR, `watch-batch3`): all seven items below are done in code; none of it has been on the watch yet.
+- **The watch face (item 7)**: the file passes Google's validators (XSD validator for v2; the newer `dwf-validator`:
+  valid for v2–v4). Found and fixed: the face's build had a `classes.dex` (Google's samples set
+  `isMinifyEnabled = true` on debug builds "to exclude Dex files"; ours didn't), and font weight `BOLD` (accepted by
+  the v1 XSD but not by the newer checker: now `SEMI_BOLD`). Moved to WFF v2 (minSdk 34) for the ring colours. The
+  earlier suspects (`Transform` on `Arc` endAngle, `Variant` in `PartText`, `ellipsis`, `RoundRectangle`,
+  `[MINUTE_Z]`, `[DAY_OF_WEEK_S]`, `[MONTH_S]`, a third-party `primaryProvider`) are all valid. If it still won't
+  apply: README › The planner watch face (logcat filters `watchface` and `runtime`).
+- Not tested on the watch yet: spots on a Samsung face, background steps upload, race/sauna, starting a session,
+  everything from batch 3.
 
-## The next batch (Vijay's list, in his words first)
+## Batch 3 (Vijay's list, in his words first; done in batch 3 unless it says otherwise)
 
 1. **Show the next set coming up**: on the log-a-set and rest screens, what's next (exercise, set n of m, weight × reps),
    so you know what's coming while resting.
@@ -98,9 +108,26 @@ mirror it), `src/planner/features/habits/auto.ts`, `src/planner/features/look/` 
    black (lighten dark accents). Refresh when the look changes.
 7. **Fix the watch face** (above).
 
-Note: main since added rules to habits that tick themselves ("only counts if done by" a time, "within N minutes of I'm up": `features/habits/auto.ts`). The watch's `Today.markAuto` and the 30-minute gym-start check in `Timers.startedInTime` don't follow those rules yet: port them.
+Done in batch 3:
+- 1–3 (watch): `Formats.kt` mirrors `LiveWorkout.tsx` + `format.ts` (blocks, superset/circuit round order with rest
+  after the round, per-set targets, timed sets with a countdown and buzz, intervals, EMOM / AMRAP clocks, sides);
+  "Next up" on the set and rest screens; an optional RPE picker, 6–10 in 0.5 steps.
+- 4: both sides poll the session doc every 2 s while a workout or rest screen is open and visible; every write is a
+  patch against a fresh read; the running rest is `rest: { endsAt, total, after, by }` on the session; `syncAt`.
+  Phone: `features/workout/sync.ts`, LiveWorkout saves by patch. Watch: `Sync.kt`.
+- 5: per-set `hr: { avg, max, rec, recSec, n }` (watch only, `Heart.kt`); the assistant gets per-set rpe / hr and a
+  short per-session line (`lifeContext.ts`, `trainingState.ts`, one line in `planner-arvy/tools.ts`).
+- 6: the look (`Look.kt`, above): screens, tile, ring spots (a `ColorRamp` on each ranged spot) and the planner
+  face's rings (`WeightedStroke colors="[COMPLICATION.RANGED_VALUE_COLORS]"`, WFF v2; a spot from another app keeps
+  the face's own colours). Fonts are not followed: the watch keeps its system font. Only the whole planner's look is
+  used (a section's own look, e.g. Train, is not). The phone has no hand-picked accent today; `Look.refresh` would
+  use an `accent` '#rrggbb' on `prefs/look` if one is ever saved.
+- 7: the face (above).
+- The habit rules note below: done (`HabitRules`, `markAuto(trigger, at, up)`).
 
-Also on the earlier list, not started: the assistant on the watch (press and talk, reply with Confirm / Undo, as on the
+Note: main since added rules to habits that tick themselves ("only counts if done by" a time, "within N minutes of I'm up": `features/habits/auto.ts`). Ported in batch 3: `Today.kt` `HabitRules`, `markAuto(trigger, at, up)`, `Timers.startedInTime` (Start workout's own 30 minutes).
+
+Still to do, not started: the assistant on the watch (press and talk, reply with Confirm / Undo, as on the
 phone's Arvy).
 
 ## How Vijay builds
