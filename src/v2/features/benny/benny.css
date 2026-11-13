@@ -173,3 +173,21 @@
 .benny-root .benny-roll-r.on .benny-roll-x{background:#16a34a;border-color:#16a34a;color:#fff}
 .benny-root .benny-roll-s{margin-left:auto;font-size:12px}
 .benny-root .benny-err{color:#b91c1c}
+/* who's going out, as tiles (ManagerBoard.tsx): drag one onto another to pair */
+.benny-root .benny-mboard{display:flex;flex-direction:column;gap:6px}
+.benny-root .benny-mzone{display:flex;flex-wrap:wrap;gap:8px;min-height:84px;padding:8px;border-radius:12px;border:1.5px dashed #fdba74;background:#fff;align-items:flex-start}
+.benny-root .benny-mzone.in{border-color:#cbd5e1;background:#f1f5f9}
+.benny-root .benny-mzone.over{border-style:solid;border-color:#f97316;background:#ffedd5}
+.benny-root .benny-mt{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 8px;border-radius:12px;border:1px solid #e2e8f0;background:#fff;min-width:76px;position:relative;transition:box-shadow .12s}
+.benny-root .benny-mt.in{opacity:.75}
+.benny-root .benny-mt.pair{border-color:#f97316;background:#fff7ed}
+.benny-root .benny-mt.pick{box-shadow:0 0 0 3px rgba(249,115,22,.4)}
+.benny-root .benny-mt.over{box-shadow:0 0 0 3px #f97316;background:#ffedd5}
+.benny-root .benny-mt.drag{pointer-events:none;z-index:5;box-shadow:0 10px 24px rgba(15,23,42,.25);opacity:.95}
+.benny-root .benny-mt-faces{display:flex;gap:4px}
+.benny-root .benny-mt-face{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:none;padding:2px;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:inherit;color:#0f172a}
+.benny-root .benny-mt-av{display:grid;place-items:center;width:40px;height:40px;border-radius:20px;background:radial-gradient(circle at 30% 25%,#fb923c,#ea580c 65%,#c2410c);color:#fff;font-weight:800;font-size:14px}
+.benny-root .benny-mt.in .benny-mt-av{background:#94a3b8}
+.benny-root .benny-mt-nm{font-size:12px;font-weight:600}
+.benny-root .benny-mt-full{font-size:11px;color:#64748b;max-width:160px;text-align:center}
+.benny-root .benny-mt .benny-link{padding:2px 4px}

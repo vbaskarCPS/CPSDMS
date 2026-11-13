@@ -5,14 +5,16 @@
 import { db } from './client';
 import type { PlanSettings } from './startSession';
 
-export type WalkStep = 'attendance' | 'rollcall' | 'who' | 'maps' | 'crews' | 'carts' | 'money' | 'done';
-export type CrewWay = 'balanced' | 'random' | 'roster';
+export type WalkStep = 'attendance' | 'rollcall' | 'who' | 'maps' | 'crews' | 'carts' | 'money' | 'done' | 'draft';
+export type CrewWay = 'balanced' | 'random' | 'roster' | 'draft';
 export type CartWay = 'roster' | 'solo' | 'pairs';
 export interface WalkManager { id: string; name: string }
 export interface WalkWorker { rowId: string; hireId: string; name: string; here: boolean }
 export interface WalkMoney { productCostPercent: number; noTaxOnCash: boolean; taxName: string; taxRate: number; from: string | null; changed?: boolean }
 export interface WalkState {
-  step: WalkStep; date: string; roadTrip: boolean;
+  step: WalkStep; date: string; roadTrip: boolean; centerId?: string;
+  /** the live draft started from this walk */
+  draft?: string;
   managers: WalkManager[];                 // everyone who can manage that day
   groups: string[][];                      // who's going out: each group is one team (manager ids); two in a group = together
   maps: Record<string, string[]>;          // group key (ids joined by +) → map names
@@ -75,7 +77,7 @@ export function walkAsk(s: WalkState, random?: string[][]): string {
   }
   if (s.groups.length > 1) {
     if (s.crews === 'balanced') lines.push('Crews: balanced, a snake draft down the ranking by average equiv per day worked.');
-    if (s.crews === 'random' && random) s.groups.forEach((g, i) => lines.push(`${groupName(g, s.managers)}'s crew: ${(random[i] || []).join(', ') || 'nobody'}.`));
+    if ((s.crews === 'random' || s.crews === 'draft') && random) s.groups.forEach((g, i) => lines.push(`${groupName(g, s.managers)}'s crew: ${(random[i] || []).join(', ') || 'nobody'}.`));
     if (s.crews === 'roster') lines.push('Crews: keep each worker with the manager they have on the roster.');
   }
   if (s.rules?.trim()) lines.push(`Keep in mind: ${s.rules.trim()}`);
