@@ -37,6 +37,8 @@ export interface Provider {
   address(access: string, f: Fetch): Promise<string>;
   /** ids, newest first. `since` = only what a check still has to look at (the Primary inbox since its cursor). */
   list(access: string, o: { search?: string; unread?: boolean; max: number; since?: Cursor }, f: Fetch): Promise<{ ids: string[]; more: boolean }>;
+  /** ids matching a search anywhere in the mailbox, newest first, a page at a time. `next` = the page after this one. */
+  search(access: string, o: { q: string; pageToken?: string; max: number }, f: Fetch): Promise<{ ids: string[]; next?: string }>;
   line(access: string, id: string, f: Fetch): Promise<MailLine | null>;
   read(access: string, id: string, f: Fetch, max?: number): Promise<MailFull>;
   /** send as this mailbox. `replyTo` = the id of the email being answered. */
@@ -121,6 +123,13 @@ export const gmail: Provider = {
     const labels = o.since || q ? (o.unread ? ['UNREAD'] : []) : ['INBOX', ...(o.unread ? ['UNREAD'] : [])];
     const r = await api<{ messages?: { id?: unknown }[]; nextPageToken?: unknown }>(f, access, `/messages?${param({ maxResults: String(max), ...(q ? { q } : {}), labelIds: labels })}`, 'list');
     return { ids: (Array.isArray(r.messages) ? r.messages : []).map(m => m?.id).filter((id): id is string => typeof id === 'string').slice(0, max), more: typeof r.nextPageToken === 'string' && !!r.nextPageToken };
+  },
+  async search(access, o, f) {
+    const max = Math.max(1, Math.min(100, Math.floor(o.max) || 50));
+    const page = typeof o.pageToken === 'string' && /^[\x21-\x7e]{1,500}$/.test(o.pageToken) ? o.pageToken : '';
+    const r = await api<{ messages?: { id?: unknown }[]; nextPageToken?: unknown }>(f, access, `/messages?${param({ maxResults: String(max), q: o.q.slice(0, 1500), ...(page ? { pageToken: page } : {}) })}`, 'search');
+    const next = typeof r.nextPageToken === 'string' && /^[\x21-\x7e]{1,500}$/.test(r.nextPageToken) ? r.nextPageToken : '';
+    return { ids: (Array.isArray(r.messages) ? r.messages : []).map(m => m?.id).filter((id): id is string => typeof id === 'string').slice(0, max), ...(next ? { next } : {}) };
   },
   async line(access, id, f) {
     return gmailLine(await api(f, access, `/messages/${encodeURIComponent(id)}?${param({ format: 'metadata', metadataHeaders: ['From', 'Subject', 'Date'] })}`, 'message'));

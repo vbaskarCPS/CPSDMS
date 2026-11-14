@@ -93,6 +93,9 @@ function world(env: Record<string, string> = ENV) {
     async addTodos(userId, docs) { let n = 0; for (const d of docs) if (!w.docs.some(x => x.user === userId && x.key === d.key)) { w.docs.push({ user: userId, key: d.key, data: d.data }); n++; } return n; },
     async dropWaiting(userId, mailboxId, nowIso) { for (const d of w.docs) if (d.user === userId && d.data.state === 'waiting' && d.data.mailbox.id === mailboxId) d.data = { ...d.data, state: 'dismissed', doneAt: nowIso }; },
     async cronKey() { return 'cron-key-made-up'; },
+    // household docs: only the receipts look uses them (receipts.test.ts)
+    async haveDocs() { return []; },
+    async addDocs() { /* not used here */ },
   };
   const deps: Deps = { store, fetch, env: k => w.env[k] || '', now: () => w.now, me: async t => (t === 'tok-vijay' ? VIJAY : t === 'tok-rosh' ? ROSH : null), claude: w.claude, notify: w.notify, log: l => { w.logs.push(l); } };
   const post = (body: Record<string, unknown>, cronKey = ''): Promise<Out> => handle({ method: 'POST', path: '/planner-mail', query: new URLSearchParams(), body, cronKey }, deps);

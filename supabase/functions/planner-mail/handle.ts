@@ -13,6 +13,18 @@
 //   inbox { mailbox, search?, unread?, max? }   → { mails: [{ id, from, subject, when, preview, unread }], more }   15 at most
 //   read { mailbox, id }                        → { mail: { id, from, to, subject, when, text, cut?, attachments, answerTo } }
 //   send { mailbox, to, subject, body, reply_to? } → { ok, id }      sends as that mailbox: the app calls it only from a Confirm tap
+//   receipts { since?, cursor? }                → { scanned, found, more, cursor?, mailboxes: [{ address, scanned, found, problem? }] }
+//       a look back through ALL of this person's own mailboxes, one after another, for what they paid (orders, bills,
+//       subscriptions, e-transfers they sent), from `since` (YYYY-MM-DD; else twelve months before today, Toronto).
+//       One call reads at most RECEIPTS_MAX new emails and stops after about a minute: while `more` is true the app
+//       calls again with the `cursor` it was given (an opaque string: it is only handed back). Each purchase becomes a
+//       household doc of kind 'receipt' (key `${date}~${id}`, `from: 'email'`), and every email looked at is
+//       remembered as a household doc of kind 'mailreceipt' (key `${mailboxId}~${messageId}`), so a look run again never
+//       reads one twice or saves a receipt twice; a doc already there (a receipt the app has matched) is never written
+//       over. The same `since` may be sent with a cursor: the cursor's own day is the one used. Household docs are written under the household's owner (as
+//       planner-plaid writes them); the mailboxes read are only ever the person's own. A mailbox that can't be read
+//       (sign-in run out, no permission, Google not answering) gets its problem in plain words and the rest go on.
+//       The counts in one answer are for that call only.
 // From Google's sign-in page (no planner token, so nothing is connected here):
 //   GET …/planner-mail/callback?state=…&code=…  → the browser is passed on to the planner it came from:
 //       <site>/<app>/settings/mail#mail_code=…&mail_state=…   (after the #: that part of an address is never sent to
@@ -33,6 +45,8 @@
 //   · What is logged when something fails: which action, the mailbox's id, and a short code. Never an address, a
 //     subject, a word of an email, a state value, Google's code, or anything Google or Claude said in sentences.
 //   · Nothing here deletes, moves or marks an email, or changes a mailbox's settings.
+import { MAILRECEIPT_KIND, RECEIPT_BATCH, RECEIPT_CHARS, RECEIPT_KIND, RECEIPT_SCHEMA, mailReceiptKey, readReceiptsCursor, receiptInput, receiptQuery, receiptSystem, receiptsFrom, receiptsSince, writeReceiptsCursor,
+  type CheckMail, type MailReceiptMark, type ReceiptsCursor } from './mail.ts';
 import { EXPIRED, EXTRACT_SCHEMA, GONE, GOOGLE_DOWN, NO_SENDING, NOT_SET_UP, CHECK_CHARS, CHECK_MAX, cleanDraft, extractInput, extractSystem, forApp, freshIds, freshMails, isMessageId, nextCursor, notifyLine, readCursor, startCursor,
   todosFrom, type MailFull, type MailLine, type MailTodo, type ProviderId } from './mail.ts';
 import { MailError, PROVIDERS, isProvider, type Fetch, type Provider } from './gmail.ts';
@@ -42,7 +56,8 @@ import { NoKey, looksLikeState, mailKey, newState, open, sameSecret, seal, state
  *  sign-in ran out and it has to be connected again. */
 export interface MailboxRow { id: string; user_id: string; provider: string; address: string; token_enc: string | null; scopes: string; todos: boolean;
   last_checked_at: string | null; cursor: unknown; problem: string | null; created_at: string }
-export interface Me { id: string; name: string; app: AppId }
+/** household = the user whose rows hold the household's shared docs (planner_users.household_id); none = their own. */
+export interface Me { id: string; name: string; app: AppId; household?: string }
 /** The database, as this function uses it. Every method that takes a person's id only ever touches that person's rows. */
 export interface Store {
   /** keep a sign-in that was just started; this person's finished and run-out ones are cleared away */
@@ -66,13 +81,20 @@ export interface Store {
   /** a mailbox was disconnected: what was still on offer from it no longer is */
   dropWaiting(userId: string, mailboxId: string, nowIso: string): Promise<void>;
   cronKey(): Promise<string>;
+  /** Of these keys of a household's docs of one kind (stored under `owner`, the household's user id), the ones there. */
+  haveDocs(owner: string, kind: string, keys: string[]): Promise<string[]>;
+  /** Household docs written under `owner`, as planner-plaid writes them, except that a doc already there is left exactly
+   *  as it is (a receipt the app has matched, ignored or deleted is never written over). */
+  addDocs(owner: string, list: { kind: string; key: string; data: unknown }[]): Promise<void>;
 }
+/** The tool Claude is made to answer with. None given: the to-dos tool of the check. */
+export interface ClaudeTool { name: string; description: string; /** how long its answer may be */ maxTokens?: number; /** its answer when Claude calls no tool */ empty?: unknown }
 export interface Deps {
   store: Store; fetch: Fetch; env: (name: string) => string; now: () => number;
   /** the planner person a token belongs to (planner_me). null = signed out. */
   me(token: string): Promise<Me | null>;
-  /** Claude's answer in the shape of `schema` */
-  claude(system: string, user: string, schema: unknown): Promise<unknown>;
+  /** Claude's answer in the shape of `schema`, given by calling `tool` (none: the to-dos tool) */
+  claude(system: string, user: string, schema: unknown, tool?: ClaudeTool): Promise<unknown>;
   /** one notification to a person's phones, opening Today */
   notify(person: Me, body: string): Promise<void>;
   log(line: string): void;
@@ -292,6 +314,123 @@ async function check(d: Deps): Promise<Out> {
   return json({ ok: true, mailboxes, read, found: [...found.values()].reduce((a, b) => a + b, 0) });
 }
 
+// ── receipts: a look back through a person's mailboxes for what they paid ──
+/** New emails one call reads at most; how long it goes on before it stops and lets the app call again; how many
+ *  emails Gmail is asked for a page at a time; how many emails are read and put to Claude in one go (three questions
+ *  of RECEIPT_BATCH, side by side). */
+export const RECEIPTS_MAX = 40, RECEIPTS_BUDGET_MS = 50_000;
+const RECEIPTS_PAGE = 50, RECEIPTS_CHUNK = RECEIPT_BATCH * 3;
+const RECEIPTS_TOOL: ClaudeTool = { name: 'receipts', description: 'What each of these emails shows this person paid: one entry per email, is_purchase false when it shows nothing paid.', maxTokens: 4000, empty: { receipts: [] } };
+const LOOK_DOWN = 'Google didn’t answer while this mailbox was being looked through. Look again in a minute: what was already looked at is skipped.';
+/** A receipt's id comes from the email it was found in, so reading that email again (it never is: its mark says it
+ *  was looked at) would give the same id, never a second receipt. */
+const receiptId = (mailboxId: string) => (mail: CheckMail): string => `email_${mailboxId.replace(/-/g, '').slice(-12)}_${mail.id}`;
+interface BoxCount { address: string; scanned: number; found: number; problem?: string }
+
+/** One mailbox, from the page the cursor is at. Returns the page to carry on from, or null when the mailbox is done. */
+async function lookThrough(d: Deps, row: MailboxRow, access: string, p: Provider,
+  c: { me: Me; owner: string; since: string; today: string; cur: ReceiptsCursor; count: BoxCount; left: () => number; outOfTime: () => boolean }): Promise<string | null> {
+  const q = receiptQuery(c.since);
+  let page = c.cur.p;
+  for (;;) {
+    if (c.left() <= 0 || c.outOfTime()) return page;
+    const l = await p.search(access, { q, ...(page ? { pageToken: page } : {}), max: RECEIPTS_PAGE }, d.fetch);
+    const ids = [...new Set(l.ids)].filter(id => isMessageId(id) && !c.cur.t.includes(id));
+    const have = new Set(ids.length ? await d.store.haveDocs(c.owner, MAILRECEIPT_KIND, ids.map(id => mailReceiptKey(row.id, id))) : []);
+    const fresh = ids.filter(id => !have.has(mailReceiptKey(row.id, id)));
+    for (let at = 0; at < fresh.length; at += RECEIPTS_CHUNK) {
+      // stopped part way through a page: the next call asks for the same page again, and skips what was done
+      if (c.left() <= 0 || c.outOfTime()) return page;
+      const ids = fresh.slice(at, at + Math.min(RECEIPTS_CHUNK, c.left()));
+      await readForReceipts(d, row, access, p, ids, c);
+      if (ids.length < Math.min(RECEIPTS_CHUNK, fresh.length - at)) return page;
+    }
+    if (!l.next) return null;
+    page = l.next;
+  }
+}
+/** These emails read, put to Claude a few at a time, and what they showed saved. */
+async function readForReceipts(d: Deps, row: MailboxRow, access: string, p: Provider, ids: string[],
+  c: { me: Me; owner: string; since: string; today: string; cur: ReceiptsCursor; count: BoxCount }): Promise<void> {
+  const nowIso = new Date(d.now()).toISOString();
+  const mails: MailFull[] = [], gone: string[] = [];
+  for (let i = 0; i < ids.length; i += 5) {   // five at a time
+    const got = await Promise.all(ids.slice(i, i + 5).map(id => p.read(access, id, d.fetch, RECEIPT_CHARS).catch(e => { if (e instanceof MailError && e.kind === 'gone') { gone.push(id); return null; } throw e; })));
+    mails.push(...got.filter((m): m is MailFull => !!m));
+  }
+  // an email that isn't there any more is remembered as looked at, so it isn't asked for again
+  if (gone.length) await d.store.addDocs(c.owner, gone.map(id => ({ kind: MAILRECEIPT_KIND, key: mailReceiptKey(row.id, id), data: { at: nowIso, found: false } satisfies MailReceiptMark })));
+  c.count.scanned += mails.length + gone.length;
+  const asked: CheckMail[] = mails.map(m => ({ id: m.id, at: m.at, from: m.from, subject: m.subject, text: m.text }));
+  const system = receiptSystem({ name: c.me.name || 'this person', today: c.today, since: c.since });
+  const batches: CheckMail[][] = [];
+  for (let i = 0; i < asked.length; i += RECEIPT_BATCH) batches.push(asked.slice(i, i + RECEIPT_BATCH));
+  await Promise.all(batches.map(async batch => {
+    let answer: unknown;
+    try { answer = await d.claude(system, receiptInput(batch), RECEIPT_SCHEMA, RECEIPTS_TOOL); }
+    catch (e) {
+      // not remembered: passed over for the rest of this look, and tried again the next time one is run
+      d.log(`receipts ${row.id}: not read for receipts (${e instanceof Error ? e.message.slice(0, 80) : 'error'})`);
+      c.cur.t.push(...batch.map(m => m.id));
+      return;
+    }
+    const out = receiptsFrom(answer, batch, { mailbox: row.address, since: c.since, today: c.today, nowIso, uid: receiptId(row.id) });
+    const writes: { kind: string; key: string; data: unknown }[] = [];
+    for (const { mail, receipt } of out) {
+      if (receipt) writes.push({ kind: RECEIPT_KIND, key: receipt.key, data: receipt.data });
+      writes.push({ kind: MAILRECEIPT_KIND, key: mailReceiptKey(row.id, mail.id), data: { at: nowIso, found: !!receipt, ...(receipt ? { receiptKey: receipt.key } : {}) } satisfies MailReceiptMark });
+    }
+    // the receipts and the marks that say their emails were looked at, in one write; nothing already there is touched
+    await d.store.addDocs(c.owner, writes);
+    c.count.found += out.filter(o => o.receipt).length;
+  }));
+}
+async function receipts(b: Record<string, unknown>, me: Me, d: Deps): Promise<Out> {
+  const cfg = config(d.env);
+  if (!cfg) return problem(NOT_SET_UP, 'not_set_up');
+  try { await mailKey(cfg.key); } catch { d.log('receipts: PLANNER_MAIL_KEY is not 32 bytes of base64'); return problem(NOT_SET_UP, 'not_set_up'); }
+  const started = d.now(), day = today(started).today;
+  // money belongs to the household: written under its owner, as planner-plaid does
+  const owner = me.household || me.id;
+  // this person's own mailboxes, and no one else's
+  const boxes = (await d.store.mailboxes(me.id)).filter(r => r.user_id === me.id);
+  const given = b.cursor === undefined || b.cursor === null || b.cursor === '' ? null : readReceiptsCursor(b.cursor);
+  if (given && given.s > day) given.s = receiptsSince(undefined, day);
+  const cur: ReceiptsCursor = given || { s: receiptsSince(b.since, day), m: boxes[0]?.id || '', i: 0, p: '', t: [] };
+  // where the look had got to: that mailbox (found by its id). One disconnected since: the one now in its place, from its first page.
+  let i = boxes.findIndex(r => r.id === cur.m);
+  if (i < 0) { i = Math.min(cur.i, boxes.length); cur.p = ''; }
+  const counts: BoxCount[] = [];
+  let read = 0;
+  const outOfTime = () => d.now() - started > RECEIPTS_BUDGET_MS;
+  for (; i < boxes.length; i++, cur.p = '') {
+    if (read >= RECEIPTS_MAX || outOfTime()) break;
+    const row = boxes[i];
+    const count: BoxCount = { address: row.address, scanned: 0, found: 0 };
+    counts.push(count);
+    cur.m = row.id; cur.i = i;
+    if (!row.token_enc) { count.problem = EXPIRED; continue; }
+    let page: string | null;
+    try {
+      page = await withMailbox(d, cfg, row, (access, p) => lookThrough(d, row, access, p, { me, owner, since: cur.s, today: day, cur, count,
+        left: () => RECEIPTS_MAX - read - count.scanned, outOfTime }));
+    } catch (e) {
+      if (e instanceof NoKey) { d.log('receipts: PLANNER_MAIL_KEY is not 32 bytes of base64'); return problem(NOT_SET_UP, 'not_set_up'); }
+      if (!(e instanceof MailError)) throw e;
+      d.log(`receipts ${row.id}: ${e.why}`);
+      // this mailbox's problem in plain words, and on to the next one
+      count.problem = e.kind === 'expired' ? EXPIRED : e.kind === 'not_allowed' ? NO_READING : LOOK_DOWN;
+      read += count.scanned;
+      continue;
+    }
+    read += count.scanned;
+    if (page !== null) { cur.p = page; break; }   // stopped part way: carried on from here at the next call
+  }
+  const more = i < boxes.length;
+  return json({ scanned: read, found: counts.reduce((a, x) => a + x.found, 0), more, ...(more ? { cursor: writeReceiptsCursor({ ...cur, m: boxes[i].id, i }) } : {}),
+    mailboxes: counts });
+}
+
 /** One request to the function. Never throws for something a person did: the answer says what went wrong. */
 export async function handle(req: In, d: Deps): Promise<Out> {
   // the one address Google knows: a GET on …/planner-mail/callback
@@ -323,6 +462,8 @@ export async function handle(req: In, d: Deps): Promise<Out> {
   }
 
   if (action === 'connect_finish') return connectFinish(b, me, d);
+
+  if (action === 'receipts') return receipts(b, me, d);
 
   // everything below is about one mailbox: this person's own, or nothing
   if (!['disconnect', 'watch', 'inbox', 'read', 'send'].includes(action)) return json({ error: 'Unknown action' }, 400);
