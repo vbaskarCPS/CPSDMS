@@ -13,6 +13,8 @@
 //  - other:          not a transfer at all: a car loan, the dump ("KENORA TRANSFER STATION"), a hydro bill, a shop.
 // Nothing here changes a row: sortTransfers only says what the Transfers screen should show and suggest. The person's
 // answers are kept in one doc (TransferPrefs) so the next months follow the same choices.
+// A move between two tracked accounts is two rows (money out of one, money into the other): linkMoves puts the two
+// sides together so the screen shows it once.
 import { builtinCategoryNoTransfer, CARD_PAYMENT } from '../../../../supabase/functions/_shared/plannerMoney';
 import { round2 } from './lib';
 import type { Account, Receipt, Txn } from './types';
@@ -23,7 +25,7 @@ export type TransferKind = 'own' | 'card' | 'sent' | 'received' | 'reversal' | '
 export interface SentRule { payee?: string; amount?: number; category: string }
 /** kind 'moneyprefs', key 'transfers': the last-four digits confirmed as theirs / not theirs, and the remembered
  *  categories for e-transfers. */
-export interface TransferPrefs { own?: string[]; notOwn?: string[]; sentRules?: SentRule[] }
+export interface TransferPrefs { own?: string[]; notOwn?: string[]; sentRules?: SentRule[]; /** nicknames for their own account numbers the planner doesn't track, by last four digits ("6622": "Savings") */ names?: Record<string, string> }
 export const TRANSFER_PREFS_KEY = 'transfers';
 
 /** How close two amounts have to be to count as "the same payment" (rent that went up a little is still rent). */
@@ -269,6 +271,83 @@ export interface OtherGroup {
   keep: boolean;
 }
 
+// ───────────── names ─────────────
+
+/** What to call the account ending in these four digits: the tracked account's name, else their nickname for it
+ *  ("Savings ····6622"), else just the digits. */
+export function endingLabel(ending: string, accounts: Account[], names: Record<string, string> = {}): string {
+  const tracked = accounts.find(a => a.last4 === ending && !a.archived) || accounts.find(a => a.last4 === ending);
+  if (tracked) return tracked.name;
+  const nick = (names[ending] || '').trim();
+  return nick ? `${nick} ····${ending}` : `····${ending}`;
+}
+/** The prefs with a nickname for one of their own account numbers (empty = no nickname). */
+export function nameEnding(prefs: TransferPrefs, ending: string, name: string): TransferPrefs {
+  const names = { ...(prefs.names || {}) };
+  const n = name.trim().replace(/\s+/g, ' ').slice(0, 30);
+  if (n) names[ending] = n; else delete names[ending];
+  return { ...prefs, names };
+}
+
+// ───────────── the two sides of one move, together ─────────────
+
+/** One move between two of their accounts. Between two tracked accounts the bank shows it twice (`out`: the row on
+ *  the account the money left, `into`: the row on the account it reached): both are here, so it is seen once. A move
+ *  to or from an account the planner doesn't track (a savings known only by its number) has one side. */
+export interface Move { key: string; date: string; amount: number; from: string; to: string; fromId?: string; toId?: string; out?: Txn; into?: Txn }
+/** Every move in one direction between the same two accounts, newest first. `both`: how many were seen on both sides. */
+export interface MoveGroup { key: string; from: string; to: string; fromId?: string; toId?: string; total: number; count: number; both: number; moves: Move[] }
+
+const cents = (t: Txn) => Math.round(abs(t) * 100);
+/** How many days apart the two sides of one move can be dated (a weekend, a late-evening move). */
+const PAIR_DAYS = 3;
+
+/** The rows that are moves between their own accounts (kind 'own'), with the two sides of each move put together:
+ *  money out of A naming B's number pairs with money into B naming A's number, the same amount to the cent, dated
+ *  within three days (the closest one wins; each row is used once). */
+export function linkMoves(ownRows: Txn[], accounts: Account[], names: Record<string, string> = {}): Move[] {
+  const byId = new Map(accounts.map(a => [a.id, a]));
+  const byLast4 = (e: string) => accounts.find(a => a.last4 === e && !a.archived) || accounts.find(a => a.last4 === e);
+  const used = new Set<string>();
+  const moves: Move[] = [];
+  const label = (id: string) => byId.get(id)?.name || 'Another account';
+  const sorted = [...ownRows].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+  // money leaving: look for the same money arriving on the other account
+  for (const t of sorted.filter(x => x.amount < 0)) {
+    const e = accountEnding(t.desc)!;
+    const other = byLast4(e), mine = byId.get(t.accountId);
+    let twin: Txn | undefined;
+    if (other && other.id !== t.accountId) {
+      twin = sorted.filter(x => x.amount > 0 && !used.has(x.id) && x.accountId === other.id && cents(x) === cents(t)
+        && Math.abs(daysBetween(t.date, x.date)) <= PAIR_DAYS && (!mine?.last4 || accountEnding(x.desc) === mine.last4))
+        .sort((a, b) => Math.abs(daysBetween(t.date, a.date)) - Math.abs(daysBetween(t.date, b.date)) || a.id.localeCompare(b.id))[0];
+    }
+    used.add(t.id); if (twin) used.add(twin.id);
+    moves.push({ key: t.id, date: t.date, amount: abs(t), from: label(t.accountId), to: other ? other.name : endingLabel(e, accounts, names),
+      fromId: mine?.id, toId: other?.id, out: t, into: twin });
+  }
+  // money arriving whose other side wasn't seen (it came from an account the planner doesn't track, or the row is missing)
+  for (const t of sorted.filter(x => x.amount > 0 && !used.has(x.id))) {
+    const e = accountEnding(t.desc)!;
+    const other = byLast4(e), mine = byId.get(t.accountId);
+    used.add(t.id);
+    moves.push({ key: t.id, date: t.date, amount: abs(t), from: other ? other.name : endingLabel(e, accounts, names), to: label(t.accountId),
+      fromId: other?.id, toId: mine?.id, into: t });
+  }
+  return moves.sort((a, b) => b.date.localeCompare(a.date) || a.key.localeCompare(b.key));
+}
+/** The moves by direction ("TD Chequing → Savings ····6622"), the biggest total first. */
+export function groupMoves(moves: Move[]): MoveGroup[] {
+  const groups = new Map<string, MoveGroup>();
+  for (const m of moves) {
+    const key = `${m.fromId || m.from}→${m.toId || m.to}`;
+    const g = groups.get(key) || { key, from: m.from, to: m.to, fromId: m.fromId, toId: m.toId, total: 0, count: 0, both: 0, moves: [] };
+    g.total = round2(g.total + m.amount); g.count++; if (m.out && m.into) g.both++; g.moves.push(m);
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) => b.total - a.total);
+}
+
 // ───────────── money in and out of one account ─────────────
 
 /** One direction between two accounts: "TD Chequing → ····6622, $4,200 in 12 moves". */
@@ -279,8 +358,8 @@ export interface Flow { into: number; out: number; net: number; routes: Route[] 
 
 /** The moves that name the account ending in `ending` ("TFR-TO 6456622" on TD Chequing = TD Chequing → ····6622; money
  *  coming in on a row = ····6622 → that account). */
-export function flowFor(ending: string, list: Txn[], accounts: Account[]): Flow {
-  const it = accounts.find(a => a.last4 === ending)?.name || `····${ending}`;
+export function flowFor(ending: string, list: Txn[], accounts: Account[], names: Record<string, string> = {}): Flow {
+  const it = endingLabel(ending, accounts, names);
   const other = (t: Txn) => accounts.find(a => a.id === t.accountId)?.name || 'Another account';
   const routes = new Map<string, Route>();
   for (const t of list) {
@@ -298,7 +377,9 @@ export function flowFor(ending: string, list: Txn[], accounts: Account[]): Flow 
 export interface TransferSort {
   /** Between their own accounts: stays as it is. `total` counts each move once: money going out, plus money coming in
    *  from an account the planner doesn't track (a move between two tracked accounts shows on both). */
-  own: { count: number; total: number; byEnding: { ending: string; name?: string; count: number; total: number; flow: Flow }[] };
+  own: { count: number; total: number; byEnding: { ending: string; name?: string; /** their nickname for an account the planner doesn't track */ nick?: string; count: number; total: number; flow: Flow }[];
+    /** The same moves with their two sides together, by direction. `count` above counts rows; `moves` counts moves. */
+    groups: MoveGroup[]; moves: number };
   /** Account numbers to ask about: "Is ····6622 one of yours?" */
   unknownAccounts: { ending: string; count: number; total: number; flow: Flow; first: string; last: string; sample: string }[];
   /** Payments to a credit card, to be changed to 'Credit card payment'. Newest first. */
@@ -333,9 +414,11 @@ export function sortTransfers(all: Txn[], accounts: Account[], prefs: TransferPr
   const ownRows = of('own');
   const ends = new Map<string, Txn[]>();
   for (const t of ownRows) { const e = accountEnding(t.desc)!; ends.set(e, [...(ends.get(e) || []), t]); }
-  const byEnding = [...ends].map(([ending, list]) => ({ ending, name: tracked.get(ending), count: list.length, total: sum(list), flow: flowFor(ending, list, accounts) }))
+  const names = prefs.names || {};
+  const byEnding = [...ends].map(([ending, list]) => ({ ending, name: tracked.get(ending), nick: tracked.has(ending) ? undefined : names[ending] || undefined, count: list.length, total: sum(list), flow: flowFor(ending, list, accounts, names) }))
     .sort((a, b) => b.total - a.total);
   const moved = sum(ownRows.filter(t => t.amount < 0 || !tracked.has(accountEnding(t.desc)!)));
+  const linked = linkMoves(ownRows, accounts, names);
 
   // account numbers not known yet → asked about; the ones they said no to → "not transfers"
   const asks = new Map<string, Txn[]>();
@@ -347,7 +430,7 @@ export function sortTransfers(all: Txn[], accounts: Account[], prefs: TransferPr
   }
   const unknownAccounts = [...asks].map(([ending, list]) => {
     const dates = list.map(t => t.date).sort();
-    return { ending, count: list.length, total: sum(list), flow: flowFor(ending, list, accounts), first: dates[0], last: dates[dates.length - 1], sample: newestFirst(list)[0].desc };
+    return { ending, count: list.length, total: sum(list), flow: flowFor(ending, list, accounts, names), first: dates[0], last: dates[dates.length - 1], sample: newestFirst(list)[0].desc };
   }).sort((a, b) => b.total - a.total);
 
   // e-transfers
@@ -377,7 +460,7 @@ export function sortTransfers(all: Txn[], accounts: Account[], prefs: TransferPr
 
   const card = newestFirst(of('card'));
   return {
-    own: { count: ownRows.length, total: moved, byEnding },
+    own: { count: ownRows.length, total: moved, byEnding, groups: groupMoves(linked), moves: linked.length },
     unknownAccounts,
     card,
     sent: { groups, cancelled, remembered },

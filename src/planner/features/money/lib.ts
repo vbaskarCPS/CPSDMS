@@ -39,6 +39,7 @@ export const todayIso = () => { const d = new Date(); return `${monthKey(d)}-${S
 // ── merchants ── (shared with the planner-plaid edge function, so CSV and bank rows agree)
 export { maskNumbers, normalizeMerchant } from '../../../../supabase/functions/_shared/plannerMoney';
 import { hideReplaced } from '../../../../supabase/functions/_shared/plannerMoney';
+export { bankSince } from '../../../../supabase/functions/_shared/plannerMoney';
 
 /** FNV-1a; good enough to spot the same bank line twice. */
 export function hash(s: string): string {
@@ -140,12 +141,13 @@ export async function recategorize(months: Record<string, Txn[]>, ids: Set<strin
   return keys;
 }
 
-/** What the screens show: a connected account's CSV rows are hidden (see hideReplaced), and once cash spending is
+/** What the screens show: a connected account's CSV rows are hidden from the day the bank's own rows begin (see
+ *  hideReplaced; older statement rows count), and once cash spending is
  *  logged (the cash wallet's cashSince), an ATM withdrawal is shown as a transfer into the wallet: the cash
  *  rows are the spending, so the withdrawal mustn't count too. Display only; writes go through loadMonths. */
 export function visibleMonths(months: Record<string, Txn[]>, accounts: Account[]): Record<string, Txn[]> {
-  const linked: Record<string, { removedAt?: string }> = {};
-  for (const a of accounts) if (a.plaid) linked[a.id] = { removedAt: a.plaid.removedAt };
+  const linked: Record<string, { removedAt?: string; since?: string }> = {};
+  for (const a of accounts) if (a.plaid) linked[a.id] = { removedAt: a.plaid.removedAt, since: a.plaid.since };
   const since = accounts.find(a => a.id === CASH_ACCOUNT_ID)?.cashSince;
   if (!Object.keys(linked).length && !since) return months;
   const out: Record<string, Txn[]> = {};

@@ -4,7 +4,7 @@
 // index.ts does the calls; the tests (src/planner/features/money/plaidAccounts.test.ts) use stand-ins.
 
 export interface ItemAccount { plaidId: string; name: string; mask: string | null; type: string; subtype: string | null; plannerId: string | null }
-export interface PlannerAccount { id: string; name: string; type: 'chequing' | 'savings' | 'credit'; last4?: string; balance?: number; balanceAsOf?: string; order: number; archived?: boolean; plaid?: { itemId: string; plaidId: string; institution?: string; linkedAt: string; removedAt?: string } }
+export interface PlannerAccount { id: string; name: string; type: 'chequing' | 'savings' | 'credit'; last4?: string; balance?: number; balanceAsOf?: string; order: number; archived?: boolean; plaid?: { itemId: string; plaidId: string; institution?: string; linkedAt: string; removedAt?: string; /** the day the bank's own rows begin (set by the sync) */ since?: string } }
 export interface PlaidAccount { account_id: string; name: string; official_name?: string | null; mask?: string | null; type: string; subtype?: string | null; balances?: { current?: number | null; available?: number | null; iso_currency_code?: string | null } }
 
 /** The household doc that says a bank has accounts not shared with the planner yet (Plaid's NEW_ACCOUNTS_AVAILABLE). Key: the item id. */

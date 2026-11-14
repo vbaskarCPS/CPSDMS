@@ -1,7 +1,7 @@
 // Bank rows from Plaid (supabase/functions/_shared/plannerMoney.ts): signs, categories, sync changes, and
 // hiding a connected account's CSV rows.
 import { describe, expect, it } from 'vitest';
-import { applySync, hideReplaced, plaidCategory, plaidToRow, type PlaidTxn, type PlannerTxn } from '../../../../supabase/functions/_shared/plannerMoney';
+import { applySync, bankSince, hideReplaced, plaidCategory, plaidToRow, type PlaidTxn, type PlannerTxn } from '../../../../supabase/functions/_shared/plannerMoney';
 import { normalizeMerchant } from './lib';
 
 const t = (o: Partial<PlaidTxn>): PlaidTxn => ({ transaction_id: 'tx1', account_id: 'pa1', amount: 12.5, date: '2026-10-30', pending: false, name: 'TIM HORTONS #2231', merchant_name: 'Tim Hortons', ...o });
@@ -81,5 +81,15 @@ describe('hideReplaced', () => {
   });
   it('after disconnecting, CSV rows after that day show again', () => {
     expect(hideReplaced(rows, { a: { removedAt: '2026-11-15T10:00:00Z' } }).map(r => r.id)).toEqual(['csv-new', 'plaid_1', 'csv-b']);
+  });
+  it('a statement from before the bank’s own rows begin counts: only the overlap is hidden', () => {
+    // the bank's history starts Oct 1: the Sep 1 statement row is not a repeat of anything
+    expect(hideReplaced(rows, { a: { since: '2026-10-01' } }).map(r => r.id)).toEqual(['csv-old', 'plaid_1', 'csv-b']);
+    // a statement row on the very day the bank's rows begin is taken as a repeat
+    expect(hideReplaced([{ id: 'csv-same', date: '2026-10-01', accountId: 'a' }], { a: { since: '2026-10-01' } })).toEqual([]);
+  });
+  it('bankSince: the earliest bank row per account, whatever the month', () => {
+    expect(bankSince({ '2026-10': rows, '2026-09': [{ id: 'plaid_0', date: '2026-09-20', accountId: 'a' }, { id: 'plaid_9', date: '2026-09-05', accountId: 'b' }] }))
+      .toEqual({ a: '2026-09-20', b: '2026-09-05' });
   });
 });
