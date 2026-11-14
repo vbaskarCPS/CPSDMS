@@ -11,7 +11,7 @@ import { CATEGORIES, CATEGORY_NAMES } from '../categories';
 import { money, monthKey, niceName, recategorize, shiftMonth } from '../lib';
 import { loadReceipts } from '../receipts';
 import { CategoryIcon } from '../CategoryIcon';
-import { answerAccount, isCardPayment, rememberSent, sortTransfers, TRANSFER_PREFS_KEY, type OtherGroup, type SentGroup, type TransferPrefs } from '../transfers';
+import { answerAccount, isCardPayment, rememberSent, sortTransfers, TRANSFER_PREFS_KEY, type Flow, type OtherGroup, type SentGroup, type TransferPrefs } from '../transfers';
 import type { Receipt, Txn } from '../types';
 
 const CHOICES = CATEGORY_NAMES.filter(c => c !== 'Transfers');
@@ -92,6 +92,22 @@ export function Transfers() {
   };
 
   // ── pieces ──
+  /** In, out and the difference for one account number, then which accounts the money came from and went to. */
+  const flowLines = (f: Flow) => (
+    <div style={{ margin: '6px 0 2px', fontSize: 13 }}>
+      <div className="pl-row" style={{ gap: 12, flexWrap: 'wrap' }}>
+        <span><span className="mo-amt mo-amt--in">+{money(f.into, { whole: true })}</span> <span className="pl-muted">in</span></span>
+        {f.out > 0 && <span><span className="mo-amt">−{money(f.out, { whole: true })}</span> <span className="pl-muted">out</span></span>}
+        <span><b className={`mo-amt ${f.net > 0 ? 'mo-amt--in' : ''}`}>{f.net > 0 ? '+' : f.net < 0 ? '−' : ''}{money(Math.abs(f.net), { whole: true })}</b> <span className="pl-muted">{f.net < 0 ? 'net: more came out than went in' : f.net > 0 ? 'net: more went in than came out' : 'net'}</span></span>
+      </div>
+      {f.routes.map(r => (
+        <div key={`${r.from}→${r.to}`} className="pl-row" style={{ gap: 8, padding: '4px 0', borderTop: '1px solid var(--line)', marginTop: 4 }}>
+          <span className="pl-grow" style={{ minWidth: 0 }}>{r.from} → {r.to} <span className="pl-muted">({plural(r.count, 'move')})</span></span>
+          <span className={`mo-amt ${r.dir === 'in' ? 'mo-amt--in' : ''}`} style={{ flex: 'none' }}>{r.dir === 'in' ? '+' : '−'}{money(r.total)}</span>
+        </div>
+      ))}
+    </div>
+  );
   const txnRows = (rows: Txn[]) => (
     <div style={{ margin: '2px 0 8px' }}>
       {rows.map(t => (
@@ -215,14 +231,16 @@ export function Transfers() {
               <small className="pl-muted">Money moved to or from an account number the planner doesn't know. Your own accounts (a savings, an RSP) stay transfers.</small>
               <div className="pl-list" style={{ marginTop: 8 }}>
                 {s.unknownAccounts.map(u => (
-                  <div key={u.ending} className="mo-txn">
-                    <div className="mo-txn__main">
-                      <b>Is ····{u.ending} one of yours?</b>
-                      <small>{plural(u.count, 'move')} · {money(u.total, { whole: true })} · {u.first === u.last ? day(u.first) : `${day(u.first)} – ${day(u.last)}`}</small>
-                      <small>{u.sample}</small>
+                  <div key={u.ending} style={{ padding: '10px 0' }}>
+                    {/* the question in full (it was cut off beside the buttons on a phone), the buttons under it */}
+                    <b style={{ display: 'block' }}>Is the account ending in {u.ending} one of yours?</b>
+                    <small className="pl-muted" style={{ display: 'block' }}>{plural(u.count, 'move')}, {u.first === u.last ? day(u.first) : `${day(u.first)} – ${day(u.last)}`}</small>
+                    <small className="pl-muted" style={{ display: 'block', overflowWrap: 'anywhere' }}>The bank writes it as “{u.sample}”</small>
+                    {flowLines(u.flow)}
+                    <div className="pl-row" style={{ gap: 8, marginTop: 8 }}>
+                      <Button small primary onClick={() => answer(u.ending, true)}>Yes, ours</Button>
+                      <Button small onClick={() => answer(u.ending, false)}>No</Button>
                     </div>
-                    <Button small primary onClick={() => answer(u.ending, true)}>Yes, ours</Button>
-                    <Button small onClick={() => answer(u.ending, false)}>No</Button>
                   </div>
                 ))}
               </div>
@@ -282,13 +300,16 @@ export function Transfers() {
               {showOwn && (
                 <div className="pl-list" style={{ marginTop: 8 }}>
                   {s.own.byEnding.map(e => (
-                    <div key={e.ending} className="mo-txn">
-                      <div className="mo-txn__main">
-                        <b>····{e.ending}{e.name ? ` · ${e.name}` : ''}</b>
-                        <small>{plural(e.count, 'move')}{!e.name && confirmed.has(e.ending) ? ' · you said it is yours' : ''}</small>
+                    <div key={e.ending} style={{ padding: '8px 0' }}>
+                      <div className="mo-txn" style={{ padding: 0 }}>
+                        <div className="mo-txn__main">
+                          <b>····{e.ending}{e.name ? ` · ${e.name}` : ''}</b>
+                          <small>{plural(e.count, 'move')}{!e.name && confirmed.has(e.ending) ? ' · yours' : ''}</small>
+                        </div>
+                        <span className="mo-amt">{money(e.total)}</span>
+                        {!e.name && confirmed.has(e.ending) && <button type="button" className="mo-catchip" onClick={() => answer(e.ending, false)}>Not ours</button>}
                       </div>
-                      <span className="mo-amt">{money(e.total)}</span>
-                      {!e.name && confirmed.has(e.ending) && <button type="button" className="mo-catchip" onClick={() => answer(e.ending, false)}>Not ours</button>}
+                      {flowLines(e.flow)}
                     </div>
                   ))}
                   {s.sent.cancelled.length > 0 && <small className="pl-muted" style={{ display: 'block', padding: '8px 0' }}>{plural(s.sent.cancelled.length, 'e-transfer')} sent and taken back: left as {s.sent.cancelled.length === 1 ? 'it is' : 'they are'}.</small>}

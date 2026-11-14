@@ -269,14 +269,38 @@ export interface OtherGroup {
   keep: boolean;
 }
 
+// ───────────── money in and out of one account ─────────────
+
+/** One direction between two accounts: "TD Chequing → ····6622, $4,200 in 12 moves". */
+export interface Route { from: string; to: string; /** into the account in question, or out of it */ dir: 'in' | 'out'; total: number; count: number }
+/** What moved in and out of one account number, seen from that account: `net` is in less out (minus = more came out
+ *  of it than went in), and `routes` says which accounts the money came from and went to, biggest first. */
+export interface Flow { into: number; out: number; net: number; routes: Route[] }
+
+/** The moves that name the account ending in `ending` ("TFR-TO 6456622" on TD Chequing = TD Chequing → ····6622; money
+ *  coming in on a row = ····6622 → that account). */
+export function flowFor(ending: string, list: Txn[], accounts: Account[]): Flow {
+  const it = accounts.find(a => a.last4 === ending)?.name || `····${ending}`;
+  const other = (t: Txn) => accounts.find(a => a.id === t.accountId)?.name || 'Another account';
+  const routes = new Map<string, Route>();
+  for (const t of list) {
+    if (!t.amount) continue;
+    const r = t.amount < 0 ? { from: other(t), to: it, dir: 'in' as const } : { from: it, to: other(t), dir: 'out' as const };
+    const k = `${r.from}→${r.to}`, was = routes.get(k);
+    routes.set(k, { ...r, total: round2((was?.total || 0) + abs(t)), count: (was?.count || 0) + 1 });
+  }
+  const into = sum(list.filter(t => t.amount < 0)), out = sum(list.filter(t => t.amount > 0));
+  return { into, out, net: round2(into - out), routes: [...routes.values()].sort((a, b) => b.total - a.total) };
+}
+
 // ───────────── the whole picture ─────────────
 
 export interface TransferSort {
   /** Between their own accounts: stays as it is. `total` counts each move once: money going out, plus money coming in
    *  from an account the planner doesn't track (a move between two tracked accounts shows on both). */
-  own: { count: number; total: number; byEnding: { ending: string; name?: string; count: number; total: number }[] };
+  own: { count: number; total: number; byEnding: { ending: string; name?: string; count: number; total: number; flow: Flow }[] };
   /** Account numbers to ask about: "Is ····6622 one of yours?" */
-  unknownAccounts: { ending: string; count: number; total: number; first: string; last: string; sample: string }[];
+  unknownAccounts: { ending: string; count: number; total: number; flow: Flow; first: string; last: string; sample: string }[];
   /** Payments to a credit card, to be changed to 'Credit card payment'. Newest first. */
   card: Txn[];
   sent: {
@@ -309,7 +333,7 @@ export function sortTransfers(all: Txn[], accounts: Account[], prefs: TransferPr
   const ownRows = of('own');
   const ends = new Map<string, Txn[]>();
   for (const t of ownRows) { const e = accountEnding(t.desc)!; ends.set(e, [...(ends.get(e) || []), t]); }
-  const byEnding = [...ends].map(([ending, list]) => ({ ending, name: tracked.get(ending), count: list.length, total: sum(list) }))
+  const byEnding = [...ends].map(([ending, list]) => ({ ending, name: tracked.get(ending), count: list.length, total: sum(list), flow: flowFor(ending, list, accounts) }))
     .sort((a, b) => b.total - a.total);
   const moved = sum(ownRows.filter(t => t.amount < 0 || !tracked.has(accountEnding(t.desc)!)));
 
@@ -323,7 +347,7 @@ export function sortTransfers(all: Txn[], accounts: Account[], prefs: TransferPr
   }
   const unknownAccounts = [...asks].map(([ending, list]) => {
     const dates = list.map(t => t.date).sort();
-    return { ending, count: list.length, total: sum(list), first: dates[0], last: dates[dates.length - 1], sample: newestFirst(list)[0].desc };
+    return { ending, count: list.length, total: sum(list), flow: flowFor(ending, list, accounts), first: dates[0], last: dates[dates.length - 1], sample: newestFirst(list)[0].desc };
   }).sort((a, b) => b.total - a.total);
 
   // e-transfers
