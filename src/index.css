@@ -206,13 +206,13 @@ body {
 
 /* Medium-small screens: 321px - 360px */
 @media screen and (max-width: 360px) {
-  html {
+  html:not(:has(.v2-bar)) {  /* not on pages with the new top bar (office and manager screens): those already fit a phone */
     zoom: 0.92;
     -moz-transform: scale(0.92);
     -moz-transform-origin: 0 0;
   }
   
-  body {
+  body:not(:has(.v2-bar)) {
     overflow-x: hidden;
     width: 108.7%;
   }
@@ -286,13 +286,13 @@ body {
 
 /* Very small screens: 320px and below (Orbic Maui+) */
 @media screen and (max-width: 320px) {
-  html {
+  html:not(:has(.v2-bar)) {  /* not on pages with the new top bar (office and manager screens): those already fit a phone */
     zoom: 0.85;
     -moz-transform: scale(0.85);
     -moz-transform-origin: 0 0;
   }
   
-  body {
+  body:not(:has(.v2-bar)) {
     overflow-x: hidden;
     width: 117.65%;
   }
@@ -481,13 +481,13 @@ body {
 
 /* Ultra-tiny screens: below 300px (edge case) */
 @media screen and (max-width: 299px) {
-  html {
+  html:not(:has(.v2-bar)) {  /* not on pages with the new top bar (office and manager screens): those already fit a phone */
     zoom: 0.75;
     -moz-transform: scale(0.75);
     -moz-transform-origin: 0 0;
   }
   
-  body {
+  body:not(:has(.v2-bar)) {
     overflow-x: hidden;
     width: 133.33%;
   }
