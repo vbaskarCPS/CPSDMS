@@ -1,6 +1,6 @@
 // The Benny's tools (supabase/functions/benny-assist/tools.ts): who gets which, and that each one goes somewhere.
 import { describe, it, expect } from 'vitest';
-import { FAST_TOOLS, TOOLS, arrayLengths, dayOpen, fastAnswerStop, forModel, heardRight, namedIn, needsMain, now, openMap, rules, saidForNames, system, systemBlocks, toolCall, toolsFor, ungrounded } from '../../../supabase/functions/benny-assist/tools';
+import { FAST_TOOLS, TOOLS, arrayLengths, dayOpen, fastAnswerStop, forModel, heardRight, namedIn, needsMain, now, openMap, opening, rules, saidForNames, system, systemBlocks, toolCall, toolsFor, ungrounded } from '../../../supabase/functions/benny-assist/tools';
 
 const ctx = { center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-10', rm_manager: 'rm_x' };
 
@@ -422,6 +422,31 @@ describe('the Benny’s tools', () => {
         { zone: 'Hamilton South 3 (2)', rep: 'Newton' }, { zone: 'Hamilton South 1 (2)', rep: 'Sina' }, { zone: 'Barrie 4', rep: 'none' }, { from_rep: 'Sam', rep: 'Priya' }] } });
       expect(toolCall('propose_ms_zone', { zone: 'Barrie 4', status: 'gone' }, ms)).toEqual({ fn: 'benny_ms_check_zone', args: { p_zone: 'Barrie 4', p_status: 'retired' }, card: { kind: 'ms_zone' } });
       expect(toolCall('propose_ms_zone', { zone: 'Barrie 4', status: 'active' }, ms)).toMatchObject({ args: { p_status: 'active' } });
+    });
+  });
+  describe('already done?', () => {
+    it('route managers and super admins can ask about any addresses, in one call', () => {
+      for (const role of ['admin', 'rm'] as const) {
+        expect(toolsFor(role).some(t => t.name === 'job_history')).toBe(true);
+        expect(rules(role)).toContain('job_history with every address they gave, in ONE call');
+        expect(rules(role)).toContain('never answer with only "it\'s logged"');
+      }
+      expect(rules('admin')).toContain('offer to mark it done: propose_booking');
+      expect(rules('rm')).toContain('the office closes it in Bookings');
+      expect(toolCall('job_history', { addresses: ['46542 mcgregor pl', ' 21015 46 ave ', '', 7] }, ctx))
+        .toEqual({ fn: 'benny_job_history', args: { p_center: 'c1', p_addresses: ['46542 mcgregor pl', '21015 46 ave'] } });
+      expect(toolCall('job_history', { addresses: 'x' }, ctx)).toMatchObject({ args: { p_addresses: [] } });
+    });
+  });
+  describe('what counts as "it couldn\'t"', () => {
+    it('is how the answer opens, not a mention further down', () => {
+      const list = 'I can help with the DMS data and work for BC Fall RJ. Here\'s what I can do.\n\n**Look things up**\n- Find workers.\n\n**Other**\n- Report bugs to Vijay, and log requests for things I can\'t do yet.';
+      expect(opening(list)).toBe('I can help with the DMS data and work for BC Fall RJ. Here\'s what I can do.\n\n');
+      expect(opening(list)).not.toMatch(/can't/);
+      expect(opening('I can\'t change a booking\'s price yet. It\'s logged for Vijay. More after.')).toBe('I can\'t change a booking\'s price yet. It\'s logged for Vijay. ');
+      expect(opening('No punctuation at all')).toBe('No punctuation at all');
+      expect(opening('x'.repeat(500) + '.')).toHaveLength(220);
+      expect(opening('')).toBe('');
     });
   });
   describe('pictures', () => {

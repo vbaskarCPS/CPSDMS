@@ -20,6 +20,8 @@ export interface PrebookCheck {
   contact?: { phone?: string; email?: string };
   /** the line on this cart's logsheet today at the same address (the prebook logged the wrong way): it is changed, not doubled */
   replaces?: { id: string; type: string; amount: number; paid_by: string; shown_as?: string };
+  /** the booking was already marked done by hand in Bookings (the check says so in its cautions): only the line is fixed and tied to it */
+  booking_done?: boolean;
   cautions?: string[];
   /** what the job code is worth this season, put in by the app when it can read the season's flats (the card shows it) */
   value?: number | null;
@@ -52,7 +54,7 @@ export function prebookCard(c: PrebookCheck): { title: string; lines: string[]; 
       `Production · ${b.job_code}${c.value != null ? ` (${money(c.value)} flat)` : ''} · prepaid${b.route ? ` · ${b.route}` : ''}`,
       ...(services ? [`Services as booked: ${services}`] : []),
       ...(r ? [`It’s on the logsheet now as a ${r.type.toLowerCase()} for ${money(r.amount)}, ${r.paid_by.toLowerCase()}. That line becomes this; no second job is added.`] : []),
-      'The booking is marked done.',
+      ...(c.booking_done ? [] : ['The booking is marked done.']),
       ...(c.cautions || []),
       ...(!r && c.contact?.email ? ['The client gets their receipt by email, the same as from the logsheet.'] : []),
       `${team ? `The cart’s (${c.cart.names.map(firstOf).join(' + ')})` : `${first}’s`} totals are worked out again.`,
@@ -96,5 +98,5 @@ export function prebookSaid(c: PrebookCheck, value: number, booking: 'done' | 'f
   const job = c.replaces
     ? `${first}’s job at ${b.street_address} now reads Production, ${b.job_code} (${money(value)} flat), prepaid`
     : `${b.street_address} is on ${first}’s logsheet: Production, ${b.job_code} (${money(value)} flat), prepaid`;
-  return `${job}. ${booking === 'done' ? 'The booking is marked done.' : 'I couldn’t confirm the booking closed: check it in Bookings › List.'} The totals are worked out again.`;
+  return `${job}. ${booking === 'done' ? (c.booking_done ? 'The booking stays done, and now names the logsheet line.' : 'The booking is marked done.') : 'I couldn’t confirm the booking closed: check it in Bookings › List.'} The totals are worked out again.`;
 }
