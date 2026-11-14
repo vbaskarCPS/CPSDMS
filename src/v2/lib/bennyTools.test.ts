@@ -191,6 +191,16 @@ describe('the Benny’s tools', () => {
       expect(saidForNames([{ role: 'user', content: 'remove Kenan' }])).toEqual(['remove Kenan']);
     });
   });
+  it('crew_week: the week so far by default, hotel per night as a number, office only', () => {
+    expect(toolCall('crew_week', {}, ctx)).toEqual({ fn: 'benny_crew_week', args: { p_center: 'c1', p_from: null, p_to: null, p_hotel: null } });
+    expect(toolCall('crew_week', { hotel: 20, from: '2026-11-09' }, ctx)).toMatchObject({ args: { p_hotel: 20, p_from: '2026-11-09' } });
+    expect(toolCall('crew_week', { hotel: '20' }, ctx)).toMatchObject({ args: { p_hotel: 20 } });
+    expect(toolCall('crew_week', { hotel: -5, to: 'today' }, ctx)).toMatchObject({ args: { p_hotel: null, p_to: null } });
+    expect(toolsFor('rm').map(t => t.name)).not.toContain('crew_week');
+  });
+  it('a worker’s prebook is looked for past their own route', () => {
+    for (const role of ['admin', 'rm'] as const) expect(rules(role)).toContain('Only say there is none after looking past their own route.');
+  });
   it('route managers get their team’s tools, not the office’s', () => {
     const rm = toolsFor('rm').map(t => t.name);
     expect(rm).toEqual(expect.arrayContaining(['live_team', 'logsheet', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'propose_job_change', 'propose_pin', 'propose_stops', 'report_bug', 'log_request', 'show_map']));

@@ -116,6 +116,11 @@ export const TOOLS: Tool[] = [
   { name: 'bonus_ranking', roles: ['admin'], description: "The Bonus EQ ranking of a day's payouts, the way the payout list's Bonus EQ sort ranks them: each paid-out cart with its equiv, its Bonus EQ (equiv ÷ the team-size factor), whether it meets the bonus rule and why not, its pay and the bonuses already on it; "
       + 'the winners (the top carts among those that qualify, ties marked); what has been given already; and the carts not paid out yet (not ranked). Use it for "who gets the bonus", "who are the top two carts", "who qualifies", and before preparing a bonus.',
     input_schema: { type: 'object', properties: { date: { type: 'string', description: 'YYYY-MM-DD; leave out for the day they have open, else the live day' } } } },
+  { name: 'crew_week', roles: ['admin'], description: 'What the crew has made (their pay) over a stretch of days, "this week so far" by default (Monday to today): each closed day\'s pay, each worker\'s days, pay, bonus and equiv, '
+      + 'and the live day\'s carts already paid out (open carts are not counted yet). With hotel (dollars per worker per night) it takes off one night per worker per day worked and gives what is left. '
+      + 'Use it for "how much has the crew made this week", "what did everyone earn since Monday", "take off hotels at $20 a night". Advances are not taken off.',
+    input_schema: { type: 'object', properties: { from: { type: 'string', description: 'YYYY-MM-DD, default Monday of this week' }, to: { type: 'string', description: 'YYYY-MM-DD, default today' },
+      hotel: { type: 'number', description: 'hotel cost per worker per night, e.g. 20' } } } },
   { name: 'propose_bonuses', roles: ['admin'], description: 'Prepare one or more bonuses on a day\'s paid-out carts for the person to confirm on ONE card (e.g. $50 each for 1st and 2nd place). '
       + 'It refuses a cart that isn\'t paid out, a place already given that day, and a day on a paid payslip. It warns (cautions) when a cart doesn\'t meet the bonus rule, when the place doesn\'t match the ranking, on a tie, and when carts are still open. A team cart splits its bonus evenly.',
     input_schema: { type: 'object', properties: { date: { type: 'string', description: 'YYYY-MM-DD; leave out for the day they have open, else the live day' },
@@ -278,6 +283,7 @@ ${role === 'admin' ? `- Crews ("give Franklyn the worst half and me the good guy
 - Words people use: "prebooks" = open Master Bookings; "the map"/"master map" = an area like NORTH VANCOUVER #2 ("North Van 1" = NORTH VANCOUVER #1); a route is a code like PCQ64 (prefix + number; "route 35" means 35 on the map in question). "North Van" = North Vancouver, "PoCo" = Port Coquitlam. WDR = withdrawn. A cart = a team of workers on the live map.
 - When the answer is about where things are (prebooks in a city, a route, which routes touch, a plan's routes), call show_map too, then answer in words.
 - A live day has two records. The live map (live_team) is what is true NOW: carts and routes change through the day (routes get added, workers get moved, paired or sent home). The day tool's session is how the day was STARTED and is not updated after. For anything about now (who is working, carts, routes, steps, equiv) use live_team; quote the session only as "at the start". A difference between the two is normal, not a bug: don't report it as one, and don't mix their numbers.
+- A worker's prebook ("put X's prebook on Y's logsheet"): bookings get moved between routes, so look on their route, and if it isn't there, on their whole map (bookings with where = the map) and the routes touching theirs; with an address, search by the street. Name the prebook you found (address, route) and ask if that's the one before preparing anything. Only say there is none after looking past their own route.
 - When you find nothing, say which center you looked in (the one in the top bar): they may be on a different one.
 - Can't do it: when they ask for something in the DMS that you have no tool for (a change you can't prepare, numbers no tool returns), call log_request with what they wanted, then say plainly that you can't do that yet, that it's logged for Vijay, and that you'll tell them here when it's live. Never pretend, and never leave it unlogged.
 - A tool result with heard_as matched the name by sound: say which name you used. A result with which or closest lists near matches: ask which one, or use it when only one fits.
@@ -479,6 +485,8 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
       return { fn: 'benny_check_texts', args: { p_center: c, p_date: isoDay(input.date) || isoDay(ctx.today), p_who: textWho(input),
         p_template: say('template'), p_texts: say('template') ? null : texts, p_tone: say('template') ? null : say('tone') }, card: { kind: 'texts' } };
     }
+    case 'crew_week': return { fn: 'benny_crew_week', args: { p_center: c, p_from: isoDay(input.from) || null, p_to: isoDay(input.to) || null,
+      p_hotel: typeof input.hotel === 'number' && input.hotel >= 0 ? input.hotel : (typeof input.hotel === 'string' && /^\d+(\.\d+)?$/.test(input.hotel) ? Number(input.hotel) : null) } };
     case 'bonus_ranking': return { fn: 'benny_bonus_rank', args: { p_center: c, p_date: isoDay(input.date) || dayOpen(ctx) } };
     case 'propose_bonuses': {
       // only what a bonus is made of: who, which place, how much, what kind (the database checks every part)
