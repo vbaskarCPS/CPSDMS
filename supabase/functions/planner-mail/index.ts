@@ -3,8 +3,8 @@
 // offered to-dos. Gmail only for now (gmail.ts keeps the mail service behind one small interface).
 //
 // This file is the wiring: the database, the secrets, Claude and the notification, handed to handle.ts, where every
-// action is written and documented (connect_start, connect_finish, list, disconnect, watch, inbox, read, send; the
-// callback Google sends people back to; check, from pg_cron). mail.ts reads an email, secure.ts locks the stored token.
+// action is written and documented (connect_start, connect_finish, list, disconnect, watch, inbox, read, send,
+// receipts; the callback Google sends people back to; check, from pg_cron). mail.ts reads an email, secure.ts locks the stored token.
 //
 // Sign-in happens on Google's own page: this function never sees or asks for an email password. Connecting takes two
 // steps on purpose. Google sends the browser to the callback, which connects nothing: it passes the browser on to the
@@ -24,7 +24,7 @@
 // Google's redirect and pg_cron can't send one. The app's calls carry the planner token (checked with planner_me),
 // the callback only passes the browser on (it changes nothing), the check carries the cron key.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { handle, type Deps, type MailboxRow, type Me, type Store } from './handle.ts';
+import { handle, type ClaudeTool, type Deps, type MailboxRow, type Me, type Store } from './handle.ts';
 import { MAILTODO_KIND, type MailTodo } from './mail.ts';
 import type { StateRow } from './secure.ts';
 import { sendPush, type VapidKeys } from './webpush.ts';
@@ -44,8 +44,10 @@ const plain = { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'n
 // deno-lint-ignore no-explicit-any
 type Svc = any;
 
-interface UserRow { id: string; username: string; display_name: string | null; settings: { app?: string } | null }
-const meOf = (u: UserRow): Me => ({ id: u.id, name: (u.display_name || u.username || '').split(/\s+/)[0] || 'there', app: u.settings?.app === 'roshplanner' ? 'roshplanner' : 'vijayplanner' });
+interface UserRow { id: string; username: string; display_name: string | null; settings: { app?: string } | null; household_id?: string | null }
+// household: as planner-plaid has it, me.household_id || me.id (planner_profile gives coalesce(household_id, id))
+const meOf = (u: UserRow): Me => ({ id: u.id, name: (u.display_name || u.username || '').split(/\s+/)[0] || 'there', app: u.settings?.app === 'roshplanner' ? 'roshplanner' : 'vijayplanner',
+  household: u.household_id || u.id });
 
 // ── the database (service role: the two mail tables have no policies, nothing else reaches them) ──
 const COLS = 'id, user_id, provider, address, token_enc, scopes, todos, last_checked_at, cursor, problem, created_at';
@@ -96,7 +98,7 @@ function storeOf(svc: Svc): Store {
       return (data || []) as MailboxRow[];
     },
     async person(userId: string) {
-      const { data } = await svc.from('planner_users').select('id, username, display_name, settings').eq('id', userId).maybeSingle();
+      const { data } = await svc.from('planner_users').select('id, username, display_name, settings, household_id').eq('id', userId).maybeSingle();
       return data ? meOf(data as UserRow) : null;
     },
     async addTodos(userId: string, docs: { key: string; data: MailTodo }[], nowIso: string) {
@@ -118,13 +120,30 @@ function storeOf(svc: Svc): Store {
       const { data } = await svc.from('planner_secrets').select('value').eq('name', 'cron_key').maybeSingle();
       return typeof data?.value === 'string' ? data.value : '';
     },
+    // ── household docs (service role writes them directly, under the household's user id, as planner-plaid does) ──
+    async haveDocs(owner: string, kind: string, keys: string[]) {
+      const out: string[] = [];
+      for (let i = 0; i < keys.length; i += 100) {
+        const { data, error } = await svc.from('planner_docs').select('key').eq('user_id', owner).eq('kind', kind).in('key', keys.slice(i, i + 100));
+        must('docs', error);
+        out.push(...((data || []) as { key: string }[]).map(d => d.key));
+      }
+      return out;
+    },
+    async addDocs(owner: string, list: { kind: string; key: string; data: unknown }[]) {
+      if (!list.length) return;
+      const now = new Date().toISOString();
+      // planner-plaid's putDocs, with ignoreDuplicates: a doc already there (a receipt the app has matched) is left as it is
+      must('docs', (await svc.from('planner_docs').upsert(list.map(d => ({ user_id: owner, kind: d.kind, key: d.key, data: d.data, updated_at: now })), { onConflict: 'user_id,kind,key', ignoreDuplicates: true })).error);
+    },
   };
 }
 
-// ── Claude reads the new email for to-dos: one forced tool call, as planner-chat asks for its structured answers ──
+// ── Claude reads email (for to-dos, for receipts): one forced tool call, as planner-chat asks for its structured answers ──
+const TODOS_TOOL: ClaudeTool = { name: 'todos', description: 'What these emails ask this person to do. An empty list when none of them does.', maxTokens: 1500, empty: { todos: [] } };
 const forcedMode = new Map<string, number>();   // model → 0 forced, thinking off · 1 forced · 2 asked to call it
 /** Errors say the status and Anthropic's short type ("529 overloaded_error"), never its sentences. */
-async function claude(sys: string, user: string, schema: unknown): Promise<unknown> {
+async function claude(sys: string, user: string, schema: unknown, tool: ClaudeTool = TODOS_TOOL): Promise<unknown> {
   const apiKey = env('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('Claude: no key');
   type Out = { stop_reason?: string; content?: { type: string; input?: unknown }[]; error?: { type?: string; message?: string } };
@@ -135,11 +154,11 @@ async function claude(sys: string, user: string, schema: unknown): Promise<unkno
       res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', ...(WORKSPACE ? { 'anthropic-workspace-id': WORKSPACE } : {}) },
-        body: JSON.stringify({ model, max_tokens: mode === 2 ? 4000 : 1500,
-          system: mode === 2 ? `${sys}\n\nGive your answer only by calling the "todos" tool, once. Write nothing else.` : sys,
+        body: JSON.stringify({ model, max_tokens: mode === 2 ? Math.max(4000, tool.maxTokens || 0) : tool.maxTokens || 1500,
+          system: mode === 2 ? `${sys}\n\nGive your answer only by calling the "${tool.name}" tool, once. Write nothing else.` : sys,
           messages: [{ role: 'user', content: user }], ...(mode === 0 ? { thinking: { type: 'disabled' } } : {}),
-          tools: [{ name: 'todos', description: 'What these emails ask this person to do. An empty list when none of them does.', input_schema: schema }],
-          tool_choice: mode === 2 ? { type: 'auto' } : { type: 'tool', name: 'todos' } }),
+          tools: [{ name: tool.name, description: tool.description, input_schema: schema }],
+          tool_choice: mode === 2 ? { type: 'auto' } : { type: 'tool', name: tool.name } }),
         signal: AbortSignal.timeout(60000),
       });
     } catch (e) { throw new Error(`Claude: ${e instanceof Error && e.name === 'TimeoutError' ? 'no answer in time' : 'the request failed'}`); }
@@ -153,7 +172,7 @@ async function claude(sys: string, user: string, schema: unknown): Promise<unkno
   }
   if (!res || !res.ok) throw new Error(`Claude: ${res?.status ?? 'no answer'} ${String(data.error?.type || '').replace(/[^a-z_]/gi, '').slice(0, 40)}`.trim());
   if (data.stop_reason === 'max_tokens') throw new Error('Claude: the answer ran too long');
-  return (data.content || []).find(c => c.type === 'tool_use')?.input ?? { todos: [] };   // no call = nothing to do in them
+  return (data.content || []).find(c => c.type === 'tool_use')?.input ?? tool.empty ?? {};   // no call = nothing in them
 }
 
 // ── one notification (as planner-push and planner-chat send theirs: the same keys, the same subscriptions) ──
