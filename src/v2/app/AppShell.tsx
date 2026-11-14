@@ -62,7 +62,8 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
         <Link to="/app/account" className="v2-pill v2-acct" title={`${profile?.full_name} · My account`} aria-label="My account">
           <UserRound size={14} /><span className="v2-hide-sm">{profile?.username}</span>
         </Link>
-        {!brand && <Benny />}
+        {/* on MainstreetAI the Benny is MainstreetAI's own (its admins; zones and reps), with its own chat */}
+        {brand ? <Benny key="ms" ms /> : <Benny key="ps" />}
         <button type="button" className="v2-gbtn v2-hide-phone" onClick={() => signOut().then(() => nav('/app/login'))} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
       </header>
 

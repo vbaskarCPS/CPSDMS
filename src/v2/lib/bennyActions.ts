@@ -15,6 +15,8 @@
 //   past_job   → a closed day's payout list › a cart's sales: change one job (type, amount, how it was paid) or add one,
 //                then save the day, which works its pay out again (not once the day is on a payslip). An open booking at
 //                the same address is marked done with it.
+//   ms_assign / ms_zone → MainstreetAI › Zones: who has which zone, and retire / bring back (bennyMs.ts)
+//   ms_cut / ms_cut_save → MainstreetAI › Zones › Generate: work new zones out, then save them (bennyMs.ts)
 //   bonus      → the day's payout list › Add bonus, on one or more paid-out carts: the live day saves it on the logsheet
 //                (bonuses and the pay it was closed at); a saved day saves it on the cart and works the day's pay out
 //                again. The database keeps a record of each one (benny_bonus_changes).
@@ -43,6 +45,7 @@ import { queueHref } from './payoutQueue';
 import { cartContext, dayLines, listCarts, saveDay } from './payoutCarts';
 import { bonusName, bonusesSaid, liveBonusPatch, withBonuses, type BonusCheck, type LiveNow } from './bennyBonus';
 import { pastJobCard, pastJobSaid, pastJobSaved, withPastJob, type PastJobCheck } from './bennyPastJob';
+import { msAssignCard, msAssignFromBenny, msCutCard, msCutFromBenny, msCutSaveCard, msCutSaveFromBenny, msZoneCard, msZoneFromBenny, type MsAssignCheck, type MsCutCheck, type MsNext, type MsRunCheck, type MsZoneCheck } from './bennyMs';
 
 export type TeamMode = 'roster' | 'solo' | 'pairs';
 /** A worker in a manager's crew, with their season so far (no days yet = no average). */
@@ -145,6 +148,10 @@ export type BennyProposal =
   | { kind: 'remove'; check: RemoveCheck }
   | { kind: 'add_job'; check: AddJobCheck }
   | { kind: 'past_job'; check: PastJobCheck }
+  | { kind: 'ms_assign'; check: MsAssignCheck }
+  | { kind: 'ms_zone'; check: MsZoneCheck }
+  | { kind: 'ms_cut'; check: MsCutCheck }
+  | { kind: 'ms_cut_save'; check: MsRunCheck }
   | { kind: 'texts'; check: TextsCheck }
   | { kind: 'bonus'; check: BonusCheck }
   | { kind: 'payouts'; check: PayoutsCheck }
@@ -295,6 +302,10 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
     case 'remove': return removeCard(p.check);
     case 'add_job': return addJobCard(p.check);
     case 'past_job': return pastJobCard(p.check);
+    case 'ms_assign': return msAssignCard(p.check);
+    case 'ms_zone': return msZoneCard(p.check);
+    case 'ms_cut': return msCutCard(p.check);
+    case 'ms_cut_save': return msCutSaveCard(p.check);
     case 'texts':
       // drawn by its own card (a button per worker); these are its words for anything that reads a card as lines
       return { title: textsTitle(p.check), lines: p.check.people.map(x => `${x.name}: “${x.text}”`), action: 'Text' };
@@ -706,7 +717,9 @@ export function textOpened(centerId: string, check: Pick<TextsCheck, 'date' | 't
   void keepTexts();
 }
 
-export async function doProposal(p: BennyProposal, center: CenterLite): Promise<string> {
+/** What it says when it's done. A card whose tap leads to more (working zones out, then showing them) hands back the
+ *  next message too; onStep gets a line of progress for a save that takes a while. */
+export async function doProposal(p: BennyProposal, center: CenterLite, onStep?: (note: string) => void): Promise<string | MsNext> {
   if (p.kind === 'start_day') return startDayFromBenny(p, center);
   if (p.kind === 'give_route') return giveRouteFromBenny(p, center.id);
   if (p.kind === 'booking') return bookingFromBenny(p, center.id);
@@ -715,6 +728,11 @@ export async function doProposal(p: BennyProposal, center: CenterLite): Promise<
   if (p.kind === 'remove') return removeFromBenny(p, center.id);
   if (p.kind === 'add_job') return addJobFromBenny(p, center.id);
   if (p.kind === 'past_job') return pastJobFromBenny(p, center);
+  // MainstreetAI: no center; the Zones screen's own saves
+  if (p.kind === 'ms_assign') return msAssignFromBenny(p.check);
+  if (p.kind === 'ms_zone') return msZoneFromBenny(p.check);
+  if (p.kind === 'ms_cut') return msCutFromBenny(p.check, onStep);
+  if (p.kind === 'ms_cut_save') return msCutSaveFromBenny(p.check);
   if (p.kind === 'pin') return pinFromBenny(p, center.id);
   if (p.kind === 'stops') return stopsFromBenny(p, center.id);
   // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)

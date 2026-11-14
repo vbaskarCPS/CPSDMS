@@ -64,6 +64,11 @@ export interface StepState { stage: RunStage; zone: number; zones: number; moves
 export async function generateZones(cityId: string, campaignId: string, target: number): Promise<string> {
   return must(await db.rpc('ms_generate_zones', { p_city: cityId, p_campaign: campaignId, p_target: target })) as string;
 }
+/** A run worked out OVER zones that exist (a re-cut from the Benny): their blocks count as free, and with `only` nothing
+ *  but their blocks is cut. Accepting the run retires them and makes the new zones together. */
+export async function generateZonesOver(cityId: string, campaignId: string, target: number, replace: string[], only: boolean): Promise<string> {
+  return must(await db.rpc('ms_generate_zones_over', { p_city: cityId, p_campaign: campaignId, p_target: target, p_replace: replace.length ? replace : null, p_only: only })) as string;
+}
 export async function runStep(runId: string): Promise<StepState> { return must(await db.rpc('ms_run_step', { p_run: runId })) as StepState; }
 /** Steps a run (a few seconds each, so no call hits the database time limit) until it's ready. */
 export async function runToReady(runId: string, onStep: (s: StepState) => void, maxSteps = 120): Promise<StepState> {

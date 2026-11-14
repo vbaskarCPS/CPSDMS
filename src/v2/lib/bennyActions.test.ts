@@ -284,6 +284,13 @@ d('describe', () => {
         change: { amount: { from: 10, to: 20 } }, ask: { amount: 20 }, patch: { price: 20, display_price: '20.00', payment_method: 'Cash', payment_breakdown: { Cash: 20 } }, stamp: 't' } },
     };
     samples.bonus = { kind: 'bonus', check: bonus() };
+    samples.ms_assign = { kind: 'ms_assign', check: { ok: true, stamp: 't', ask: [], moves: [{ zone_id: 'z1', zone: 'Hamilton South 3 (2)', campaign_id: 'c1', campaign: 'Taxifi', from_id: 'u1', from: 'Sina K', to_id: 'u2', to: 'Newton O' }] } };
+    samples.ms_zone = { kind: 'ms_zone', check: { ok: true, stamp: 't', zone: { id: 'z1', name: 'Barrie 4', city: 'Barrie' }, from: 'active', to: 'retired', businesses: 12 } };
+    samples.ms_cut = { kind: 'ms_cut', check: { ok: true, stamp: 't', city: { id: 'c', name: 'Hamilton' }, campaign: { id: 'k', name: 'Taxifi' }, target: 3, only: true, replace: [{ id: 'z3', name: 'Hamilton South 3 (2)', reps: 'Sina K' }],
+      area: { blocks: 33, density: 42638, per_zone: 14213 }, ask: { city: 'c', target: 3, campaign: 'k', zones: ['z3'] } } };
+    samples.ms_cut_save = { kind: 'ms_cut_save', check: { ok: true, stamp: 't', run: 'r1', city: 'Hamilton', campaign: 'Taxifi', zones: [{ name: 'Hamilton South 1', density: 6097, plazas: 254 }] } };
+    expect(describe(samples.ms_assign)).toMatchObject({ title: 'Give Hamilton South 3 (2) to Newton', action: 'Assign' });
+    expect(describe(samples.ms_zone)).toMatchObject({ title: 'Retire Barrie 4', action: 'Retire' });
     samples.remove = { kind: 'remove', check: { ok: true, date: '2026-11-11', stamp: 's', workers: [{ cn: 'I1012', name: 'Kenan Francis-Bull', roster: { id: 'r', now: 'showed', then: 'not marked' } }] } };
     expect(describe(samples.remove).action).toBe('Remove from today');
     samples.texts = { kind: 'texts', check: { ok: true, date: '2026-11-11', who: 'no_shows', own_words: true, people: [{ hire_id: 'h1', cn: 'I1169', name: 'Steven Doherty', first: 'Steven', phone: '6045550101', text: 'Steven, call me.' }] } };

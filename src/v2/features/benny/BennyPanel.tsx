@@ -1,22 +1,25 @@
 // src/v2/features/benny/BennyPanel.tsx — The Benny: how you open it and its panel.
 //   variant "bar": "Ask the Benny" + mic in the top bar (super admins), panel on the right / bottom sheet on a phone.
+//   ms: on MainstreetAI's screens the top-bar Benny is MainstreetAI's (its admins): zones and reps, its own chat, no center.
 //   variant "fab": a round orange button on the route manager map (route managers, and super admins on any manager's map),
 //                  opening a bottom sheet; "my team" = the map that's open.
 // Mic: tap = listen until you pause, then send; hold = talk while held, let go to send.
 // Answers are read out only when the question was spoken (and the speaker is on).
 // Changes come as a card under the answer: nothing happens until you tap its button.
+// Pictures: the picture button (or pasting one) sends up to three with a message, shrunk first; the Benny looks at them.
 // "It's live": when something the person logged (a bug, a request it couldn't do) has been built, the Benny opens with
 // it the next time they open the app, once, and offers a notification on this device for the next time.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Check, Mic, Send, Volume2, VolumeX, X } from 'lucide-react';
+import { Check, ImagePlus, Mic, Send, Volume2, VolumeX, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
-import { askBenny, bennyNews, bennyNewsSeen, canListen, demoDue, listen, primeVoice, readDemo, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
+import { askBenny, bennyNews, bennyNewsSeen, canListen, demoDue, listen, MAX_PICS, primeVoice, readDemo, shrinkPicture, speak, stopSpeaking, watchErrors, writeDemo, type BennyMsg } from '../../lib/benny';
 import { claimNews, newsText } from '../../lib/bennyNews';
 import { bennyMorning, bennyMorningSeen, fromMorningLink, morningText, openDayHref, whatsNewText } from '../../lib/bennyMorning';
 import { describe, doProposal, emailsPreset, payoutsStart, textOpened, type BennyProposal } from '../../lib/bennyActions';
 import { bonusReplaced } from '../../lib/bennyBonus';
+import { msCutDiscard } from '../../lib/bennyMs';
 import { BennyMapCard } from './BennyMap';
 import { TextsCard } from './BennyTexts';
 import { NotifyRow } from './BennyNotify';
@@ -32,7 +35,8 @@ let morningOn = '';   // the day this page showed the morning report (only one o
 let morningAt = 0;
 const keyFor = (variant: string) => `benny.chat.v2.${variant}`;
 const load = (k: string): BennyMsg[] => { try { return JSON.parse(sessionStorage.getItem(k) || '[]'); } catch { return []; } };
-const save = (k: string, m: BennyMsg[]) => { try { sessionStorage.setItem(k, JSON.stringify(m.slice(-30))); } catch { /* private mode */ } };
+// pictures are big: the chat that is kept remembers only how many there were
+const save = (k: string, m: BennyMsg[]) => { try { sessionStorage.setItem(k, JSON.stringify(m.slice(-30).map(({ images, ...x }) => (images?.length ? { ...x, pics: images.length } : x)))); } catch { /* private mode */ } };
 const todayLocal = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 watchErrors();
 
@@ -41,13 +45,14 @@ const Rich: React.FC<{ text: string }> = ({ text }) => <>{text.split('\n').map((
   <React.Fragment key={i}>{i > 0 && <br />}{line.split(/(\*\*[^*]+\*\*)/g).map((p, j) => p.startsWith('**') && p.endsWith('**') ? <b key={j}>{p.slice(2, -2)}</b> : p)}</React.Fragment>
 ))}</>;
 
-const ProposalCard: React.FC<{ p: BennyProposal; outcome: BennyMsg['outcome']; busy: boolean; onDo: () => void; onNo: () => void; onChange?: () => void }> = ({ p, outcome, busy, onDo, onNo, onChange }) => {
+const ProposalCard: React.FC<{ p: BennyProposal; outcome: BennyMsg['outcome']; busy: boolean; note?: string | null; onDo: () => void; onNo: () => void; onChange?: () => void }> = ({ p, outcome, busy, note, onDo, onNo, onChange }) => {
   const d = describe(p);
   return (
     <div className={`benny-card${outcome ? ` ${outcome.state}` : ''}`}>
       <b className="benny-card-t">{d.title}</b>
       <ul>{d.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
       {outcome && <div className={`benny-card-out ${outcome.state}`} role="status">{outcome.state === 'done' && <Check size={15} />}{outcome.text}</div>}
+      {busy && note && <div className="benny-card-out" role="status">{note}</div>}
       {(!outcome || outcome.state === 'failed') && (
         <div className="benny-card-b">
           <button type="button" className="benny-go" onClick={onDo} disabled={busy}>{busy ? 'Working…' : outcome ? 'Try again' : d.action}</button>
@@ -63,17 +68,22 @@ export const Benny: React.FC<{
   variant?: 'bar' | 'fab'; rmManager?: string | null; rmName?: string | null; centerId?: string | null;
   /** the floater map: the managers followed there (rmManager is then the floater's own id), and the center it is open at */
   following?: { id: string; name: string }[] | null; centerLabel?: string | null;
-}> = ({ variant = 'bar', rmManager, rmName, centerId, following, centerLabel }) => {
+  /** MainstreetAI's Benny (the top bar on its screens) */
+  ms?: boolean;
+}> = ({ variant = 'bar', rmManager, rmName, centerId, following, centerLabel, ms = false }) => {
   const { profile, center, can, setCenterId } = useAuth();
   const loc = useLocation();
   const nav = useNavigate();
   const floating = variant === 'fab' && !!following?.length;
-  const KEY = keyFor(floating ? 'fab.floater' : variant);   // the floater map keeps its own chat: its cards are the floater's, not a manager's
+  const KEY = keyFor(ms ? 'ms' : floating ? 'fab.floater' : variant);   // the floater map keeps its own chat: its cards are the floater's, not a manager's
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<BennyMsg[]>(() => load(KEY));
   const [text, setText] = useState('');
+  const [pending, setPending] = useState<string[]>([]);   // pictures picked for the next message
+  const fileIn = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [doing, setDoing] = useState<number | null>(null);
+  const [doingNote, setDoingNote] = useState<string | null>(null);   // a save that takes a while says how far it is
   const [hearing, setHearing] = useState<null | 'tap' | 'hold'>(null);
   const [unread, setUnread] = useState(false);   // the white dot: the Benny said something while it was closed
   const [mute, setMute] = useState(() => { try { return localStorage.getItem(MUTE) === '1'; } catch { return false; } });
@@ -83,12 +93,12 @@ export const Benny: React.FC<{
   const still = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const mic = canListen();
-  const allowed = variant === 'bar' ? !!profile?.is_super_admin : !!profile && (profile.is_super_admin || can('route_manager') || can('rm_floater'));
+  const allowed = ms ? !!profile && can('mainstreet_admin') : variant === 'bar' ? !!profile?.is_super_admin : !!profile && (profile.is_super_admin || can('route_manager') || can('rm_floater'));
   const userId = profile?.id || '';
   // the first-time demo: 0 = not showing, 1 = meet the Benny, 2 = try a question, 3 = three things to know
   const [demo, setDemo] = useState<0 | 1 | 2 | 3>(0);
-  const cid = centerId || center?.id || null;
-  const centerName = centerLabel || (center && center.id === cid ? center.display_name : undefined);
+  const cid = ms ? null : centerId || center?.id || null;
+  const centerName = ms ? 'MainstreetAI' : centerLabel || (center && center.id === cid ? center.display_name : undefined);
   const followKey = (following || []).map(f => f.id).join(',');
 
   // a tap on a texts card (a Text button, a changed text) is kept with the chat but mustn't move the list: the row tapped stays where it is
@@ -107,7 +117,7 @@ export const Benny: React.FC<{
   }, [open]);
   useEffect(() => () => { rec.current?.cancel(); stopSpeaking(); }, []);
   useEffect(() => {
-    if (!allowed || !userId) return;
+    if (!allowed || !userId || ms) return;   // the demo is the Property Stars one; MainstreetAI's opens on its own hello
     const seen = readDemo(userId);
     if (!demoDue(seen)) return;
     const t = window.setTimeout(() => {
@@ -136,6 +146,7 @@ export const Benny: React.FC<{
     };
     // the morning report: once a day, when its notification went out (or they tapped it)
     const morning = async (force: boolean) => {
+      if (ms) return;   // the morning report is the workerbook's
       if (!force && Date.now() - morningAt < NEWS_EVERY_MS) return;
       morningAt = Date.now();
       const r = await bennyMorning(force);
@@ -171,13 +182,14 @@ export const Benny: React.FC<{
 
   const walkMoney = useRef<NonNullable<Extract<BennyProposal, { kind: 'start_day' }>['money']> | null>(null);
   const send = useCallback(async (q: string, spoken: boolean) => {
-    const ask = q.trim(); if (!ask || busy) return;
-    const next: BennyMsg[] = [...msgs, { role: 'user', text: ask, spoken }];
-    setMsgs(m => [...m, next[next.length - 1]]); setText(''); setBusy(true);
+    const pics = pending;
+    const ask = q.trim() || (pics.length ? (pics.length === 1 ? 'Look at this picture.' : 'Look at these pictures.') : ''); if (!ask || busy) return;
+    const next: BennyMsg[] = [...msgs, { role: 'user', text: ask, spoken, ...(pics.length ? { images: pics } : {}) }];
+    setMsgs(m => [...m, next[next.length - 1]]); setText(''); setPending([]); setBusy(true);
     try {
       const r = await askBenny(next.slice(-16), {
-        center_id: cid || undefined, center_name: centerName, today: todayLocal(), path: loc.pathname,
-        screen: variant === 'fab' ? 'rm' : undefined, rm_manager: rmManager || undefined, user_name: profile?.full_name,
+        center_id: cid || undefined, center_name: ms ? undefined : centerName, today: todayLocal(), path: loc.pathname,
+        screen: ms ? 'ms' : variant === 'fab' ? 'rm' : undefined, rm_manager: rmManager || undefined, user_name: profile?.full_name,
         ...(floating ? { following: following!.map(f => f.id), following_names: following!.map(f => f.name) } : {}),
       });
       // a Start the day card made from the walk-through carries the product cost and tax chosen there
@@ -191,7 +203,18 @@ export const Benny: React.FC<{
     } catch (e) {
       setMsgs(m => [...m, { role: 'assistant', text: e instanceof Error ? e.message : 'Something went wrong', error: true }]);
     } finally { setBusy(false); }
-  }, [msgs, busy, cid, centerName, loc.pathname, mute, variant, rmManager, followKey, profile?.full_name, say]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [msgs, busy, cid, centerName, loc.pathname, mute, variant, rmManager, followKey, profile?.full_name, say, pending, ms]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // pictures: picked with the button or pasted into the box; shrunk here, sent with the next message
+  const addPictures = useCallback(async (files: (File | Blob)[]) => {
+    const room = MAX_PICS - pending.length;
+    if (!files.length) return;
+    if (room <= 0) { setMsgs(m => [...m, { role: 'assistant', text: `${MAX_PICS} pictures at most with one message.`, error: true }]); return; }
+    try {
+      const urls = await Promise.all(files.slice(0, room).map(shrinkPicture));
+      setPending(p => [...p, ...urls].slice(0, MAX_PICS));
+    } catch (e) { setMsgs(m => [...m, { role: 'assistant', text: e instanceof Error ? e.message : 'That picture couldn’t be added', error: true }]); }
+  }, [pending.length]);
 
   // "help me start the day": the walk-through, one question at a time (it reads the day, crew, managers and maps first)
   const startWalk = useCallback(async () => {
@@ -214,7 +237,8 @@ export const Benny: React.FC<{
 
   const settle = (i: number, outcome: NonNullable<BennyMsg['outcome']>) => setMsgs(m => m.map((x, j) => j === i ? { ...x, outcome } : x));
   const confirm = async (i: number) => {
-    const p = msgs[i]?.proposal; if (!p || !cid || doing !== null) return;
+    const p = msgs[i]?.proposal; if (!p || doing !== null) return;
+    if (!cid && !p.kind.startsWith('ms_')) return;   // MainstreetAI's cards have no center
     // booking emails: nothing changes here. The Send booking emails screen opens with the day and routes picked and writes
     // the emails; the person reads them and presses Send there.
     if (p.kind === 'booking_emails') {
@@ -235,14 +259,27 @@ export const Benny: React.FC<{
     }
     setDoing(i);
     try {
-      const done = await doProposal(p, { id: cid, region: center?.id === cid ? center.region : null, services: center?.id === cid ? center.services : null });
+      const res = await doProposal(p, { id: cid || '', region: center?.id === cid ? center.region : null, services: center?.id === cid ? center.services : null }, setDoingNote);
+      const done = typeof res === 'string' ? res : res.text;
       settle(i, { state: 'done', text: done });
+      // the chat goes on by itself: zones were worked out, so here they are on the map, with the card that saves them
+      if (typeof res !== 'string') setMsgs(m => [...m, { role: 'assistant', text: res.then.text, map: res.then.map ? { maps: [], highlight: [], pins: [], ...res.then.map } : null, proposal: res.then.proposal }]);
       const spoke = [...msgs.slice(0, i)].reverse().find(m => m.role === 'user')?.spoken;
       if (spoke && !mute) say(done);
       window.dispatchEvent(new CustomEvent('benny:changed', { detail: p.kind }));
     } catch (e) {
       settle(i, { state: 'failed', text: e instanceof Error ? e.message : 'That didn’t work' });
-    } finally { setDoing(null); }
+    } finally { setDoing(null); setDoingNote(null); }
+  };
+  // "Not now". On the card that saves worked-out zones it also discards them, so no proposal is left waiting on the Zones screen.
+  const decline = (i: number) => {
+    const p = msgs[i]?.proposal;
+    if (p?.kind !== 'ms_cut_save') { settle(i, { state: 'dismissed', text: 'Not done.' }); return; }
+    if (doing !== null) return;
+    setDoing(i);
+    msCutDiscard(p.check).then(t => settle(i, { state: 'dismissed', text: t }))
+      .catch(e => settle(i, { state: 'dismissed', text: `Not saved. (The proposal is still on the Zones screen: ${e instanceof Error ? e.message : 'it couldn’t be discarded'})` }))
+      .finally(() => setDoing(null));
   };
 
   const startHearing = (mode: 'tap' | 'hold') => {
@@ -290,11 +327,13 @@ export const Benny: React.FC<{
       <Mic size={cls.includes('big') ? 18 : 16} />
     </button>
   ) : null;
-  const demoAsk = variant === 'fab' ? ['Who’s on my team today?', 'Which of my routes have prebooks?'] : ['Who’s booked today?', 'How many open prebooks do we have?'];
+  const demoAsk = ms ? ['Which zones have no rep?', 'Who has the most zones?'] : variant === 'fab' ? ['Who’s on my team today?', 'Which of my routes have prebooks?'] : ['Who’s booked today?', 'How many open prebooks do we have?'];
   // the offer of a notification sits under the latest answer it belongs to, not under every one
   const offerAt = msgs.reduce((at, m, i) => (m.news || m.logged ? i : at), -1);
   const whose = floating ? (following!.length === 1 ? `${following![0].name}’s team` : `${following!.length} managers’ teams`) : rmName ? `${rmName}’s team` : 'Your team';
-  const suggestions = floating
+  const suggestions = ms
+    ? ['Which zones have no rep?', 'Show me the zones in Hamilton', 'Who has which zone?', 'Something’s broken on this screen']
+    : floating
     ? ['Who’s out today?', 'Plan my check order', 'Drop a pin here called Meet', 'Something’s broken on the map']
     : variant === 'fab'
     ? ['Who’s on my team today?', 'Find a free route connected to Kyle’s', 'Which of my routes have prebooks?', 'Something’s broken on the map']
@@ -331,16 +370,19 @@ export const Benny: React.FC<{
           <div className="benny-list" ref={list} aria-live="polite">
             {!msgs.length && demo === 0 && (
               <div className="benny-hello">
-                <p>{floating ? `Ask about the team${following!.length === 1 ? '' : 's'} you’re following (${following!.map(f => f.name.split(' ')[0]).join(', ')}), or tell me a change: “give Wilson route 35”, “drop a pin at Wilson”, “plan my pickup order”. You confirm every change first.`
+                <p>{ms ? 'Ask about zones and reps, or tell me a change: “give Hamilton South 2 to Newton”, “swap Sina’s and Newton’s zones”, “retire Barrie 4”. Send a picture of a map with an area marked and I’ll find the zones there. You confirm every change first.'
+                  : floating ? `Ask about the team${following!.length === 1 ? '' : 's'} you’re following (${following!.map(f => f.name.split(' ')[0]).join(', ')}), or tell me a change: “give Wilson route 35”, “drop a pin at Wilson”, “plan my pickup order”. You confirm every change first.`
                   : variant === 'fab' ? 'Ask about your team and routes, or tell me a change: “partner up Wilson with Michael A”, “give Wilson route 35”. You confirm every change first.'
                   : 'Ask about today, people, bookings or maps, or start a day. You confirm every change first. Tell me when something’s broken and I’ll let Vijay know.'}</p>
-                {variant === 'bar' && canStart && <button type="button" className="benny-chip" onClick={() => void startWalk()}>Help me start the day</button>}
+                {variant === 'bar' && !ms && canStart && <button type="button" className="benny-chip" onClick={() => void startWalk()}>Help me start the day</button>}
                 {suggestions.map(s => <button key={s} type="button" className="benny-chip" onClick={() => void send(s, false)}>{s}</button>)}
               </div>
             )}
             {msgs.map((m, i) => (
               <div key={i} className={`benny-msg ${m.role}${m.error ? ' err' : ''}${m.news ? ' news' : ''}`}>
                 <div className="benny-bubble"><Rich text={m.text} /></div>
+                {m.images?.length ? <div className="benny-pics">{m.images.map((u, k) => <img key={k} src={u} alt={`Picture ${k + 1} sent with this message`} />)}</div>
+                  : m.pics ? <span className="v2-small benny-mut">{m.pics === 1 ? '1 picture was sent with this' : `${m.pics} pictures were sent with this`}</span> : null}
                 {i === offerAt && <NotifyRow when={m.news ? 'news' : 'logged'} />}
                 {m.morning && (
                   <div className="benny-morning-b">
@@ -368,7 +410,7 @@ export const Benny: React.FC<{
                 {m.proposal && m.proposal.kind !== 'texts' && <ProposalCard p={m.proposal} busy={doing === i} onDo={() => void confirm(i)}
                   // a bonus card overtaken by a newer one for the same place is shown, but no longer the one to tap
                   outcome={m.outcome || (bonusReplaced(msgs.map(x => x.proposal), i) ? { state: 'dismissed', text: 'Replaced by the newer card below.' } : undefined)}
-                  onNo={() => settle(i, { state: 'dismissed', text: 'Not done.' })}
+                  note={doing === i ? doingNote : null} onNo={() => decline(i)}
                   onChange={m.proposal.kind === 'start_day' ? () => { const d = (m.proposal as Extract<BennyProposal, { kind: 'start_day' }>).check.date; settle(i, { state: 'dismissed', text: 'Opened Start session to change it.' }); nav(`/app/workerbook/days/${d}/start`); }
                     : m.proposal.kind === 'booking' ? () => { settle(i, { state: 'dismissed', text: 'Opened Bookings › List to change it there.' }); nav('/app/bookings/list'); } : undefined} />}
               </div>
@@ -409,11 +451,20 @@ export const Benny: React.FC<{
               </div>
             )}
           </div>
+          {pending.length > 0 && (
+            <div className="benny-pend" role="group" aria-label="Pictures to send">
+              {pending.map((u, k) => <span key={k} className="benny-pend-i"><img src={u} alt={`Picture ${k + 1}, ready to send`} />
+                <button type="button" onClick={() => setPending(p => p.filter((_, j) => j !== k))} aria-label={`Remove picture ${k + 1}`}><X size={12} /></button></span>)}
+            </div>
+          )}
           <form className="benny-in" onSubmit={e => { e.preventDefault(); void send(text, false); }}>
+            <input ref={fileIn} type="file" accept="image/*" multiple hidden onChange={e => { const f = [...(e.target.files || [])]; e.target.value = ''; void addPictures(f); }} />
+            <button type="button" className="benny-icon benny-clip" onClick={() => fileIn.current?.click()} disabled={busy || !!hearing} aria-label="Add a picture" title="Add a picture"><ImagePlus size={20} /></button>
             <label htmlFor={`benny-ask-${variant}`} className="benny-sr">Ask the Benny</label>
             <input id={`benny-ask-${variant}`} ref={input} value={text} onChange={e => setText(e.target.value)} disabled={!!hearing}
+              onPaste={e => { const f = [...e.clipboardData.items].filter(i => i.kind === 'file' && i.type.startsWith('image/')).map(i => i.getAsFile()).filter((x): x is File => !!x); if (f.length) { e.preventDefault(); void addPictures(f); } }}
               placeholder={hearing === 'hold' ? 'Listening… let go to send' : hearing ? 'Listening… pause when you’re done' : 'Ask or tell the Benny…'} autoComplete="off" />
-            {text.trim() && !hearing
+            {(text.trim() || pending.length > 0) && !hearing
               ? <button type="submit" className="benny-mic big" disabled={busy} aria-label="Send"><Send size={17} /></button>
               : micBtn(' big')}
           </form>

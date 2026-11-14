@@ -31,6 +31,13 @@ export const Zones: React.FC = () => {
   }, []);
   const campaigns = useLoad(listCampaigns, []);
   const reps = useLoad(listReps, []);
+  // a zone changed from the Benny's card (who has it, retired, new zones saved): show it
+  const fromBenny = useRef(() => { zones.reload(); reps.reload(); }); fromBenny.current = () => { zones.reload(); reps.reload(); };
+  useEffect(() => {
+    const on = (e: Event) => { const k = String((e as CustomEvent).detail || ''); if (k.startsWith('ms_') && k !== 'ms_cut') fromBenny.current(); };
+    window.addEventListener('benny:changed', on);
+    return () => window.removeEventListener('benny:changed', on);
+  }, []);
   const [filter, setFilter] = useState<ZoneFilter>('all');
   const [showRetired, setShowRetired] = useState(false);
   const [q, setQ] = useState('');

@@ -1,6 +1,7 @@
 // src/v2/features/benny/BennyMap.tsx — the map the Benny shows in the chat: the master maps outlined and named,
 // the routes it's about in colour with their numbers, every other route grey, and pins (e.g. prebooks).
 // Drawn like the map builder: street-line routes. Tap "Full screen" to open it as a modal.
+// MainstreetAI's maps are zones instead: each zone a coloured shape with its name and rep, and the area asked about boxed in black.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import mapboxgl from 'mapbox-gl';
@@ -12,6 +13,31 @@ import { routeShapes, type RouteShape } from '../../lib/territory';
 import { bennyOutlines, type BennyMap as Spec } from '../../lib/benny';
 
 const HL = '#f97316', GREY = '#9ca3af', OUTLINE = '#334155', STOP = '#1d4ed8';
+export const ZONE_COLOURS = ['#2563eb', '#16a34a', '#db2777', '#d97706', '#7c3aed', '#0891b2', '#dc2626', '#4d7c0f'];
+
+/** MainstreetAI: the zones as shapes (each its own colour), a label on each (name, and who has it), and the asked-about box. Pure, so it's tested. */
+export function zoneFeatures(spec: Pick<Spec, 'zones' | 'box'>) {
+  const shapes: GeoJSON.Feature[] = []; const labels: GeoJSON.Feature[] = [];
+  (spec.zones || []).forEach((z, i) => {
+    const g = z.polygon as GeoJSON.Geometry | null;
+    if (!g || (g.type !== 'Polygon' && g.type !== 'MultiPolygon')) return;
+    const colour = ZONE_COLOURS[i % ZONE_COLOURS.length];
+    shapes.push({ type: 'Feature', properties: { name: z.name, colour }, geometry: g });
+    // the label sits in the middle of the zone's biggest piece (the middle of its outline's box)
+    const rings = g.type === 'Polygon' ? [g.coordinates[0]] : g.coordinates.map(poly => poly[0]);
+    const ring = rings.reduce((a, b) => (b.length > a.length ? b : a), rings[0]) || [];
+    if (!ring.length) return;
+    const xs = ring.map(c => c[0]), ys = ring.map(c => c[1]);
+    labels.push({ type: 'Feature', properties: { label: z.who ? `${z.name}\n${z.who}` : z.name, colour }, geometry: { type: 'Point', coordinates: [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2] } });
+  });
+  const b = spec.box; const ok = !!b && [b.s, b.w, b.n, b.e].every(Number.isFinite) && b.n > b.s && b.e > b.w;
+  const box: GeoJSON.Feature[] = ok ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[b!.w, b!.s], [b!.e, b!.s], [b!.e, b!.n], [b!.w, b!.n], [b!.w, b!.s]] } }] : [];
+  return {
+    shapes: { type: 'FeatureCollection', features: shapes } as GeoJSON.FeatureCollection,
+    labels: { type: 'FeatureCollection', features: labels } as GeoJSON.FeatureCollection,
+    box: { type: 'FeatureCollection', features: box } as GeoJSON.FeatureCollection,
+  };
+}
 
 /** The map's features, from the spec and the routes' lines (pure, so it's tested). */
 export function bennyFeatures(spec: Spec, shapes: RouteShape[], outlines: Record<string, GeoJSON.Geometry>) {
@@ -107,6 +133,7 @@ const MapBox: React.FC<{ spec: Spec; centerId?: string | null; tall?: boolean }>
   useEffect(() => {
     let off = false;
     setErr(null);
+    if (spec.zones?.length) { setData({ shapes: [], outlines: {} }); return; }   // a zone map carries its own shapes
     // The routes are the map; the outlines are a nicety. A slow or failed outline request never holds the map up or
     // breaks it: after a few seconds the map draws with each map's routes' own outline instead.
     const kept = Promise.race([
@@ -119,6 +146,7 @@ const MapBox: React.FC<{ spec: Spec; centerId?: string | null; tall?: boolean }>
     return () => { off = true; };
   }, [spec.maps.join('|'), centerId, tries]);   // eslint-disable-line react-hooks/exhaustive-deps
   const fc = useMemo(() => data ? bennyFeatures(spec, data.shapes, data.outlines) : null, [data, spec]);
+  const zc = useMemo(() => zoneFeatures(spec), [spec]);
 
   useEffect(() => {
     if (!box.current || !fc) return;
@@ -132,6 +160,17 @@ const MapBox: React.FC<{ spec: Spec; centerId?: string | null; tall?: boolean }>
     (box.current as HTMLDivElement & { __map?: mapboxgl.Map }).__map = m;   // as mbMap does: lets a check read the drawn map
     m.on('load', () => {
       tidyRmBaseMap(m);
+      // MainstreetAI's zones, under everything else: a light fill, a strong edge, the name and rep on top; the asked-about area in black
+      if (zc.shapes.features.length || zc.box.features.length) {
+        m.addSource('b-zones', { type: 'geojson', data: zc.shapes });
+        m.addSource('b-zone-l', { type: 'geojson', data: zc.labels });
+        m.addSource('b-box', { type: 'geojson', data: zc.box });
+        m.addLayer({ id: 'b-zones-fill', type: 'fill', source: 'b-zones', paint: { 'fill-color': ['get', 'colour'], 'fill-opacity': 0.18 } });
+        m.addLayer({ id: 'b-zones-line', type: 'line', source: 'b-zones', layout: { 'line-join': 'round' }, paint: { 'line-color': ['get', 'colour'], 'line-width': 2.5 } });
+        m.addLayer({ id: 'b-box', type: 'line', source: 'b-box', layout: { 'line-join': 'round' }, paint: { 'line-color': '#000', 'line-width': 3, 'line-dasharray': [2, 1.5] } });
+        m.addLayer({ id: 'b-zone-l', type: 'symbol', source: 'b-zone-l', layout: { 'text-field': ['get', 'label'], 'text-size': 12, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-allow-overlap': true, 'text-max-width': 12 },
+          paint: { 'text-color': '#0f172a', 'text-halo-color': '#fff', 'text-halo-width': 2 } });
+      }
       m.addSource('b-out', { type: 'geojson', data: fc.outlines });
       m.addSource('b-routes', { type: 'geojson', data: fc.routes });
       m.addSource('b-nums', { type: 'geojson', data: fc.nums });
@@ -168,20 +207,23 @@ const MapBox: React.FC<{ spec: Spec; centerId?: string | null; tall?: boolean }>
       m.on('mouseleave', 'b-pins', () => { m.getCanvas().style.cursor = ''; });
       // frame: the highlighted routes and pins when there are some (with the outlines when that's all of a map), else the maps
       const on: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: fc.routes.features.filter(x => (x.properties as { on: number }).on) };
-      const b = bboxOf(fc.pins.features.length || on.features.length ? [fc.pins, on, fc.path] : [fc.outlines, fc.routes]);
-      if (b) m.fitBounds(b, { padding: { top: 44, bottom: 36, left: 36, right: 48 }, maxZoom: 15, duration: 0 });
+      // a zone map frames the asked-about box when there is one (with room to see its neighbours), else its zones
+      const b = zc.box.features.length ? bboxOf([zc.box]) : zc.shapes.features.length ? bboxOf([zc.shapes])
+        : bboxOf(fc.pins.features.length || on.features.length ? [fc.pins, on, fc.path] : [fc.outlines, fc.routes]);
+      if (b) m.fitBounds(b, { padding: zc.box.features.length ? 56 : { top: 44, bottom: 36, left: 36, right: 48 }, maxZoom: 15, duration: 0 });
     });
     const ro = new ResizeObserver(() => m.resize()); ro.observe(box.current);
     return () => { ro.disconnect(); try { m.remove(); } catch { /* gone */ } };
-  }, [fc]);
+  }, [fc, zc]);
 
   return <MapFrame ref={box} tall={tall} label={spec.title} error={!!err}
     message={err ? `The map didn’t load: ${err}` : !fc ? 'Loading the map…' : null} onRetry={() => { setData(null); setTries(t => t + 1); }} />;
 };
 
 /** The line under a map card's title: what is on it. Maps with nothing picked out are just "2 maps". */
-export function mapCaption(spec: Pick<Spec, 'maps' | 'highlight' | 'pins'>): string {
+export function mapCaption(spec: Pick<Spec, 'maps' | 'highlight' | 'pins' | 'zones' | 'box'>): string {
   const n = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  if (spec.zones?.length) return `${n(spec.zones.length, 'zone')}${spec.box ? ' · the black box is the area asked about' : ''}`;
   const ordered = spec.pins.some(p => typeof p.n === 'number');
   return [
     spec.highlight.length ? `${n(spec.highlight.length, 'route')} highlighted` : !spec.pins.length ? n(spec.maps.length, 'map') : '',
