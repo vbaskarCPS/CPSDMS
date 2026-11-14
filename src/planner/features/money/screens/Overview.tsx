@@ -2,7 +2,7 @@
 // whose card charge has come in since (receipts.ts matchPending).
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Upload, ListOrdered, PiggyBank, Landmark, RefreshCw, Wallet, Camera, Banknote, Receipt as ReceiptIcon } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Upload, ListOrdered, PiggyBank, Landmark, RefreshCw, Wallet, Camera, Banknote, Receipt as ReceiptIcon, ArrowLeftRight } from 'lucide-react';
 import { Page, Header, Card, Button, Progress, Stat, Empty, Bars, useToast } from '../../../ui/primitives';
 import { useMoney } from '../useMoney';
 import { budgetTotal, dailySpend, money, monthKey, monthLabel, shiftMonth, sumByCategory, todayIso, totals, daysInMonth } from '../lib';
@@ -73,6 +73,7 @@ export function Overview() {
             <Link to="/money/budget"><PiggyBank /> Budget</Link>
             <Link to="/money/receipts"><ReceiptIcon /> Receipts</Link>
             <Link to="/money/recurring"><RefreshCw /> Recurring</Link>
+            <Link to="/money/transfers"><ArrowLeftRight /> Transfers</Link>
             <Link to="/money/accounts"><Landmark /> Accounts</Link>
           </div>
 
