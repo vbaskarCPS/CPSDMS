@@ -276,6 +276,8 @@ d('describe', () => {
       booking_emails: { kind: 'booking_emails', check: emails },
       pin: { kind: 'pin', check: pin }, stops: { kind: 'stops', check: order },
       payouts: { kind: 'payouts', check: { ok: true, date: '2026-11-10', carts: [{ cart_id: 's1', cn: 'I1', workers: ['A B'], jobs: 1, gross: 10, collected: { prepaid: 10 } }] } },
+      past_job: { kind: 'past_job', check: { ok: true, date: '2026-11-10', stamp: 't', add: false, worker: { cn: 'I1', name: 'A B' }, cart: { id: 'c1', label: 'A B', members: 1 }, line: 's1',
+        from: { address: '1 A St', type: 'Sale', amount: 210, paid_by: 'Cash', shown_as: '210' }, to: { address: '1 A St', type: 'Production', amount: 210, paid_by: 'Prepaid', shown_as: 'AFSL' }, ask: {} } },
       add_job: { kind: 'add_job', check: { ok: true, date: '2026-11-10', stamp: 't', worker: { cn: 'I1', name: 'A B' }, cart: { id: 's1', workers: ['I1'], names: ['A B'] },
         job: { address: '1 A St', service: 'Lawn Rejuvenation', price: 300, paid_by: 'Cash', add_ons: [], total: 300 } } },
       job: { kind: 'job', check: { ok: true, date: '2026-11-10', worker: { cn: 'I1', name: 'A B' }, cart: { id: 's1', workers: ['A B'] }, job: { id: 't1', type: 'Sale', amount: 10, paid_by: 'Cash' },
