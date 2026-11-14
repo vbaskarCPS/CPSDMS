@@ -473,6 +473,213 @@ const blossom: Record<Place, ReactNode> = {
     <path d={bow(12, 14.2, 0.9)} /><path d="M12 14.2l-1.5 3.6M12 14.2l1.5 3.6" /><circle cx="12" cy="14.2" r="1" {...full} /></>,
 };
 
+// ── Outdoors: a firm round pen with a wash; mountains, pines, a tent, a fire ──
+const outdoors: Record<Place, ReactNode> = {
+  // the sun coming up behind the mountains
+  today: <>
+    <path d="M3 19l6-9 4 5 2.5-3L21 19z" {...wash} /><path d="M2 19h20" />
+    <circle cx="17" cy="6.5" r="2.4" /><path d="M17 2.2v.9M21.3 6.5h-.9M20 3.5l-.6.6" /></>,
+  // a heart with the line of a ridge across it
+  health: <>
+    <path d={heart(12, 11.5, 8.6)} {...wash} /><path d="M6.4 13.6l2.6-3 2 2 2.6-4 4 5" /></>,
+  // a pack loaded for the trail: what's put by
+  wealth: <>
+    <rect x="5.5" y="7" width="13" height="14" rx="3" {...wash} />
+    <path d="M9 7V5.5a3 3 0 0 1 6 0V7M5.5 12.5h13M10.5 15.8h3M8 21v-2.5M16 21v-2.5" /></>,
+  // a tent pitched, its flap open
+  lifestyle: <>
+    <path d="M3 20L12 5l9 15z" {...wash} />
+    <path d="M12 5v6.5M9.4 20l2.6-5.8 2.6 5.8M1.5 20h21M10.7 5.1L9.6 3.3M13.3 5.1l1.1-1.8" /></>,
+  // a hiking boot: the miles to put in
+  train: <>
+    <path d="M6 3.5h5v6l6.5 3.2a3 3 0 0 1 1.7 2.7V18H4.5V5A1.5 1.5 0 0 1 6 3.5z" {...wash} />
+    <path d="M4.5 18v2.5h15V18M11 9.5H8.5M11 6.5H8.5M14.2 11.3l-1.4 2" /></>,
+  // a pot over the campfire
+  food: <>
+    <path d="M4 21.5l16-3.5M4 18l16 3.5" />
+    <path d="M12 16.2c-2.4 0-3.6-1.7-3-3.8.4-1.5 1.8-2.3 1.8-4.2 1.9.9 4.2 3.2 4.2 5.8 0 1.3-1.1 2.2-3 2.2z" {...wash} />
+    <path d="M5 4.5h14M8 4.5v2.2a4 4 0 0 0 8 0V4.5" /></>,
+  // the moon over two pines
+  cycle: <>
+    <path d={moon(15, 7.5, 4.8, -20)} {...wash} />
+    <path d="M7 20.5l3-6H8.6l2.4-5 2.4 5H12l3 6zM11 20.5v1.5M3 20.5l2-4H4l1.6-3.4 1.4 3" /></>,
+  // a folded map with the route marked on it
+  plan: <>
+    <path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z" {...wash} /><path d="M9 4v14M15 6v14" />
+    <path d="M5.5 15c1.5-3 3.5-1 5-3s3-1.5 4.5-2.5 2.2-1.2 3.4-2" strokeDasharray="1.3 1.8" /></>,
+  // a pine growing inside the loop of the days
+  habits: <>
+    <path d={LOOP} /><path d="M12 7.6l2.8 4.6h-1.4l2 3.4H8.6l2-3.4H9.2z" {...wash} /><path d="M12 15.6v2" /></>,
+  // a page of the calendar with the peaks on it
+  calendar: <>
+    {page(2.5)}<path d="M7 18.2l3-4.6 2 2.6 2-3.1 3 5.1z" {...wash} /></>,
+  // a basket for the market
+  shop: <>
+    <path d="M3.5 9.5h17l-1.6 11H5.1z" {...wash} />
+    <path d="M7.5 9.5l2.2-5.5M16.5 9.5l-2.2-5.5M4.4 14.5h15.2M9.5 9.5v11M14.5 9.5v11" /></>,
+};
+
+// ── Tactical: a square-cut stencil pen; a flag, a shield, a compass, stripes ──
+const tactical: Record<Place, ReactNode> = {
+  // a flag going up its pole
+  today: <>
+    <path d="M5 21V3M2.5 21h7" /><path d="M5 4h12l-2.5 3.5L17 11H5z" {...wash} /></>,
+  // a shield with a cross on it
+  health: <>
+    <path d="M12 3l8 3v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z" {...wash} /><path d="M12 8.5v7M8.5 12h7" /></>,
+  // a strongbox with its dial
+  wealth: <>
+    <rect x="3" y="5.5" width="18" height="14" {...wash} /><circle cx="12" cy="12.5" r="3.2" />
+    <path d="M12 9.3v1.4M3 8.6h18M6.5 19.5v2M17.5 19.5v2" /></>,
+  // a compass
+  lifestyle: <>
+    <circle cx="12" cy="12" r="8.6" {...wash} /><path d="M15.4 8.6l-2 5-5 2 2-5z" />
+    <path d="M12 2.4v2.2M12 19.4v2.2M2.4 12h2.2M19.4 12h2.2" /></>,
+  // a sandbag to carry
+  train: <>
+    <path d="M4 10.5h16l-1.2 10H5.2z" {...wash} /><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5M4.8 15h14.4M10 18h4" /></>,
+  // a ration tin and its spork
+  food: <>
+    <rect x="3" y="9" width="12" height="11.5" {...wash} /><path d="M3 12.5h12M3 17h12M19.5 3v18M17.5 3v4.2a2 2 0 0 0 4 0V3" /></>,
+  // the moon and a star: night watch
+  cycle: <>
+    <path d={moon(11, 12.5, 8, -20)} {...wash} /><path d={star(18.5, 5.5, 3)} /></>,
+  // a clipboard with the checklist ticked
+  plan: <>
+    <rect x="4.5" y="4" width="15" height="17.5" {...wash} />
+    <path d="M9 2.5h6v3H9zM7.5 10l1.6 1.6L12 8.8M7.5 15.2l1.6 1.6L12 14M14 10.4h3M14 15.6h3" /></>,
+  // three stripes: earned one day at a time
+  habits: <>
+    <path d="M5 9.5l7-5 7 5M5 14.5l7-5 7 5M5 19.5l7-5 7 5" /><path d="M12 14.5l7 5H5z" {...wash} /></>,
+  // a page of the calendar with the days crossed off
+  calendar: <>
+    {page(0)}<path d="M7.5 13l2.4 2.4M9.9 13l-2.4 2.4M13.2 13l2.4 2.4M15.6 13l-2.4 2.4M7.5 18h2.4" /></>,
+  // a kit bag
+  shop: <>
+    <path d="M3 10h18v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 19z" {...wash} />
+    <path d="M8.5 10V7.5A1.5 1.5 0 0 1 10 6h4a1.5 1.5 0 0 1 1.5 1.5V10M3 14h18M10.5 14v2.2h3V14" /></>,
+};
+
+// ── Tech: a fine round pen, circuits and screens; a power button, a chip, a controller ──
+const tech: Record<Place, ReactNode> = {
+  // the power button: switching the day on
+  today: <>
+    <circle cx="12" cy="13" r="8" {...wash} stroke="none" /><path d="M12 3v8" /><path d="M7.2 6.4a8 8 0 1 0 9.6 0" /></>,
+  // a heart with a pulse running through it, to a node
+  health: <>
+    <path d={heart(12, 11.5, 8.6)} {...wash} /><path d="M4.5 12h3.5l1.5-3 2.5 6 2-4h4.5" /><circle cx="19.2" cy="12" r="1.1" /></>,
+  // a chip with a dollar on it
+  wealth: <>
+    <rect x="6" y="6" width="12" height="12" rx="1.5" {...wash} />
+    <path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3" />
+    <path d="M13.8 9.8c-.4-.6-1-.9-1.8-.9-1 0-1.8.6-1.8 1.4 0 1.9 3.8 1 3.8 2.9 0 .8-.8 1.4-1.9 1.4-.8 0-1.5-.3-1.9-.9M12 8v.8M12 14.6v.8" /></>,
+  // a game controller
+  lifestyle: <>
+    <path d="M7 8h10a4 4 0 0 1 4 4l.5 4.5a2.2 2.2 0 0 1-3.9 1.6L15.5 16h-7l-2.1 2.1A2.2 2.2 0 0 1 2.5 16.5L3 12a4 4 0 0 1 4-4z" {...wash} />
+    <path d="M7.5 10.6v3M6 12.1h3" /><circle cx="15.5" cy="11" r=".9" /><circle cx="17.6" cy="13.1" r=".9" /></>,
+  // a battery charging up
+  train: <>
+    <rect x="2.5" y="7" width="17" height="10" rx="2" {...wash} /><path d="M21.5 10.5v3M11.6 8.6L9 12.6h3.6L10 15.4" /></>,
+  // a mug, the steam rising as a signal
+  food: <>
+    <path d="M4 10.5h12V16a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z" {...wash} />
+    <path d="M16 12.2h1.5a2.4 2.4 0 0 1 0 4.8H16M6.6 7.4a3.4 3.4 0 0 1 6.8 0M8.5 7.9a1.5 1.5 0 0 1 3 0" /></>,
+  // a moon with a ring in orbit round it
+  cycle: <>
+    <circle cx="12" cy="12" r="5" {...wash} /><ellipse cx="12" cy="12" rx="10" ry="3.6" transform="rotate(-25 12 12)" />
+    <circle cx="19.8" cy="7.6" r="1.2" /></>,
+  // a terminal: the plan, typed out
+  plan: <>
+    <rect x="3" y="4" width="18" height="16" rx="2" {...wash} /><path d="M3 8h18M7 12l3 2.5L7 17M12.5 17H17" /></>,
+  // two arrows going round a node: running again
+  habits: <>
+    <path d="M19.5 9A8 8 0 0 0 5 7.5M4.5 15A8 8 0 0 0 19 16.5M5 3.5v4h4M19 20.5v-4h-4" />
+    <circle cx="12" cy="12" r="2.3" {...wash} /></>,
+  // a page of the calendar as a screen: a cell lit
+  calendar: <>
+    {page(2)}<rect x="7" y="13" width="3.2" height="3.2" {...wash} /><path d="M13 14.6h4M7 18.2h10" /></>,
+  // a cart wired up
+  shop: <>
+    <path d="M2.5 4h2.6l2.2 11h11.2l2-8H6.3" {...wash} /><circle cx="8.5" cy="19" r="1.6" /><circle cx="17" cy="19" r="1.6" />
+    <path d="M10 10.6h2l1.2-1.6h3" /></>,
+};
+
+// ── Garage: a heavy pen; gears, a bolt, a toolbox, a grill ──
+const garage: Record<Place, ReactNode> = {
+  // a sun like a gear coming up over the road
+  today: <>
+    <path d="M6 19a6 6 0 0 1 12 0z" {...wash} /><path d="M2 19h20M12 10.5V8M7.8 12.3L6.2 10.7M16.2 12.3l1.6-1.6M5.3 16.1L3 15.3M18.7 16.1l2.3-.8" /></>,
+  // a heart held together with a nut and bolt: built strong
+  health: <>
+    <path d={heart(12, 11.5, 8.6)} {...wash} /><path d="M12 8.4l2.7 1.6v3.1L12 14.7l-2.7-1.6V10z" /><circle cx="12" cy="11.55" r="1" /></>,
+  // the toolbox: what's kept
+  wealth: <>
+    <rect x="3" y="9" width="18" height="11" rx="1.5" {...wash} />
+    <path d="M8.5 9V6.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1V9M3 13.8h18M10.5 13.8v2.4h3v-2.4" /></>,
+  // the car, ready to go
+  lifestyle: <>
+    <path d="M3 16.2v-3.4l2.6-4.4h8.8l3.6 4.2h2.5a1.5 1.5 0 0 1 1.5 1.5v2.1z" {...wash} />
+    <circle cx="7" cy="16.6" r="2" /><circle cx="17" cy="16.6" r="2" /><path d="M9.6 8.4v4.4M3 12.8h15" /></>,
+  // a loaded barbell
+  train: <>
+    <path d="M2 12h20M3.5 9v6M20.5 9v6" /><rect x="5" y="6" width="3" height="12" rx=".8" {...wash} /><rect x="16" y="6" width="3" height="12" rx=".8" {...wash} /></>,
+  // the grill, smoke rising
+  food: <>
+    <path d="M3.5 10h17a8.5 8.5 0 0 1-17 0z" {...wash} /><path d="M8 18l-2 4M16 18l2 4M8 6.5c0-1 1-1 1-2.2M12 6.5c0-1 1-1 1-2.2M16 6.5c0-1 1-1 1-2.2" /></>,
+  // the moon, with rivets
+  cycle: <>
+    <path d={moon(11.5, 12, 8.5, -20)} {...wash} /><circle cx="16.4" cy="6.6" r="1" /><circle cx="18.4" cy="11.8" r="1" /></>,
+  // a blueprint
+  plan: <>
+    <rect x="3" y="4" width="18" height="16" rx="1" {...wash} /><path d="M3 8h18M7 12h5M7 15.5h3" /><circle cx="16" cy="14" r="2.6" /></>,
+  // a gear: the same turn again and again
+  habits: <>
+    <circle cx="12" cy="12" r="5" {...wash} /><circle cx="12" cy="12" r="1.8" />
+    <path d="M12 3.5V6M12 18v2.5M3.5 12H6M18 12h2.5M6 6l1.8 1.8M16.2 16.2L18 18M6 18l1.8-1.8M16.2 7.8L18 6" /></>,
+  // a page of the calendar, the job done
+  calendar: <>
+    {page(1)}<path d="M8 15.2l2.6 2.6 5.4-5.2" /></>,
+  // a hand truck with a crate on it
+  shop: <>
+    <path d="M5 3l3 14h11" /><rect x="9.4" y="6" width="8" height="8" rx="1" {...wash} /><circle cx="8.5" cy="19.5" r="2" /></>,
+};
+
+// ── Metal: solid shapes cut out; lightning, flames, a tankard, a pick ──
+const metal: Record<Place, ReactNode> = {
+  // the sun coming up with spikes
+  today: <>
+    <path d="M5 19a7 7 0 0 1 14 0zM2.5 20h19v1.5h-19zM12 5.5l1.1 4h-2.2zM5.8 8.6l3.2 2.6-1.6 1.1zM18.2 8.6L17 12.3l-1.6-1.1z" /></>,
+  // a heart with a flame burning in it
+  health: <path {...hole} d={`${heart(12, 11.6, 9)}M12 7.6c1.2 1.4 2.6 2.4 2.4 4.4-.1 1.5-1.2 2.6-2.4 2.6s-2.3-1.1-2.4-2.6c-.1-1.2.6-1.9 1.2-2.5.1.7.6 1.2 1.1 1.3-.1-1.1-.2-2.2.1-3.2z`} />,
+  // a chest of treasure
+  wealth: <path {...hole} d="M3 10a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v1H3zM3 12h18v8.5H3zM10.5 12v3.4h3V12z" />,
+  // a guitar pick
+  lifestyle: <path {...hole} d="M12 21.5c-4-3-7.2-8-7.2-12.2C4.8 6.2 8 4 12 4s7.2 2.2 7.2 5.3c0 4.2-3.2 9.2-7.2 12.2zM12 8.2l-1.5 3.6h3z" />,
+  // a heavy dumbbell
+  train: <>
+    <path d="M8 10.8h8v2.4H8z" /><rect x="3" y="7" width="3.2" height="10" rx="1" /><rect x="17.8" y="7" width="3.2" height="10" rx="1" />
+    <rect x="6.2" y="8.5" width="1.8" height="7" rx=".6" /><rect x="16" y="8.5" width="1.8" height="7" rx=".6" /></>,
+  // a tankard
+  food: <>
+    <path {...hole} d="M4.5 5h11.5v14a2 2 0 0 1-2 2H6.5a2 2 0 0 1-2-2zM7.2 8v9.4h1.6V8zM11.4 8v9.4H13V8z" />
+    <path d="M16 8.2h2.4a2 2 0 0 1 2 2v3.6a2 2 0 0 1-2 2H16" {...ink(2.2)} /></>,
+  // the moon and a spark
+  cycle: <>
+    <path d={moon(11, 12.5, 8.4, -20)} /><path d={spark(18.5, 5, 3.4)} /></>,
+  // a book with a lightning bolt on it
+  plan: <path {...hole} d="M5 5.5a2 2 0 0 1 2-2h10.5a2 2 0 0 1 2 2v15H7a2 2 0 0 1-2-2zM7.3 16.9v1.3h9.9v-1.3zM13.2 6.4L9.6 11.6h2.6l-1.6 4 4.2-5.6h-2.6z" />,
+  // a flame inside the loop: it keeps burning
+  habits: <>
+    <path d={LOOP} {...ink(2.2)} />
+    <path d="M12 6.8c1.6 1.8 3.4 3 3.2 5.6-.2 2-1.6 3.4-3.2 3.4s-3-1.4-3.2-3.4c-.1-1.5.7-2.4 1.5-3.2.2 1 .7 1.6 1.4 1.8-.1-1.4-.3-3 .3-4.2z" /></>,
+  // a calendar page with a skull on it
+  calendar: <>
+    <path {...hole} d="M5.5 5h13a2 2 0 0 1 2 2v11.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM5.3 8.7v1.1h13.4V8.7zM12 11.4c-2 0-3.4 1.3-3.4 3 0 1 .5 1.7 1.2 2.1v1.5h4.4v-1.5c.7-.4 1.2-1.1 1.2-2.1 0-1.7-1.4-3-3.4-3zM10.6 14a.9.9 0 1 0 0 1.8.9.9 0 1 0 0-1.8zM13.4 14a.9.9 0 1 0 0 1.8.9.9 0 1 0 0-1.8z" />
+    <path d="M8 2.8V6M16 2.8V6" {...ink(1.9)} /></>,
+  // a bag with a lightning bolt
+  shop: <path {...hole} d="M5 8h14l-1 13H6zM9 8V6.5a3 3 0 0 1 6 0V8h-1.4V6.5a1.6 1.6 0 0 0-3.2 0V8zM13 10.4l-3 4.6h2.2l-1 3.6 3.3-4.7h-2.2z" />,
+};
+
 const pen = (w: number, more: SVGProps<SVGSVGElement> = {}): SVGProps<SVGSVGElement> => ({ fill: 'none', stroke: 'currentColor', strokeWidth: w, strokeLinecap: 'round', strokeLinejoin: 'round', ...more });
 
 /** Every pack, in the order the screen shows them. */
@@ -487,6 +694,11 @@ export const PACKS: Pack[] = [
   { id: 'spooky', name: 'Spooky', note: 'Bats, cats and a cauldron', hand: { fill: 'currentColor', stroke: 'none' }, art: spooky },
   { id: 'retro', name: 'Retro', note: 'Sunbursts, rainbows and a record', hand: pen(2.2), art: retro },
   { id: 'blossom', name: 'Blossom', note: 'Bows, hearts and flowers', hand: pen(1.6), art: blossom },
+  { id: 'outdoors', name: 'Outdoors', note: 'Mountains, a tent and a campfire', hand: pen(1.8), art: outdoors },
+  { id: 'tactical', name: 'Tactical', note: 'A flag, a shield and stripes', hand: pen(2, { strokeLinecap: 'square', strokeLinejoin: 'miter' }), art: tactical },
+  { id: 'tech', name: 'Tech', note: 'A power button, a chip and a terminal', hand: pen(1.5), art: tech },
+  { id: 'garage', name: 'Garage', note: 'Gears, a toolbox and a grill', hand: pen(2.4), art: garage },
+  { id: 'metal', name: 'Metal', note: 'Lightning, flames and a tankard', hand: { fill: 'currentColor', stroke: 'none', fillRule: 'nonzero' }, art: metal },
 ];
 export const packOf = (id: PackId): Pack => PACKS.find(p => p.id === id) ?? PACKS[0];
 

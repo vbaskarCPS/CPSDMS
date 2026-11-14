@@ -35,7 +35,7 @@ export function placeAt(to: string): Place | null {
 }
 
 /** The packs. 'line' is the planner's own icons: what it has always shown. */
-export const PACK_IDS = ['line', 'woodland', 'cottage', 'celestial', 'festive', 'academia', 'coastal', 'spooky', 'retro', 'blossom'] as const;
+export const PACK_IDS = ['line', 'woodland', 'cottage', 'celestial', 'festive', 'academia', 'coastal', 'spooky', 'retro', 'blossom', 'outdoors', 'tactical', 'tech', 'garage', 'metal'] as const;
 export type PackId = typeof PACK_IDS[number];
 export const isPack = (v: unknown): v is PackId => typeof v === 'string' && (PACK_IDS as readonly string[]).includes(v);
 
@@ -50,9 +50,9 @@ export const LOOK_PACK: Record<string, PackId> = {
   halloween: 'spooky',
   retro70s: 'retro',
   pastels: 'blossom', spring: 'blossom', coquette: 'blossom',
-  minimal: 'line', graphite: 'line',
-  lodge: 'woodland', expedition: 'woodland', harbour: 'coastal', whisky: 'academia',
-  neon: 'celestial', circuit: 'line', fieldops: 'line', grit: 'line', metal: 'spooky',
+  minimal: 'line',
+  lodge: 'outdoors', expedition: 'outdoors', harbour: 'coastal', whisky: 'academia',
+  neon: 'tech', circuit: 'tech', graphite: 'tech', fieldops: 'tactical', grit: 'garage', metal: 'metal',
 };
 
 /** What the person chose. `pack`: 'match' follows the look, or one pack for always. `own`: the places that carry a
