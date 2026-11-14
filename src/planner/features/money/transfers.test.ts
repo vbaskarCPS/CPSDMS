@@ -121,9 +121,10 @@ describe('sortTransfers', () => {
     expect(s.own.total).toBe(775);
     expect(s.totals.own).toBe(775);
     expect(s.own.byEnding).toEqual([
-      { ending: '1817', name: 'Joint', count: 1, total: 500 },
-      { ending: '5623', name: 'Chequing', count: 1, total: 500 },
-      { ending: '6622', name: undefined, count: 2, total: 275 },
+      { ending: '1817', name: 'Joint', count: 1, total: 500, flow: { into: 500, out: 0, net: 500, routes: [{ from: 'Chequing', to: 'Joint', dir: 'in', total: 500, count: 1 }] } },
+      { ending: '5623', name: 'Chequing', count: 1, total: 500, flow: { into: 0, out: 500, net: -500, routes: [{ from: 'Chequing', to: 'Joint', dir: 'out', total: 500, count: 1 }] } },
+      // in, out and the difference, seen from the savings; and where each direction came from and went to
+      { ending: '6622', name: undefined, count: 2, total: 275, flow: { into: 200, out: 75, net: 125, routes: [{ from: 'Chequing', to: '····6622', dir: 'in', total: 200, count: 1 }, { from: '····6622', to: 'Chequing', dir: 'out', total: 75, count: 1 }] } },
     ]);
     expect(s.unknownAccounts).toEqual([]);
   });
@@ -137,8 +138,8 @@ describe('sortTransfers', () => {
     ];
     const s = sortTransfers(rows, ACCOUNTS);
     expect(s.unknownAccounts).toEqual([
-      { ending: '6622', count: 3, total: 520, sent: 400, back: 120, first: '2026-03-02', last: '2026-06-15', sample: 'SSV TO: 6456622' },
-      { ending: '7588', count: 1, total: 50, sent: 50, back: 0, first: '2026-04-01', last: '2026-04-01', sample: 'PTS TO: 6457588' },
+      { ending: '6622', count: 3, total: 520, first: '2026-03-02', last: '2026-06-15', sample: 'SSV TO: 6456622', flow: expect.objectContaining({ into: 400, out: 120, net: 280 }) },
+      { ending: '7588', count: 1, total: 50, first: '2026-04-01', last: '2026-04-01', sample: 'PTS TO: 6457588', flow: expect.objectContaining({ into: 50, out: 0, net: 50 }) },
     ]);
     expect(s.own.count).toBe(0);
     // yes to one, no to the other: the yes joins their accounts, the no is "not a transfer" (money to someone else)
