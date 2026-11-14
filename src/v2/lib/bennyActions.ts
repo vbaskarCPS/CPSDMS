@@ -12,6 +12,9 @@
 //                works the cart's equiv and totals out again). The database keeps a record of each one (benny_job_changes).
 //   add_job    → the logsheet's own save of a new sale (completeJob), with each add-on as its own line tied to it; the
 //                cart's totals are worked out again, and a client with an email gets the logsheet's receipt
+//   past_job   → a closed day's payout list › a cart's sales: change one job (type, amount, how it was paid) or add one,
+//                then save the day, which works its pay out again (not once the day is on a payslip). An open booking at
+//                the same address is marked done with it.
 //   bonus      → the day's payout list › Add bonus, on one or more paid-out carts: the live day saves it on the logsheet
 //                (bonuses and the pay it was closed at); a saved day saves it on the cart and works the day's pay out
 //                again. The database keeps a record of each one (benny_bonus_changes).
@@ -39,6 +42,7 @@ import { lastSettings } from './bennyWalk';
 import { queueHref } from './payoutQueue';
 import { cartContext, dayLines, listCarts, saveDay } from './payoutCarts';
 import { bonusName, bonusesSaid, liveBonusPatch, withBonuses, type BonusCheck, type LiveNow } from './bennyBonus';
+import { pastJobCard, pastJobSaid, pastJobSaved, withPastJob, type PastJobCheck } from './bennyPastJob';
 
 export type TeamMode = 'roster' | 'solo' | 'pairs';
 /** A worker in a manager's crew, with their season so far (no days yet = no average). */
@@ -140,6 +144,7 @@ export const payoutsStart = (c: PayoutsCheck): string | null => queueHref(c.date
 export type BennyProposal =
   | { kind: 'remove'; check: RemoveCheck }
   | { kind: 'add_job'; check: AddJobCheck }
+  | { kind: 'past_job'; check: PastJobCheck }
   | { kind: 'texts'; check: TextsCheck }
   | { kind: 'bonus'; check: BonusCheck }
   | { kind: 'payouts'; check: PayoutsCheck }
@@ -289,6 +294,7 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
     }
     case 'remove': return removeCard(p.check);
     case 'add_job': return addJobCard(p.check);
+    case 'past_job': return pastJobCard(p.check);
     case 'texts':
       // drawn by its own card (a button per worker); these are its words for anything that reads a card as lines
       return { title: textsTitle(p.check), lines: p.check.people.map(x => `${x.name}: “${x.text}”`), action: 'Text' };
@@ -608,6 +614,43 @@ export async function bonusesFromBenny(p: Extract<BennyProposal, { kind: 'bonus'
   throw new Error(`I couldn’t read the payouts back to confirm it. Check ${list} before trying again.`);
 }
 
+/**
+ * A closed day's payout list › change (or add) a job on a cart, then save the day: its pay is worked out again by the
+ * payout engine, exactly as saving on that list does. Checked again first (nothing may have moved since the card), read
+ * back after, and the open booking at that address is marked done by the Bookings save.
+ */
+export async function pastJobFromBenny(p: Extract<BennyProposal, { kind: 'past_job' }>, center: CenterLite): Promise<string> {
+  const c = await recheck<PastJobCheck>('benny_check_past_job', { p_center: center.id, p_date: p.check.date, p_worker: p.check.worker.cn, p_job: p.check.ask });
+  if (c.stamp !== p.check.stamp) throw new Error(`${c.worker.name.split(' ')[0]}’s payout for ${c.date} was changed since I checked. Ask me again.`);
+  const next = withPastJob(await listCarts(center.id, c.date), c);
+  // the center's own region (its tax, when the season has no rate card): never a guess, this works pay out
+  const region = center.region || ((await db.from('command_centers').select('region').eq('id', center.id).maybeSingle()).data as { region?: string } | null)?.region;
+  if (!region) throw new Error('I couldn’t read this center’s region to work the pay out');
+  const ctx = await cartContext(center.id, region, c.date, next);
+  const list = `the payout list for ${c.date}`;
+  try { await saveDay(center.id, c.date, next, await dayLines(next, ctx)); }
+  catch (e) { throw new Error(`It didn’t save${e instanceof Error && e.message ? ` (${e.message.replace(/\.$/, '')})` : ''}. Nothing changed. Try again, or change it on ${list}.`); }
+  // read it back: only then is it called saved
+  let ok = false;
+  try { ok = pastJobSaved(await listCarts(center.id, c.date), c); } catch { /* no signal: not confirmed */ }
+  if (!ok) throw new Error(`I couldn’t read the job back to confirm it. Check ${list} before trying again.`);
+  let pay: { equiv: number; pay: number } | null = null;
+  try {
+    const row = (await db.from('payout_lines').select('equiv,total_payout').eq('center_id', center.id).eq('day', c.date).eq('cn', c.worker.cn).maybeSingle()).data as { equiv: number; total_payout: number } | null;
+    if (row) pay = { equiv: Number(row.equiv), pay: Number(row.total_payout) };
+  } catch { /* the pay line is only for the sentence */ }
+  let booking: 'done' | 'failed' | null = null;
+  if (c.booking) {
+    try {
+      const b = await recheck<BookingCheck>('benny_check_booking', { p_center: center.id, p_booking: c.booking.id,
+        p_change: { status: 'done', office_note: `Done ${c.date} by ${c.worker.name} (${c.worker.cn}); logged on that day’s payout.` } });
+      const saved = await saveBooking(b.booking.id, null, b.patch);
+      booking = saved.status === 'done' ? 'done' : 'failed';
+    } catch { booking = 'failed'; }
+  }
+  return pastJobSaid(c, pay, booking);
+}
+
 /** RM map › Pins › drop a pin: the map's own save, on the day and manager the check was made for. */
 export async function pinFromBenny(p: Extract<BennyProposal, { kind: 'pin' }>, centerId: string): Promise<string> {
   const c = p.check;
@@ -671,6 +714,7 @@ export async function doProposal(p: BennyProposal, center: CenterLite): Promise<
   if (p.kind === 'bonus') return bonusesFromBenny(p, center);
   if (p.kind === 'remove') return removeFromBenny(p, center.id);
   if (p.kind === 'add_job') return addJobFromBenny(p, center.id);
+  if (p.kind === 'past_job') return pastJobFromBenny(p, center);
   if (p.kind === 'pin') return pinFromBenny(p, center.id);
   if (p.kind === 'stops') return stopsFromBenny(p, center.id);
   // not a change: the panel opens the Send booking emails screen instead (see BennyPanel)
