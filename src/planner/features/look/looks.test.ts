@@ -8,13 +8,13 @@ import { BUTTON_SHAPES, CARD_SHAPES, EDGES, FACES, LOOKS, LOOK_IDS, LOOK_ONLY_VA
 const all = lookList();
 const prefs = (over: Partial<LookPrefs> = {}): LookPrefs => ({ ...noPrefs(), ...over });
 
-describe('the 26 looks', () => {
+describe('the 31 looks', () => {
   it('are the ones Rosh listed, under the names the other parts of the planner know them by', () => {
     expect([...LOOK_IDS]).toEqual(['woodland', 'cottagecore', 'pastels', 'christmas', 'autumn', 'academia', 'celestial', 'minimal',
       'french', 'botanical', 'countryside', 'regency', 'coastal', 'spring', 'fairy', 'halloween', 'winter', 'mediterranean', 'retro70s', 'stationery', 'coquette',
-      'lodge', 'harbour', 'whisky', 'graphite', 'expedition']);
+      'lodge', 'harbour', 'whisky', 'graphite', 'expedition', 'neon', 'circuit', 'fieldops', 'grit', 'metal']);
     expect(lookList('main').map(l => l.id)).toEqual(['woodland', 'cottagecore', 'pastels', 'christmas', 'autumn', 'academia', 'celestial', 'minimal']);
-    expect(lookList('more')).toHaveLength(18);
+    expect(lookList('more')).toHaveLength(23);
     for (const id of LOOK_IDS) expect(LOOKS[id].id).toBe(id);
   });
   it('each has a heading face no other look has', () => {
@@ -344,7 +344,7 @@ describe('the colour for the very first frame (planner.html, before the app has 
 
 describe('what was saved comes back safe to use', () => {
   it('nothing, or rubbish, is "nothing chosen"', () => {
-    for (const junk of [null, undefined, 7, 'woodland', [], { all: 'neon' }, { sections: 'x', bg: 4, pic: null, shapes: [], type: 0 }]) expect(isPlain(cleanPrefs(junk)), JSON.stringify(junk)).toBe(true);
+    for (const junk of [null, undefined, 7, 'woodland', [], { all: 'plasma' }, { sections: 'x', bg: 4, pic: null, shapes: [], type: 0 }]) expect(isPlain(cleanPrefs(junk)), JSON.stringify(junk)).toBe(true);
   });
   it('keeps what it knows and drops what it does not', () => {
     const p = cleanPrefs({ all: 'fairy', sections: { food: 'mediterranean', money: 'own', plan: 'vaporwave', nope: 'woodland' }, bg: { strength: 140, brightness: 10, overlay: 55.4, corner: false }, pic: { fit: 'repeat', overlay: 200, on: { all: 'abc', today: '', moon: 'x' } }, shapes: { cards: 'soft', buttons: 'triangle', edges: 'frame', shadows: 'pop' }, type: { heading: 'cinzel', text: 'comic sans' }, at: '2026-11-11T10:00:00.000Z' });

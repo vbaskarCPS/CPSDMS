@@ -52,6 +52,7 @@ export const LOOK_PACK: Record<string, PackId> = {
   pastels: 'blossom', spring: 'blossom', coquette: 'blossom',
   minimal: 'line', graphite: 'line',
   lodge: 'woodland', expedition: 'woodland', harbour: 'coastal', whisky: 'academia',
+  neon: 'celestial', circuit: 'line', fieldops: 'line', grit: 'line', metal: 'spooky',
 };
 
 /** What the person chose. `pack`: 'match' follows the look, or one pack for always. `own`: the places that carry a

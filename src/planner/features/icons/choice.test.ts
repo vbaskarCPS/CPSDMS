@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { cleanPrefs, drawn, isPicture, LOOK_PACK, NO_CHOICE, PACK_IDS, packFor, placeAt, PLACES, placesFor, toFetch, type IconPrefs } from './choice';
 
 // the looks the planner has (the ids the looks put on <html data-look>)
-const LOOKS = ['woodland', 'cottagecore', 'pastels', 'christmas', 'autumn', 'academia', 'celestial', 'minimal', 'french', 'botanical', 'countryside', 'regency', 'coastal', 'spring', 'fairy', 'halloween', 'winter', 'mediterranean', 'retro70s', 'stationery', 'coquette', 'lodge', 'harbour', 'whisky', 'graphite', 'expedition'];
+const LOOKS = ['woodland', 'cottagecore', 'pastels', 'christmas', 'autumn', 'academia', 'celestial', 'minimal', 'french', 'botanical', 'countryside', 'regency', 'coastal', 'spring', 'fairy', 'halloween', 'winter', 'mediterranean', 'retro70s', 'stationery', 'coquette', 'lodge', 'harbour', 'whisky', 'graphite', 'expedition', 'neon', 'circuit', 'fieldops', 'grit', 'metal'];
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';
 const WEBP = 'data:image/webp;base64,UklGRg==';
 
