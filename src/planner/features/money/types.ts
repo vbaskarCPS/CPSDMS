@@ -58,7 +58,7 @@ export interface Receipt {
   /** How an email receipt was paid ('etransfer': an Interac e-transfer, kind 'transaction'). */
   paidBy?: 'card' | 'etransfer' | 'paypal' | 'other';
   /** Who an e-transfer went to. */
-  payee?: string;
+  payee?: { name: string; email?: string };   // e-transfers: who it was sent to
   /** Set by the app: paid on the company card, or not a receipt at all. Hidden from "Not matched", never matched. */
   ignored?: 'company' | 'not_receipt';
 }

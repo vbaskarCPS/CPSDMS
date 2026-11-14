@@ -120,3 +120,6 @@ export function looseCandidates(r: Pick<Receipt, 'date' | 'merchant'>, rows: Txn
   }
   return out.sort((a, b) => b.score - a.score || a.txn.id.localeCompare(b.txn.id));
 }
+
+/** "Priya (priya@x.com)", or just the name; '' when unknown. */
+export const payeeLabel = (p: { name?: string; email?: string } | undefined): string => (p?.name ? `${p.name}${p.email ? ` (${p.email})` : ''}` : p?.email || '');

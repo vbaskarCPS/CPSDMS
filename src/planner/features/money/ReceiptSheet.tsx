@@ -9,7 +9,7 @@ import { CategoryIcon } from './CategoryIcon';
 import { dayLabel, loadMonths, money, niceName } from './lib';
 import { addCashRow, candidatesFor, linkReceipt, loadReceiptPhotos, removeReceipt, saveReceipt, setReceiptCategory, splitByCategory, unlinkReceipt, type Candidate } from './receipts';
 import { mailboxName, receiptTotal } from './mailReceipts';
-import { foreignCurrency } from './receiptMatch';
+import { foreignCurrency, payeeLabel } from './receiptMatch';
 import type { Account, Receipt, Txn } from './types';
 
 export function receiptStatus(r: Receipt): { label: string; tone: 'good' | 'amber' | 'muted' } {
@@ -69,7 +69,7 @@ export function ReceiptSheet({ receipt, others, accounts, onClose, onChange }: {
         <>
           <p className="pl-muted" style={{ fontSize: 13 }}>
             {dayLabel(r.date)}{r.time ? ` · ${r.time}` : ''} · <b style={{ color: 'var(--ink)' }}>{receiptTotal(r)}</b>
-            {r.tax ? ` · tax ${money(r.tax)}` : ''}{r.tip ? ` · tip ${money(r.tip)}` : ''} · {r.payment === 'cash' ? 'cash' : r.paidBy === 'etransfer' ? `e-transfer${r.payee ? ` to ${r.payee}` : ''}` : r.paidBy === 'paypal' ? 'PayPal' : `card${r.cardLast4 ? ` ····${r.cardLast4}` : ''}`}
+            {r.tax ? ` · tax ${money(r.tax)}` : ''}{r.tip ? ` · tip ${money(r.tip)}` : ''} · {r.payment === 'cash' ? 'cash' : r.paidBy === 'etransfer' ? `e-transfer${r.payee ? ` to ${payeeLabel(r.payee)}` : ''}` : r.paidBy === 'paypal' ? 'PayPal' : `card${r.cardLast4 ? ` ····${r.cardLast4}` : ''}`}
           </p>
           {r.email && (
             <p className="pl-muted" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>

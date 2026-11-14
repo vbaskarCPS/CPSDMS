@@ -12,6 +12,7 @@ import { dayLabel, money, monthKey, monthLabel, niceName, shiftMonth } from '../
 import { useMoney } from '../useMoney';
 import { loadReceipts, matchPending } from '../receipts';
 import { ReceiptSheet, receiptStatus } from '../ReceiptSheet';
+import { payeeLabel } from '../receiptMatch';
 import { hiddenEmailReceipts, isEmailReceipt, listedReceipts, mailboxName, matchEmailReceipts, receiptTotal, scanEmail, setIgnored, unmatchedEmailReceipts, type ScanProgress } from '../mailReceipts';
 import type { Receipt } from '../types';
 
@@ -90,7 +91,7 @@ export function Receipts() {
         <Mail className="mo-mailicon" aria-label="From email" />
         <div className="mo-txn__main">
           <b>{niceName(r.merchant.toUpperCase())}</b>
-          <small>{dayLabel(r.date)}{r.paidBy === 'etransfer' && r.payee ? ` · to ${r.payee}` : ''}{r.email?.mailbox ? ` · ${mailboxName(r.email.mailbox)}` : ''}</small>
+          <small>{dayLabel(r.date)}{r.paidBy === 'etransfer' && r.payee ? ` · to ${payeeLabel(r.payee)}` : ''}{r.email?.mailbox ? ` · ${mailboxName(r.email.mailbox)}` : ''}</small>
           {r.email?.subject && <small className="mo-mailrcpt__subj">{r.email.subject}</small>}
         </div>
         <span className="mo-amt">{receiptTotal(r)}</span>

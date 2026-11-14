@@ -79,7 +79,7 @@ describe('matching email receipts', () => {
     expect(c.map(x => x.txn.id)).toEqual(['r1']);
   });
   it('an e-transfer matches the one SEND E-TFR row of its amount within 3 days', () => {
-    const et = rc({ id: 'et', merchant: 'Interac e-Transfer', payee: 'Priya Sharma', paidBy: 'etransfer', kind: 'transaction', total: 150, date: '2026-11-05' });
+    const et = rc({ id: 'et', merchant: 'Interac e-Transfer', payee: { name: 'Priya Sharma' }, paidBy: 'etransfer', kind: 'transaction', total: 150, date: '2026-11-05' });
     const send = row({ id: 'send', accountId: 'chq', merchant: 'SEND E-TFR', desc: 'SEND E-TFR ***4KD', amount: -150, date: '2026-11-06', category: 'Transfers' });
     expect(pickEmailMatches([et], [send, row({ id: 'in', accountId: 'chq', merchant: 'E-TRANSFER RECEIVED', desc: 'E-TRANSFER RECEIVED', amount: 150 })], [visa, chq]).map(x => x.txn.id)).toEqual(['send']);
     expect(pickEmailMatches([et], [{ ...send, date: '2026-11-09' }], [visa, chq])).toEqual([]);              // 4 days later
@@ -120,5 +120,14 @@ describe('the lists', () => {
   it('names a mailbox by the part before the @', () => {
     expect(mailboxName('rosh.test@example.com')).toBe('rosh.test');
     expect(mailboxName(undefined)).toBe('');
+  });
+});
+
+describe('the same purchase in both mailboxes', () => {
+  it('is listed once, and not at all once its twin matched', () => {
+    const a = { id: 'a', date: '2026-11-01', merchant: 'Canva', total: 20.7, payment: 'card', items: [], category: 'Subscriptions', photos: 0, addedAt: '', from: 'email', email: { mailbox: 'one@gmail.com', id: '1', subject: '', sender: '' } } as Receipt;
+    const b = { ...a, id: 'b', email: { ...a.email!, mailbox: 'two@gmail.com' } } as Receipt;
+    expect(unmatchedEmailReceipts([a, b]).map(r => r.id)).toEqual(['a']);
+    expect(unmatchedEmailReceipts([{ ...a, txnId: 't1' }, b])).toEqual([]);
   });
 });

@@ -128,7 +128,16 @@ export async function matchEmailReceipts(): Promise<{ linked: Receipt[]; waiting
 
 const newestFirst = (a: Receipt, b: Receipt) => b.date.localeCompare(a.date) || (b.addedAt || '').localeCompare(a.addedAt || '');
 /** "Not matched": email receipts without a bank row that haven't been put aside, newest first. */
-export const unmatchedEmailReceipts = (list: Receipt[]): Receipt[] => list.filter(r => isEmailReceipt(r) && !r.txnId && !r.ignored).sort(newestFirst);
+/** The same purchase emailed to two mailboxes: another email receipt, same day, total and shop, from another mailbox. */
+const twinOf = (r: Receipt, list: Receipt[]): Receipt | undefined => list.find(o => o !== r && isEmailReceipt(o) && o.date === r.date
+  && Math.abs(o.total - r.total) < 0.01 && o.merchant.toLowerCase() === r.merchant.toLowerCase() && o.email?.mailbox !== r.email?.mailbox);
+/** Waiting to be matched or put aside, newest first. A copy whose twin (from the other mailbox) matched or was put
+ *  aside isn't listed; of two copies neither of which has, only one is. */
+export const unmatchedEmailReceipts = (list: Receipt[]): Receipt[] => list.filter(r => {
+  if (!isEmailReceipt(r) || r.txnId || r.ignored) return false;
+  const twin = twinOf(r, list);
+  return !twin || (!twin.txnId && !twin.ignored && r.id < twin.id);
+}).sort(newestFirst);
 /** "Show hidden": the ones put aside (company card, not a receipt), newest first. */
 export const hiddenEmailReceipts = (list: Receipt[]): Receipt[] => list.filter(r => isEmailReceipt(r) && !!r.ignored).sort(newestFirst);
 /** The normal receipts list: photo receipts, and email receipts once they've matched. */
