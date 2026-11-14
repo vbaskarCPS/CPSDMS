@@ -276,7 +276,7 @@ export interface TransferSort {
    *  from an account the planner doesn't track (a move between two tracked accounts shows on both). */
   own: { count: number; total: number; byEnding: { ending: string; name?: string; count: number; total: number }[] };
   /** Account numbers to ask about: "Is ····6622 one of yours?" */
-  unknownAccounts: { ending: string; count: number; total: number; first: string; last: string; sample: string }[];
+  unknownAccounts: { ending: string; count: number; total: number; /** money sent to it, and money that came from it */ sent: number; back: number; first: string; last: string; sample: string }[];
   /** Payments to a credit card, to be changed to 'Credit card payment'. Newest first. */
   card: Txn[];
   sent: {
@@ -323,7 +323,7 @@ export function sortTransfers(all: Txn[], accounts: Account[], prefs: TransferPr
   }
   const unknownAccounts = [...asks].map(([ending, list]) => {
     const dates = list.map(t => t.date).sort();
-    return { ending, count: list.length, total: sum(list), first: dates[0], last: dates[dates.length - 1], sample: newestFirst(list)[0].desc };
+    return { ending, count: list.length, total: sum(list), sent: sum(list.filter(t => t.amount < 0)), back: sum(list.filter(t => t.amount > 0)), first: dates[0], last: dates[dates.length - 1], sample: newestFirst(list)[0].desc };
   }).sort((a, b) => b.total - a.total);
 
   // e-transfers

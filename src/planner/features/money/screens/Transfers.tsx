@@ -215,14 +215,16 @@ export function Transfers() {
               <small className="pl-muted">Money moved to or from an account number the planner doesn't know. Your own accounts (a savings, an RSP) stay transfers.</small>
               <div className="pl-list" style={{ marginTop: 8 }}>
                 {s.unknownAccounts.map(u => (
-                  <div key={u.ending} className="mo-txn">
-                    <div className="mo-txn__main">
-                      <b>Is ····{u.ending} one of yours?</b>
-                      <small>{plural(u.count, 'move')} · {money(u.total, { whole: true })} · {u.first === u.last ? day(u.first) : `${day(u.first)} – ${day(u.last)}`}</small>
-                      <small>{u.sample}</small>
+                  <div key={u.ending} style={{ padding: '10px 0' }}>
+                    {/* the question in full (it was cut off beside the buttons on a phone), the buttons under it */}
+                    <b style={{ display: 'block' }}>Is the account ending in {u.ending} one of yours?</b>
+                    <small className="pl-muted" style={{ display: 'block' }}>{plural(u.count, 'move')}, {u.first === u.last ? day(u.first) : `${day(u.first)} – ${day(u.last)}`}</small>
+                    <small className="pl-muted" style={{ display: 'block' }}>{[u.sent > 0 && `${money(u.sent, { whole: true })} sent to it`, u.back > 0 && `${money(u.back, { whole: true })} came back from it`].filter(Boolean).join(' · ')}</small>
+                    <small className="pl-muted" style={{ display: 'block', overflowWrap: 'anywhere' }}>The bank writes it as “{u.sample}”</small>
+                    <div className="pl-row" style={{ gap: 8, marginTop: 8 }}>
+                      <Button small primary onClick={() => answer(u.ending, true)}>Yes, ours</Button>
+                      <Button small onClick={() => answer(u.ending, false)}>No</Button>
                     </div>
-                    <Button small primary onClick={() => answer(u.ending, true)}>Yes, ours</Button>
-                    <Button small onClick={() => answer(u.ending, false)}>No</Button>
                   </div>
                 ))}
               </div>

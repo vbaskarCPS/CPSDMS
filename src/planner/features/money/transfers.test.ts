@@ -133,11 +133,12 @@ describe('sortTransfers', () => {
       tx('2026-03-02', 'TFR-TO 6456622', -300),
       tx('2026-06-15', 'SSV TO: 6456622', -100),
       tx('2026-04-01', 'PTS TO: 6457588', -50),
+      tx('2026-05-20', 'TFR-FR 6456622', 120),
     ];
     const s = sortTransfers(rows, ACCOUNTS);
     expect(s.unknownAccounts).toEqual([
-      { ending: '6622', count: 2, total: 400, first: '2026-03-02', last: '2026-06-15', sample: 'SSV TO: 6456622' },
-      { ending: '7588', count: 1, total: 50, first: '2026-04-01', last: '2026-04-01', sample: 'PTS TO: 6457588' },
+      { ending: '6622', count: 3, total: 520, sent: 400, back: 120, first: '2026-03-02', last: '2026-06-15', sample: 'SSV TO: 6456622' },
+      { ending: '7588', count: 1, total: 50, sent: 50, back: 0, first: '2026-04-01', last: '2026-04-01', sample: 'PTS TO: 6457588' },
     ]);
     expect(s.own.count).toBe(0);
     // yes to one, no to the other: the yes joins their accounts, the no is "not a transfer" (money to someone else)
@@ -146,7 +147,7 @@ describe('sortTransfers', () => {
     expect(prefs).toEqual({ own: ['6622'], notOwn: ['7588'] });
     const after = sortTransfers(rows, ACCOUNTS, prefs);
     expect(after.unknownAccounts).toEqual([]);
-    expect(after.own).toMatchObject({ count: 2, total: 400 });
+    expect(after.own).toMatchObject({ count: 3, total: 520 });
     expect(after.other).toMatchObject([{ key: 'acct:7588', label: 'Account ····7588 (not yours)', account: '7588', count: 1, total: 50, suggest: 'Other', keep: false }]);
     // changing their mind moves it across
     expect(answerAccount(prefs, '7588', true)).toEqual({ own: ['6622', '7588'], notOwn: [] });

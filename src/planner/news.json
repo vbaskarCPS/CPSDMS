@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-14-transfers-question", "date": "2026-11-14", "title": "Transfers: the account question in full", "for": "night",
+    "lines": ["“Is the account ending in 6622 one of yours?” is no longer cut off on a phone.", "It now also says how much was sent to that account and how much came back."] },
   { "id": "2026-11-14-sort-transfers", "date": "2026-11-14", "title": "Sort your transfers", "for": "night",
     "lines": ["Money › Transfers: everything the planner left out of spending as a transfer, sorted into what it really is.", "Say which account numbers are yours (savings, RSP): moves between your own accounts stay out of spending.", "E-transfers you send (rent!) get a category in one tap, and next month’s follow it.", "Card payments, and things that only have “transfer” in the name, are fixed in one tap too."] },
   { "id": "2026-11-14-receipt-groups", "date": "2026-11-14", "title": "Receipts: split orders, your company card, older emails", "for": "night",
