@@ -1,7 +1,7 @@
 // src/planner/features/money/ReceiptSheet.tsx — one receipt: its photos, what it says, where the money went, and the
 // bank charge it matched (or the cash row it made). From here a waiting receipt is matched by hand, a card receipt that
 // was really cash is moved to the cash wallet, the category is changed (the matched charge follows), or it's removed.
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Banknote, Link2, Link2Off, Mail, Trash2 } from 'lucide-react';
 import { Button, Sheet, useToast } from '../../ui/primitives';
 import { SPENDING_CATEGORIES } from './categories';
@@ -10,6 +10,7 @@ import { dayLabel, loadMonths, money, niceName } from './lib';
 import { addCashRow, candidatesFor, linkReceipt, loadReceiptPhotos, removeReceipt, saveReceipt, setReceiptCategory, splitByCategory, unlinkReceipt, type Candidate } from './receipts';
 import { mailboxName, receiptTotal } from './mailReceipts';
 import { foreignCurrency, payeeLabel } from './receiptMatch';
+import { accountColors } from './accountColor';
 import type { Account, Receipt, Txn } from './types';
 
 export function receiptStatus(r: Receipt): { label: string; tone: 'good' | 'amber' | 'muted' } {
@@ -34,6 +35,7 @@ export function ReceiptSheet({ receipt, others, accounts, onClose, onChange }: {
   const [toast, say] = useToast();
   const r = receipt;
   const accName = (id: string) => accounts.find(a => a.id === id)?.name || 'Bank';
+  const colours = useMemo(() => accountColors(accounts), [accounts]);   // a bank row's line: its account's colour
 
   useEffect(() => {
     setPhotos(null); setCands(null); setMatched(null); setSure(false);
@@ -108,7 +110,7 @@ export function ReceiptSheet({ receipt, others, accounts, onClose, onChange }: {
               <p><Banknote /> In the cash wallet, counted as {r.category}.</p>
             ) : r.txnId ? (
               <>
-                <p><Link2 /> Matched{matched ? `: ${accName(matched.accountId)} · ${dayLabel(matched.date)} · ${money(Math.abs(matched.amount))}` : ''}{r.matchedBy === 'auto' ? ' (automatically)' : ''}</p>
+                <p className={matched ? 'mo-acctline' : undefined} style={matched ? { ['--acct' as string]: colours[matched.accountId] } : undefined}><Link2 /> Matched{matched ? `: ${accName(matched.accountId)} · ${dayLabel(matched.date)} · ${money(Math.abs(matched.amount))}` : ''}{r.matchedBy === 'auto' ? ' (automatically)' : ''}</p>
                 {shared > 0 && <p className="pl-muted" style={{ fontSize: 13 }}>One charge for {shared + 1} emails: this one and {shared} other{shared === 1 ? '' : 's'} add up to it.</p>}
                 {(r.txnMore?.length || 0) > 0 && <p className="pl-muted" style={{ fontSize: 13 }}>Billed as {r.txnMore!.length + 1} charges that add up to {receiptTotal(r)}: this is the biggest.</p>}
                 <Button small ghost disabled={busy} onClick={() => void run(() => unlinkReceipt(r), 'Unmatched')}><Link2Off style={{ width: 16, height: 16 }} /> Not this charge</Button>
@@ -123,7 +125,7 @@ export function ReceiptSheet({ receipt, others, accounts, onClose, onChange }: {
                 <p><b>Which charge is it?</b></p>
                 <div className="pl-list">
                   {cands.slice(0, 5).map(c => (
-                    <div key={c.txn.id} className="mo-txn">
+                    <div key={c.txn.id} className="mo-txn mo-acctline" style={{ ['--acct' as string]: colours[c.txn.accountId] }}>
                       <div className="mo-txn__main"><b>{niceName(c.txn.merchant)}</b><small>{accName(c.txn.accountId)} · {dayLabel(c.txn.date)}{c.exact ? '' : foreignCurrency(r) ? ' · converted' : ' · with a tip'}</small></div>
                       <span className="mo-amt">{money(c.txn.amount)}</span>
                       <Button small primary disabled={busy} onClick={() => void run(() => linkReceipt(r, c.txn, 'hand'), `Matched · ${r.category}`)}>This one</Button>

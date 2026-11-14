@@ -8,6 +8,7 @@ import { useMoney } from '../useMoney';
 import { dayLabel, money, monthKey } from '../lib';
 import { cadenceLabel, findRecurring, monthlyCost, recurringFrom, type Recurring as Line } from '../recurring';
 import { CategoryIcon } from '../CategoryIcon';
+import { accountColors } from '../accountColor';
 import type { RecurringPrefs } from '../types';
 
 const pretty = (s: string) => s.replace(/\s+_[A-Z]\b/g, '').replace(/\b\w+/g, w => w[0] + w.slice(1).toLowerCase());
@@ -17,6 +18,7 @@ export function Recurring() {
   const { months, accounts, loading } = useMoney(recurringFrom(m), m);
   const [open, setOpen] = useState<string | null>(null);
   const accountName = (id: string) => accounts.find(a => a.id === id)?.name || '';
+  const colours = useMemo(() => accountColors(accounts), [accounts]);   // each payment's line: its account's colour
   const prefs = useDoc<RecurringPrefs>('moneyprefs', 'recurringIgnore', { ignore: [] }, 300);
   const [showHidden, setShowHidden] = useState(false);
   const [toast, say] = useToast();
@@ -63,7 +65,7 @@ export function Recurring() {
         <div className="mo-rec-history" style={{ margin: '2px 0 10px 32px' }}>
           <small className="pl-muted">{r.txns.length} charge{r.txns.length === 1 ? '' : 's'} · {money(total)} in all{r.names.length > 1 ? ` · also as ${r.names.filter(n => n !== r.merchant).map(pretty).join(', ')}` : ''}</small>
           {r.txns.map(t => (
-            <div key={t.id} className="pl-row" style={{ gap: 8, padding: '5px 0', borderTop: '1px solid var(--line)', fontSize: 13 }}>
+            <div key={t.id} className="pl-row mo-acctline" style={{ gap: 8, padding: '5px 0 5px 8px', borderTop: '1px solid var(--line)', fontSize: 13, ['--acct' as string]: colours[t.accountId] }}>
               <span style={{ width: 86, flex: 'none' }}>{dayLabel(t.date)}</span>
               <span className="pl-grow" style={{ minWidth: 0 }}>{pretty(t.merchant)}<small className="pl-muted" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{accountName(t.accountId)}{t.desc && t.desc !== t.merchant ? ` · ${t.desc}` : ''}</small></span>
               <span className="mo-amt">{money(-t.amount)}</span>
