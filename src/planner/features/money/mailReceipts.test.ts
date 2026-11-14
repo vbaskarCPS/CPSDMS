@@ -1,7 +1,7 @@
 // Receipts from email (mailReceipts.ts): where a look starts, the page loop, matching (e-transfers, other currencies,
 // rows already taken), and the Not matched / hidden lists. Nothing here touches the network.
 import { describe, expect, it, vi } from 'vitest';
-import { afterScan, hiddenEmailReceipts, listedReceipts, mailboxName, monthsBack, pickEmailMatches, runScan, scanSince, unmatchedEmailReceipts, withIgnored, type ScanCall } from './mailReceipts';
+import { afterScan, hiddenEmailReceipts, listedReceipts, mailboxName, monthsBack, pickEmailMatches, RETRY_WAITS, runScan, ScanStopped, scanSince, unmatchedEmailReceipts, withIgnored, type ScanCall } from './mailReceipts';
 import { isEtransferRow, looseCandidates, pickMatch } from './receiptMatch';
 import type { ReceiptScanPage } from '../mail/mail';
 import type { Account, Receipt, Txn } from './types';
@@ -54,6 +54,35 @@ describe('the page loop', () => {
     const none = vi.fn(async (_o: Parameters<ScanCall>[0]): Promise<ReceiptScanPage> => page({ more: true }));
     await runScan(none, '2026-01-01');
     expect(none).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a page that fails on the way', () => {
+  const page = (o: Partial<ReceiptScanPage>): ReceiptScanPage => ({ scanned: 0, found: 0, more: false, mailboxes: [], ...o });
+  const dropped = () => new Error('Failed to send a request to the Edge Function');
+  it('is asked for again, the same page, and the look carries on', async () => {
+    const answers: (ReceiptScanPage | Error)[] = [page({ scanned: 40, found: 5, more: true, cursor: 'c1' }), dropped(), dropped(), page({ scanned: 10, found: 2 })];
+    const call = vi.fn(async (_o: Parameters<ScanCall>[0]): Promise<ReceiptScanPage> => { const a = answers.shift()!; if (a instanceof Error) throw a; return a; });
+    const waits: number[] = [];
+    const p = await runScan(call, '2026-01-01', undefined, { retry: () => true, wait: async s => { waits.push(s); } });
+    expect(call.mock.calls.map(c => c[0].cursor)).toEqual([undefined, 'c1', 'c1', 'c1']);
+    expect(waits).toEqual([2, 5]);
+    expect(p).toMatchObject({ scanned: 50, found: 7, done: true });
+  });
+  it('gives up after the last wait, saying what was read and that nothing is lost', async () => {
+    let n = 0;
+    const call = vi.fn(async (_o: Parameters<ScanCall>[0]): Promise<ReceiptScanPage> => { if (n++ === 0) return page({ scanned: 40, found: 5, more: true, cursor: 'c1' }); throw dropped(); });
+    const err = await runScan(call, '2026-01-01', undefined, { retry: () => true, wait: async () => undefined }).catch(e => e);
+    expect(err).toBeInstanceOf(ScanStopped);
+    expect((err as ScanStopped).progress).toMatchObject({ scanned: 40, found: 5, done: false });
+    expect((err as Error).message).toBe('The connection dropped after 40 emails (5 receipts saved). Nothing is lost: tap again to carry on.');
+    expect(call).toHaveBeenCalledTimes(1 + 1 + RETRY_WAITS.length);
+  });
+  it('a failure that is final (signed out, not set up) isn’t asked again', async () => {
+    const call = vi.fn(async (_o: Parameters<ScanCall>[0]): Promise<ReceiptScanPage> => { throw new Error('Please sign in again.'); });
+    await expect(runScan(call, '2026-01-01', undefined, { retry: () => false, wait: async () => undefined })).rejects.toThrow('Please sign in again.');
+    expect(call).toHaveBeenCalledTimes(1);
+    await expect(runScan(call, '2026-01-01')).rejects.toThrow('Please sign in again.');   // and with no options, as before
   });
 });
 

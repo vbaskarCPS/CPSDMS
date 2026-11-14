@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-14-receipt-scan-retry", "date": "2026-11-14", "title": "Finding receipts in email keeps going", "for": "night",
+    "lines": ["If the connection drops while it reads your email, it now waits and carries on by itself, and keeps the screen on.", "If it does have to stop, nothing is lost: tap again and it picks up where it left off."] },
   { "id": "2026-11-13-icon-packs-his", "date": "2026-11-13", "title": "Five new icon sets", "for": "night",
     "lines": ["Outdoors, Tactical, Tech, Garage and Metal: a drawing for every button and tile.", "They come on with the matching looks, or pick one in Settings › Icons."] },
   { "id": "2026-11-13-five-more-looks", "date": "2026-11-13", "title": "Five more looks: future, tech, field ops, grit, metal", "for": "night",
