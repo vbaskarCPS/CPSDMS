@@ -8,6 +8,8 @@ export interface Account {
   /** The cash wallet (id 'cash'): the first day cash spending was logged. From then on an ATM withdrawal moves money
    *  into the wallet (shown as a transfer) and what's bought with the cash is the spending, so nothing counts twice. */
   cashSince?: string;
+  /** Picked on Money › Accounts ('#3b82f6'): the line down the side of its transactions (accountColor.ts). */
+  color?: string;
 }
 
 export type TxnSource = 'rule' | 'builtin' | 'ai' | 'manual' | 'plaid';   // 'plaid': Plaid's own category
