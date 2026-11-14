@@ -4,6 +4,13 @@ import { normalizeMerchant } from '../../../../supabase/functions/_shared/planne
 import { CASH_ACCOUNT_ID, type Account, type Receipt, type Txn } from './types';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+/** The same amount to the cent (a cent off is another charge: 20.17 is not 20.18). */
+const sameCents = (a: number, b: number) => Math.round(a * 100) === Math.round(b * 100);
+
+/** The bank rows a receipt holds: its row, and the others when one order was billed as several charges. */
+export const rowIds = (r: Pick<Receipt, 'txnId' | 'txnMore'>): string[] => (r.txnId ? [r.txnId, ...(r.txnMore || []).map(x => x.id)] : []);
+/** Every bank row some receipt already holds. */
+export const takenRows = (receipts: Receipt[], except?: string): Set<string> => new Set(receipts.filter(r => r.id !== except).flatMap(rowIds));
 
 /** Whole days from `a` to `b` (both YYYY-MM-DD): positive when b is later. */
 export function dayDiff(a: string, b: string): number {
@@ -40,7 +47,7 @@ export function matchCandidates(r: Pick<Receipt, 'date' | 'total' | 'tip' | 'mer
     const days = dayDiff(r.date, t.date);
     if (days < -2 || days > 7) continue;
     const paid = -t.amount;
-    const exact = Math.abs(paid - r.total) < 0.015 || (!!r.tip && Math.abs(paid - (r.total - r.tip)) < 0.015);
+    const exact = sameCents(paid, r.total) || (!!r.tip && sameCents(paid, r.total - r.tip));
     const name = Math.max(merchantScore(r.merchant, t.merchant), merchantScore(r.merchant, t.desc));
     const tipped = !exact && !r.tip && paid > r.total && paid <= r.total * 1.3 + 0.01 && name >= 0.5;
     if (!exact && !tipped) continue;
@@ -93,17 +100,21 @@ export const awaitingMatch = (r: Receipt): boolean => r.payment === 'card' && !r
 
 /** The bank row to link a receipt to without asking, or null. Photo receipts: autoPick of matchCandidates. From email,
  *  the same, except: a sent e-transfer matches the one "SEND E-TFR" row of the same amount within 3 days (the bank
- *  line has no name to compare), and a receipt in another currency is never linked by itself. */
+ *  line has no name to compare), and a receipt in another currency is linked by itself only to a charge at the same
+ *  shop for the very same figure. */
 export function pickMatch(r: Receipt, rows: Txn[], accounts: Account[], taken: Set<string>): Candidate | null {
   if (!awaitingMatch(r)) return null;
   if (r.paidBy === 'etransfer') {
     const hits = rows.filter(t => !taken.has(t.id) && t.accountId !== CASH_ACCOUNT_ID && !t.toWallet && isEtransferRow(t)
-      && Math.abs(-t.amount - r.total) < 0.015 && Math.abs(dayDiff(r.date, t.date)) <= 3);
+      && sameCents(-t.amount, r.total) && Math.abs(dayDiff(r.date, t.date)) <= 3);
     if (hits.length === 1) { const days = dayDiff(r.date, hits[0].date); return { txn: hits[0], score: round2(60 - Math.abs(days) * 3), exact: true, days, name: 0 }; }
     if (hits.length > 1) return null;   // two e-transfers of the same amount: the person's pick
   }
-  if (foreignCurrency(r)) return null;
-  return autoPick(matchCandidates(r, rows, accounts, taken), r.total);
+  const cands = matchCandidates(r, rows, accounts, taken);
+  // another currency: the bank's amount is converted, so it isn't linked by itself, unless a charge at that shop is
+  // the very same figure (then the email's currency was misread: a converted amount never lands on it to the cent)
+  if (foreignCurrency(r)) { const same = cands.filter(c => c.exact && c.name >= 0.5); return same.length === 1 ? same[0] : null; }
+  return autoPick(cands, r.total);
 }
 
 /** For "Match…" on a receipt in another currency: the charges at a store with a similar name, any amount, from 2

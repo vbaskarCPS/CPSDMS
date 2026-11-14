@@ -1,4 +1,8 @@
 [
+  { "id": "2026-11-14-sort-transfers", "date": "2026-11-14", "title": "Sort your transfers", "for": "night",
+    "lines": ["Money › Transfers: everything the planner left out of spending as a transfer, sorted into what it really is.", "Say which account numbers are yours (savings, RSP): moves between your own accounts stay out of spending.", "E-transfers you send (rent!) get a category in one tap, and next month’s follow it.", "Card payments, and things that only have “transfer” in the name, are fixed in one tap too."] },
+  { "id": "2026-11-14-receipt-groups", "date": "2026-11-14", "title": "Receipts: split orders, your company card, older emails", "for": "night",
+    "lines": ["An order billed as 2 or more charges (Amazon charges as each parcel ships) now shows up with its charges: tap Match, or Match all.", "Several emails that are one charge can be matched together too: tap Combine and tick them.", "Mark one receipt as Company card and that card’s last 4 digits are remembered: its other receipts are put aside too.", "Emails from before your card’s history sit in their own list, and an order’s extra shipping emails are no longer listed."] },
   { "id": "2026-11-14-receipt-scan-retry", "date": "2026-11-14", "title": "Finding receipts in email keeps going", "for": "night",
     "lines": ["If the connection drops while it reads your email, it now waits and carries on by itself, and keeps the screen on.", "If it does have to stop, nothing is lost: tap again and it picks up where it left off."] },
   { "id": "2026-11-13-icon-packs-his", "date": "2026-11-13", "title": "Five new icon sets", "for": "night",

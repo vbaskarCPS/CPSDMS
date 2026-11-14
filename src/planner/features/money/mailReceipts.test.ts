@@ -101,7 +101,8 @@ describe('matching email receipts', () => {
     expect(pickEmailMatches([rc({ ignored: 'company' }), rc({ id: 'x', txnId: 'other' }), { ...rc({ id: 'p' }), from: 'photo' }], [row({})], [visa])).toEqual([]);
   });
   it('another currency is matched by hand, not by itself', () => {
-    expect(pickMatch(rc({ currency: 'USD', total: 42.17 }), [row({})], [visa], new Set())).toBeNull();
+    expect(pickMatch(rc({ currency: 'USD', total: 42.17 }), [row({ amount: -57.9 })], [visa], new Set())).toBeNull();   // the bank's amount is converted
+    expect(pickMatch(rc({ currency: 'USD', total: 42.17 }), [row({})], [visa], new Set())?.txn.id).toBe('r1');          // the very same figure at that shop: the currency was misread
     expect(pickMatch(rc({ currency: 'cad' }), [row({})], [visa], new Set())?.txn.id).toBe('r1');
     // the hand match looks by name, any amount
     const c = looseCandidates(rc({ currency: 'USD', merchant: 'Amazon.com', total: 30 }), [row({ amount: -41.88, merchant: 'AMAZON.COM', desc: 'AMAZON.COM*AB12' }), row({ id: 'esso', merchant: 'ESSO', desc: 'ESSO' })], new Set());
@@ -126,7 +127,7 @@ describe('matching email receipts', () => {
 describe('the lists', () => {
   const list = [
     rc({ id: 'old', date: '2026-10-01' }),
-    rc({ id: 'new', date: '2026-11-10' }),
+    rc({ id: 'new', date: '2026-11-10', total: 18.5 }),   // its own amount: the same total within days would be the same purchase
     rc({ id: 'matched', txnId: 'r9' }),
     rc({ id: 'company', ignored: 'company' }),
     { ...rc({ id: 'photo' }), from: undefined, email: undefined },

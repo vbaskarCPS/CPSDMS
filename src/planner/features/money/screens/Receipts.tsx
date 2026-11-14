@@ -2,9 +2,13 @@
 // charge, waiting for the bank, or cash. Opening the screen first matches any waiting receipt whose charge has come in.
 // "From your email" finds purchase emails in the person's connected mailboxes (mailReceipts.ts) and matches them to the
 // bank; the ones that don't match wait in "Not matched", to be matched by hand or put aside (company card, not a receipt).
+// One order billed as several charges (a shop that charges as each parcel ships) is suggested with its charges, and
+// several emails that add up to one charge can be matched together (suggested, or picked with "Combine"); a company
+// card is remembered by its last four digits; emails older than the card's rows in the planner are kept in their own
+// list, since their charge can't be on that card here (receiptGroups.ts).
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Banknote, Camera, Mail, Receipt as ReceiptIcon } from 'lucide-react';
+import { Banknote, Camera, Layers, Mail, Receipt as ReceiptIcon } from 'lucide-react';
 import { Button, Card, Empty, Header, Page, useToast } from '../../../ui/primitives';
 import { mailboxes as loadMailboxes, type Mailbox } from '../../mail/mail';
 import { CategoryIcon } from '../CategoryIcon';
@@ -12,9 +16,10 @@ import { dayLabel, money, monthKey, monthLabel, niceName, shiftMonth } from '../
 import { useMoney } from '../useMoney';
 import { loadReceipts, matchPending } from '../receipts';
 import { ReceiptSheet, receiptStatus } from '../ReceiptSheet';
-import { payeeLabel } from '../receiptMatch';
-import { hiddenEmailReceipts, isEmailReceipt, listedReceipts, mailboxName, matchEmailReceipts, receiptTotal, scanEmail, ScanStopped, setIgnored, unmatchedEmailReceipts, type ScanProgress } from '../mailReceipts';
-import type { Receipt } from '../types';
+import { payeeLabel, takenRows } from '../receiptMatch';
+import { emailLists, hiddenEmailReceipts, isEmailReceipt, listedReceipts, loadMatchContext, mailboxName, markCompany, matchEmailReceipts, matchGroup, matchSplit, receiptTotal, scanEmail, ScanStopped, setIgnored, unmarkCompany, type MatchContext, type ScanProgress } from '../mailReceipts';
+import { chargesFor, suggestGroups, suggestSplits } from '../receiptGroups';
+import type { Receipt, Txn } from '../types';
 
 export function Receipts() {
   const { accounts } = useMoney('0000', '0000');
@@ -28,6 +33,11 @@ export function Receipts() {
   const [scanNote, setScanNote] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [ctx, setCtx] = useState<MatchContext | null>(null);          // the bank's rows, for groups and card history
+  const [combine, setCombine] = useState(false);                      // ticking emails to match as one charge
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());     // suggestions answered "Not these" (this visit)
+  const [showOlder, setShowOlder] = useState(false);                  // the ones from before the card's rows begin
 
   useEffect(() => {
     let on = true;
@@ -39,7 +49,9 @@ export function Receipts() {
     setScanning(true); setScan(null); setScanNote(null);
     try {
       const p = await scanEmail(setScan);
-      const res = await matchEmailReceipts();
+      const fresh = await loadMatchContext().catch(() => ctx);
+      if (fresh) setCtx(fresh);
+      const res = await matchEmailReceipts(fresh || undefined);
       setList(await loadReceipts(shiftMonth(monthKey(), -24)));
       const bad = p.mailboxes.filter(m => m.problem);
       setScanNote(`${p.found ? `${p.found} receipt${p.found === 1 ? '' : 's'} found` : 'No new receipts'} · ${res.linked.length} matched to the bank${res.waiting ? ` · ${res.waiting} not matched` : ''}`
@@ -54,9 +66,50 @@ export function Receipts() {
   async function ignore(r: Receipt, why: Receipt['ignored'] | null) {
     setBusyId(r.id);
     try {
-      const next = await setIgnored(r, why);
+      const all = list || [];
+      // "Company card" remembers the card by its last four digits and takes its other receipts along; Undo brings them back
+      const res = why === 'company' ? await markCompany(r, all, accounts)
+        : !why && r.ignored === 'company' ? await unmarkCompany(r, all, accounts)
+        : { changed: [await setIgnored(r, why)], card: null };
+      const by = new Map(res.changed.map(x => [x.id, x]));
+      setList(l => (l || []).map(x => by.get(x.id) || x));
+      const more = res.changed.length - 1;
+      say(why === 'company' ? (res.card ? `Company card ····${res.card}${more > 0 ? `: ${more} more put aside` : ' remembered'}` : 'Hidden: company card')
+        : why ? 'Hidden: not a receipt'
+        : res.card ? `····${res.card} is no longer a company card${more > 0 ? `: ${more + 1} back in Not matched` : ''}` : 'Back in Not matched', 'good');
+    } catch (e) { say(e instanceof Error ? e.message : 'Could not save', 'bad'); }
+    finally { setBusyId(null); }
+  }
+  /** One order billed as several charges: link it to all of them. */
+  async function matchCharges(r: Receipt, txns: Txn[]) {
+    setBusyId(r.id);
+    try {
+      const next = await matchSplit(r, txns);
       setList(l => (l || []).map(x => (x.id === r.id ? next : x)));
-      say(why === 'company' ? 'Hidden: company card' : why ? 'Hidden: not a receipt' : 'Back in Not matched', 'good');
+      say(`Matched to ${txns.length} charge${txns.length === 1 ? '' : 's'}`, 'good');
+    } catch (e) { say(e instanceof Error ? e.message : 'Could not save', 'bad'); }
+    finally { setBusyId(null); }
+  }
+  async function matchAllSplits() {
+    setBusyId('all-splits');
+    try {
+      const done: Receipt[] = [];
+      for (const sp of splits) done.push(await matchSplit(sp.receipt, sp.rows));
+      const by = new Map(done.map(x => [x.id, x]));
+      setList(l => (l || []).map(x => by.get(x.id) || x));
+      say(`${done.length} orders matched to their charges`, 'good');
+    } catch (e) { say(e instanceof Error ? e.message : 'Could not save', 'bad'); }
+    finally { setBusyId(null); }
+  }
+  /** Several emails that are one card charge: link them all to it. */
+  async function matchTogether(rs: Receipt[], txn: Txn) {
+    setBusyId(txn.id);
+    try {
+      const next = await matchGroup(rs, txn);
+      const by = new Map(next.map(x => [x.id, x]));
+      setList(l => (l || []).map(x => by.get(x.id) || x));
+      setPicked(new Set()); setCombine(false);
+      say(`${next.length} emails matched to the ${money(Math.abs(txn.amount))} charge`, 'good');
     } catch (e) { say(e instanceof Error ? e.message : 'Could not save', 'bad'); }
     finally { setBusyId(null); }
   }
@@ -66,7 +119,13 @@ export function Receipts() {
     void (async () => {
       try {
         const res = await matchPending().catch(() => ({ linked: [] as Receipt[], waiting: 0 }));
-        if (on && res.linked.length) say(`${res.linked.length} receipt${res.linked.length === 1 ? '' : 's'} matched to the bank`, 'good');
+        // the bank's rows (for groups and how far back each card goes), then the email receipts: company cards put
+        // aside, clear matches linked
+        const c = await loadMatchContext().catch(() => null);
+        if (on && c) setCtx(c);
+        const mail = c ? await matchEmailReceipts(c).catch(() => ({ linked: [] as Receipt[], waiting: 0, company: 0 })) : { linked: [] as Receipt[], waiting: 0, company: 0 };
+        const matched = res.linked.length + mail.linked.length;
+        if (on && (matched || mail.company)) say([matched ? `${matched} receipt${matched === 1 ? '' : 's'} matched to the bank` : '', mail.company ? `${mail.company} on a company card put aside` : ''].filter(Boolean).join(' · '), 'good');
         const rs = await loadReceipts(shiftMonth(monthKey(), -24));
         if (on) setList(rs);
       } catch (e) { if (on) { setError(e instanceof Error ? e.message : 'Could not load'); setList([]); } }
@@ -86,8 +145,21 @@ export function Receipts() {
     return out;
   }, [list]);
   const waiting = listedReceipts(list || []).filter(r => r.payment === 'card' && !r.txnId).length;
-  const unmatched = useMemo(() => unmatchedEmailReceipts(list || []), [list]);
+  const lists = useMemo(() => emailLists(list || [], ctx?.history || []), [list, ctx]);
+  const unmatched = lists.unmatched;
   const hidden = useMemo(() => hiddenEmailReceipts(list || []), [list]);
+  const taken = useMemo(() => takenRows(list || []), [list]);
+  const older = useMemo(() => lists.older.map(o => o.r), [lists]);
+  // one order billed as several charges (a shop that charges as each parcel ships): the older ones count too
+  const splits = useMemo(() => (ctx ? suggestSplits([...unmatched, ...older], ctx.rows, list || []).filter(sp => !skipped.has(sp.receipt.id)) : []), [ctx, unmatched, older, list, skipped]);
+  const inSplit = useMemo(() => new Set(splits.flatMap(sp => sp.rows.map(t => t.id))), [splits]);
+  // emails that add up to one charge (orders billed together), and the charges for a group ticked by hand
+  const groups = useMemo(() => (ctx ? suggestGroups(unmatched, ctx.rows, taken).filter(g => !skipped.has(g.txn.id) && !inSplit.has(g.txn.id)) : []), [ctx, unmatched, taken, skipped, inSplit]);
+  const chosen = useMemo(() => unmatched.filter(r => picked.has(r.id)), [unmatched, picked]);
+  const charges = useMemo(() => (ctx && chosen.length >= 2 ? chargesFor(chosen, ctx.rows, taken) : []), [ctx, chosen, taken]);
+  const accName = (id: string) => accounts.find(a => a.id === id)?.name || 'Bank';
+  const olderFrom = lists.older.length ? [...new Map(lists.older.map(o => [o.account.id, o.account])).values()] : [];
+  const tick = (id: string) => setPicked(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const noBox = boxes !== null && boxes.length === 0;
   const emailRow = (r: Receipt, isHidden: boolean) => (
     <div key={r.id} className="mo-mailrcpt">
@@ -95,7 +167,7 @@ export function Receipts() {
         <Mail className="mo-mailicon" aria-label="From email" />
         <div className="mo-txn__main">
           <b>{niceName(r.merchant.toUpperCase())}</b>
-          <small>{dayLabel(r.date)}{r.paidBy === 'etransfer' && r.payee ? ` · to ${payeeLabel(r.payee)}` : ''}{r.email?.mailbox ? ` · ${mailboxName(r.email.mailbox)}` : ''}</small>
+          <small>{dayLabel(r.date)}{r.paidBy === 'etransfer' && r.payee ? ` · to ${payeeLabel(r.payee)}` : ''}{r.cardLast4 ? ` · card ····${r.cardLast4}` : ''}{r.email?.mailbox ? ` · ${mailboxName(r.email.mailbox)}` : ''}</small>
           {r.email?.subject && <small className="mo-mailrcpt__subj">{r.email.subject}</small>}
         </div>
         <span className="mo-amt">{receiptTotal(r)}</span>
@@ -103,9 +175,13 @@ export function Receipts() {
       <div className="mo-mailrcpt__acts">
         {isHidden ? (
           <>
-            <span className="mo-status mo-status--muted">{r.ignored === 'company' ? 'Company card' : 'Not a receipt'}</span>
+            <span className="mo-status mo-status--muted">{r.ignored === 'company' ? `Company card${r.cardLast4 ? ` ····${r.cardLast4}` : ''}` : 'Not a receipt'}</span>
             <Button small ghost disabled={busyId === r.id} onClick={() => void ignore(r, null)}>Undo</Button>
           </>
+        ) : combine ? (
+          <label className="pl-row" style={{ gap: 8, fontSize: 13 }}>
+            <input type="checkbox" checked={picked.has(r.id)} onChange={() => tick(r.id)} style={{ width: 20, height: 20 }} /> Part of the charge
+          </label>
         ) : (
           <>
             <Button small ghost disabled={busyId === r.id} onClick={() => void ignore(r, 'company')}>Company card</Button>
@@ -135,14 +211,99 @@ export function Receipts() {
         {noBox && <p className="pl-muted" style={{ fontSize: 13, marginTop: 8 }}>Connect a mailbox first in <Link to="/settings/mail">Settings › Email</Link>.</p>}
         {scanning && <p className="pl-muted" style={{ fontSize: 13, marginTop: 8 }}>{scan ? `Read ${scan.scanned} emails · ${scan.found} receipts` : 'Opening your mailboxes…'}{scan?.mailboxes.filter(m => m.problem).map(m => ` · ${mailboxName(m.address)}: ${m.problem}`).join('')}</p>}
         {!scanning && scanNote && <p style={{ fontSize: 13, marginTop: 8 }}>{scanNote}</p>}
+        {splits.length > 0 && (
+          <>
+            <div className="mo-day" style={{ marginTop: 12 }}><span>Billed as several charges ({splits.length})</span>
+              {splits.length > 1 && <button type="button" className="mo-linkbtn" disabled={busyId === 'all-splits'} onClick={() => void matchAllSplits()}>Match all {splits.length}</button>}</div>
+            <div className="pl-list">
+              {splits.map(sp => (
+                <div key={sp.receipt.id} className="mo-mailrcpt">
+                  <div className="mo-txn">
+                    <Layers className="mo-mailicon" aria-hidden />
+                    <div className="mo-txn__main">
+                      <b>{niceName(sp.receipt.merchant.toUpperCase())} · {receiptTotal(sp.receipt)}</b>
+                      <small>{dayLabel(sp.receipt.date)}{sp.receipt.email?.subject ? ` · ${sp.receipt.email.subject}` : ''}</small>
+                      {sp.rows.map(t => <small key={t.id} className="mo-mailrcpt__subj">Charge: {dayLabel(t.date)} · {money(Math.abs(t.amount))} · {accName(t.accountId)}</small>)}
+                      {sp.covered.map(t => <small key={t.id} className="mo-mailrcpt__subj">Has its own shipping email: {dayLabel(t.date)} · {money(Math.abs(t.amount))}</small>)}
+                    </div>
+                  </div>
+                  <div className="mo-mailrcpt__acts">
+                    <Button small ghost disabled={busyId === sp.receipt.id} onClick={() => setSkipped(x => new Set(x).add(sp.receipt.id))}>Not these</Button>
+                    <Button small primary disabled={busyId === sp.receipt.id || busyId === 'all-splits'} onClick={() => void matchCharges(sp.receipt, sp.rows)}>Match {sp.rows.length === 1 ? 'the charge' : `${sp.rows.length} charges`}</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {groups.length > 0 && (
+          <>
+            <div className="mo-day" style={{ marginTop: 12 }}><span>Add up to one charge ({groups.length})</span></div>
+            <div className="pl-list">
+              {groups.map(g => (
+                <div key={g.txn.id} className="mo-mailrcpt">
+                  <div className="mo-txn">
+                    <Layers className="mo-mailicon" aria-hidden />
+                    <div className="mo-txn__main">
+                      <b>{niceName(g.txn.merchant)} · {money(Math.abs(g.txn.amount))}</b>
+                      <small>Charged {dayLabel(g.txn.date)} · {accName(g.txn.accountId)} · {g.receipts.length} emails add up to it</small>
+                      {g.receipts.map(r => <small key={r.id} className="mo-mailrcpt__subj">{dayLabel(r.date)} · {receiptTotal(r)} · {r.email?.subject || niceName(r.merchant.toUpperCase())}</small>)}
+                    </div>
+                  </div>
+                  <div className="mo-mailrcpt__acts">
+                    <Button small ghost disabled={busyId === g.txn.id} onClick={() => setSkipped(x => new Set(x).add(g.txn.id))}>Not these</Button>
+                    <Button small primary disabled={busyId === g.txn.id} onClick={() => void matchTogether(g.receipts, g.txn)}>Match together</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
         {(unmatched.length > 0 || hidden.length > 0) && (
           <>
             <div className="mo-day" style={{ marginTop: 12 }}><span>Not matched ({unmatched.length})</span>
-              {hidden.length > 0 && <button type="button" className="mo-linkbtn" onClick={() => setShowHidden(v => !v)}>{showHidden ? 'Hide hidden' : `Show hidden (${hidden.length})`}</button>}</div>
+              <span style={{ display: 'flex', gap: 12 }}>
+                {unmatched.length > 1 && <button type="button" className="mo-linkbtn" onClick={() => { setCombine(v => !v); setPicked(new Set()); }}>{combine ? 'Done combining' : 'Combine'}</button>}
+                {hidden.length > 0 && <button type="button" className="mo-linkbtn" onClick={() => setShowHidden(v => !v)}>{showHidden ? 'Hide hidden' : `Show hidden (${hidden.length})`}</button>}
+              </span></div>
+            {combine && (
+              <div className="mo-rcpt-match" style={{ marginBottom: 8 }}>
+                {chosen.length < 2 ? <p className="pl-muted">Tick the emails that were billed as one card charge (the charge usually posts a day later).</p> : (
+                  <>
+                    <p><b>{chosen.length} emails · {money(chosen.reduce((s, r) => s + r.total, 0))}</b>{charges.length ? ': which charge is it?' : ''}</p>
+                    {charges.length === 0 ? <p className="pl-muted">No charge near that total from 2 days before to a week after. Tick or untick emails, or wait for the bank.</p> : (
+                      <div className="pl-list">
+                        {charges.map(c => (
+                          <button key={c.txn.id} type="button" className="mo-txn mo-rcpt-row" disabled={busyId === c.txn.id} onClick={() => void matchTogether(chosen, c.txn)}>
+                            <div className="mo-txn__main">
+                              <b>{niceName(c.txn.merchant)}</b>
+                              <small>{dayLabel(c.txn.date)} · {accName(c.txn.accountId)}</small>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                              <span className="mo-amt">{money(Math.abs(c.txn.amount))}</span>
+                              <span className={`mo-status mo-status--${c.diff === 0 ? 'good' : 'amber'}`}>{c.diff === 0 ? 'Exact' : `${money(Math.abs(c.diff))} ${c.diff > 0 ? 'more' : 'less'}`}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             <div className="pl-list">{unmatched.map(r => emailRow(r, false))}</div>
             {showHidden && <div className="pl-list" style={{ opacity: 0.75 }}>{hidden.map(r => emailRow(r, true))}</div>}
           </>
         )}
+        {older.length > 0 && (
+          <>
+            <div className="mo-day" style={{ marginTop: 12 }}><span>Before your card history ({older.length})</span>
+              <button type="button" className="mo-linkbtn" onClick={() => setShowOlder(v => !v)}>{showOlder ? 'Hide' : 'Show'}</button></div>
+            <p className="pl-muted" style={{ fontSize: 12 }}>Older than {olderFrom.map(a => `${a.name}’s first row here (${dayLabel(a.first)})`).join(', ')}, so its charges can’t be there. They still match if they were paid from another account, or once older statements are added.</p>
+            {showOlder && <div className="pl-list" style={{ opacity: 0.85 }}>{older.map(r => emailRow(r, false))}</div>}
+          </>
+        )}
+        {lists.same.length > 0 && <p className="pl-muted" style={{ fontSize: 12, marginTop: 4 }}>{lists.same.length} not listed: the same purchase as another email (an order and its shipping emails).</p>}
       </Card>
       {list && listedReceipts(list).length === 0 ? (
         <Card><Empty icon={<ReceiptIcon />} title="No receipts yet" blurb="Snap a receipt or a payment screenshot: the store, total and what was bought are read for you, and the card charge gets a better category." /></Card>
