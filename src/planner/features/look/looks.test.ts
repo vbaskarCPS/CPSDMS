@@ -8,12 +8,13 @@ import { BUTTON_SHAPES, CARD_SHAPES, EDGES, FACES, LOOKS, LOOK_IDS, LOOK_ONLY_VA
 const all = lookList();
 const prefs = (over: Partial<LookPrefs> = {}): LookPrefs => ({ ...noPrefs(), ...over });
 
-describe('the 21 looks', () => {
+describe('the 26 looks', () => {
   it('are the ones Rosh listed, under the names the other parts of the planner know them by', () => {
     expect([...LOOK_IDS]).toEqual(['woodland', 'cottagecore', 'pastels', 'christmas', 'autumn', 'academia', 'celestial', 'minimal',
-      'french', 'botanical', 'countryside', 'regency', 'coastal', 'spring', 'fairy', 'halloween', 'winter', 'mediterranean', 'retro70s', 'stationery', 'coquette']);
+      'french', 'botanical', 'countryside', 'regency', 'coastal', 'spring', 'fairy', 'halloween', 'winter', 'mediterranean', 'retro70s', 'stationery', 'coquette',
+      'lodge', 'harbour', 'whisky', 'graphite', 'expedition']);
     expect(lookList('main').map(l => l.id)).toEqual(['woodland', 'cottagecore', 'pastels', 'christmas', 'autumn', 'academia', 'celestial', 'minimal']);
-    expect(lookList('more')).toHaveLength(13);
+    expect(lookList('more')).toHaveLength(18);
     for (const id of LOOK_IDS) expect(LOOKS[id].id).toBe(id);
   });
   it('each has a heading face no other look has', () => {

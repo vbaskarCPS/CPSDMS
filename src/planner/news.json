@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-13-five-looks", "date": "2026-11-13", "title": "Five new looks in Theme Studio", "for": "night",
+    "lines": ["Mountain lodge, Navy harbour, Whisky & oak, Graphite & steel and Expedition & field notes.", "Each has its own colours, type, wallpaper and icons: Settings › Theme Studio."] },
   { "id": "2026-11-13-mail-receipts", "date": "2026-11-13", "title": "Receipts from your email", "for": "night",
     "lines": ["Money › Receipts: tap “Find receipts in email” to read order emails and e-transfers from both your mailboxes.", "They’re matched to the bank by themselves, and the charge takes the receipt’s category.", "The rest wait in Not matched: tap Match…, or Company card to put a work purchase aside."] },
   { "id": "2026-11-13-recurring-beat", "date": "2026-11-13", "title": "Recurring is more accurate",

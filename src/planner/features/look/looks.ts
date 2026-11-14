@@ -1,4 +1,4 @@
-// src/planner/features/look/looks.ts — the looks: 21 ways the whole planner can be dressed, and the working-out of
+// src/planner/features/look/looks.ts — the looks: 26 ways the whole planner can be dressed, and the working-out of
 // what a choice means on a given screen. A look is its own colours (one set: a look is itself whatever the phone's
 // light or dark setting), its own type, the shape of its cards and buttons, and a background drawn from art.ts.
 // A person picks one for the whole planner and, if they like, a different one for any section; shapes and type can
@@ -50,6 +50,11 @@ export const FACES = {
   shrikhand: { family: 'Shrikhand', weights: [400], stack: SERIF, kind: 'display' },
   yeseva: { family: 'Yeseva One', weights: [400], stack: SERIF, kind: 'display' },
   fraunces: { family: 'Fraunces', weights: [500, 700], stack: SERIF, kind: 'display' },
+  zilla: { family: 'Zilla Slab', weights: [600, 700], stack: SERIF, kind: 'display' },
+  oswald: { family: 'Oswald', weights: [500, 600], stack: SANS, kind: 'display' },
+  abril: { family: 'Abril Fatface', weights: [400], stack: SERIF, kind: 'display' },
+  rajdhani: { family: 'Rajdhani', weights: [600, 700], stack: SANS, kind: 'display' },
+  bitter: { family: 'Bitter', weights: [600, 700], stack: SERIF, kind: 'display' },
   // text: all easy to read at 14 to 16 px
   nunito: { family: 'Nunito', weights: [400, 500, 600, 700], stack: ROUND, kind: 'text' },
   lora: { family: 'Lora', weights: [400, 500, 600, 700], stack: SERIF, kind: 'text' },
@@ -100,7 +105,8 @@ export interface LookBg {
 }
 
 export const LOOK_IDS = ['woodland', 'cottagecore', 'pastels', 'christmas', 'autumn', 'academia', 'celestial', 'minimal',
-  'french', 'botanical', 'countryside', 'regency', 'coastal', 'spring', 'fairy', 'halloween', 'winter', 'mediterranean', 'retro70s', 'stationery', 'coquette'] as const;
+  'french', 'botanical', 'countryside', 'regency', 'coastal', 'spring', 'fairy', 'halloween', 'winter', 'mediterranean', 'retro70s', 'stationery', 'coquette',
+  'lodge', 'harbour', 'whisky', 'graphite', 'expedition'] as const;
 export type LookId = (typeof LOOK_IDS)[number];
 /** The planner's own look: navy and gold for Vijay, plum and pink for Rosh, light or dark with the phone. */
 export const OWN = 'own' as const;
@@ -119,7 +125,7 @@ export interface Look {
   bg: LookBg;
 }
 
-// ───────────────────────── the 21 looks ─────────────────────────
+// ───────────────────────── the 26 looks ─────────────────────────
 
 const L = (bg: string, bg2: string, ink: string, ink2: string, line: string, accent: string, accentInk: string, amber: string, amber2: string): Palette => ({ scheme: 'light', bg, bg2, ink, ink2, line, accent, accentInk, amber, amber2 });
 const D = (bg: string, bg2: string, ink: string, ink2: string, line: string, accent: string, accentInk: string, amber: string, amber2: string): Palette => ({ scheme: 'dark', bg, bg2, ink, ink2, line, accent, accentInk, amber, amber2 });
@@ -292,6 +298,47 @@ export const LOOKS: Record<LookId, Look> = {
     type: { display: 'yeseva', body: 'lora', hand: 'dancing', headWeight: 400, headScale: 0.98, labelSize: 19 },
     shapes: { card: 22, button: 999, edge: 'stitch', shadow: 'soft' },
     bg: { paper: [{ kind: 'dots', size: 26, fade: 0.6 }, { kind: 'scatter', motifs: ['bow', 'heart', 'cherries', 'pearls', 'swan', 'rose'], across: 4, size: 300 }], strength: 42, top: { kind: 'rule', motif: 'bow', colors: ['#f3a7ba', '#d9667f', '#f3a7ba'] }, corner: ['swan', 'bow', 'cherries', 'heart'], bar: 'scallop' },
+  },
+  // ── five for him (13 Nov) ──
+  lodge: {
+    id: 'lodge', name: 'Mountain lodge', short: 'Lodge', group: 'more', blurb: 'Pine, plaid and a fire going',
+    palette: D('#172019', '#202b23', '#efe7d6', '#c2b9a3', '#36443a', '#d08a43', '#172019', '#d9a55a', '#e8c27e'),
+    art: ['#4f7a5a', '#9a4e2e', '#d08a43', '#7c6448', '#5a6b52'],
+    type: { display: 'zilla', body: 'nunito', headWeight: 700, headScale: 1.04 },
+    shapes: { card: 10, button: 10, edge: 'stitch', shadow: 'soft' },
+    bg: { paper: [{ kind: 'plaid', size: 96, fade: 0.55, colors: ['#3b4d3f', '#5a2f22', '#2a362d'] }, { kind: 'scatter', motifs: ['pine', 'deer', 'fox', 'acorn', 'leaf', 'pine'], across: 4, size: 300 }], grain: 0.6, strength: 40, top: { kind: 'zigzag', colors: ['#4f7a5a', '#9a4e2e'] }, corner: ['pine@0', 'deer@3', 'pine@0', 'fox@1'] },
+  },
+  harbour: {
+    id: 'harbour', name: 'Navy harbour', short: 'Harbour', group: 'more', blurb: 'Rope, anchors and signal flags',
+    palette: L('#eef1f4', '#ffffff', '#132338', '#475a70', '#d3dbe4', '#1e3a5f', '#ffffff', '#e0b04a', '#7a5a12'),
+    art: ['#7f98b3', '#c9654f', '#d9b25a', '#9fb3c8'],
+    type: { display: 'oswald', body: 'inter', headWeight: 600, headScale: 0.98, headSpacing: '0.04em', headCaps: true },
+    shapes: { card: 6, button: 6, edge: 'double', shadow: 'none' },
+    bg: { paper: [{ kind: 'stripes', size: 64, fade: 0.6, colors: ['#dfe6ee'] }, { kind: 'scatter', motifs: ['anchor', 'sailboat', 'star', 'fish', 'anchor', 'shell'], across: 4, size: 320 }], grain: 0.3, strength: 38, top: { kind: 'bunting', colors: ['#1e3a5f', '#b8432f', '#d9b25a'] }, corner: ['sailboat@0', 'anchor@1', 'fish@3', 'star@2'], bar: 'wave' },
+  },
+  whisky: {
+    id: 'whisky', name: 'Whisky & oak', short: 'Whisky', group: 'more', blurb: 'Leather, brass and amber light',
+    palette: D('#1d140e', '#281c14', '#f2e6d2', '#c8b59a', '#45331f', '#c98a2e', '#1d140e', '#d9a24a', '#e8bf74'),
+    art: ['#7a4a26', '#c98a2e', '#5c2a1e', '#a5875c', '#3c2a1a'],
+    type: { display: 'abril', body: 'lora', headWeight: 400, headScale: 1.0 },
+    shapes: { card: 4, button: 4, edge: 'frame', shadow: 'lifted' },
+    bg: { paper: [{ kind: 'stripes', size: 40, fade: 0.75, colors: ['#241912'] }, { kind: 'scatter', motifs: ['key', 'book', 'globe', 'candle', 'laurel'], across: 4, size: 320, fade: 0.8 }], grain: 0.9, strength: 36, top: { kind: 'rule', motif: 'key', colors: ['#c98a2e', '#7a4a26'] }, corner: ['globe@1', 'book@0', 'candle@1', 'key@1'] },
+  },
+  graphite: {
+    id: 'graphite', name: 'Graphite & steel', short: 'Graphite', group: 'more', blurb: 'Charcoal, steel blue and clean lines',
+    palette: D('#16181b', '#1f2226', '#eceff2', '#aeb4bb', '#33383e', '#5b9bd5', '#0f1215', '#c9d1d9', '#e3e8ed'),
+    art: ['#3a4048', '#5b9bd5', '#8a939d'],
+    type: { display: 'rajdhani', body: 'inter', headWeight: 700, headScale: 1.04, headSpacing: '0.06em', headCaps: true },
+    shapes: { card: 3, button: 3, edge: 'hairline', shadow: 'none' },
+    bg: { paper: [{ kind: 'grid', size: 48, fade: 0.4, colors: ['#2c3238'] }], grain: 0.2, strength: 45 },
+  },
+  expedition: {
+    id: 'expedition', name: 'Expedition & field notes', short: 'Expedition', group: 'more', blurb: 'Maps, compasses and canvas',
+    palette: L('#ece5d4', '#f8f3e6', '#2a2b1f', '#5c5a45', '#d6ccb3', '#556b2f', '#ffffff', '#c9a14a', '#6e5212'),
+    art: ['#556b2f', '#8a6a3a', '#b5452b', '#6d7f8c', '#c9a14a'],
+    type: { display: 'bitter', body: 'inter', headWeight: 700, headScale: 0.98 },
+    shapes: { card: 8, button: 8, edge: 'dashed', shadow: 'soft' },
+    bg: { paper: [{ kind: 'grid', size: 56, fade: 0.65, colors: ['#d9cfb6'] }, { kind: 'scatter', motifs: ['globe', 'pine', 'sun', 'key', 'bird', 'leaf'], across: 4, size: 320 }], grain: 0.55, strength: 40, top: { kind: 'tape', colors: ['#c9b98f', '#556b2f'] }, corner: ['globe@0', 'pine@0', 'bird@2', 'sun@4'] },
   },
 };
 /** The planner's own colours, as planner.css has them (a test keeps the two the same): for its tile in the Studio,
