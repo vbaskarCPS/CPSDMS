@@ -5,7 +5,7 @@ import { rules, toolCall, toolsFor } from '../../../supabase/functions/benny-ass
 
 const member = (cn: string, first: string) => ({ hire_id: null, cn, first_name: first, last_name: 'X', equiv_split: 100, upsell_split: 100, machine_rental: 0, deductions: 0 });
 const cart = (id: string, cn: string, first: string, sales: PayoutCart['sales']): PayoutCart =>
-  ({ id, label: first, manager: null, members: [member(cn, first)], eq_override: null, crackfill_lbs: 0, bonuses: [], settings: {}, notes: null, sales });
+  ({ id, label: first, manager: null, members: [member(cn, first)], eq_override: 14.4, crackfill_lbs: 0, bonuses: [], settings: {}, notes: null, sales });
 const carts = (): PayoutCart[] => [
   cart('c1', 'I1004', 'Jahswill', [
     { id: 's1', route_code: 'SES08', address: '17085 61A', client_name: 'Jeff Glass', price: 210, payment_type: 'Cash', payments: { Cash: 210 }, type: 'Sale', display_price: '210', service: 'FP', notes: null, meta: { details: 1 } },
@@ -24,6 +24,8 @@ describe('the Benny: a job on a closed day’s payout', () => {
   it('changes only that job, on that cart, and keeps the rest of the day as it was', () => {
     const before = carts(); const next = withPastJob(before, check);
     expect(next[1]).toBe(before[1]);
+    expect(next[1].eq_override).toBe(14.4);   // another cart keeps the equiv it was paid out at
+    expect(next[0].eq_override).toBeNull();   // this cart's equiv now comes from its sales, so the change reaches the pay
     expect(next[0].sales[1]).toEqual(before[0].sales[1]);
     expect(next[0].sales[0]).toMatchObject({ id: 's1', type: 'Production', payment_type: 'Prepaid', price: 210, display_price: 'AFSL', payments: null, address: '17085 61A', client_name: 'Jeff Glass', meta: { details: 1 } });
     expect(before[0].sales[0].type).toBe('Sale');   // the list it was given is untouched
@@ -50,6 +52,7 @@ describe('the Benny: a job on a closed day’s payout', () => {
     expect(card.lines).toContain('The open booking at 17085 61 a (AFSL) is marked done.');
     expect(card.lines).toContain('Jahswill’s pay now: $105.20 on 14.40 equiv.');
     expect(card.action).toBe('Save');
+    expect(pastJobCard({ ...check, cart: { ...check.cart, eq_set: 14.4 } }).lines).toContain('Jahswill’s equiv was set at 14.40 at payout. Saving works it out from the sales instead, so the pay follows this job.');
     expect(pastJobCard({ ...check, add: true, from: undefined }).action).toBe('Add the job');
     expect(jobSaid({ type: 'Sale', amount: 250, paid_by: 'Cash', shown_as: '250' })).toBe('Sale · $250.00 · Cash');
   });

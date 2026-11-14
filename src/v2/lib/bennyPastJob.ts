@@ -2,14 +2,16 @@
 // The database checks it first (benny_check_past_job: the day is closed, not on a payslip, the cart is paid out, the job
 // is the one meant). On the tap the app changes that cart's sales and saves the day the way its payout list does
 // (saveDay with the lines the payout engine works out), so the worker's equiv and pay are worked out again, never typed
-// in. An open booking at the same address is marked done with it, unless they said to leave it.
+// in. A cart whose equiv was set at payout is switched back to its sales, or the change would not reach the pay. An open
+// booking at the same address is marked done with it, unless they said to leave it.
 import type { CartSale, PayoutCart, SaleType } from './payoutCarts';
 
 export interface PastJobSide { address?: string; type: string; amount: number; paid_by: string; shown_as?: string; service?: string; route?: string; client?: string }
 export interface PastJobCheck {
   ok: boolean; problems?: string[]; date: string; stamp: string; add: boolean;
   worker: { cn: string; name: string };
-  cart: { id: string; label: string; members: number };
+  /** eq_set = the cart's equiv as set at payout (then its pay doesn't follow its sales until the save switches it back) */
+  cart: { id: string; label: string; members: number; eq_set?: number | null };
   /** the job being changed (missing when a new one is added) */
   line?: string; from?: PastJobSide; to: PastJobSide;
   /** the open booking at that address, marked done with the save */
@@ -36,6 +38,7 @@ export function pastJobCard(c: PastJobCheck): { title: string; lines: string[]; 
       c.add || !c.from ? `New: ${jobSaid(c.to)}${c.to.route ? ` · ${c.to.route}` : ''}` : `${jobSaid(c.from)} → ${jobSaid(c.to)}`,
       ...(c.booking ? [`The open booking at ${c.booking.address}${c.booking.job_code ? ` (${c.booking.job_code})` : ''} is marked done.`] : []),
       ...(c.pay_now ? [`${first}’s pay now: ${money(c.pay_now.pay)} on ${Number(c.pay_now.equiv).toFixed(2)} equiv.`] : []),
+      ...(c.cart.eq_set != null ? [`${c.cart.members > 1 ? 'The cart’s' : `${first}’s`} equiv was set at ${Number(c.cart.eq_set).toFixed(2)} at payout. Saving works it out from the sales instead, so the pay follows this job.`] : []),
       `That day is saved, so this works its pay out again (${c.cart.members > 1 ? 'the cart’s' : `${first}’s`} equiv and pay), the same as on its payout list.`,
     ],
     action: c.add ? 'Add the job' : 'Save',
@@ -53,8 +56,10 @@ export function withPastJob(carts: PayoutCart[], c: PastJobCheck): PayoutCart[] 
   const patch: Pick<CartSale, 'type' | 'price' | 'payment_type' | 'payments' | 'display_price'> = {
     type: t.type as SaleType, price: Number(t.amount) || 0, payment_type: t.paid_by, payments: null, display_price: t.shown_as || String(t.amount),
   };
-  return carts.map(cart => {
-    if (cart !== hits[0]) return cart;
+  return carts.map(cart0 => {
+    if (cart0 !== hits[0]) return cart0;
+    // the equiv set at payout was worked out from the job as it was: from here the cart's sales decide it ("Use the sales")
+    const cart = { ...cart0, eq_override: null };
     if (c.add) {
       return { ...cart, sales: [...cart.sales, { route_code: t.route || null, address: t.address || null, client_name: t.client || null, service: t.service || 'FP', notes: null, ...patch }] };
     }
