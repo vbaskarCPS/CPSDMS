@@ -19,6 +19,7 @@ import { claimNews, newsText } from '../../lib/bennyNews';
 import { bennyMorning, bennyMorningSeen, fromMorningLink, morningText, openDayHref, whatsNewText } from '../../lib/bennyMorning';
 import { describe, doProposal, emailsPreset, payoutsStart, textOpened, type BennyProposal } from '../../lib/bennyActions';
 import { bonusReplaced } from '../../lib/bennyBonus';
+import { msCutDiscard } from '../../lib/bennyMs';
 import { BennyMapCard } from './BennyMap';
 import { TextsCard } from './BennyTexts';
 import { NotifyRow } from './BennyNotify';
@@ -44,13 +45,14 @@ const Rich: React.FC<{ text: string }> = ({ text }) => <>{text.split('\n').map((
   <React.Fragment key={i}>{i > 0 && <br />}{line.split(/(\*\*[^*]+\*\*)/g).map((p, j) => p.startsWith('**') && p.endsWith('**') ? <b key={j}>{p.slice(2, -2)}</b> : p)}</React.Fragment>
 ))}</>;
 
-const ProposalCard: React.FC<{ p: BennyProposal; outcome: BennyMsg['outcome']; busy: boolean; onDo: () => void; onNo: () => void; onChange?: () => void }> = ({ p, outcome, busy, onDo, onNo, onChange }) => {
+const ProposalCard: React.FC<{ p: BennyProposal; outcome: BennyMsg['outcome']; busy: boolean; note?: string | null; onDo: () => void; onNo: () => void; onChange?: () => void }> = ({ p, outcome, busy, note, onDo, onNo, onChange }) => {
   const d = describe(p);
   return (
     <div className={`benny-card${outcome ? ` ${outcome.state}` : ''}`}>
       <b className="benny-card-t">{d.title}</b>
       <ul>{d.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
       {outcome && <div className={`benny-card-out ${outcome.state}`} role="status">{outcome.state === 'done' && <Check size={15} />}{outcome.text}</div>}
+      {busy && note && <div className="benny-card-out" role="status">{note}</div>}
       {(!outcome || outcome.state === 'failed') && (
         <div className="benny-card-b">
           <button type="button" className="benny-go" onClick={onDo} disabled={busy}>{busy ? 'Working…' : outcome ? 'Try again' : d.action}</button>
@@ -81,6 +83,7 @@ export const Benny: React.FC<{
   const fileIn = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [doing, setDoing] = useState<number | null>(null);
+  const [doingNote, setDoingNote] = useState<string | null>(null);   // a save that takes a while says how far it is
   const [hearing, setHearing] = useState<null | 'tap' | 'hold'>(null);
   const [unread, setUnread] = useState(false);   // the white dot: the Benny said something while it was closed
   const [mute, setMute] = useState(() => { try { return localStorage.getItem(MUTE) === '1'; } catch { return false; } });
@@ -256,14 +259,27 @@ export const Benny: React.FC<{
     }
     setDoing(i);
     try {
-      const done = await doProposal(p, { id: cid || '', region: center?.id === cid ? center.region : null, services: center?.id === cid ? center.services : null });
+      const res = await doProposal(p, { id: cid || '', region: center?.id === cid ? center.region : null, services: center?.id === cid ? center.services : null }, setDoingNote);
+      const done = typeof res === 'string' ? res : res.text;
       settle(i, { state: 'done', text: done });
+      // the chat goes on by itself: zones were worked out, so here they are on the map, with the card that saves them
+      if (typeof res !== 'string') setMsgs(m => [...m, { role: 'assistant', text: res.then.text, map: res.then.map ? { maps: [], highlight: [], pins: [], ...res.then.map } : null, proposal: res.then.proposal }]);
       const spoke = [...msgs.slice(0, i)].reverse().find(m => m.role === 'user')?.spoken;
       if (spoke && !mute) say(done);
       window.dispatchEvent(new CustomEvent('benny:changed', { detail: p.kind }));
     } catch (e) {
       settle(i, { state: 'failed', text: e instanceof Error ? e.message : 'That didn’t work' });
-    } finally { setDoing(null); }
+    } finally { setDoing(null); setDoingNote(null); }
+  };
+  // "Not now". On the card that saves worked-out zones it also discards them, so no proposal is left waiting on the Zones screen.
+  const decline = (i: number) => {
+    const p = msgs[i]?.proposal;
+    if (p?.kind !== 'ms_cut_save') { settle(i, { state: 'dismissed', text: 'Not done.' }); return; }
+    if (doing !== null) return;
+    setDoing(i);
+    msCutDiscard(p.check).then(t => settle(i, { state: 'dismissed', text: t }))
+      .catch(e => settle(i, { state: 'dismissed', text: `Not saved. (The proposal is still on the Zones screen: ${e instanceof Error ? e.message : 'it couldn’t be discarded'})` }))
+      .finally(() => setDoing(null));
   };
 
   const startHearing = (mode: 'tap' | 'hold') => {
@@ -394,7 +410,7 @@ export const Benny: React.FC<{
                 {m.proposal && m.proposal.kind !== 'texts' && <ProposalCard p={m.proposal} busy={doing === i} onDo={() => void confirm(i)}
                   // a bonus card overtaken by a newer one for the same place is shown, but no longer the one to tap
                   outcome={m.outcome || (bonusReplaced(msgs.map(x => x.proposal), i) ? { state: 'dismissed', text: 'Replaced by the newer card below.' } : undefined)}
-                  onNo={() => settle(i, { state: 'dismissed', text: 'Not done.' })}
+                  note={doing === i ? doingNote : null} onNo={() => decline(i)}
                   onChange={m.proposal.kind === 'start_day' ? () => { const d = (m.proposal as Extract<BennyProposal, { kind: 'start_day' }>).check.date; settle(i, { state: 'dismissed', text: 'Opened Start session to change it.' }); nav(`/app/workerbook/days/${d}/start`); }
                     : m.proposal.kind === 'booking' ? () => { settle(i, { state: 'dismissed', text: 'Opened Bookings › List to change it there.' }); nav('/app/bookings/list'); } : undefined} />}
               </div>

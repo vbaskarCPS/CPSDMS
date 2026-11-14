@@ -211,7 +211,7 @@ describe('the Benny’s tools', () => {
   });
   it('changes become cards; lookups don’t', () => {
     const kinds = TOOLS.map(t => { const c = toolCall(t.name, {}, ctx); return c && 'fn' in c && c.card ? c.card.kind : null; }).filter(Boolean);
-    expect(kinds.sort()).toEqual(['add_job', 'bonus', 'booking', 'booking_emails', 'give_route', 'job', 'ms_assign', 'ms_zone', 'partner', 'past_job', 'payouts', 'pin', 'remove', 'solo', 'start_day', 'stops', 'texts']);
+    expect(kinds.sort()).toEqual(['add_job', 'bonus', 'booking', 'booking_emails', 'give_route', 'job', 'ms_assign', 'ms_cut', 'ms_zone', 'partner', 'past_job', 'payouts', 'pin', 'remove', 'solo', 'start_day', 'stops', 'texts']);
     const start = toolCall('propose_start_day', { assign: [], team_mode: 'whatever' }, ctx);
     expect(start && 'fn' in start && start.card?.team_mode).toBe('roster');
     expect(toolCall('propose_start_day', {}, ctx)).toMatchObject({ args: { p_date: '2026-11-10' } });
@@ -384,7 +384,7 @@ describe('the Benny’s tools', () => {
     const ms = { screen: 'ms', today: '2026-11-14', user_name: 'Vijay B', path: '/app/mainstreet/zones' };
     it('its admins get its tools and nobody else’s; nobody else gets its tools', () => {
       const names = toolsFor('ms').map(t => t.name);
-      expect(names).toEqual(['ms_zones', 'ms_reps', 'ms_locate', 'ms_map', 'propose_ms_assign', 'propose_ms_zone', 'report_bug', 'log_request']);
+      expect(names).toEqual(['ms_zones', 'ms_reps', 'ms_locate', 'ms_map', 'propose_ms_assign', 'ms_cities', 'propose_ms_cut', 'propose_ms_zone', 'report_bug', 'log_request']);
       for (const role of ['admin', 'rm'] as const) expect(toolsFor(role).map(t => t.name).filter(n => n.includes('ms_'))).toEqual([]);
     });
     it('is told about zones and reps, not the workerbook', () => {
@@ -405,6 +405,16 @@ describe('the Benny’s tools', () => {
       expect(toolCall('ms_map', { city: ' Hamilton ', south: '43.2' }, ms)).toMatchObject({ args: { p_city: 'Hamilton', p_s: null, p_w: null } });
       expect(toolCall('ms_locate', { city: 'Hamilton', names: ['Upper James', '', 7, ' Mohawk '] }, ms)).toEqual({ fn: 'benny_ms_locate', args: { p_city: 'Hamilton', p_names: ['Upper James', 'Mohawk'] } });
       expect(toolCall('ms_zones', { show: 'everything' }, ms)).toEqual({ fn: 'benny_ms_zones', args: { p_q: null, p_show: 'active' } });
+    });
+    it('a cut names the city, how many, and the zones to cut again', () => {
+      expect(toolCall('propose_ms_cut', { city: 'Hamilton', target: 3, zones: ['Hamilton South 3 (2)', ' ', 4, 'Hamilton South 4 (2)'] }, ms))
+        .toEqual({ fn: 'benny_ms_check_cut', card: { kind: 'ms_cut' }, args: { p_city: 'Hamilton', p_target: 3, p_zones: ['Hamilton South 3 (2)', 'Hamilton South 4 (2)'], p_campaign: null } });
+      // no number is asked about, never guessed; no zones = only what is in no zone yet
+      expect(toolCall('propose_ms_cut', { city: 'Barrie', target: '4' }, ms)).toMatchObject({ args: { p_target: null, p_zones: null } });
+      expect(toolCall('propose_ms_cut', { city: 'Barrie', target: 2.5, zones: ['all'], campaign: 'Taxifi' }, ms)).toMatchObject({ args: { p_target: null, p_zones: ['all'], p_campaign: 'Taxifi' } });
+      expect(toolCall('ms_cities', {}, ms)).toEqual({ fn: 'benny_ms_cities', args: { p_q: null } });
+      expect(rules('ms')).toContain('propose_ms_cut');
+      expect(rules('ms')).toContain('nothing changes yet');
     });
     it('moves become one card: a swap is two moves, no rep is "none"', () => {
       const swap = toolCall('propose_ms_assign', { moves: [{ zone: 'Hamilton South 3 (2)', rep: 'Newton' }, { zone: 'Hamilton South 1 (2)', rep: 'Sina', extra: 1 }, 'junk', { zone: 'Barrie 4' }, { from_rep: 'Sam', rep: 'Priya' }] }, ms);

@@ -198,6 +198,12 @@ export const TOOLS: Tool[] = [
     input_schema: { type: 'object', properties: { moves: { type: 'array', description: 'one per zone, or one { from_rep, rep } for all of a rep\'s zones', items: { type: 'object', properties: {
       zone: { type: 'string', description: 'the zone\'s name as the tools gave it' }, rep: { type: 'string', description: 'who gets it: the rep\'s name, or "none" to leave it with no rep' },
       campaign: { type: 'string', description: 'only when the zone has more than one campaign' }, from_rep: { type: 'string', description: 'instead of zone: every zone this rep has' } }, required: ['rep'] } } }, required: ['moves'] } },
+  { name: 'ms_cities', roles: ['ms'], description: 'The loaded cities: each one\'s blocks and density (its size: commercial land and main-road frontage), how many zones it has, how many of those have no rep, what part is in no zone yet, and whether it is still being built.',
+    input_schema: { type: 'object', properties: { q: { type: 'string', description: 'part of a city\'s name, or a province code (ON, AB, BC). Leave out for all' } } } },
+  { name: 'propose_ms_cut', roles: ['ms'], description: 'Check cutting zones in a city with the zone generator (zones of about equal density, made of whole blocks) and put it on a card. Tapping the card only works the zones out and shows them on the map; a second card saves them. '
+      + 'zones = the existing zones to cut again (their names), or ["all"] for every zone of the city; leave zones out to cut only the part of the city that is in no zone yet.',
+    input_schema: { type: 'object', properties: { city: str, target: { type: 'integer', description: 'how many zones to make (usually one per rep), 1 to 60' },
+      zones: strs('the zones to re-cut, by name as the tools gave them, or ["all"]'), campaign: { type: 'string', description: 'only when they named one, or when asked which' } }, required: ['city', 'target'] } },
   { name: 'propose_ms_zone', roles: ['ms'], description: 'Check retiring a zone (it leaves the reps\' lists; its history stays) or bringing a retired one back, and put it on a card to confirm.',
     input_schema: { type: 'object', properties: { zone: { type: 'string', description: 'the zone\'s name' }, status: { type: 'string', enum: ['retired', 'active'] } }, required: ['zone', 'status'] } },
   { name: 'report_bug', roles: ['admin', 'rm', 'ms'], description: 'Report a bug in the app to Vijay (the developer): it is saved in the app\'s Bug log, which he reads. '
@@ -297,13 +303,16 @@ Rules:
 - Only MainstreetAI's data and work. Anything else: "I can only help with MainstreetAI here." The Property Stars side (workerbook, bookings, payouts) has its own Benny on its own screens.
 - Zones and reps: ms_zones for zones (who has which, the ones with no rep, a city's zones), ms_reps for the reps (their zones, visits in the last 7 days, last visit). A zone has one rep per campaign; most zones have one campaign.
 - Where zones are: ms_map draws them on the map in the chat, a city's zones or the zones touching an area. Call it whenever the answer is about where zones are, then answer in words: which zones, who has each.
-- Changes you can prepare: giving a zone to a rep, moving it to another rep, swapping two reps' zones, taking the rep off a zone, giving every zone one rep has to another (propose_ms_assign), and retiring a zone or bringing a retired one back (propose_ms_zone). You never make the change: after ok, say in a line or two what will change (each zone: from whom, to whom) and "Tap the button on the card to do it." Never say it is done. If it says no, say why in plain words.
+- Changes you can prepare: giving a zone to a rep, moving it to another rep, swapping two reps' zones, taking the rep off a zone, giving every zone one rep has to another (propose_ms_assign), retiring a zone or bringing a retired one back (propose_ms_zone), and cutting new zones or cutting existing ones again (propose_ms_cut). You never make the change: after ok, say in a line or two what will change (each zone: from whom, to whom) and "Tap the button on the card to do it." Never say it is done. If it says no, say why in plain words.
 - Every move they asked for goes in ONE propose_ms_assign call, on one card. A swap is two moves: A's zone to B, and B's zone to A. If a rep has more than one zone and they didn't say which, ask which, listing them.
 - Names: if a tool says "Which one" or "Which zone", ask, listing the names. Use a zone's name exactly as the tools gave it.
 ${PICTURES}
 - A picture of a map with an area marked on it (circled, boxed, shaded: "he lives in the circle", "who has this part"): 1) read the city, and the names of the roads at the mark's edges and a few inside it. 2) Call ms_locate with the city and those names: it gives where each road runs and the exact points where they cross. 3) From the crossings, work out the box around the marked area: its south, west, north and east. Read which side of each road the mark's edge is on; don't just take the outermost crossings. 4) Call ms_map with that box and a short title. 5) Say which zones are in it, who has each and how much of the area each covers, and say plainly that the box is your reading of the picture: it is drawn in black on the map for them to check, and they can tell you to move an edge ("further north", "stop at Mohawk"). If the city isn't loaded or none of the roads is found, say so and ask for a street name or the city. Never name the zones in a marked area without ms_map.
 - After placing an area, offer the next step in a line when there is one: who could swap, or which zone nearby has no rep. Don't prepare a change they didn't ask for.
-- Cutting new zones, re-cutting a city, splitting a city's roads between reps and loading a new city: these are done on the Zones and Cities screens for now, and are being added to the Benny. Say which screen; don't log it.
+- Sizes: density is a zone's (or a city's) size: commercial land and main-road frontage, which is what the zone generator evens out. "businesses" is only how many are loaded in it, and for most cities that is few or none: don't use it as the size.
+- Cutting zones ("cut Barrie into 4 zones", "re-cut Hamilton South 3 and 4 into 3", "redo all of Hamilton as 10 zones", "build zones for the rest of Oakville", "split Hamilton between 8 reps" = 8 zones): propose_ms_cut with the city, how many zones, and for a re-cut the zones to cut again (their names, or all for the whole city). Leave zones out to cut only the part of the city that is in no zone yet. If they didn't say how many, ask; ms_cities and ms_zones show how big the city and its zones are, if they want help picking. After ok, say what will be cut from what, about how big each zone comes out, and that nothing changes yet: "Tap Work them out and I'll draw them on the map; you save them after." You can't move a zone's edge, merge two proposed zones or draw one by hand: that is the Zones screen (Generate › review, or Draw).
+- After a cut card: the app works the zones out itself and puts the next message in the chat (the zones, their map, and a card that saves them). You don't call anything for that. If they then want a different number, call propose_ms_cut again with it. Once saved, the new zones have no rep: when they say who gets which, use propose_ms_assign with the new zones' names from that message.
+- Loading a new city, or rebuilding one, is done on the Cities screen: say so; don't log it.
 - Can't do it: when they ask for anything else in MainstreetAI that you have no tool for, call log_request with what they wanted, then say plainly that you can't do that yet, that it's logged for Vijay, and that you'll tell them here when it's live. Never pretend, and never leave it unlogged.
 - Bugs: when something on a MainstreetAI screen is broken, use report_bug with a clear developer-ready description, then say "I'll let Vijay know — it's in the bug log. I'll tell you here when it's fixed." If the tool returns an error, say it wasn't saved.
 - Be short and specific: the answer first, with the numbers; a list only when it helps; no more than about 8 lines.
@@ -448,7 +457,7 @@ export function fastAnswerStop(reply: string, lookups: string[], context: string
   return tokens.length ? { why: 'ungrounded', tokens: tokens.slice(0, 8) } : null;
 }
 
-export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus' | 'texts' | 'remove' | 'add_job' | 'past_job' | 'ms_assign' | 'ms_zone';
+export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus' | 'texts' | 'remove' | 'add_job' | 'past_job' | 'ms_assign' | 'ms_zone' | 'ms_cut';
 
 /**
  * What the Benny itself is shown of a checked change. A texts card carries each worker's cell number for its links;
@@ -512,6 +521,11 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     case 'propose_ms_assign': return { fn: 'benny_ms_check_assign', args: { p_moves: (Array.isArray(input.moves) ? input.moves : []).filter(m => m && typeof m === 'object').slice(0, 40)
       .map(m => { const x = m as Record<string, unknown>; return { ...(msText(x.zone) ? { zone: msText(x.zone) } : {}), ...(msText(x.from_rep) ? { from_rep: msText(x.from_rep) } : {}), rep: msText(x.rep) || 'none', ...(msText(x.campaign) ? { campaign: msText(x.campaign) } : {}) }; }) },
       card: { kind: 'ms_assign' } };
+    case 'ms_cities': return { fn: 'benny_ms_cities', args: { p_q: msText(input.q) } };
+    case 'propose_ms_cut': return { fn: 'benny_ms_check_cut', args: { p_city: msText(input.city) || '',
+      p_target: typeof input.target === 'number' && Number.isInteger(input.target) ? input.target : null,
+      p_zones: Array.isArray(input.zones) ? input.zones.filter((z): z is string => typeof z === 'string' && !!z.trim()).map(z => z.trim().slice(0, 120)).slice(0, 80) : null,
+      p_campaign: msText(input.campaign) }, card: { kind: 'ms_cut' } };
     case 'propose_ms_zone': return { fn: 'benny_ms_check_zone', args: { p_zone: msText(input.zone) || '', p_status: input.status === 'active' ? 'active' : 'retired' }, card: { kind: 'ms_zone' } };
     case 'find_people': return { fn: 'benny_find_people', args: { p_center: c, p_q: String(input.q || '') } };
     case 'day': return { fn: 'benny_day', args: { p_center: c, p_date: String(input.date || ctx.today) } };
