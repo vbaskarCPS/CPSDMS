@@ -1,4 +1,4 @@
-// src/planner/features/look/looks.ts — the looks: 26 ways the whole planner can be dressed, and the working-out of
+// src/planner/features/look/looks.ts — the looks: 31 ways the whole planner can be dressed, and the working-out of
 // what a choice means on a given screen. A look is its own colours (one set: a look is itself whatever the phone's
 // light or dark setting), its own type, the shape of its cards and buttons, and a background drawn from art.ts.
 // A person picks one for the whole planner and, if they like, a different one for any section; shapes and type can
@@ -55,6 +55,11 @@ export const FACES = {
   abril: { family: 'Abril Fatface', weights: [400], stack: SERIF, kind: 'display' },
   rajdhani: { family: 'Rajdhani', weights: [600, 700], stack: SANS, kind: 'display' },
   bitter: { family: 'Bitter', weights: [600, 700], stack: SERIF, kind: 'display' },
+  orbitron: { family: 'Orbitron', weights: [600, 700], stack: SANS, kind: 'display' },
+  sharetech: { family: 'Share Tech Mono', weights: [400], stack: "ui-monospace, 'Cascadia Mono', Menlo, monospace", kind: 'display' },
+  blackops: { family: 'Black Ops One', weights: [400], stack: SANS, kind: 'display' },
+  bebas: { family: 'Bebas Neue', weights: [400], stack: SANS, kind: 'display' },
+  metalmania: { family: 'Metal Mania', weights: [400], stack: SERIF, kind: 'display', oddFigures: true },
   // text: all easy to read at 14 to 16 px
   nunito: { family: 'Nunito', weights: [400, 500, 600, 700], stack: ROUND, kind: 'text' },
   lora: { family: 'Lora', weights: [400, 500, 600, 700], stack: SERIF, kind: 'text' },
@@ -106,7 +111,7 @@ export interface LookBg {
 
 export const LOOK_IDS = ['woodland', 'cottagecore', 'pastels', 'christmas', 'autumn', 'academia', 'celestial', 'minimal',
   'french', 'botanical', 'countryside', 'regency', 'coastal', 'spring', 'fairy', 'halloween', 'winter', 'mediterranean', 'retro70s', 'stationery', 'coquette',
-  'lodge', 'harbour', 'whisky', 'graphite', 'expedition'] as const;
+  'lodge', 'harbour', 'whisky', 'graphite', 'expedition', 'neon', 'circuit', 'fieldops', 'grit', 'metal'] as const;
 export type LookId = (typeof LOOK_IDS)[number];
 /** The planner's own look: navy and gold for Vijay, plum and pink for Rosh, light or dark with the phone. */
 export const OWN = 'own' as const;
@@ -125,7 +130,7 @@ export interface Look {
   bg: LookBg;
 }
 
-// ───────────────────────── the 26 looks ─────────────────────────
+// ───────────────────────── the 31 looks ─────────────────────────
 
 const L = (bg: string, bg2: string, ink: string, ink2: string, line: string, accent: string, accentInk: string, amber: string, amber2: string): Palette => ({ scheme: 'light', bg, bg2, ink, ink2, line, accent, accentInk, amber, amber2 });
 const D = (bg: string, bg2: string, ink: string, ink2: string, line: string, accent: string, accentInk: string, amber: string, amber2: string): Palette => ({ scheme: 'dark', bg, bg2, ink, ink2, line, accent, accentInk, amber, amber2 });
@@ -339,6 +344,47 @@ export const LOOKS: Record<LookId, Look> = {
     type: { display: 'bitter', body: 'inter', headWeight: 700, headScale: 0.98 },
     shapes: { card: 8, button: 8, edge: 'dashed', shadow: 'soft' },
     bg: { paper: [{ kind: 'grid', size: 56, fade: 0.65, colors: ['#d9cfb6'] }, { kind: 'scatter', motifs: ['globe', 'pine', 'sun', 'key', 'bird', 'leaf'], across: 4, size: 320 }], grain: 0.55, strength: 40, top: { kind: 'tape', colors: ['#c9b98f', '#556b2f'] }, corner: ['globe@0', 'pine@0', 'bird@2', 'sun@4'] },
+  },
+  // ── five more for him: futuristic, tech, military, gritty, metal (13 Nov) ──
+  neon: {
+    id: 'neon', name: 'Neon future', short: 'Neon', group: 'more', blurb: 'Cyan light, rockets and a city at night',
+    palette: D('#0b0d1f', '#131735', '#eef1ff', '#aab2e0', '#2a2f5c', '#22e3ff', '#08101f', '#ff4fd8', '#ff9bea'),
+    art: ['#2fb4d6', '#c247b0', '#6a55d8', '#3b4a8f'],
+    type: { display: 'orbitron', body: 'inter', headWeight: 700, headScale: 0.82, headSpacing: '0.06em', headCaps: true },
+    shapes: { card: 14, button: 6, edge: 'hairline', shadow: 'glow' },
+    bg: { paper: [{ kind: 'grid', size: 40, fade: 0.5, colors: ['#1d2352'] }, { kind: 'scatter', motifs: ['planet', 'rocket', 'star', 'sparkle', 'planet', 'bolt'], across: 4, size: 320, fade: 0.8 }], sky: ['#0a0c1c', '#121638', '#1d1240'], strength: 40, top: { kind: 'stars' }, corner: ['planet@0', 'rocket@1', 'star@1', 'sparkle@0'] },
+  },
+  circuit: {
+    id: 'circuit', name: 'Circuit board', short: 'Circuit', group: 'more', blurb: 'Terminal green, chips and traces',
+    palette: D('#07130d', '#0d1f16', '#dcf5e6', '#9cc4ad', '#1f3a2b', '#39d98a', '#04120a', '#39d98a', '#8af0bb'),
+    art: ['#1f6b45', '#2fa86a', '#2b4d3c'],
+    type: { display: 'sharetech', body: 'inter', headWeight: 400, headScale: 1.0, headSpacing: '0.02em' },
+    shapes: { card: 4, button: 4, edge: 'dashed', shadow: 'none' },
+    bg: { paper: [{ kind: 'grid', size: 32, fade: 0.5, colors: ['#123323'] }, { kind: 'scatter', motifs: ['chip', 'bolt', 'gear', 'dot', 'chip', 'crosshair'], across: 4, size: 300 }], grain: 0.2, strength: 38, top: { kind: 'rule', motif: 'chip', colors: ['#2fa86a', '#1f6b45'] }, corner: ['chip@0', 'gear@0', 'bolt@1', 'dot@1'] },
+  },
+  fieldops: {
+    id: 'fieldops', name: 'Field ops', short: 'Field ops', group: 'more', blurb: 'Olive drab, camo and stencilled type',
+    palette: D('#1d2116', '#262b1d', '#ece6d0', '#bdb59a', '#3b4230', '#c2a46a', '#1d2116', '#c2a46a', '#d9c08c'),
+    art: ['#3c4826', '#5a4c32', '#2b331f', '#4f5a36'],
+    type: { display: 'blackops', body: 'inter', headWeight: 400, headScale: 0.98, headSpacing: '0.02em' },
+    shapes: { card: 2, button: 2, edge: 'bold', shadow: 'none' },
+    bg: { paper: [{ kind: 'scatter', motifs: ['blot@0', 'blot@1', 'blot@2', 'blot@3'], across: 3, size: 200, scale: 2.4 }, { kind: 'scatter', motifs: ['star', 'shield', 'crosshair', 'star'], across: 3, size: 340, fade: 0.7, colors: ['#8a7a4e', '#6b6a3e'] }], grain: 0.5, strength: 34, top: { kind: 'bands', colors: ['#4b5a2e', '#6b5b3a', '#2f3a22'] }, corner: ['shield@0', 'star@2', 'crosshair@1', 'star@3'] },
+  },
+  grit: {
+    id: 'grit', name: 'Concrete & rust', short: 'Grit', group: 'more', blurb: 'Asphalt, rust and hazard stripes',
+    palette: D('#1a1a19', '#242322', '#e9e6e0', '#b5b0a8', '#3a3836', '#d9622b', '#140c06', '#d98a3a', '#e8b07a'),
+    art: ['#5a3a2a', '#7a4a2e', '#4a4845', '#6e6a64'],
+    type: { display: 'bebas', body: 'inter', headWeight: 400, headScale: 1.22, headSpacing: '0.03em' },
+    shapes: { card: 2, button: 2, edge: 'bold', shadow: 'lifted' },
+    bg: { paper: [{ kind: 'stripes', size: 28, fade: 0.8, colors: ['#232221', '#2c2a28'] }, { kind: 'scatter', motifs: ['bolt', 'gear', 'dot', 'gear'], across: 4, size: 300 }], grain: 1, strength: 34, top: { kind: 'zigzag', colors: ['#d9622b', '#1a1a19'] }, corner: ['gear@0', 'bolt@2', 'gear@1', 'dot@1'] },
+  },
+  metal: {
+    id: 'metal', name: 'Heavy metal', short: 'Metal', group: 'more', blurb: 'Black, chrome and blood red',
+    palette: D('#0c0c0d', '#161618', '#efeef0', '#b4b2b8', '#2e2d31', '#c8202e', '#ffffff', '#c9ccd3', '#e2e4e8'),
+    art: ['#6e1a22', '#6f7279', '#9a1c28', '#3a3a3f'],
+    type: { display: 'metalmania', body: 'inter', headWeight: 400, headScale: 1.1 },
+    shapes: { card: 2, button: 2, edge: 'frame', shadow: 'lifted' },
+    bg: { paper: [{ kind: 'scatter', motifs: ['skull', 'flame', 'bolt', 'star', 'skull', 'flame'], across: 4, size: 300, fade: 0.8 }], grain: 0.7, strength: 36, top: { kind: 'zigzag', colors: ['#6f7279', '#3a3a3f'] }, corner: ['skull@0', 'flame@2', 'bolt@1', 'star@1'] },
   },
 };
 /** The planner's own colours, as planner.css has them (a test keeps the two the same): for its tile in the Studio,

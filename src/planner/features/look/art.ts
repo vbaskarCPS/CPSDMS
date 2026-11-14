@@ -104,6 +104,17 @@ export const MOTIFS: Record<string, Motif> = {
   cameo: (a, b, c) => `<ellipse rx="10.6" ry="13.6" fill="${a}"/><ellipse rx="8" ry="11" fill="${b}"/><ellipse rx="9.3" ry="12.3" fill="none" stroke="${b}" stroke-width=".7" stroke-dasharray=".2 2.2" stroke-linecap="round"/><path d="M-4.6 8.6 C-4.4 6.4 -3.2 5.4 -1.8 5 L-1.6 2.2 C-4.2 1.8 -6 -.5 -5.6 -3.2 C-7.4 -3.6 -7.6 -6.2 -5.6 -6.4 C-5 -8.6 -2.6 -9.8 -.2 -9.6 C2.4 -9.4 4 -7.6 4 -5.6 L5.4 -3.2 L4.2 -2.6 L4.6 -1.6 L3.9 -1.1 L4.3 -.2 L3.4 1 C2.6 1.8 1.6 2 1.2 2.2 L1.6 4.6 C3.2 5.4 4.6 6.4 4.6 8.6Z" fill="${c}"/>`,
   fleur: (a, b) => `<path d="M0 -14 C4.2 -9 4.6 -3 0 3.4 C-4.6 -3 -4.2 -9 0 -14Z" fill="${a}"/>${both(() => `<path d="M2 3.4 C4 -4 12 -8 12.6 -1 C12.8 3 8 4 7 1 C7 5 4 6.4 2 3.4Z M1.6 6.4 C5 7.4 6 10.4 7.6 11.4 C4.6 12.4 2.6 10.4 1.4 7.4Z" fill="${a}"/>`)}<path d="M0 6 C2.2 9 3 11 0 14.4 C-3 11 -2.2 9 0 6Z" fill="${a}"/><rect x="-6" y="3" width="12" height="3.2" rx="1.2" fill="${b}"/>`,
   dot: a => `<circle r="4" fill="${a}"/>`,
+  // for the tech, military, gritty and metal looks (13 Nov)
+  gear: (a, b) => `${ring(8, 10.6, () => `<rect x="-2.6" y="-3.2" width="5.2" height="5" rx="1" fill="${a}"/>`)}<circle r="10" fill="${a}"/><circle r="4.2" fill="${b}"/>`,
+  bolt: a => `<path d="M3.4 -14 L-8 2 H-1 L-4 14 L8 -3.4 H1Z" fill="${a}" stroke-linejoin="round"/>`,
+  chip: (a, b) => `<g stroke="${a}" stroke-width="1.8" stroke-linecap="round">${[-5, 0, 5].map(v => `<path d="M${v} -12 V-8 M${v} 8 V12 M-12 ${v} H-8 M8 ${v} H12"/>`).join('')}</g><rect x="-8.4" y="-8.4" width="16.8" height="16.8" rx="2" fill="${a}"/><rect x="-4" y="-4" width="8" height="8" rx="1" fill="${b}"/>`,
+  rocket: (a, b, c) => `${both(() => `<path d="M4 0 L9.4 9 L4 7Z" fill="${b}"/>`)}<path d="M0 -14 C6.4 -8 6.4 2 4.2 7.6 H-4.2 C-6.4 2 -6.4 -8 0 -14Z" fill="${a}"/><circle cy="-4" r="2.6" fill="${c}"/><path d="M-2.6 8 L0 14 L2.6 8Z" fill="${b}"/>`,
+  shield: (a, b) => `<path d="M0 -13 L11 -9 V0 C11 7 6 11 0 14 C-6 11 -11 7 -11 0 V-9Z" fill="${a}"/><path d="M0 -9 L7 -6.4 V0 C7 4.6 4 7.4 0 9.6Z" fill="${b}" opacity=".6"/>`,
+  crosshair: a => `<g fill="none" stroke="${a}" stroke-width="2" stroke-linecap="round"><circle r="9"/><path d="M0 -14 V-5 M0 5 V14 M-14 0 H-5 M5 0 H14"/></g><circle r="1.6" fill="${a}"/>`,
+  skull: (a, b, c) => `<path d="M0 -13 C8 -13 12 -7 12 -1 C12 4 9 6 8 7 V11 H-8 V7 C-9 6 -12 4 -12 -1 C-12 -7 -8 -13 0 -13Z" fill="${a}"/><ellipse cx="-4.6" cy="-1" rx="3" ry="3.4" fill="${c}"/><ellipse cx="4.6" cy="-1" rx="3" ry="3.4" fill="${c}"/><path d="M0 3 L-1.6 6 H1.6Z" fill="${c}"/><path d="M-4 8 V11 M0 8 V11 M4 8 V11" stroke="${b}" stroke-width="1"/>`,
+  flame: (a, b) => `<path d="M0 -14 C4 -8 9 -5 8 3 C7 10 3 13 0 14 C-3 13 -7 10 -8 3 C-8 -2 -5 -4 -4 -8 C-2 -4 -1 -3 0 -2 C1 -6 0 -10 0 -14Z" fill="${a}"/><path d="M0 2 C3 5 4 8 2 12 C1 13 -1 13 -2 12 C-4 9 -2 6 0 2Z" fill="${b}"/>`,
+  // a patch of camouflage: drawn large and close together, they make the pattern
+  blot: a => `<path d="M-12 -3 C-13 -9 -6 -12 -1 -10 C3 -14 11 -12 11 -6 C15 -3 13 4 9 5 C9 11 2 13 -2 10 C-7 13 -13 9 -11 4 C-15 2 -14 -2 -12 -3Z" fill="${a}"/>`,
 };
 export type MotifId = keyof typeof MOTIFS;
 
@@ -253,7 +264,7 @@ export function barEdge(kind: BarEdge, fill: string, line: string): { svg: strin
 }
 
 /** What flies or floats: in a corner scene these go up in the air, not on the ground. */
-const IN_THE_AIR = new Set(['butterfly', 'moth', 'bat', 'ghost', 'cloud', 'sun', 'moon', 'star', 'sparkle', 'snow', 'bee', 'planet', 'heart', 'crane', 'web', 'pearls', 'wand']);
+const IN_THE_AIR = new Set(['rocket', 'bolt', 'butterfly', 'moth', 'bat', 'ghost', 'cloud', 'sun', 'moon', 'star', 'sparkle', 'snow', 'bee', 'planet', 'heart', 'crane', 'web', 'pearls', 'wand']);
 /** A little scene for the corner of the screen: up to four motifs, the first one big, on a patch of ground. */
 export function corner(motifs: string[], colors: string[], ground?: string): { svg: string; w: number; h: number } {
   if (!motifs.length) return { svg: '', w: 0, h: 0 };
