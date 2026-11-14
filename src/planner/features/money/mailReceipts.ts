@@ -9,9 +9,9 @@ import { getDoc, putDoc, putDocs } from '../../lib/docs';
 import { SignedOut } from '../../lib/auth';
 import { MailProblem, mailboxes as loadMailboxes, scanReceipts, type ReceiptScanPage } from '../mail/mail';
 import { loadAccounts, loadMonths, money, todayIso, visibleMonths } from './lib';
-import { linkGroup, linkReceipt, loadReceipts, receiptKey, saveReceipt } from './receipts';
+import { linkGroup, linkReceipt, linkSplit, loadReceipts, receiptKey, saveReceipt } from './receipts';
 import { beforeHistory, companyCard, historyFloor, historyStarts, liveRows, onCompanyCard, sameAsAnother, type CardHistory, type SameAs } from './receiptGroups';
-import { awaitingMatch, foreignCurrency, pickMatch, shiftDay } from './receiptMatch';
+import { awaitingMatch, foreignCurrency, pickMatch, shiftDay, takenRows } from './receiptMatch';
 import type { Account, MailReceiptPrefs, Receipt, Txn } from './types';
 
 export const PREFS_KIND = 'moneyprefs', PREFS_KEY = 'mailReceipts';
@@ -148,7 +148,7 @@ export const isEmailReceipt = (r: Receipt): boolean => r.from === 'email';
 /** Which email receipts link to which bank rows: every waiting one (oldest first), with the same rules as a photo
  *  receipt (pickMatch), never a row another receipt already has, nor one picked earlier in this run. */
 export function pickEmailMatches(all: Receipt[], rows: Txn[], accounts: Account[]): { r: Receipt; txn: Txn }[] {
-  const taken = new Set(all.filter(r => r.txnId).map(r => r.txnId!));
+  const taken = takenRows(all);
   const out: { r: Receipt; txn: Txn }[] = [];
   for (const r of all.filter(x => isEmailReceipt(x) && awaitingMatch(x)).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))) {
     const pick = pickMatch(r, rows, accounts, taken);
@@ -184,7 +184,7 @@ export async function matchEmailReceipts(ctx?: MatchContext): Promise<{ linked: 
   const prefs = await getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY).catch(() => null);
   const cards = companyCards(prefs, all, c.accounts);
   if (cards.join() !== (prefs?.companyCards || []).join()) await putDoc(PREFS_KIND, PREFS_KEY, { ...(prefs || {}), companyCards: cards }).catch(() => undefined);
-  const aside = onCompanyCard(all, cards).map(r => ({ ...r, ignored: 'company' as const, ignoredBy: 'card' as const }));
+  const aside = onCompanyCard(all, cards).map(({ r, card }) => ({ ...r, ignored: 'company' as const, ignoredBy: 'card' as const, ignoredCard: card }));
   if (aside.length) {
     await putDocs(aside.map(r => ({ kind: 'receipt', key: receiptKey(r), data: r })));
     const by = new Map(aside.map(r => [r.id, r]));
@@ -203,7 +203,8 @@ export async function markCompany(r: Receipt, all: Receipt[], accounts: Account[
   const card = companyCard(r, accounts);
   const first: Receipt = { ...withIgnored(r, 'company') };
   delete first.ignoredBy;
-  const rest = card ? onCompanyCard(all.filter(o => o.id !== r.id), [card]).map(o => ({ ...o, ignored: 'company' as const, ignoredBy: 'card' as const })) : [];
+  // the others go by what is known once this one is aside: its card, and the same charge without a card shown
+  const rest = card ? onCompanyCard(all.map(o => (o.id === r.id ? first : o)), [card]).map(x => ({ ...x.r, ignored: 'company' as const, ignoredBy: 'card' as const, ignoredCard: card })) : [];
   await putDocs([first, ...rest].map(x => ({ kind: 'receipt', key: receiptKey(x), data: x })));
   if (card) {
     const prefs = await getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY).catch(() => null);
@@ -217,8 +218,8 @@ export async function unmarkCompany(r: Receipt, all: Receipt[], accounts: Accoun
   const prefs = await getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY).catch(() => null);
   const c = companyCard(r, accounts);
   const card = c && companyCards(prefs, all, accounts).includes(c) ? c : null;
-  const back = (x: Receipt): Receipt => { const n = withIgnored(x, null); delete n.ignoredBy; return n; };
-  const others = card ? all.filter(o => o.id !== r.id && isEmailReceipt(o) && o.ignored === 'company' && o.cardLast4 === card) : [];
+  const back = (x: Receipt): Receipt => { const n = withIgnored(x, null); delete n.ignoredBy; delete n.ignoredCard; return n; };
+  const others = card ? all.filter(o => o.id !== r.id && isEmailReceipt(o) && o.ignored === 'company' && (o.cardLast4 === card || o.ignoredCard === card)) : [];
   const changed = [r, ...others].map(back);
   await putDocs(changed.map(x => ({ kind: 'receipt', key: receiptKey(x), data: x })));
   if (card && (prefs?.companyCards || []).includes(card)) await putDoc(PREFS_KIND, PREFS_KEY, { ...(prefs || {}), companyCards: (prefs?.companyCards || []).filter(x => x !== card) });
@@ -227,6 +228,8 @@ export async function unmarkCompany(r: Receipt, all: Receipt[], accounts: Accoun
 
 /** Link a group of receipts to the one charge they add up to. */
 export const matchGroup = (rs: Receipt[], txn: Txn): Promise<Receipt[]> => linkGroup(rs, txn, 'hand');
+/** Link one order to the several charges it was billed as. */
+export const matchSplit = (r: Receipt, txns: Txn[]): Promise<Receipt> => linkSplit(r, txns, 'hand');
 
 // ───────────── the lists ─────────────
 
@@ -234,7 +237,8 @@ const newestFirst = (a: Receipt, b: Receipt) => b.date.localeCompare(a.date) || 
 /** The email receipts with no bank row, sorted into where they show (each newest first):
  *  `unmatched` = waiting for a match or to be put aside ("Not matched");
  *  `same`      = the same money as another email (an order and its shipping emails, or two mailboxes): not listed;
- *  `older`     = from before the card's rows begin in the planner, with the account they are too old for: not listed. */
+ *  `older`     = from before the card's rows begin in the planner, with the account they are too old for: kept apart
+ *                (they can still match, to an older account's rows, and can be opened). */
 export interface EmailLists { unmatched: Receipt[]; same: { r: Receipt; why: SameAs }[]; older: { r: Receipt; account: CardHistory }[] }
 export function emailLists(list: Receipt[], history: CardHistory[] = []): EmailLists {
   const dup = sameAsAnother(list);

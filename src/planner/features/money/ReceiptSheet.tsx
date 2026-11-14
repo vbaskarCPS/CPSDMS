@@ -110,6 +110,7 @@ export function ReceiptSheet({ receipt, others, accounts, onClose, onChange }: {
               <>
                 <p><Link2 /> Matched{matched ? `: ${accName(matched.accountId)} · ${dayLabel(matched.date)} · ${money(Math.abs(matched.amount))}` : ''}{r.matchedBy === 'auto' ? ' (automatically)' : ''}</p>
                 {shared > 0 && <p className="pl-muted" style={{ fontSize: 13 }}>One charge for {shared + 1} emails: this one and {shared} other{shared === 1 ? '' : 's'} add up to it.</p>}
+                {(r.txnMore?.length || 0) > 0 && <p className="pl-muted" style={{ fontSize: 13 }}>Billed as {r.txnMore!.length + 1} charges that add up to {receiptTotal(r)}: this is the biggest.</p>}
                 <Button small ghost disabled={busy} onClick={() => void run(() => unlinkReceipt(r), 'Unmatched')}><Link2Off style={{ width: 16, height: 16 }} /> Not this charge</Button>
               </>
             ) : cands === null ? <p className="pl-muted">Looking for the charge…</p> : cands.length === 0 ? (

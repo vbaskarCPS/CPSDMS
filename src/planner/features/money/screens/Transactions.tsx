@@ -12,6 +12,7 @@ import { loadReceipts, removeCashRow } from '../receipts';
 import { ReceiptSheet } from '../ReceiptSheet';
 import { CategoryIcon } from '../CategoryIcon';
 import type { Receipt, Txn } from '../types';
+import { rowIds } from '../receiptMatch';
 
 export function Transactions() {
   const [params, setParams] = useSearchParams();
@@ -28,7 +29,8 @@ export function Transactions() {
   const [openReceipt, setOpenReceipt] = useState<Receipt | null>(null);
   const [sure, setSure] = useState(false);
   useEffect(() => { let on = true; loadReceipts(shiftMonth(m, -11), m).then(r => on && setReceipts(r)).catch(() => undefined); return () => { on = false; }; }, [m]);
-  const byTxn = useMemo(() => new Map(receipts.filter(r => r.txnId).map(r => [r.txnId!, r])), [receipts]);
+  // a receipt holds its row, and the others when one order was billed as several charges
+  const byTxn = useMemo(() => new Map(receipts.flatMap(r => rowIds(r).map(id => [id, r] as [string, Receipt]))), [receipts]);
 
   const set = (k: string, v: string) => { const p = new URLSearchParams(params); if (v) p.set(k, v); else p.delete(k); setParams(p, { replace: true }); };
   const accName = (id: string) => accounts.find(a => a.id === id)?.name || '';

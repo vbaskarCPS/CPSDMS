@@ -1,8 +1,8 @@
 // Receipts that need more than one receipt or account in view (receiptGroups.ts): live rows, one purchase in several
 // emails, several emails on one charge, how far back the bank's rows go, and the company card.
 import { describe, expect, it } from 'vitest';
-import { beforeHistory, chargesFor, companyCard, historyFloor, historyStarts, liveRows, onCompanyCard, sameAsAnother, samePurchase, shipmentsOf, subsetsAdding, suggestGroups } from './receiptGroups';
-import { autoPick, matchCandidates } from './receiptMatch';
+import { beforeHistory, chargesFor, companyCard, historyFloor, historyStarts, liveRows, onCompanyCard, sameAsAnother, samePurchase, shipmentsOf, subsetsAdding, suggestGroups, suggestSplits } from './receiptGroups';
+import { autoPick, matchCandidates, pickMatch, rowIds, takenRows } from './receiptMatch';
 import { emailLists, companyCards, scanSince } from './mailReceipts';
 import type { Account, Receipt, Txn } from './types';
 
@@ -124,7 +124,7 @@ describe('the company card', () => {
     expect(companyCard({ cardLast4: '32' }, [])).toBeNull();
   });
   it('every other waiting receipt on that card is put aside; matched ones and other cards are left', () => {
-    expect(onCompanyCard([a, b, c, d, { ...rc('e', '2026-10-08', 5, { cardLast4: '3210' }), txnId: 't1' }], ['3210']).map(r => r.id)).toEqual(['a', 'b']);
+    expect(onCompanyCard([a, b, c, d, { ...rc('e', '2026-10-08', 5, { cardLast4: '3210' }), txnId: 't1' }], ['3210']).map(x => [x.r.id, x.card])).toEqual([['a', '3210'], ['b', '3210']]);
     expect(onCompanyCard([a, b], [])).toEqual([]);
   });
   it('a receipt put aside by hand before cards were remembered still names its card', () => {
@@ -132,5 +132,61 @@ describe('the company card', () => {
     expect(companyCards(null, [marked, c, d], [visa, chq])).toEqual(['3210']);
     expect(companyCards({ companyCards: ['9999'] }, [swept], [visa, chq])).toEqual(['9999']);            // one put aside by its card doesn't name it again
     expect(companyCards({ companyCards: ['9999', 'junk'] }, [{ ...c, ignored: 'company' }], [visa, chq])).toEqual(['9999']);
+  });
+  it('the same monthly charge whose email shows no card goes along with it', () => {
+    const known: Receipt = { ...rc('k', '2026-10-16', 316.4, { merchant: 'Anthropic', cardLast4: '3210' }), ignored: 'company' };
+    const bare = rc('n', '2026-08-16', 316.4, { merchant: 'Anthropic' }), other = rc('o', '2026-08-16', 31.64, { merchant: 'Anthropic' }), shop = rc('s', '2026-08-16', 316.4);
+    expect(onCompanyCard([known, bare, other, shop], ['3210']).map(x => [x.r.id, x.card])).toEqual([['n', '3210']]);
+  });
+});
+
+describe('one order billed as several charges', () => {
+  it('finds the charges that add up to the order, a day or more later', () => {
+    const order = rc('o', '2026-05-24', 96.01);
+    const a = row('2026-05-25', 47.44, { accountId: 'chq' }), b = row('2026-05-25', 41.8, { accountId: 'chq' }), c = row('2026-05-25', 6.77, { accountId: 'chq' }), d = row('2026-05-26', 12.5, { accountId: 'chq' });
+    const s = suggestSplits([order], [a, b, c, d], [order]);
+    expect(s.map(x => [x.receipt.id, x.rows.map(t => t.id).sort(), x.covered.length])).toEqual([['o', [a.id, b.id, c.id].sort(), 0]]);
+  });
+  it('a charge that already has its shipping email counts toward the total but isn’t linked again', () => {
+    const order = rc('o', '2026-08-31', 147.37), ship1 = { ...rc('s1', '2026-09-01', 60.87), txnId: 'x1' }, ship2 = { ...rc('s2', '2026-09-02', 41.31), txnId: 'x2' };
+    const free = row('2026-09-02', 45.19), r1 = row('2026-09-01', 60.87, { id: 'x1' }), r2 = row('2026-09-02', 41.31, { id: 'x2' });
+    const [s] = suggestSplits([order], [free, r1, r2], [order, ship1, ship2]);
+    expect(s.rows.map(t => t.id)).toEqual([free.id]);
+    expect(s.covered.map(t => t.id)).toEqual(['x1', 'x2']);
+  });
+  it('not when two combinations fit, nothing is free, the shop differs, or a row belongs to some other receipt', () => {
+    const order = rc('o', '2026-06-01', 30);
+    expect(suggestSplits([order], [row('2026-06-02', 15), row('2026-06-02', 15), row('2026-06-02', 5), row('2026-06-03', 25)], [order])).toEqual([]);
+    const held = { ...rc('h', '2026-06-02', 20), txnId: 'y1' }, held2 = { ...rc('h2', '2026-06-02', 10), txnId: 'y2' };
+    expect(suggestSplits([order], [row('2026-06-02', 20, { id: 'y1' }), row('2026-06-02', 10, { id: 'y2' })], [order, held, held2])).toEqual([]);
+    expect(suggestSplits([order], [row('2026-06-02', 20, { merchant: 'WALMART', desc: 'WALMART' }), row('2026-06-02', 10)], [order])).toEqual([]);
+    const photo: Receipt = { ...rc('p', '2026-06-02', 20, { merchant: 'Costco' }), from: 'photo', email: undefined, txnId: 'z1' };
+    expect(suggestSplits([order], [row('2026-06-02', 20, { id: 'z1' }), row('2026-06-02', 10)], [order, photo])).toEqual([]);
+  });
+  it('a charge goes to one order only, and a receipt’s rows are all taken', () => {
+    const o1 = rc('o1', '2026-06-01', 30), o2 = rc('o2', '2026-06-01', 30.5);
+    const a = row('2026-06-02', 20), b = row('2026-06-02', 10), c = row('2026-06-02', 10.5);
+    expect(suggestSplits([o1, o2], [a, b, c], [o1, o2]).map(x => x.receipt.id)).toEqual(['o1']);
+    const linked: Receipt = { ...o1, txnId: a.id, txnMonth: '2026-06', txnMore: [{ id: b.id, month: '2026-06' }] };
+    expect(rowIds(linked)).toEqual([a.id, b.id]);
+    expect([...takenRows([linked, o2])]).toEqual([a.id, b.id]);
+    expect([...takenRows([linked, o2], 'o1')]).toEqual([]);
+  });
+});
+
+describe('to the cent', () => {
+  it('a charge one cent off is another charge', () => {
+    const r = rc('a', '2026-09-25', 20.17);
+    const uber = row('2026-09-28', 20.18, { merchant: 'UBER CANADA/UBEREATS', desc: 'UBER CANADA/UBEREATS' });
+    expect(matchCandidates(r, [uber], [visa], new Set())).toEqual([]);
+    expect(pickMatch(r, [uber], [visa], new Set())).toBeNull();
+    expect(pickMatch(r, [row('2026-09-28', 20.17)], [visa], new Set())?.exact).toBe(true);
+  });
+  it('an email read as US dollars still links to a charge at that shop for the very same figure', () => {
+    const r = rc('d', '2026-09-15', 19.2, { merchant: 'Disney+', currency: 'USD' });
+    const same = row('2026-09-16', 19.2, { merchant: 'GOOGLE DISNEY', desc: 'GOOGLE*DISNEY' });
+    expect(pickMatch(r, [same], [visa], new Set())?.txn.id).toBe(same.id);
+    expect(pickMatch(r, [row('2026-09-16', 26.4, { merchant: 'GOOGLE DISNEY', desc: 'GOOGLE*DISNEY' })], [visa], new Set())).toBeNull();     // converted: by hand
+    expect(pickMatch(r, [row('2026-09-16', 19.2, { merchant: 'TIM HORTONS', desc: 'TIM HORTONS' })], [visa], new Set())).toBeNull();       // another shop
   });
 });

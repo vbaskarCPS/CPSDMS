@@ -6,9 +6,10 @@
 //    parts. Only one of them should be waiting for the bank.
 //  • Several emails, one charge: orders placed the same day are often billed as one card charge that posts a day
 //    later. suggestGroups finds the emails that add up to a charge; chargesFor lists the charges for a hand-made group.
+//  • One email, several charges: an order charged parcel by parcel. suggestSplits finds the charges that add up to it.
 //  • Card history: an email older than the card's first row in the planner can't be matched, so it isn't listed.
 //  • Company card: a card (by its last four digits) whose purchases are all put aside.
-import { awaitingMatch, dayDiff, foreignCurrency, merchantScore, shiftDay } from './receiptMatch';
+import { awaitingMatch, dayDiff, foreignCurrency, merchantScore, rowIds, shiftDay } from './receiptMatch';
 import { CASH_ACCOUNT_ID, type Account, type AccountType, type Receipt, type Txn } from './types';
 
 const cents = (n: number) => Math.round(n * 100);
@@ -113,6 +114,37 @@ export function suggestGroups(pool: Receipt[], rows: Txn[], taken: Set<string>):
   return out;
 }
 
+export interface SplitSuggestion { receipt: Receipt; /** the free charges it would be linked to */ rows: Txn[]; /** charges of the same order that already have their own (shipping) email */ covered: Txn[] }
+/** The other way round: ONE order email billed as several charges (a shop that charges as each parcel ships). For a
+ *  waiting receipt, the charges at the same shop from a day before it to 10 days after that add up to its total: 2 to
+ *  5 of them, each either free or already holding a shipping email from that shop, and at least one free. Only when
+ *  exactly one combination adds up. Oldest receipt first; a charge is offered to one receipt only. */
+export function suggestSplits(pool: Receipt[], rows: Txn[], all: Receipt[]): SplitSuggestion[] {
+  const holder = new Map<string, Receipt>();
+  for (const r of all) for (const id of rowIds(r)) holder.set(id, r);
+  const used = new Set<string>();
+  const out: SplitSuggestion[] = [];
+  for (const r of pool.filter(groupable).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))) {
+    const total = cents(r.total);
+    const near = rows.filter(t => {
+      if (t.amount >= 0 || t.accountId === CASH_ACCOUNT_ID || t.toWallet || used.has(t.id) || cents(-t.amount) >= total) return false;
+      const d = dayDiff(r.date, t.date);
+      if (d < -1 || d > 10 || shopOnRow(r, t) < 0.5) return false;
+      const h = holder.get(t.id);
+      return !h || (h.id !== r.id && isEmail(h) && sameShop(h.merchant, r.merchant) && dayDiff(r.date, h.date) >= 0);
+    }).sort((a, b) => Math.abs(dayDiff(r.date, a.date)) - Math.abs(dayDiff(r.date, b.date)) || a.id.localeCompare(b.id)).slice(0, 14);
+    if (near.length < 2) continue;
+    const combos = subsetsAdding(near, t => cents(-t.amount), total, 5, 2);
+    if (combos.length !== 1) continue;
+    const free = combos[0].filter(t => !holder.has(t.id)), covered = combos[0].filter(t => holder.has(t.id));
+    if (!free.length) continue;
+    for (const t of free) used.add(t.id);
+    const byDay = (a: Txn, b: Txn) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id);
+    out.push({ receipt: r, rows: free.sort(byDay), covered: covered.sort(byDay) });
+  }
+  return out;
+}
+
 export interface GroupCharge { txn: Txn; /** the charge less the receipts' total (0 = to the cent) */ diff: number; name: number; days: number }
 /** For a group picked by hand: the charges it could be, from 2 days before its first email to 7 days after its last.
  *  A charge of exactly the group's total (any name) first, then charges at the same shop within 15% (at least $5),
@@ -165,6 +197,19 @@ export function companyCard(r: Pick<Receipt, 'cardLast4'>, accounts: Account[]):
   const c = (r.cardLast4 || '').trim();
   return /^\d{4}$/.test(c) && !accounts.some(a => !a.archived && a.last4 === c) ? c : null;
 }
-/** The email receipts still waiting that were paid on one of the company cards. */
-export const onCompanyCard = (all: Receipt[], cards: string[]): Receipt[] =>
-  (cards.length ? all.filter(r => isEmail(r) && awaitingMatch(r) && !!r.cardLast4 && cards.includes(r.cardLast4)) : []);
+/** The email receipts still waiting that go with a company card, each with the card that takes it: one that shows the
+ *  card's last four digits; and one that shows no card at all but is the same charge (same shop, same amount) as a
+ *  receipt known to be on a company card (a monthly bill whose email doesn't always name the card). */
+export function onCompanyCard(all: Receipt[], cards: string[]): { r: Receipt; card: string }[] {
+  if (!cards.length) return [];
+  const emails = all.filter(isEmail);
+  const known = emails.filter(r => !!r.cardLast4 && cards.includes(r.cardLast4) && (r.ignored === 'company' || awaitingMatch(r)));
+  const out: { r: Receipt; card: string }[] = [];
+  for (const r of emails) {
+    if (!awaitingMatch(r)) continue;
+    if (r.cardLast4) { if (cards.includes(r.cardLast4)) out.push({ r, card: r.cardLast4 }); continue; }
+    const like = known.find(k => cents(k.total) === cents(r.total) && sameShop(k.merchant, r.merchant));
+    if (like) out.push({ r, card: like.cardLast4! });
+  }
+  return out;
+}

@@ -6,7 +6,7 @@
 import { getDocs, putDocs } from '../../lib/docs';
 import { uid } from '../../ui/primitives';
 import { loadAccounts, loadMonths, mergeTxns, normalizeMerchant, recategorize, round2, saveAccount, todayIso, visibleMonths } from './lib';
-import { awaitingMatch, foreignCurrency, looseCandidates, matchCandidates, pickMatch, shiftDay, type Candidate } from './receiptMatch';
+import { awaitingMatch, foreignCurrency, looseCandidates, matchCandidates, pickMatch, shiftDay, takenRows, type Candidate } from './receiptMatch';
 import { liveRows } from './receiptGroups';
 import { CASH_ACCOUNT_ID, type Account, type Receipt, type Txn, type TxnMonth } from './types';
 export { splitByCategory, type Candidate } from './receiptMatch';
@@ -110,9 +110,21 @@ export async function linkGroup(rs: Receipt[], txn: Txn, by: 'auto' | 'hand'): P
   if (txn.category !== big.category || txn.source !== 'manual') await recategorize({ [txn.date.slice(0, 7)]: [{ ...txn }] }, new Set([txn.id]), big.category);
   return next;
 }
+/** One order billed as several charges: the receipt holds every one of them (the biggest as its row), and they all
+ *  take its category. */
+export async function linkSplit(r: Receipt, txns: Txn[], by: 'auto' | 'hand'): Promise<Receipt> {
+  const rows = [...txns].sort((a, b) => a.amount - b.amount || a.id.localeCompare(b.id));   // biggest charge first
+  if (rows.length < 2) return linkReceipt(r, rows[0], by);
+  const next: Receipt = { ...r, txnId: rows[0].id, txnMonth: rows[0].date.slice(0, 7), txnMore: rows.slice(1).map(t => ({ id: t.id, month: t.date.slice(0, 7) })), matchedAt: new Date().toISOString(), matchedBy: by };
+  await saveReceipt(next);
+  const months: Record<string, Txn[]> = {};
+  for (const t of rows) (months[t.date.slice(0, 7)] ||= []).push({ ...t });
+  await recategorize(months, new Set(rows.map(t => t.id)), r.category);
+  return next;
+}
 export async function unlinkReceipt(r: Receipt): Promise<Receipt> {
   const next: Receipt = { ...r };
-  delete next.txnId; delete next.txnMonth; delete next.matchedAt; delete next.matchedBy;
+  delete next.txnId; delete next.txnMonth; delete next.txnMore; delete next.matchedAt; delete next.matchedBy;
   await saveReceipt(next);
   return next;
 }
@@ -121,7 +133,11 @@ export async function unlinkReceipt(r: Receipt): Promise<Receipt> {
 export async function setReceiptCategory(r: Receipt, category: string): Promise<Receipt> {
   const next = { ...r, category };
   await saveReceipt(next);
-  if (r.txnId && r.txnMonth) await recategorize({ [r.txnMonth]: [{ id: r.txnId } as Txn] }, new Set([r.txnId]), category);
+  if (r.txnId && r.txnMonth) {
+    const months: Record<string, Txn[]> = { [r.txnMonth]: [{ id: r.txnId } as Txn] };
+    for (const x of r.txnMore || []) (months[x.month] ||= []).push({ id: x.id } as Txn);
+    await recategorize(months, new Set([r.txnId, ...(r.txnMore || []).map(x => x.id)]), category);
+  }
   return next;
 }
 
@@ -136,7 +152,7 @@ export async function candidatesFor(r: Receipt, others: Receipt[]): Promise<Cand
   const from = shiftDay(r.date, -2), to = shiftDay(r.date, 7);
   const [accounts, raw] = await Promise.all([loadAccounts(), loadMonths(from.slice(0, 7), to.slice(0, 7))]);
   const rows = liveRows(Object.values(visibleMonths(raw, accounts)).flat(), accounts);
-  const taken = new Set(others.filter(o => o.id !== r.id && o.txnId).map(o => o.txnId!));
+  const taken = takenRows(others, r.id);
   // another currency: the bank's amount is converted, so look by the store's name instead of the amount
   return foreignCurrency(r) ? looseCandidates(r, rows, taken) : matchCandidates(r, rows, accounts, taken);
 }
@@ -151,7 +167,7 @@ export async function matchPending(): Promise<{ linked: Receipt[]; waiting: numb
   const from = shiftDay(pending[0].date, -3), to = shiftDay(pending[pending.length - 1].date, 7);
   const [accounts, raw] = await Promise.all([loadAccounts(), loadMonths(from.slice(0, 7), to.slice(0, 7))]);
   const rows = liveRows(Object.values(visibleMonths(raw, accounts)).flat(), accounts);   // not an archived account's
-  const taken = new Set(all.filter(r => r.txnId).map(r => r.txnId!));
+  const taken = takenRows(all);
   const linked: Receipt[] = [];
   for (const r of pending) {
     const pick = pickMatch(r, rows, accounts, taken);   // the same rules as receipts from email (mailReceipts.ts)
