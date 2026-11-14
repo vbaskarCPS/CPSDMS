@@ -284,6 +284,8 @@ d('describe', () => {
         change: { amount: { from: 10, to: 20 } }, ask: { amount: 20 }, patch: { price: 20, display_price: '20.00', payment_method: 'Cash', payment_breakdown: { Cash: 20 } }, stamp: 't' } },
     };
     samples.bonus = { kind: 'bonus', check: bonus() };
+    samples.prebook_done = { kind: 'prebook_done', check: { ok: true, date: '2026-11-14', stamp: 't', worker: { cn: 'I1003', name: 'Andile Gobodo' }, cart: { id: 's1', workers: ['I1003'], names: ['Andile Gobodo'] },
+      booking: { id: 'b1', address: '40781 Thunderbird Ridge, unit 10', street_address: '40781 Thunderbird Ridge', route: 'SQU35', job_code: 'AFSL', prepaid: true } } };
     samples.ms_assign = { kind: 'ms_assign', check: { ok: true, stamp: 't', ask: [], moves: [{ zone_id: 'z1', zone: 'Hamilton South 3 (2)', campaign_id: 'c1', campaign: 'Taxifi', from_id: 'u1', from: 'Sina K', to_id: 'u2', to: 'Newton O' }] } };
     samples.ms_zone = { kind: 'ms_zone', check: { ok: true, stamp: 't', zone: { id: 'z1', name: 'Barrie 4', city: 'Barrie' }, from: 'active', to: 'retired', businesses: 12 } };
     samples.ms_cut = { kind: 'ms_cut', check: { ok: true, stamp: 't', city: { id: 'c', name: 'Hamilton' }, campaign: { id: 'k', name: 'Taxifi' }, target: 3, only: true, replace: [{ id: 'z3', name: 'Hamilton South 3 (2)', reps: 'Sina K' }],

@@ -15,6 +15,7 @@
 //   past_job   → a closed day's payout list › a cart's sales: change one job (type, amount, how it was paid) or add one,
 //                then save the day, which works its pay out again (not once the day is on a payslip). An open booking at
 //                the same address is marked done with it.
+//   prebook_done → a prebook done on today's live day: the logsheet's own completion, booking marked done (bennyPrebook.ts)
 //   ms_assign / ms_zone → MainstreetAI › Zones: who has which zone, and retire / bring back (bennyMs.ts)
 //   ms_cut / ms_cut_save → MainstreetAI › Zones › Generate: work new zones out, then save them (bennyMs.ts)
 //   bonus      → the day's payout list › Add bonus, on one or more paid-out carts: the live day saves it on the logsheet
@@ -40,6 +41,7 @@ import { STOP_WORD } from './bennyDrive';
 import { textOf, textsTitle, type TextPerson, type TextsCheck, type TextsState } from './bennyTexts';
 import { removeCard, removedSaid, type RemoveCheck, type RemoveDone } from './bennyRemove';
 import { addJobCard, addJobLines, addedSaid, type AddJobCheck } from './bennyAddJob';
+import { codeValue, liveBookingId, prebookCard, prebookFix, prebookLine, prebookSaid, type PrebookCheck } from './bennyPrebook';
 import { lastSettings } from './bennyWalk';
 import { queueHref } from './payoutQueue';
 import { cartContext, dayLines, listCarts, saveDay } from './payoutCarts';
@@ -147,6 +149,7 @@ export const payoutsStart = (c: PayoutsCheck): string | null => queueHref(c.date
 export type BennyProposal =
   | { kind: 'remove'; check: RemoveCheck }
   | { kind: 'add_job'; check: AddJobCheck }
+  | { kind: 'prebook_done'; check: PrebookCheck }
   | { kind: 'past_job'; check: PastJobCheck }
   | { kind: 'ms_assign'; check: MsAssignCheck }
   | { kind: 'ms_zone'; check: MsZoneCheck }
@@ -302,6 +305,7 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
     case 'remove': return removeCard(p.check);
     case 'add_job': return addJobCard(p.check);
     case 'past_job': return pastJobCard(p.check);
+    case 'prebook_done': return prebookCard(p.check);
     case 'ms_assign': return msAssignCard(p.check);
     case 'ms_zone': return msZoneCard(p.check);
     case 'ms_cut': return msCutCard(p.check);
@@ -583,6 +587,45 @@ export async function addJobFromBenny(p: Extract<BennyProposal, { kind: 'add_job
   return addedSaid(again);
 }
 
+/** What this season's office flats are worth, from the live day's own season (the same numbers the logsheet uses). */
+export async function seasonFlats(centerId: string): Promise<{ season: string; flats: { code: string; value: number }[] }> {
+  const { sessionService } = await legacy(centerId);
+  const { getSeasonConfig } = await import('../../lib/commandCenterService');
+  const season = await sessionService.getSessionSeasonType();
+  return { season, flats: getSeasonConfig(season).officeFlats };
+}
+
+/**
+ * A prebook done on today's live day. The database checks it again first. A new line is saved with the logsheet's own
+ * completion (the booking's id rides on it, so the bookings sync marks the booking done); a line that is already there
+ * for that address is changed with the logsheet's own edit save, then given the booking's id (benny_prebook_after).
+ * Either way the booking is read back: "marked done" is only said when it is.
+ */
+export async function prebookDoneFromBenny(p: Extract<BennyProposal, { kind: 'prebook_done' }>, centerId: string): Promise<string> {
+  const first = p.check.worker.name.split(' ')[0];
+  const { sessionService, date } = await legacy(centerId);
+  if (date !== p.check.date) throw new Error('The live day changed since I checked. Ask me again.');
+  const c = await recheck<PrebookCheck>('benny_check_prebook_done', { p_center: centerId, p_worker: p.check.worker.cn, p_booking: p.check.booking.id });
+  if (c.stamp !== p.check.stamp) throw new Error(`That prebook or ${first}’s logsheet changed since I checked. Ask me again.`);
+  const { season, flats } = await seasonFlats(centerId);
+  const value = codeValue(c.booking.job_code, flats);
+  if (value == null) throw new Error(`I can’t tell what ${c.booking.job_code} is worth this season, so nothing was saved. Complete it on the logsheet screen.`);
+  // after the save the database says whether the booking reads done; for a line that was already there it first puts
+  // the booking's id on it, so it is the same as a prebook the worker completed and the bookings sync closes the booking
+  const after = async (tx?: string) => {
+    try { return ((await db.rpc('benny_prebook_after', { p_center: centerId, p_worker: c.worker.cn, p_booking: c.booking.id, p_tx: tx ?? null })).data as { status?: string } | null)?.status === 'done'; }
+    catch { return false; }   // no signal: said as not confirmed
+  };
+  if (c.replaces) {
+    try { await sessionService.updateTransaction(c.replaces.id, prebookFix(c, value, season)); }
+    catch (e) { throw new Error(`The change didn’t save${e instanceof Error && e.message ? ` (${e.message.replace(/\.$/, '')})` : ''}. ${first}’s job still reads as before.`); }
+    return prebookSaid(c, value, (await after(c.replaces.id)) ? 'done' : 'failed');
+  }
+  try { await sessionService.completeJob(prebookLine(c, value, season), liveBookingId(c), c.worker.cn, c.cart.workers); }
+  catch (e) { throw new Error(`The job didn’t save: ${e instanceof Error ? e.message : 'try again'}. Nothing was added.`); }
+  return prebookSaid(c, value, (await after()) ? 'done' : 'failed');
+}
+
 /**
  * The day's payout list › Add bonus, for each bonus on the card. The database checks once more and starts a record of
  * each; the app saves the way that day's payout list does; the carts are read back, so "added" is only said when they are.
@@ -727,6 +770,7 @@ export async function doProposal(p: BennyProposal, center: CenterLite, onStep?: 
   if (p.kind === 'bonus') return bonusesFromBenny(p, center);
   if (p.kind === 'remove') return removeFromBenny(p, center.id);
   if (p.kind === 'add_job') return addJobFromBenny(p, center.id);
+  if (p.kind === 'prebook_done') return prebookDoneFromBenny(p, center.id);
   if (p.kind === 'past_job') return pastJobFromBenny(p, center);
   // MainstreetAI: no center; the Zones screen's own saves
   if (p.kind === 'ms_assign') return msAssignFromBenny(p.check);

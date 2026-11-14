@@ -53,7 +53,7 @@ export function forServer(messages: BennyMsg[]) {
 }
 /** The change cards this build of the app can show. Sent with every question, so the server never sends a card that an
  *  older open tab can't draw (it says "refresh" instead). Add a kind here when describe() and doProposal() handle it. */
-export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts', 'bonus', 'texts', 'remove', 'add_job', 'past_job', 'ms_assign', 'ms_zone', 'ms_cut', 'ms_cut_save'];
+export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts', 'bonus', 'texts', 'remove', 'add_job', 'past_job', 'prebook_done', 'ms_assign', 'ms_zone', 'ms_cut', 'ms_cut_save'];
 
 /** What else this build can do with a card it already shows. 'crews' = a start-day card that says who goes with which
  *  manager (an older tab would start the day and ignore the crews, so the server holds that card back from it). */
@@ -84,6 +84,12 @@ export async function askBenny(messages: BennyMsg[], context: BennyContext): Pro
   const answer = { reply: String(data?.reply || ''), map: data?.map ? { maps: [], highlight: [], pins: [], ...(data.map as Partial<BennyMap>) } as BennyMap : null, proposal: got && CARDS.includes(got.kind) ? got : null, ...(data?.logged === true ? { logged: true } : {}) };
   // an order comes planned in straight lines: here it is put in driving order by the road's own times, when they can be read
   if (answer.proposal?.kind === 'stops') return withOrder(answer, answer.proposal.check, await byRoad(answer.proposal.check).catch(() => null));
+  // a prebook's card shows what its job code is worth this season (the save works it out again, whatever is shown)
+  if (answer.proposal?.kind === 'prebook_done' && context.center_id) {
+    const check = answer.proposal.check;
+    const value = await import('./bennyActions').then(m => m.seasonFlats(context.center_id!)).then(f => import('./bennyPrebook').then(m => m.codeValue(check.booking.job_code, f.flats))).catch(() => null);
+    return { ...answer, proposal: { ...answer.proposal, check: { ...check, value } } };
+  }
   return answer;
 }
 
