@@ -137,5 +137,9 @@ describe('what the real data taught it', () => {
     expect(rs).toHaveLength(1);
     expect(rs[0]).toMatchObject({ merchant: 'INTELL MEMBER BUS', active: true });
     expect(rs[0].names).toEqual(['INTELL MEMBER BUS', 'MOKA TAM BUS']);
+    // its history: all 14 charges, newest first, the old name's included
+    expect(rs[0].txns).toHaveLength(14);
+    expect(rs[0].txns[0].date > rs[0].txns[13].date).toBe(true);
+    expect(rs[0].txns[rs[0].txns.length - 1].merchant).toBe('MOKA TAM BUS');
   });
 });

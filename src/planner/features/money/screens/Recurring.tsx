@@ -1,7 +1,7 @@
 // /money/recurring — what charges on a regular beat (weekly to yearly), what that adds up to a month, and what seems to
 // have stopped. The detection is in ../recurring.ts.
 import { useMemo, useState } from 'react';
-import { RefreshCw, EyeOff } from 'lucide-react';
+import { ChevronDown, ChevronRight, EyeOff, RefreshCw } from 'lucide-react';
 import { Page, Header, Card, Button, Stat, Empty, useToast } from '../../../ui/primitives';
 import { useDoc } from '../../../lib/useDoc';
 import { useMoney } from '../useMoney';
@@ -14,7 +14,9 @@ const pretty = (s: string) => s.replace(/\s+_[A-Z]\b/g, '').replace(/\b\w+/g, w 
 
 export function Recurring() {
   const m = monthKey();
-  const { months, loading } = useMoney(recurringFrom(m), m);
+  const { months, accounts, loading } = useMoney(recurringFrom(m), m);
+  const [open, setOpen] = useState<string | null>(null);
+  const accountName = (id: string) => accounts.find(a => a.id === id)?.name || '';
   const prefs = useDoc<RecurringPrefs>('moneyprefs', 'recurringIgnore', { ignore: [] }, 300);
   const [showHidden, setShowHidden] = useState(false);
   const [toast, say] = useToast();
@@ -34,13 +36,17 @@ export function Recurring() {
     if (r.prevAmount !== undefined) bits.push(`${r.lastAmount > r.prevAmount ? 'up' : 'down'} from ${money(r.prevAmount)}`);
     else if (r.varies) bits.push(`last ${money(r.lastAmount)}, varies`);
     const perMonth = r.cadence === 'monthly' || !r.active;
+    const isOpen = open === r.id;
+    const total = r.txns.reduce((s, t) => s - t.amount, 0);
     return (
-      <div key={r.id} className="mo-txn" style={{ opacity: hidden ? 0.5 : 1 }}>
+      <div key={r.id}>
+      <div className="mo-txn" style={{ opacity: hidden ? 0.5 : 1 }}>
         <CategoryIcon name={r.category} size={20} />
-        <div className="mo-txn__main">
-          <b>{pretty(r.merchant)}</b>
-          <small>{bits.join(' · ')}</small>
-        </div>
+        <button type="button" className="mo-txn__main" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : r.id)}
+          style={{ background: 'none', border: 0, padding: 0, textAlign: 'left', color: 'inherit', font: 'inherit', cursor: 'pointer' }}>
+          <b>{pretty(r.merchant)} {isOpen ? <ChevronDown aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} /> : <ChevronRight aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} />}</b>
+          <small style={{ display: 'block' }}>{bits.join(' · ')}</small>
+        </button>
         <div style={{ textAlign: 'right' }}>
           <span className="mo-amt">{money(perMonth ? r.avg : monthlyCost(r))}<span className="pl-muted" style={{ fontWeight: 400, fontSize: 11 }}>{perMonth ? (r.cadence === 'monthly' ? '/mo' : ` ${cadenceLabel(r.cadence)}`) : '/mo'}</span></span>
           {!perMonth && <><br /><small className="pl-muted">{money(r.avg)} {cadenceLabel(r.cadence)}</small></>}
@@ -52,6 +58,19 @@ export function Recurring() {
             <EyeOff style={{ width: 12, height: 12 }} /> {hidden ? 'Show' : 'Not recurring'}
           </button>
         </div>
+      </div>
+      {isOpen && (
+        <div className="mo-rec-history" style={{ margin: '2px 0 10px 32px' }}>
+          <small className="pl-muted">{r.txns.length} charge{r.txns.length === 1 ? '' : 's'} · {money(total)} in all{r.names.length > 1 ? ` · also as ${r.names.filter(n => n !== r.merchant).map(pretty).join(', ')}` : ''}</small>
+          {r.txns.map(t => (
+            <div key={t.id} className="pl-row" style={{ gap: 8, padding: '5px 0', borderTop: '1px solid var(--line)', fontSize: 13 }}>
+              <span style={{ width: 86, flex: 'none' }}>{dayLabel(t.date)}</span>
+              <span className="pl-grow" style={{ minWidth: 0 }}>{pretty(t.merchant)}<small className="pl-muted" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{accountName(t.accountId)}{t.desc && t.desc !== t.merchant ? ` · ${t.desc}` : ''}</small></span>
+              <span className="mo-amt">{money(-t.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
       </div>
     );
   };

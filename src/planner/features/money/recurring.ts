@@ -26,6 +26,8 @@ export interface Recurring {
   merchant: string;
   /** Every name it came under (for "Not recurring", which hides by name). */
   names: string[];
+  /** Every charge it's made of, newest first (twins seen twice counted once). */
+  txns: Txn[];
   category: string;
   /** What it usually costs each time: the latest for a fixed price, the average of the last 3 for a bill that varies. */
   avg: number;
@@ -201,7 +203,7 @@ function streamOf(charges: Txn[], today: string, varies: boolean, everyday = fal
     merchant, names, category: [...cats].sort((a, b) => b[1] - a[1])[0][0],
     avg, cadence: beat.cadence, months: [...new Set(dates.map(d => d.slice(0, 7)))], count: list.length,
     last, lastAmount, prevAmount: !changes ? prev : undefined,
-    next, active, varies: changes,
+    next, active, varies: changes, txns: [...list].reverse(),
   };
   streamTxns.set(line, list);
   return line;
@@ -297,7 +299,15 @@ export function findRecurring(months: Record<string, Txn[]>, thisMonth: string, 
     const beat = BEATS.find(b => b.cadence === r.cadence)!;
     const after = out.find(o => o !== r && o.active && o.cadence === r.cadence && Math.abs(streamTxns.get(o)![0] ? -streamTxns.get(o)![0].amount - r.lastAmount : 1) < 0.01
       && Math.abs(daysBetween(nextBeat(r, beat), streamTxns.get(o)![0].date)) <= beat.slack + 2);
-    if (after) { after.names = [...new Set([...after.names, ...r.names])]; out.splice(i, 1); }
+    if (after) {
+      // one line with both names and all its charges (the old name's history included)
+      const joined = streamOf([...streamTxns.get(r)!, ...streamTxns.get(after)!], now, false);
+      const keep = joined && joined.active ? joined : after;
+      keep.names = [...new Set([...after.names, ...r.names])];
+      if (keep.merchant !== after.merchant && keep === joined) keep.merchant = after.merchant;
+      out[out.indexOf(after)] = keep;
+      out.splice(i, 1);
+    }
   }
   for (let i = out.length - 1; i >= 0; i--) if (out[i].avg < 1 || out[i].names.some(n => ignore.includes(n))) out.splice(i, 1);
   const key = (r: Recurring) => (r.active ? 0 : 1);
