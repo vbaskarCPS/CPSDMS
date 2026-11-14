@@ -145,7 +145,7 @@ export function Transfers() {
         <div className="pl-row" style={{ gap: 8, alignItems: 'flex-start' }}>
           <button type="button" className="pl-grow" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : key)} style={{ ...linkBtn, minWidth: 0 }}>
             <b>{g.from} → {g.to} {isOpen ? <ChevronDown aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} /> : <ChevronRight aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} />}</b>
-            <small className="pl-muted" style={{ display: 'block' }}>{plural(g.count, 'move')}{g.both === g.count ? ' · both sides matched' : g.both ? ` · ${g.both} matched on both sides` : ''}</small>
+            <small className="pl-muted" style={{ display: 'block' }}>{plural(g.count, 'move')}{!(g.fromId && g.toId) ? ` · one side only: ${g.fromId ? g.to : g.from} isn’t linked to the planner` : g.both === g.count ? ' · both sides matched' : ` · ${g.both} matched on both sides`}</small>
           </button>
           <span className="mo-amt" style={{ flex: 'none' }}>{money(g.total)}</span>
         </div>
@@ -156,7 +156,7 @@ export function Transfers() {
                 <div className="pl-row" style={{ gap: 8 }}><span className="pl-grow">{day(m.date)}</span><span className="mo-amt">{money(m.amount)}</span></div>
                 {m.out && side(m.out, '−', m.date)}
                 {m.into && side(m.into, '+', m.date)}
-                {!(m.out && m.into) && <div className="pl-muted">{m.fromId && m.toId ? 'The other side isn’t in the planner yet' : `Only this side: ${m.out ? g.to : g.from} isn’t tracked here`}</div>}
+                {!(m.out && m.into) && m.fromId && m.toId && <div className="pl-muted">The other side hasn’t shown up yet</div>}
               </div>
             ))}
             {more(key, g.moves.length)}
