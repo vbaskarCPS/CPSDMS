@@ -1,9 +1,9 @@
 // supabase/functions/benny-assist/index.ts — The Benny, the in-app assistant.
 //
-//   POST { messages: [{ role, content }], context: { center_id, center_name, today, path, screen, rm_manager, following, user_name, spoken, diag } }
+//   POST { messages: [{ role, content }], images?: [{ media_type, data }] (up to 3 pictures sent with the last message), context: { center_id, center_name, today, path, screen, rm_manager, following, user_name, spoken, diag } }
 //     → { reply, map?, proposal?, logged? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
-//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | add_job | past_job | payouts | bonus | texts | remove.
+//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | add_job | past_job | payouts | bonus | texts | remove | ms_assign | ms_zone.
 //              The Benny never makes the change itself: the app does, with the same code as its screens, after the person taps
 //              Confirm. booking_emails changes nothing at all: its card opens the Send booking emails screen, where the person sends.
 //              payouts changes nothing either: its card opens the payout screen, where the person finalizes each payout.
@@ -12,7 +12,10 @@
 //              the person a notification for when it's live.
 //
 // Who: super admins (everything), route managers (their own team on the live map: carts, routes, connected routes),
-// floaters on the floater map (the teams of the managers they follow there).
+// floaters on the floater map (the teams of the managers they follow there), and MainstreetAI admins on MainstreetAI's
+// screens (context.screen "ms": zones and reps only, with its own tools and rules).
+// Pictures: sent with the question to the main model only (the small model never takes a question with a picture). They
+// are looked at for that one question and kept nowhere: not in the chat that is sent back next time, not in the log.
 // Runs as the signed-in person: their JWT is passed through, so every lookup (benny_* database functions) is checked by
 // the database against their permissions and the centers they can see. The Benny has no database access of its own.
 // Bug reports, and requests it couldn't do (no tool for it), are saved in the app's own log (benny_bugs, shown in
@@ -133,10 +136,23 @@ Deno.serve(async req => {
     const { data: me } = await sb.auth.getUser(auth.replace(/^Bearer\s+/i, ''));
     if (!me?.user) return json({ error: 'signed_out' }, 401);
 
-    const b = await req.json().catch(() => ({})) as { messages?: Msg[]; context?: Ctx };
+    const b = await req.json().catch(() => ({})) as { messages?: Msg[]; context?: Ctx; images?: unknown };
     const ctx: Ctx = b.context || {};
-    const [{ data: role, error: roleErr }, { data: mode }] = await Promise.all([sb.rpc('benny_ok_any', { p_center: ctx.center_id || null }), sb.rpc('benny_model_mode')]);
-    if (roleErr || (role !== 'admin' && role !== 'rm')) return json({ error: 'The Benny is for super admins and route managers.' }, 403);
+    // MainstreetAI's own Benny: for its admins, on its screens. It has no center, and nothing of the Property Stars side.
+    const onMs = ctx.screen === 'ms';
+    if (onMs) { ctx.center_id = undefined; ctx.center_name = undefined; ctx.rm_manager = undefined; ctx.following = undefined; ctx.following_names = undefined; }
+    const [{ data: asRole, error: roleErr }, { data: mode }] = await Promise.all([
+      onMs ? sb.rpc('ms_is_admin').then(r => ({ data: r.data === true ? 'ms' : null, error: r.error })) : sb.rpc('benny_ok_any', { p_center: ctx.center_id || null }),
+      sb.rpc('benny_model_mode')]);
+    const role = asRole as Role | null;
+    if (onMs && (roleErr || role !== 'ms')) return json({ error: 'The Benny here is for MainstreetAI admins.' }, 403);
+    if (!onMs && (roleErr || (role !== 'admin' && role !== 'rm'))) return json({ error: 'The Benny is for super admins and route managers.' }, 403);
+    // pictures sent with the question (the app shrinks them first): a few, of a kind the model reads, none huge
+    const pics = (Array.isArray(b.images) ? b.images : []).filter((i): i is { media_type: string; data: string } => !!i && typeof i === 'object'
+        && /^image\/(jpeg|png|webp|gif)$/.test(String((i as { media_type?: unknown }).media_type)) && typeof (i as { data?: unknown }).data === 'string'
+        && (i as { data: string }).data.length > 100 && (i as { data: string }).data.length < 5_000_000 && /^[A-Za-z0-9+/=]+$/.test((i as { data: string }).data.slice(0, 2000)))
+      .slice(0, 3);
+    ctx.pictures = pics.length;
     // a route manager's "my team" is their own map; only admins can open someone else's.
     // The floater map is the floater's own: the database checks it (their id, the permission, the managers followed).
     if (role === 'rm' && ctx.rm_manager && !/^floater_/.test(ctx.rm_manager)) {
@@ -161,7 +177,8 @@ Deno.serve(async req => {
     const question = String(history[history.length - 1].content);
     // which model: the setting in the database; a super admin's own app can ask for one or the other to try it out
     const asked = role === 'admin' && (ctx.model === 'fast' || ctx.model === 'main') ? ctx.model : null;
-    const fastOn = (asked ? asked === 'fast' : mode === 'fast_first') && FAST !== MODEL;
+    // MainstreetAI's questions and anything with a picture go to the main model
+    const fastOn = (asked ? asked === 'fast' : mode === 'fast_first') && FAST !== MODEL && role !== 'ms';
     const used = tallies;
     logTo = sb;
     logBase = { role, center_id: ctx.center_id || null, path: ctx.path || null, spoken: !!ctx.spoken, question, fast_model: FAST, main_model: MODEL };
@@ -203,6 +220,8 @@ Deno.serve(async req => {
     /** One go at the question on one model. The small model's go (fast) stops, with why, the moment its answer wouldn't be safe to show. */
     const run = async (model: string, fast: boolean): Promise<Run> => {
       const msgs: Msg[] = [...history]; const t = fast ? used.fast : used.main;
+      // the pictures go with the question just asked (history keeps the words only: names said are still checked against them)
+      if (pics.length) msgs[msgs.length - 1] = { role: 'user', content: [...pics.map(i => ({ type: 'image', source: { type: 'base64', media_type: i.media_type, data: i.data } })), { type: 'text', text: question }] };
       const out: Run = { reply: '', map: null, mapTitle: '', proposal: null, usedTools: 0, logged: false };
       const lookups: string[] = []; const lengths: number[] = []; let nudged = false;
       for (let round = 0; round < 8; round++) {
@@ -244,10 +263,13 @@ Deno.serve(async req => {
           if (fast && got && (got as { error?: string }).error) return { ...out, stop: { why: 'tool_error' } };
           if (p) out.proposal = p;
           if (u.name === 'show_map' && got && !(got as { error?: string }).error) { out.map = got; out.mapTitle = String(u.input?.title || ''); }
+          // MainstreetAI's zones on the map: the shapes go to the chat's map, the words to the Benny
+          const zoneMap = u.name === 'ms_map' && got && (got as { ok?: boolean }).ok === true ? (got as { map?: { title?: string } }).map : null;
+          if (zoneMap) { out.map = zoneMap; out.mapTitle = String(zoneMap.title || 'Zones'); }
           // a map's pins can be many: Claude only needs the counts
           const forClaude = u.name === 'show_map' && got && (got as { pins?: unknown[] }).pins
             ? { maps: (got as { maps: unknown }).maps, highlighted_routes: (got as { highlight: unknown[] }).highlight, pins: (got as { pins: unknown[] }).pins.length, shown: true }
-            : got;
+            : zoneMap ? { ...(got as object), map: 'shown in the chat' } : got;
           const text = JSON.stringify(forClaude).slice(0, 30000);
           if (fast) { lookups.push(text); arrayLengths(forClaude, 0, lengths); }
           results.push({ type: 'tool_result', tool_use_id: u.id, content: text });
@@ -258,7 +280,7 @@ Deno.serve(async req => {
     };
 
     // the small model first, when that is on and the question is one it may take; the main model whenever its go may not be shown
-    const skip = !fastOn ? null : ctx.spoken ? 'spoken' : needsMain(question);
+    const skip = !fastOn ? null : pics.length ? 'picture' : ctx.spoken ? 'spoken' : needsMain(question);
     let res: Run | null = null;
     if (fastOn && !skip) {
       // the small model being unavailable must never cost the person their answer: the main model takes the question

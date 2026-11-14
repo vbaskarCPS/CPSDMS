@@ -6,7 +6,7 @@ vi.mock('../bookings/mbMap', () => ({ BLANK_STYLE: {} }));
 vi.mock('../../../lib/rmMapStyle', () => ({ RM_STYLE: '', tidyRmBaseMap: () => undefined }));
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { bennyFeatures, hullOutline, mapCaption, MapFrame, outlinesFor } from './BennyMap';
+import { bennyFeatures, hullOutline, mapCaption, MapFrame, outlinesFor, zoneFeatures, ZONE_COLOURS } from './BennyMap';
 
 describe('mapCaption', () => {
   const pin = { lat: 49, lng: -123, label: 'x', route: null };
@@ -70,3 +70,27 @@ describe('the map’s outlines and messages', () => {
     expect(html).toContain('Try again');
   });
 });
+
+describe('a MainstreetAI zone map', () => {
+  const sq = (x: number, y: number): GeoJSON.Polygon => ({ type: 'Polygon', coordinates: [[[x, y], [x + 0.02, y], [x + 0.02, y + 0.01], [x, y + 0.01], [x, y]]] });
+  const zones = [{ name: 'Hamilton South 3 (2)', who: 'Sina K', polygon: sq(-79.9, 43.23) }, { name: 'Hamilton South 4 (2)', polygon: sq(-79.86, 43.23) }];
+  it('draws each zone in its own colour with its name and rep, and the asked-about area as a closed box', () => {
+    const f = zoneFeatures({ zones, box: { s: 43.232, w: -79.905, n: 43.277, e: -79.795 } });
+    expect(f.shapes.features.map(x => x.properties!.colour)).toEqual([ZONE_COLOURS[0], ZONE_COLOURS[1]]);
+    expect(f.labels.features.map(x => x.properties!.label)).toEqual(['Hamilton South 3 (2)\nSina K', 'Hamilton South 4 (2)']);
+    const [lng, lat] = (f.labels.features[0].geometry as GeoJSON.Point).coordinates;
+    expect(lng).toBeCloseTo(-79.89, 5); expect(lat).toBeCloseTo(43.235, 5);
+    const ring = (f.box.features[0].geometry as GeoJSON.LineString).coordinates;
+    expect(ring).toHaveLength(5); expect(ring[0]).toEqual(ring[4]); expect(ring[0]).toEqual([-79.905, 43.232]);
+  });
+  it('leaves out a shape that isn’t an area and a box that isn’t one', () => {
+    const f = zoneFeatures({ zones: [{ name: 'Bad', polygon: { type: 'Point', coordinates: [0, 0] } }, { name: 'None', polygon: null as unknown as GeoJSON.Geometry }], box: { s: 43.3, w: -79.9, n: 43.2, e: -79.8 } });
+    expect(f.shapes.features).toEqual([]); expect(f.box.features).toEqual([]);
+    expect(zoneFeatures({}).shapes.features).toEqual([]);
+  });
+  it('its caption counts the zones and says what the black box is', () => {
+    expect(mapCaption({ maps: [], highlight: [], pins: [], zones, box: { s: 1, w: 1, n: 2, e: 2 } })).toBe('2 zones · the black box is the area asked about');
+    expect(mapCaption({ maps: [], highlight: [], pins: [], zones: zones.slice(0, 1) })).toBe('1 zone');
+  });
+});
+

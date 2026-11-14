@@ -10,9 +10,13 @@ import type { BennyNews } from './bennyNews';
 
 /** pins with n are stops in an order: drawn numbered, joined in that order from start (where the manager is) when given:
  *  along path (the road, as [lng, lat] points) when the road is known, else in straight lines */
-export interface BennyMap { maps: string[]; highlight: string[]; pins: { lat: number; lng: number; label: string; route: string | null; n?: number }[]; start?: { lat: number; lng: number } | null; path?: [number, number][]; title?: string }
+export interface BennyMap { maps: string[]; highlight: string[]; pins: { lat: number; lng: number; label: string; route: string | null; n?: number }[]; start?: { lat: number; lng: number } | null; path?: [number, number][]; title?: string;
+  /** MainstreetAI: zones drawn as shapes (who = the rep on each), and the area asked about (a box read off a picture) in black */
+  zones?: { name: string; who?: string; polygon: GeoJSON.Geometry }[]; box?: { s: number; w: number; n: number; e: number } | null }
 export interface BennyMsg {
   role: 'user' | 'assistant'; text: string; spoken?: boolean; map?: BennyMap | null; error?: boolean;
+  /** pictures sent with this message (data URLs, kept only while the page is open) and how many there were (kept with the chat) */
+  images?: string[]; pics?: number;
   proposal?: BennyProposal | null;
   /** the card's state: done (with what happened), dismissed, or failed */
   outcome?: { state: 'done' | 'dismissed' | 'failed'; text: string } | null;
@@ -42,13 +46,14 @@ export interface BennyContext {
 
 /** What the Benny is told about each message: its words, plus what happened to a card. */
 export function forServer(messages: BennyMsg[]) {
+  const pics = (m: BennyMsg) => { const n = m.images?.length || m.pics || 0; return n ? `\n\n[sent with ${n} picture${n === 1 ? '' : 's'}]` : ''; };
   return messages.filter(m => !m.error && !m.news).map(m => ({ role: m.role,
-    content: m.outcome ? `${m.text}\n\n[The card: ${m.outcome.state === 'done' ? 'confirmed, done' : m.outcome.state}: ${m.outcome.text}]`
+    content: m.role === 'user' ? m.text + pics(m) : m.outcome ? `${m.text}\n\n[The card: ${m.outcome.state === 'done' ? 'confirmed, done' : m.outcome.state}: ${m.outcome.text}]`
       : m.proposal?.kind === 'texts' ? `${m.text}\n\n[The card: ${textsSaid(m.proposal.check.people, m.texts)}]` : m.text }));
 }
 /** The change cards this build of the app can show. Sent with every question, so the server never sends a card that an
  *  older open tab can't draw (it says "refresh" instead). Add a kind here when describe() and doProposal() handle it. */
-export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts', 'bonus', 'texts', 'remove', 'add_job', 'past_job'];
+export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts', 'bonus', 'texts', 'remove', 'add_job', 'past_job', 'ms_assign', 'ms_zone'];
 
 /** What else this build can do with a card it already shows. 'crews' = a start-day card that says who goes with which
  *  manager (an older tab would start the day and ignore the crews, so the server holds that card back from it). */
@@ -62,7 +67,10 @@ function tryModel(): { model?: 'fast' | 'main' } {
 
 export async function askBenny(messages: BennyMsg[], context: BennyContext): Promise<{ reply: string; map: BennyMap | null; proposal: BennyProposal | null; logged?: boolean }> {
   const lastAsk = [...messages].reverse().find(m => m.role === 'user');
-  const body = { messages: forServer(messages), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag(), cards: [...CARDS, ...CAN], ...tryModel() } };
+  // the pictures sent with the question just asked go along as they are (earlier ones are only mentioned)
+  const images = (lastAsk && messages[messages.length - 1] === lastAsk ? lastAsk.images || [] : []).slice(0, MAX_PICS)
+    .map(u => ({ media_type: u.slice(5, u.indexOf(';')), data: u.slice(u.indexOf(',') + 1) })).filter(i => /^image\/(jpeg|png|webp|gif)$/.test(i.media_type) && i.data);
+  const body = { messages: forServer(messages), ...(images.length ? { images } : {}), context: { ...context, spoken: !!lastAsk?.spoken, diag: diag(), cards: [...CARDS, ...CAN, 'pictures'], ...tryModel() } };
   const { data, error } = await db.functions.invoke('benny-assist', { body });
   if (error) {
     // the function's own message (e.g. "for super admins") rides in the response body
@@ -73,10 +81,32 @@ export async function askBenny(messages: BennyMsg[], context: BennyContext): Pro
   if (data?.error) throw new Error(data.error);
   if (data?.route) console.info('[benny route]', JSON.stringify(data.route));   // only sent to a super admin trying the models out
   const got = (data?.proposal as BennyProposal) || null;
-  const answer = { reply: String(data?.reply || ''), map: (data?.map as BennyMap) || null, proposal: got && CARDS.includes(got.kind) ? got : null, ...(data?.logged === true ? { logged: true } : {}) };
+  const answer = { reply: String(data?.reply || ''), map: data?.map ? { maps: [], highlight: [], pins: [], ...(data.map as Partial<BennyMap>) } as BennyMap : null, proposal: got && CARDS.includes(got.kind) ? got : null, ...(data?.logged === true ? { logged: true } : {}) };
   // an order comes planned in straight lines: here it is put in driving order by the road's own times, when they can be read
   if (answer.proposal?.kind === 'stops') return withOrder(answer, answer.proposal.check, await byRoad(answer.proposal.check).catch(() => null));
   return answer;
+}
+
+/** Pictures per message, and their longest side once shrunk (the model reads nothing finer, and a phone photo is far bigger). */
+export const MAX_PICS = 3;
+const PIC_SIDE = 1568;
+/** The new size for a picture: its longest side brought down to `max`, never up. Pure, so it's tested. */
+export function fitWithin(w: number, h: number, max = PIC_SIDE): { w: number; h: number } {
+  const k = Math.min(1, max / Math.max(w, h, 1));
+  return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
+}
+/** A picked or pasted picture, shrunk and turned into a JPEG data URL for sending. */
+export async function shrinkPicture(file: Blob): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('That isn’t a picture');
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('That picture couldn’t be read')); i.src = url; });
+    const { w, h } = fitWithin(img.naturalWidth, img.naturalHeight);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d'); if (!g) throw new Error('This browser can’t prepare pictures');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', 0.82);
+  } finally { URL.revokeObjectURL(url); }
 }
 
 /** The kept outlines of these master maps (only the ones that have one). Light, and open to anyone who can use the Benny. */
