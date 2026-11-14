@@ -32,7 +32,7 @@
 // model) and roughly what it cost (cost.ts): Super Admin › Bug log › AI logs (benny_ai_log). Saving never holds up or
 // fails an answer.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { FAST_TOOLS, TOOLS, arrayLengths, fastAnswerStop, forModel, namedIn, needsMain, now, openMap, saidForNames, systemBlocks, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
+import { FAST_TOOLS, TOOLS, arrayLengths, fastAnswerStop, forModel, namedIn, needsMain, now, openMap, opening, saidForNames, systemBlocks, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
 import { costUsd, type Tally } from './cost.ts';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
@@ -301,8 +301,9 @@ Deno.serve(async req => {
         : 'I looked into that but couldn’t put an answer together. Try asking for one part of it at a time.';
       res.logged = true;
     }
-    // it said it couldn't, straight off, and logged nothing: log it for it
-    if (!res.logged && res.usedTools === 0 && !res.proposal && CANT.test(res.reply) && !OFF_TOPIC.test(res.reply)) {
+    // it said it couldn't, straight off, and logged nothing: log it for it. Only when the answer OPENS with the refusal:
+    // "what can you do" is answered with a list that mentions the things it can't do yet, and that is no request
+    if (!res.logged && res.usedTools === 0 && !res.proposal && CANT.test(opening(res.reply)) && !OFF_TOPIC.test(res.reply)) {
       const auto = await logEntry(sb, ctx, 'request', { title: question.slice(0, 120), asked: question, reply: res.reply.slice(0, 600), auto: true });
       if (auto.saved === true) res.saved = true;
     }

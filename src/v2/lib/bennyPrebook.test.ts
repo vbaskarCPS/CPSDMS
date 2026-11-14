@@ -84,6 +84,14 @@ describe('the card', () => {
     c.booking = { ...c.booking, client: undefined, services: undefined, route: undefined };
     expect(prebookCard(c).lines).toEqual(['40781 Thunderbird Ridge, unit 10', 'Production · AFSL · prepaid', 'The booking is marked done.', 'The cart’s (Andile + Kyle) totals are worked out again.']);
   });
+  it('a booking someone already closed by hand: only the line is fixed, and the card doesn’t claim to close it', () => {
+    const c = check({ replaces: sale, booking_done: true, cautions: ['The booking was already marked done in Bookings (Nov 14): it stays done, and now names Andile.'] });
+    const card = prebookCard(c);
+    expect(card.action).toBe('Fix it');
+    expect(card.lines).not.toContain('The booking is marked done.');
+    expect(card.lines).toContain('The booking was already marked done in Bookings (Nov 14): it stays done, and now names Andile.');
+    expect(prebookSaid(c, 210, 'done')).toBe('Andile’s job at 40781 Thunderbird Ridge now reads Production, AFSL ($210.00 flat), prepaid. The booking stays done, and now names the logsheet line. The totals are worked out again.');
+  });
   it('says what was saved, and says so when the booking couldn’t be confirmed closed', () => {
     expect(prebookSaid(check(), 210, 'done')).toBe('40781 Thunderbird Ridge is on Andile’s logsheet: Production, AFSL ($210.00 flat), prepaid. The booking is marked done. The totals are worked out again.');
     expect(prebookSaid(check({ replaces: sale }), 210, 'failed')).toBe('Andile’s job at 40781 Thunderbird Ridge now reads Production, AFSL ($210.00 flat), prepaid. I couldn’t confirm the booking closed: check it in Bookings › List. The totals are worked out again.');
