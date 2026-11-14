@@ -2,17 +2,21 @@
 // bank charge it matched (or the cash row it made). From here a waiting receipt is matched by hand, a card receipt that
 // was really cash is moved to the cash wallet, the category is changed (the matched charge follows), or it's removed.
 import { useEffect, useState } from 'react';
-import { Banknote, Link2, Link2Off, Trash2 } from 'lucide-react';
+import { Banknote, Link2, Link2Off, Mail, Trash2 } from 'lucide-react';
 import { Button, Sheet, useToast } from '../../ui/primitives';
 import { SPENDING_CATEGORIES } from './categories';
 import { CategoryIcon } from './CategoryIcon';
 import { dayLabel, loadMonths, money, niceName } from './lib';
 import { addCashRow, candidatesFor, linkReceipt, loadReceiptPhotos, removeReceipt, saveReceipt, setReceiptCategory, splitByCategory, unlinkReceipt, type Candidate } from './receipts';
+import { mailboxName, receiptTotal } from './mailReceipts';
+import { foreignCurrency, payeeLabel } from './receiptMatch';
 import type { Account, Receipt, Txn } from './types';
 
 export function receiptStatus(r: Receipt): { label: string; tone: 'good' | 'amber' | 'muted' } {
   if (r.payment === 'cash') return { label: 'Cash', tone: 'muted' };
   if (r.txnId) return { label: 'Matched', tone: 'good' };
+  if (r.ignored) return { label: r.ignored === 'company' ? 'Company card' : 'Not a receipt', tone: 'muted' };
+  if (r.from === 'email') return { label: 'Not matched', tone: 'amber' };
   return { label: 'Waiting for the bank', tone: 'amber' };
 }
 
@@ -64,9 +68,16 @@ export function ReceiptSheet({ receipt, others, accounts, onClose, onChange }: {
       {r && (
         <>
           <p className="pl-muted" style={{ fontSize: 13 }}>
-            {dayLabel(r.date)}{r.time ? ` · ${r.time}` : ''} · <b style={{ color: 'var(--ink)' }}>{money(r.total)}</b>
-            {r.tax ? ` · tax ${money(r.tax)}` : ''}{r.tip ? ` · tip ${money(r.tip)}` : ''} · {r.payment === 'cash' ? 'cash' : `card${r.cardLast4 ? ` ····${r.cardLast4}` : ''}`}
+            {dayLabel(r.date)}{r.time ? ` · ${r.time}` : ''} · <b style={{ color: 'var(--ink)' }}>{receiptTotal(r)}</b>
+            {r.tax ? ` · tax ${money(r.tax)}` : ''}{r.tip ? ` · tip ${money(r.tip)}` : ''} · {r.payment === 'cash' ? 'cash' : r.paidBy === 'etransfer' ? `e-transfer${r.payee ? ` to ${payeeLabel(r.payee)}` : ''}` : r.paidBy === 'paypal' ? 'PayPal' : `card${r.cardLast4 ? ` ····${r.cardLast4}` : ''}`}
           </p>
+          {r.email && (
+            <p className="pl-muted" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Mail style={{ width: 14, height: 14, flex: 'none', color: 'var(--accent)' }} />
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mailboxName(r.email.mailbox)} · {r.email.subject}</span>
+            </p>
+          )}
+          {foreignCurrency(r) && !r.txnId && <p className="mo-rcpt-warn">Paid in {r.currency!.toUpperCase()}: the bank’s charge is in dollars, so pick it by hand.</p>}
 
           {photos === null ? <p className="pl-muted" style={{ fontSize: 13 }}>Loading the photo…</p> : photos.length > 0 && (
             <div className="mo-rcpt-photos">{photos.map((p, i) => <img key={i} src={p} alt={`Receipt photo ${i + 1}`} />)}</div>
@@ -109,7 +120,7 @@ export function ReceiptSheet({ receipt, others, accounts, onClose, onChange }: {
                 <div className="pl-list">
                   {cands.slice(0, 5).map(c => (
                     <div key={c.txn.id} className="mo-txn">
-                      <div className="mo-txn__main"><b>{niceName(c.txn.merchant)}</b><small>{accName(c.txn.accountId)} · {dayLabel(c.txn.date)}{c.exact ? '' : ' · with a tip'}</small></div>
+                      <div className="mo-txn__main"><b>{niceName(c.txn.merchant)}</b><small>{accName(c.txn.accountId)} · {dayLabel(c.txn.date)}{c.exact ? '' : foreignCurrency(r) ? ' · converted' : ' · with a tip'}</small></div>
                       <span className="mo-amt">{money(c.txn.amount)}</span>
                       <Button small primary disabled={busy} onClick={() => void run(() => linkReceipt(r, c.txn, 'hand'), `Matched · ${r.category}`)}>This one</Button>
                     </div>

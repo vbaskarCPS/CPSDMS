@@ -3,6 +3,12 @@
 // came from a CSV in the browser or from Plaid on the server (rules are keyed by merchant name, so the
 // two must agree). No imports: this file runs in the browser (Vite) and in Deno.
 
+/** The category names, in the app's order (src/planner/features/money/categories.ts has them with their icons and
+ *  colours; a test keeps the two the same). Here so the server can check a category without the app's files. */
+export const MONEY_CATEGORIES = ['Groceries', 'Dining', 'Coffee', 'Transport', 'Gas', 'Housing', 'Utilities', 'Phone & Internet', 'Insurance', 'Health', 'Fitness',
+  'Shopping', 'Kids', 'Entertainment', 'Subscriptions', 'Travel', 'Gifts', 'Education', 'Personal care', 'Transfers', 'Credit card payment', 'Income',
+  'Fees & interest', 'Cash', 'Other'] as const;
+
 /** Long digit runs (13–19) could be a card number: keep the last 4 only. */
 export function maskNumbers(s: string): string { return s.replace(/\d[\d -]{11,22}\d/g, m => { const digits = m.replace(/\D/g, ''); return digits.length >= 13 && digits.length <= 19 ? `****${digits.slice(-4)}` : m; }); }
 

@@ -89,6 +89,19 @@ export async function sendMail(o: { mailbox: string; to: string[]; subject: stri
   await ask({ action: 'send', mailbox: o.mailbox, to: o.to, subject: o.subject, body: o.body, ...(o.replyTo ? { reply_to: o.replyTo } : {}) });
 }
 
+/** One page of looking through the person's connected mailboxes for purchase emails (Money › Receipts › Find receipts
+ *  in email). The function saves each receipt it finds as a 'receipt' doc; this is how many it read and found on this
+ *  page, and, while `more`, the cursor for the next page. A mailbox it couldn't read has a `problem`. */
+export interface ReceiptScanPage { scanned: number; found: number; more: boolean; cursor?: string; mailboxes: { address: string; scanned: number; found: number; problem?: string }[] }
+export async function scanReceipts(o: { since?: string; cursor?: string }): Promise<ReceiptScanPage> {
+  if (isDemo()) return { scanned: 0, found: 0, more: false, mailboxes: [] };
+  const r = await ask<Partial<ReceiptScanPage>>({ action: 'receipts', ...(o.since ? { since: o.since } : {}), ...(o.cursor ? { cursor: o.cursor } : {}) });
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+  return { scanned: n(r?.scanned), found: n(r?.found), more: r?.more === true, ...(typeof r?.cursor === 'string' && r.cursor ? { cursor: r.cursor.slice(0, 2000) } : {}),
+    mailboxes: (Array.isArray(r?.mailboxes) ? r.mailboxes : []).filter(m => m && typeof m.address === 'string' && m.address)
+      .map(m => ({ address: m.address.slice(0, 254), scanned: n(m.scanned), found: n(m.found), ...(typeof m.problem === 'string' && m.problem ? { problem: m.problem.slice(0, 300) } : {}) })) };
+}
+
 /** Which mailbox is meant. Named by its address or a word from it ("work"): that one, null when none fits, or the
  *  ones that fit when several do. Not named: the only one, or all of them. */
 export function pickMailbox(list: Mailbox[], named: unknown): Mailbox | Mailbox[] | null {

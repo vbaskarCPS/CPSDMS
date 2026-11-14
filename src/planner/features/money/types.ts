@@ -49,7 +49,22 @@ export interface Receipt {
   matchedAt?: string;
   matchedBy?: 'auto' | 'hand' | 'cash';
   addedAt: string;
+  /** Where it came from: a photo (the default) or a purchase email read by planner-mail (action 'receipts'). */
+  from?: 'photo' | 'email';
+  /** The email it was read from (from === 'email'): which of the person's mailboxes, its Gmail id, subject and sender. */
+  email?: { mailbox: string; id: string; subject: string; sender: string };
+  /** ISO code when it isn't Canadian dollars ('USD'): never matched by itself, the bank's amount is converted. */
+  currency?: string;
+  /** How an email receipt was paid ('etransfer': an Interac e-transfer, kind 'transaction'). */
+  paidBy?: 'card' | 'etransfer' | 'paypal' | 'other';
+  /** Who an e-transfer went to. */
+  payee?: { name: string; email?: string };   // e-transfers: who it was sent to
+  /** Set by the app: paid on the company card, or not a receipt at all. Hidden from "Not matched", never matched. */
+  ignored?: 'company' | 'not_receipt';
 }
+/** kind 'moneyprefs', key 'mailReceipts': when email was last looked through for receipts (YYYY-MM-DD), and per mailbox
+ *  address, so a mailbox connected later (or one that had a problem) is read from 12 months back. */
+export interface MailReceiptPrefs { lastScan?: string; boxes?: Record<string, string> }
 export const CASH_ACCOUNT_ID = 'cash';
 export interface TxnMonth { rows: Txn[] }        // kind 'txns', key YYYY-MM
 export interface Rule { category: string }       // kind 'rule', key = merchant
