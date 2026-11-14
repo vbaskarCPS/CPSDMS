@@ -174,7 +174,7 @@ export function applySync(
 
 /** For a connected account, the bank's rows are the record: hide that account's CSV rows (they're kept) from the
  *  day the bank's own rows begin (`since`) up to the day it was disconnected, if it was. A statement from before the
- *  bank's history isn't a repeat of anything, so its rows count. `since` unknown (not synced yet): all are hidden. */
+ *  bank's history isn't a repeat of anything, so its rows count. `since` unknown (not worked out yet): all are hidden. */
 export function hideReplaced<T extends { id: string; date: string; accountId: string }>(
   rows: T[], linked: Record<string, { removedAt?: string; since?: string } | undefined>,
 ): T[] {

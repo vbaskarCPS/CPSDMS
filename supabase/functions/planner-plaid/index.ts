@@ -22,7 +22,7 @@
 // Secrets: PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV ('sandbox' | 'production').
 // Deployed without JWT verification: the planner has no Supabase accounts, and Plaid can't send one.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { applySync, bankSince, type PlaidTxn, type PlannerTxn } from '../_shared/plannerMoney.ts';
+import { applySync, type PlaidTxn, type PlannerTxn } from '../_shared/plannerMoney.ts';
 import { itemAccounts, linkTokenBody, NEW_ACCOUNTS_KIND, plannerChoices, plannerType, refreshAccounts, suggestFor, type ItemAccount, type PlaidAccount, type PlannerAccount } from './lib.ts';
 
 const env = (k: string) => (Deno.env.get(k) || '').trim();
@@ -109,20 +109,17 @@ async function syncItem(svc: SupabaseClient, item: ItemRow): Promise<{ added: nu
   const res = applySync(months, { added, modified, removed }, accountMap, rules);
   const out: { kind: string; key: string; data: unknown }[] = [...res.touched].map(m => ({ kind: 'txns', key: m, data: { rows: months[m] } }));
 
-  // the accounts this bank fills: what the bank says the balance is now (credit cards: the amount owed, as on the
-  // card's CSV), and the day its own rows begin (statement rows from before that day count; see hideReplaced)
-  const since = bankSince(months);
-  const accs = await docs<PlannerAccount>(svc, owner, 'account');
-  for (const pid of new Set(Object.values(accountMap))) {
-    const acc = accs.find(a => a.key === pid)?.data;
-    if (!acc) continue;
-    let next = acc;
-    const b = balances.find(x => accountMap[x.account_id] === pid);
-    // some banks leave "current" empty for a chequing account and give only "available": use that then
-    const cur = typeof b?.balances?.current === 'number' ? b.balances.current : b?.balances?.available;
-    if (typeof cur === 'number') next = { ...next, balance: Math.round(cur * 100) / 100, balanceAsOf: today() };
-    if (next.plaid && !next.plaid.removedAt && since[pid] && next.plaid.since !== since[pid]) next = { ...next, plaid: { ...next.plaid, since: since[pid] } };
-    if (next !== acc) out.push({ kind: 'account', key: acc.id, data: next });
+  // balances: what the bank says now (credit cards: the amount owed, as on the card's CSV)
+  if (balances.length) {
+    const accs = await docs<PlannerAccount>(svc, owner, 'account');
+    for (const b of balances) {
+      const pid = accountMap[b.account_id];
+      const acc = pid && accs.find(a => a.key === pid)?.data;
+      // some banks leave "current" empty for a chequing account and give only "available": use that then
+      const cur = typeof b.balances?.current === 'number' ? b.balances.current : b.balances?.available;
+      if (!acc || typeof cur !== 'number') continue;
+      out.push({ kind: 'account', key: acc.id, data: { ...acc, balance: Math.round(cur * 100) / 100, balanceAsOf: today() } });
+    }
   }
   await putDocs(svc, owner, out);
   await svc.from('planner_bank_items').update({ cursor, last_sync_at: new Date().toISOString(), status: 'active', error: null }).eq('item_id', item.item_id);
