@@ -1,7 +1,7 @@
 // /money/transactions — every line, grouped by day; tap the category to change it (and teach a rule). A charge with a
 // receipt shows a receipt mark and opens it; a cash row without a receipt can be removed.
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ReceiptText, Search, Trash2, X } from 'lucide-react';
 import { Page, Header, Card, Button, Input, Sheet, Empty, useToast } from '../../../ui/primitives';
 import { putDoc } from '../../../lib/docs';
@@ -101,6 +101,8 @@ export function Transactions() {
           <Button small ghost disabled={m >= monthKey()} onClick={() => set('m', shiftMonth(m, 1))}>{monthLabel(shiftMonth(m, 1)).split(' ')[0]} ›</Button>
         </div>
       )}
+
+      {cat === 'Transfers' && <Link to="/money/transfers" className="pl-muted" style={{ fontSize: 13 }}>Sort transfers ›</Link>}
 
       {!loading && rows.length === 0 ? <Card><Empty title="Nothing here" blurb={q ? 'No merchant matches that.' : 'No transactions for this view.'} /></Card> : (
         <Card>

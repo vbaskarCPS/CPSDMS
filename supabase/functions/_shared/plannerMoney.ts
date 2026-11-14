@@ -27,11 +27,15 @@ export function normalizeMerchant(desc: string): string {
   return s.slice(0, 40) || 'UNKNOWN';
 }
 
+/** How a payment to a credit card is worded (also used by the planner's Transfers sorting, transfers.ts). */
+export const CARD_PAYMENT = /PAYMENT ?- ?THANK YOU|TD VISA|TD MASTERCARD|VISA PAYMENT|MASTERCARD PAYMENT|AMEX PAYMENT|CC PAYMENT|PMT.*VISA|PAYMENT TO.*(VISA|MC|CARD)/;
+/** The words that make a row a transfer. */
+const TRANSFER_WORDS = /E-?TRANSFER|E-?TFR|ETFR|INTERAC|TFR-?TO|TFR-?FR|\bTFR\b|TRANSFER|SEND MONEY|RECEIVED FROM|WIRE|RECURRING TFR|TO SAVINGS|FROM SAVINGS/;
 // Built-in rules: first pattern found in the normalized merchant (or the raw description) wins.
 // Order matters: the specific ones (PAYMENT - THANK YOU, E-TRANSFER) come before the generic (PAYMENT).
 const RULES: [RegExp, string][] = [
-  [/PAYMENT ?- ?THANK YOU|TD VISA|TD MASTERCARD|VISA PAYMENT|MASTERCARD PAYMENT|AMEX PAYMENT|CC PAYMENT|PMT.*VISA|PAYMENT TO.*(VISA|MC|CARD)/, 'Credit card payment'],
-  [/E-?TRANSFER|E-?TFR|ETFR|INTERAC|TFR-?TO|TFR-?FR|\bTFR\b|TRANSFER|SEND MONEY|RECEIVED FROM|WIRE|RECURRING TFR|TO SAVINGS|FROM SAVINGS/, 'Transfers'],
+  [CARD_PAYMENT, 'Credit card payment'],
+  [TRANSFER_WORDS, 'Transfers'],
   [/PAYROLL|PAY ?ROLL|SALARY|DIRECT DEPOSIT|GC DEPOSIT|CANADA +(FED|PRO)|CRA |GST\/HST|CHILD TAX|CCB|EI BENEFIT|DEPOSIT|REFUND/, 'Income'],
   [/MONTHLY (PLAN|ACCOUNT) FEE|SERVICE CHARGE|NSF|OVERDRAFT|INTEREST CHARGE|PURCHASE INTEREST|CASH ADVANCE INT|ANNUAL FEE|\bFEE\b|INTEREST/, 'Fees & interest'],
   [/\bATM\b|CASH WITHDRAWAL|WITHDRAWAL|ABM/, 'Cash'],
@@ -59,6 +63,14 @@ const RULES: [RegExp, string][] = [
 export function builtinCategory(merchant: string, desc = ''): string | null {
   const s = `${merchant} ${desc}`.toUpperCase();
   for (const [re, cat] of RULES) if (re.test(s)) return cat;
+  return null;
+}
+/** The same, with the 'Transfers' rule left out: what a row would be if the word TRANSFER (or TFR, WIRE) weren't in it.
+ *  For rows already under Transfers that aren't transfers at all ("KENORA TRANSFER STATION"); see transfers.ts. The
+ *  words are taken out first, so the letters inside them don't set off another rule (traNSFer isn't an NSF fee). */
+export function builtinCategoryNoTransfer(merchant: string, desc = ''): string | null {
+  const s = `${merchant} ${desc}`.toUpperCase().replace(new RegExp(TRANSFER_WORDS.source, 'g'), ' ');
+  for (const [re, cat] of RULES) if (cat !== 'Transfers' && re.test(s)) return cat;
   return null;
 }
 
