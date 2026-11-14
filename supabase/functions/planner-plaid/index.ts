@@ -115,7 +115,8 @@ async function syncItem(svc: SupabaseClient, item: ItemRow): Promise<{ added: nu
     for (const b of balances) {
       const pid = accountMap[b.account_id];
       const acc = pid && accs.find(a => a.key === pid)?.data;
-      const cur = b.balances?.current;
+      // some banks leave "current" empty for a chequing account and give only "available": use that then
+      const cur = typeof b.balances?.current === 'number' ? b.balances.current : b.balances?.available;
       if (!acc || typeof cur !== 'number') continue;
       out.push({ kind: 'account', key: acc.id, data: { ...acc, balance: Math.round(cur * 100) / 100, balanceAsOf: today() } });
     }
