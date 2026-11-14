@@ -13,7 +13,7 @@ import { useMoney } from '../useMoney';
 import { loadReceipts, matchPending } from '../receipts';
 import { ReceiptSheet, receiptStatus } from '../ReceiptSheet';
 import { payeeLabel } from '../receiptMatch';
-import { hiddenEmailReceipts, isEmailReceipt, listedReceipts, mailboxName, matchEmailReceipts, receiptTotal, scanEmail, setIgnored, unmatchedEmailReceipts, type ScanProgress } from '../mailReceipts';
+import { hiddenEmailReceipts, isEmailReceipt, listedReceipts, mailboxName, matchEmailReceipts, receiptTotal, scanEmail, ScanStopped, setIgnored, unmatchedEmailReceipts, type ScanProgress } from '../mailReceipts';
 import type { Receipt } from '../types';
 
 export function Receipts() {
@@ -44,7 +44,11 @@ export function Receipts() {
       const bad = p.mailboxes.filter(m => m.problem);
       setScanNote(`${p.found ? `${p.found} receipt${p.found === 1 ? '' : 's'} found` : 'No new receipts'} · ${res.linked.length} matched to the bank${res.waiting ? ` · ${res.waiting} not matched` : ''}`
         + (bad.length ? `. ${bad.map(m => `${mailboxName(m.address)}: ${m.problem}`).join(' · ')}` : ''));
-    } catch (e) { setScanNote(e instanceof Error ? e.message : 'Email couldn’t be read. Try again.'); }
+    } catch (e) {
+      // stopped part-way: what was read is saved, so match that much and show it
+      if (e instanceof ScanStopped) { await matchEmailReceipts().catch(() => undefined); setList(await loadReceipts(shiftMonth(monthKey(), -24)).catch(() => list ?? [])); }
+      setScanNote(e instanceof Error ? e.message : 'Email couldn’t be read. Try again.');
+    }
     finally { setScanning(false); }
   }
   async function ignore(r: Receipt, why: Receipt['ignored'] | null) {

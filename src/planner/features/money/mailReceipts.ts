@@ -6,7 +6,8 @@
 // What doesn't match waits in "Not matched", where it can be put aside as the company card or "not a receipt".
 // The pure parts (where to start, the page loop, which match, which list) are tested in mailReceipts.test.ts.
 import { getDoc, putDoc } from '../../lib/docs';
-import { mailboxes as loadMailboxes, scanReceipts, type ReceiptScanPage } from '../mail/mail';
+import { SignedOut } from '../../lib/auth';
+import { MailProblem, mailboxes as loadMailboxes, scanReceipts, type ReceiptScanPage } from '../mail/mail';
 import { loadAccounts, loadMonths, money, todayIso, visibleMonths } from './lib';
 import { linkReceipt, loadReceipts, saveReceipt } from './receipts';
 import { awaitingMatch, foreignCurrency, pickMatch, shiftDay } from './receiptMatch';
@@ -56,15 +57,41 @@ export interface ScanProgress {
 }
 export type ScanCall = (o: { since: string; cursor?: string }) => Promise<ReceiptScanPage>;
 const MAX_PAGES = 200;
+/** How long to wait before asking for the same page again, each time it fails (seconds). After the last, it stops. */
+export const RETRY_WAITS = [2, 5, 10, 20, 30];
+/** The look stopped part-way (the connection kept dropping). What was read up to then is saved on the server, so
+ *  tapping again carries on from there (emails already read are skipped). */
+export class ScanStopped extends Error {
+  constructor(readonly progress: ScanProgress) {
+    super(`The connection dropped after ${progress.scanned} email${progress.scanned === 1 ? '' : 's'}${progress.found ? ` (${progress.found} receipt${progress.found === 1 ? '' : 's'} saved)` : ''}. Nothing is lost: tap again to carry on.`);
+  }
+}
+export interface ScanOptions {
+  /** Is this failure worth asking again for (a dropped connection), or final (signed out, email not set up)? */
+  retry?: (e: unknown) => boolean;
+  /** Wait before asking again (the app also waits for the screen to come back). */
+  wait?: (seconds: number) => Promise<void>;
+}
 
 /** Ask for pages until the function says there's no more, adding up what each page read and found (each page's
- *  counts are that page's own). Stops too if a page says "more" without a new cursor (it would only repeat). */
-export async function runScan(call: ScanCall, since: string, onProgress: (p: ScanProgress) => void = () => undefined): Promise<ScanProgress> {
+ *  counts are that page's own). Stops too if a page says "more" without a new cursor (it would only repeat).
+ *  A page that fails on the way (the phone lost its connection, the screen went off) is asked for again, the same
+ *  page, a few times with a longer wait each time; if it still fails the look stops with ScanStopped. */
+export async function runScan(call: ScanCall, since: string, onProgress: (p: ScanProgress) => void = () => undefined, opts: ScanOptions = {}): Promise<ScanProgress> {
   const p: ScanProgress = { scanned: 0, found: 0, pages: 0, mailboxes: [], done: false, since };
   const seen = new Set<string>();
+  const copy = () => ({ ...p, mailboxes: p.mailboxes.map(b => ({ ...b })) });
   let cursor: string | undefined;
   for (;;) {
-    const page = await call({ since, ...(cursor ? { cursor } : {}) });
+    let page: ReceiptScanPage | undefined;
+    for (let attempt = 0; !page; attempt++) {
+      try { page = await call({ since, ...(cursor ? { cursor } : {}) }); }
+      catch (e) {
+        if (!opts.retry || !opts.retry(e)) throw e;
+        if (attempt >= RETRY_WAITS.length) throw new ScanStopped(copy());
+        await (opts.wait ? opts.wait(RETRY_WAITS[attempt]) : Promise.resolve());
+      }
+    }
     p.pages++;
     p.scanned += page.scanned; p.found += page.found;
     for (const m of page.mailboxes) {
@@ -74,10 +101,25 @@ export async function runScan(call: ScanCall, since: string, onProgress: (p: Sca
       if (m.problem) box.problem = m.problem;
     }
     const next = page.more ? page.cursor : undefined;
-    if (!next || seen.has(next) || p.pages >= MAX_PAGES) { p.done = true; onProgress({ ...p, mailboxes: p.mailboxes.map(b => ({ ...b })) }); return p; }
+    if (!next || seen.has(next) || p.pages >= MAX_PAGES) { p.done = true; onProgress(copy()); return p; }
     seen.add(next); cursor = next;
-    onProgress({ ...p, mailboxes: p.mailboxes.map(b => ({ ...b })) });
+    onProgress(copy());
   }
+}
+
+/** Wait, and if the planner isn't on screen (another app, the screen off) wait until it is: a request sent from the
+ *  background is the one that fails. */
+async function waitForScreen(seconds: number): Promise<void> {
+  await new Promise(r => setTimeout(r, seconds * 1000));
+  if (typeof document === 'undefined' || document.visibilityState === 'visible') return;
+  await new Promise<void>(r => { const back = () => { if (document.visibilityState === 'visible') { document.removeEventListener('visibilitychange', back); r(); } }; document.addEventListener('visibilitychange', back); });
+}
+/** Keep the screen on while it reads (where the phone allows it); returns how to let go. */
+async function keepAwake(): Promise<() => void> {
+  try {
+    const lock = await (navigator as Navigator & { wakeLock?: { request(kind: 'screen'): Promise<{ release(): Promise<void> }> } }).wakeLock?.request('screen');
+    return () => { void lock?.release().catch(() => undefined); };
+  } catch { return () => undefined; }
 }
 
 /** Look through the person's connected mailboxes for receipts (from the remembered day), and remember today. */
@@ -85,7 +127,12 @@ export async function scanEmail(onProgress?: (p: ScanProgress) => void): Promise
   const today = todayIso();
   const [{ mailboxes }, prefs] = await Promise.all([loadMailboxes(), getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY)]);
   const since = scanSince(prefs, mailboxes.map(m => m.address), today);
-  const progress = await runScan(scanReceipts, since, onProgress);
+  const letGo = await keepAwake();
+  let progress: ScanProgress;
+  // a plain failure (the request never got there, or the server hiccuped) is asked again; "sign in again" and
+  // "email isn't set up" are final
+  try { progress = await runScan(scanReceipts, since, onProgress, { retry: e => !(e instanceof MailProblem) && !(e instanceof SignedOut), wait: waitForScreen }); }
+  finally { letGo(); }
   // read again just before writing: the other person may have looked meanwhile (household doc)
   const fresh = await getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY).catch(() => prefs);
   await putDoc(PREFS_KIND, PREFS_KEY, afterScan(fresh, progress, today));
