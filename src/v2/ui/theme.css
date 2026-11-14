@@ -654,6 +654,20 @@
   .v2-tabs button, .v2-tabs a { padding: 9px 9px; }
 }
 @media (max-width: 480px) { .v2-bar .v2-crumb { display: none; } }
+/* phones: everything in the top bar fits across the screen, so the page opens at the right size (no pinching it down).
+   The logo and Sign out give way (Home and Sign out are in the menu); the center name and the day chip get shorter. */
+.v2-show-phone { display: none !important; }
+html, body { overflow-x: clip; }
+@media (max-width: 480px) {
+  .v2-hide-phone { display: none !important; }
+  .v2-show-phone { display: flex !important; }
+  .v2-bar { gap: 6px; padding: 0 8px; }
+  .v2-bar > * { flex-shrink: 0; }
+  .v2-bar .v2-gbtn { width: 36px; height: 36px; }
+  .v2-bar .v2-select-pill { max-width: 112px; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v2-bar .v2-daychip { padding: 6px 9px; gap: 5px; }
+  .v2-bar .v2-acct { padding: 6px 9px; }
+}
 
 /* Accounts Reporting (admin/AccountsReporting.tsx): centre, date range and quick ranges on one bar */
 .v2-etf-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin: 0 0 14px; }

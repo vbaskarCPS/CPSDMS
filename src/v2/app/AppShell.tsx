@@ -44,7 +44,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
         </button>
         {brand
           ? <Link to={homeOf(hereComp!)} className="v2-brand" aria-label={brand}><MsLogo size={19} tone="dark" /><MsTab /></Link>
-          : <Link to="/app" className="v2-brand"><img src="/icon-192.png" alt="" className="v2-logo" /><span className="v2-hide-sm">Property Stars</span></Link>}
+          : <Link to="/app" className="v2-brand v2-hide-phone"><img src="/icon-192.png" alt="" className="v2-logo" /><span className="v2-hide-sm">Property Stars</span></Link>}
         <span className="v2-crumb">
           {brand ? null : here ? <>
             <Link to={homeOf(hereComp || here.comp)}><b>{here.comp.label}</b></Link>
@@ -63,7 +63,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
           <UserRound size={14} /><span className="v2-hide-sm">{profile?.username}</span>
         </Link>
         {!brand && <Benny />}
-        <button type="button" className="v2-gbtn" onClick={() => signOut().then(() => nav('/app/login'))} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
+        <button type="button" className="v2-gbtn v2-hide-phone" onClick={() => signOut().then(() => nav('/app/login'))} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
       </header>
 
       {open && (
@@ -79,6 +79,10 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                 <span className="tx"><b>{c.label}</b><span>{c.blurb}</span></span>
               </button>
             ))}
+            {/* on a phone the bar has no room for Sign out, so it lives here */}
+            <button type="button" className="v2-menu-row v2-show-phone" onClick={() => { setOpen(false); signOut().then(() => nav('/app/login')); }}>
+              <span className="ic"><LogOut size={20} /></span><span className="tx"><b>Sign out</b><span>{profile?.username || ''}</span></span>
+            </button>
           </nav>
         </>
       )}
