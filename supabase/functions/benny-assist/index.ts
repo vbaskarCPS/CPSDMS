@@ -64,6 +64,8 @@ const FIRST_CARDS = ['start_day', 'give_route', 'partner', 'solo'];
 /** The Benny said it couldn't, without logging it: caught here so no request goes unseen. */
 const CANT = /\b(can['’]?t|cannot|not able to|unable to|don['’]t have (a|the) (tool|way)|no (tool|way) (to|for)|isn['’]t (something i can|switched on|available)|not (yet )?(supported|possible|available))\b/i;
 const OFF_TOPIC = /only help with the DMS/i;
+/** Said once to the main model when it stops with no words: answer, or log what it couldn't do. */
+const NUDGE = '(System: you stopped without replying. Reply to the person now in plain words with what you found. If the tools can\'t answer it, call log_request, then say so.)';
 
 async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, input: Record<string, unknown>, said: string[] = []): Promise<{ out: unknown; proposal?: Proposal }> {
   if (!TOOLS.some(t => t.name === name && t.roles.includes(role))) return { out: { error: `${name} isn't available to you` } };
@@ -202,7 +204,7 @@ Deno.serve(async req => {
     const run = async (model: string, fast: boolean): Promise<Run> => {
       const msgs: Msg[] = [...history]; const t = fast ? used.fast : used.main;
       const out: Run = { reply: '', map: null, mapTitle: '', proposal: null, usedTools: 0, logged: false };
-      const lookups: string[] = []; const lengths: number[] = [];
+      const lookups: string[] = []; const lengths: number[] = []; let nudged = false;
       for (let round = 0; round < 8; round++) {
         const r = await claude(model, sys, msgs, tools);
         t.steps++; t.input += r.usage?.input_tokens || 0; t.cache_write += r.usage?.cache_creation_input_tokens || 0;
@@ -210,6 +212,16 @@ Deno.serve(async req => {
         const uses = r.content.filter(c => c.type === 'tool_use');
         if (!uses.length || r.stop_reason !== 'tool_use') {
           out.reply = r.content.filter(c => c.type === 'text').map(c => c.text || '').join('').trim();
+          // the main model ended with nothing to say (or ran out of room mid-call): one more go, told to answer in words
+          if (!fast && !out.reply && !nudged) {
+            nudged = true;
+            const last = msgs[msgs.length - 1];
+            if (last && last.role === 'user') {
+              // a new message, so the person's own words (history) stay as they were
+              msgs[msgs.length - 1] = { role: 'user', content: typeof last.content === 'string' ? `${last.content}\n\n${NUDGE}` : [...(last.content as unknown[]), { type: 'text', text: NUDGE }] };
+              continue;
+            }
+          }
           if (!fast) return out;
           const stop = CANT.test(out.reply) ? { why: 'cant' } : fastAnswerStop(out.reply, lookups, [...history.map(m => String(m.content)), now(ctx, role as Role)], lengths);
           return stop ? { ...out, stop } : out;
@@ -258,6 +270,15 @@ Deno.serve(async req => {
     const why = !fastOn ? null : skip || res?.stop?.why || null;
     const tokens = res?.stop?.tokens;
     if (!res || res.stop) res = await run(MODEL, false);
+    // no answer at all, even after being told to answer: never a blank reply. Log it so Vijay sees it, and say so
+    if (!res.reply.trim() && !res.proposal) {
+      const auto = await logEntry(sb, ctx, 'request', { title: question.slice(0, 120), asked: question, why_not: 'The Benny looked it up but gave no answer', auto: true });
+      if (auto.saved === true) res.saved = true;
+      res.reply = auto.saved === true
+        ? 'I looked into that but couldn’t put an answer together. It’s logged for Vijay, and I’ll tell you here when I can do it. You could try asking for one part of it at a time.'
+        : 'I looked into that but couldn’t put an answer together. Try asking for one part of it at a time.';
+      res.logged = true;
+    }
     // it said it couldn't, straight off, and logged nothing: log it for it
     if (!res.logged && res.usedTools === 0 && !res.proposal && CANT.test(res.reply) && !OFF_TOPIC.test(res.reply)) {
       const auto = await logEntry(sb, ctx, 'request', { title: question.slice(0, 120), asked: question, reply: res.reply.slice(0, 600), auto: true });
