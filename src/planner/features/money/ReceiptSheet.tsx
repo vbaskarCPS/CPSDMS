@@ -62,6 +62,8 @@ export function ReceiptSheet({ receipt, others, accounts, onClose, onChange }: {
   }, 'Moved to the cash wallet');
 
   const split = r ? splitByCategory(r) : [];
+  // other receipts linked to the same bank row (orders billed as one charge)
+  const shared = r?.txnId ? others.filter(o => o.id !== r.id && o.txnId === r.txnId).length : 0;
 
   return (
     <Sheet open={!!r} onClose={onClose} title={r ? niceName(r.merchant.toUpperCase()) : ''}>
@@ -107,6 +109,7 @@ export function ReceiptSheet({ receipt, others, accounts, onClose, onChange }: {
             ) : r.txnId ? (
               <>
                 <p><Link2 /> Matched{matched ? `: ${accName(matched.accountId)} · ${dayLabel(matched.date)} · ${money(Math.abs(matched.amount))}` : ''}{r.matchedBy === 'auto' ? ' (automatically)' : ''}</p>
+                {shared > 0 && <p className="pl-muted" style={{ fontSize: 13 }}>One charge for {shared + 1} emails: this one and {shared} other{shared === 1 ? '' : 's'} add up to it.</p>}
                 <Button small ghost disabled={busy} onClick={() => void run(() => unlinkReceipt(r), 'Unmatched')}><Link2Off style={{ width: 16, height: 16 }} /> Not this charge</Button>
               </>
             ) : cands === null ? <p className="pl-muted">Looking for the charge…</p> : cands.length === 0 ? (

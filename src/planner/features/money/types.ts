@@ -61,10 +61,16 @@ export interface Receipt {
   payee?: { name: string; email?: string };   // e-transfers: who it was sent to
   /** Set by the app: paid on the company card, or not a receipt at all. Hidden from "Not matched", never matched. */
   ignored?: 'company' | 'not_receipt';
+  /** 'card': put aside because its card (cardLast4) is a company card, not one by one (mailReceipts.ts markCompany). */
+  ignoredBy?: 'card';
 }
 /** kind 'moneyprefs', key 'mailReceipts': when email was last looked through for receipts (YYYY-MM-DD), and per mailbox
- *  address, so a mailbox connected later (or one that had a problem) is read from 12 months back. */
-export interface MailReceiptPrefs { lastScan?: string; boxes?: Record<string, string> }
+ *  address, so a mailbox connected later (or one that had a problem) is read from 12 months back; and the company cards. */
+export interface MailReceiptPrefs {
+  lastScan?: string; boxes?: Record<string, string>;
+  /** The last four digits of the cards that are a company's: every email receipt paid on one is put aside. */
+  companyCards?: string[];
+}
 export const CASH_ACCOUNT_ID = 'cash';
 export interface TxnMonth { rows: Txn[] }        // kind 'txns', key YYYY-MM
 export interface Rule { category: string }       // kind 'rule', key = merchant

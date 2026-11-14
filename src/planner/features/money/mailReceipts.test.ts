@@ -126,7 +126,7 @@ describe('matching email receipts', () => {
 describe('the lists', () => {
   const list = [
     rc({ id: 'old', date: '2026-10-01' }),
-    rc({ id: 'new', date: '2026-11-10' }),
+    rc({ id: 'new', date: '2026-11-10', total: 18.5 }),   // its own amount: the same total within days would be the same purchase
     rc({ id: 'matched', txnId: 'r9' }),
     rc({ id: 'company', ignored: 'company' }),
     { ...rc({ id: 'photo' }), from: undefined, email: undefined },

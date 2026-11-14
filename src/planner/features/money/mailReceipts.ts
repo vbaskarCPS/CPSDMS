@@ -5,11 +5,12 @@
 // (receiptMatch.ts pickMatch) and linked the same way (receipts.ts linkReceipt: the row takes the receipt's category).
 // What doesn't match waits in "Not matched", where it can be put aside as the company card or "not a receipt".
 // The pure parts (where to start, the page loop, which match, which list) are tested in mailReceipts.test.ts.
-import { getDoc, putDoc } from '../../lib/docs';
+import { getDoc, putDoc, putDocs } from '../../lib/docs';
 import { SignedOut } from '../../lib/auth';
 import { MailProblem, mailboxes as loadMailboxes, scanReceipts, type ReceiptScanPage } from '../mail/mail';
 import { loadAccounts, loadMonths, money, todayIso, visibleMonths } from './lib';
-import { linkReceipt, loadReceipts, saveReceipt } from './receipts';
+import { linkGroup, linkReceipt, loadReceipts, receiptKey, saveReceipt } from './receipts';
+import { beforeHistory, companyCard, historyFloor, historyStarts, liveRows, onCompanyCard, sameAsAnother, type CardHistory, type SameAs } from './receiptGroups';
 import { awaitingMatch, foreignCurrency, pickMatch, shiftDay } from './receiptMatch';
 import type { Account, MailReceiptPrefs, Receipt, Txn } from './types';
 
@@ -28,8 +29,9 @@ export function monthsBack(iso: string, months: number): string {
 
 /** The day to read from: 12 months back for a mailbox never read (or one whose last look had a problem), otherwise its
  *  last look less 3 days. With several mailboxes, the earliest of them (one call reads them all). */
-export function scanSince(prefs: MailReceiptPrefs | null, addresses: string[], today: string): string {
-  const first = monthsBack(today, FIRST_MONTHS);
+export function scanSince(prefs: MailReceiptPrefs | null, addresses: string[], today: string, floor?: string | null): string {
+  // never from before the bank's own rows begin (`floor`): an older email has nothing to match
+  const back = monthsBack(today, FIRST_MONTHS), first = floor && floor > back && floor <= today ? floor : back;
   const lastFor = (a: string) => (prefs?.boxes ? prefs.boxes[a.toLowerCase()] : prefs?.lastScan);
   const days = (addresses.length ? addresses : ['']).map(a => { const l = lastFor(a); return l ? shiftDay(l, -OVERLAP_DAYS) : first; });
   const since = days.sort()[0];
@@ -125,8 +127,8 @@ async function keepAwake(): Promise<() => void> {
 /** Look through the person's connected mailboxes for receipts (from the remembered day), and remember today. */
 export async function scanEmail(onProgress?: (p: ScanProgress) => void): Promise<ScanProgress> {
   const today = todayIso();
-  const [{ mailboxes }, prefs] = await Promise.all([loadMailboxes(), getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY)]);
-  const since = scanSince(prefs, mailboxes.map(m => m.address), today);
+  const [{ mailboxes }, prefs, ctx] = await Promise.all([loadMailboxes(), getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY), loadMatchContext().catch(() => null)]);
+  const since = scanSince(prefs, mailboxes.map(m => m.address), today, ctx ? historyFloor(ctx.history) : null);
   const letGo = await keepAwake();
   let progress: ScanProgress;
   // a plain failure (the request never got there, or the server hiccuped) is asked again; "sign in again" and
@@ -157,34 +159,95 @@ export function pickEmailMatches(all: Receipt[], rows: Txn[], accounts: Account[
   return out;
 }
 
-/** Link every email receipt (last 13 months) whose bank row is a clear match. */
-export async function matchEmailReceipts(): Promise<{ linked: Receipt[]; waiting: number }> {
-  const all = await loadReceipts(monthsBack(todayIso(), FIRST_MONTHS + 1));
-  const pending = all.filter(r => isEmailReceipt(r) && awaitingMatch(r));
-  if (!pending.length) return { linked: [], waiting: 0 };
-  const dates = pending.map(r => r.date).sort();
-  const from = shiftDay(dates[0], -3), to = shiftDay(dates[dates.length - 1], 7);
-  const [accounts, raw] = await Promise.all([loadAccounts(), loadMonths(from.slice(0, 7), to.slice(0, 7))]);
-  const rows = Object.values(visibleMonths(raw, accounts)).flat();
-  const linked: Receipt[] = [];
-  for (const { r, txn } of pickEmailMatches(all, rows, accounts)) linked.push(await linkReceipt(r, txn, 'auto'));
-  return { linked, waiting: pending.length - linked.length };
+/** What matching needs from the bank: the accounts, every row matching may use (what the screens show, less an
+ *  archived account's), and how far back each account's rows go. */
+export interface MatchContext { accounts: Account[]; rows: Txn[]; history: CardHistory[] }
+export async function loadMatchContext(): Promise<MatchContext> {
+  const [accounts, raw] = await Promise.all([loadAccounts(), loadMonths()]);
+  const rows = liveRows(Object.values(visibleMonths(raw, accounts)).flat(), accounts);
+  return { accounts, rows, history: historyStarts(rows, accounts) };
 }
+
+/** The company cards: the remembered ones, and the card of any receipt put aside by hand as "Company card" (so a
+ *  receipt marked before cards were remembered counts too). */
+export function companyCards(prefs: MailReceiptPrefs | null, all: Receipt[], accounts: Account[]): string[] {
+  const byHand = all.filter(r => isEmailReceipt(r) && r.ignored === 'company' && r.ignoredBy !== 'card').map(r => companyCard(r, accounts)).filter((c): c is string => !!c);
+  return [...new Set([...(prefs?.companyCards || []).filter(c => /^\d{4}$/.test(c)), ...byHand])].sort();
+}
+
+/** Tidy the email receipts (last 13 months): put aside the ones paid on a company card, then link every one whose
+ *  bank row is a clear match. */
+export async function matchEmailReceipts(ctx?: MatchContext): Promise<{ linked: Receipt[]; waiting: number; company: number }> {
+  let all = await loadReceipts(monthsBack(todayIso(), FIRST_MONTHS + 1));
+  if (!all.some(r => isEmailReceipt(r) && awaitingMatch(r))) return { linked: [], waiting: 0, company: 0 };
+  const c = ctx || await loadMatchContext();
+  const prefs = await getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY).catch(() => null);
+  const cards = companyCards(prefs, all, c.accounts);
+  if (cards.join() !== (prefs?.companyCards || []).join()) await putDoc(PREFS_KIND, PREFS_KEY, { ...(prefs || {}), companyCards: cards }).catch(() => undefined);
+  const aside = onCompanyCard(all, cards).map(r => ({ ...r, ignored: 'company' as const, ignoredBy: 'card' as const }));
+  if (aside.length) {
+    await putDocs(aside.map(r => ({ kind: 'receipt', key: receiptKey(r), data: r })));
+    const by = new Map(aside.map(r => [r.id, r]));
+    all = all.map(r => by.get(r.id) || r);
+  }
+  const pending = all.filter(r => isEmailReceipt(r) && awaitingMatch(r));
+  const linked: Receipt[] = [];
+  for (const { r, txn } of pickEmailMatches(all, c.rows, c.accounts)) linked.push(await linkReceipt(r, txn, 'auto'));
+  return { linked, waiting: pending.length - linked.length, company: aside.length };
+}
+
+/** "Company card" on a receipt. When the email shows the card's last four digits (and it isn't one of the planner's
+ *  own accounts), the card is remembered and every other waiting receipt paid on it is put aside too, now and after
+ *  each later look. Returns every receipt that changed. */
+export async function markCompany(r: Receipt, all: Receipt[], accounts: Account[]): Promise<{ changed: Receipt[]; card: string | null }> {
+  const card = companyCard(r, accounts);
+  const first: Receipt = { ...withIgnored(r, 'company') };
+  delete first.ignoredBy;
+  const rest = card ? onCompanyCard(all.filter(o => o.id !== r.id), [card]).map(o => ({ ...o, ignored: 'company' as const, ignoredBy: 'card' as const })) : [];
+  await putDocs([first, ...rest].map(x => ({ kind: 'receipt', key: receiptKey(x), data: x })));
+  if (card) {
+    const prefs = await getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY).catch(() => null);
+    if (!(prefs?.companyCards || []).includes(card)) await putDoc(PREFS_KIND, PREFS_KEY, { ...(prefs || {}), companyCards: [...(prefs?.companyCards || []), card].sort() });
+  }
+  return { changed: [first, ...rest], card };
+}
+/** Undo of "Company card". If its card was remembered, the card is forgotten and everything put aside because of the
+ *  card comes back with it. */
+export async function unmarkCompany(r: Receipt, all: Receipt[], accounts: Account[]): Promise<{ changed: Receipt[]; card: string | null }> {
+  const prefs = await getDoc<MailReceiptPrefs>(PREFS_KIND, PREFS_KEY).catch(() => null);
+  const c = companyCard(r, accounts);
+  const card = c && companyCards(prefs, all, accounts).includes(c) ? c : null;
+  const back = (x: Receipt): Receipt => { const n = withIgnored(x, null); delete n.ignoredBy; return n; };
+  const others = card ? all.filter(o => o.id !== r.id && isEmailReceipt(o) && o.ignored === 'company' && o.cardLast4 === card) : [];
+  const changed = [r, ...others].map(back);
+  await putDocs(changed.map(x => ({ kind: 'receipt', key: receiptKey(x), data: x })));
+  if (card && (prefs?.companyCards || []).includes(card)) await putDoc(PREFS_KIND, PREFS_KEY, { ...(prefs || {}), companyCards: (prefs?.companyCards || []).filter(x => x !== card) });
+  return { changed, card };
+}
+
+/** Link a group of receipts to the one charge they add up to. */
+export const matchGroup = (rs: Receipt[], txn: Txn): Promise<Receipt[]> => linkGroup(rs, txn, 'hand');
 
 // ───────────── the lists ─────────────
 
 const newestFirst = (a: Receipt, b: Receipt) => b.date.localeCompare(a.date) || (b.addedAt || '').localeCompare(a.addedAt || '');
-/** "Not matched": email receipts without a bank row that haven't been put aside, newest first. */
-/** The same purchase emailed to two mailboxes: another email receipt, same day, total and shop, from another mailbox. */
-const twinOf = (r: Receipt, list: Receipt[]): Receipt | undefined => list.find(o => o !== r && isEmailReceipt(o) && o.date === r.date
-  && Math.abs(o.total - r.total) < 0.01 && o.merchant.toLowerCase() === r.merchant.toLowerCase() && o.email?.mailbox !== r.email?.mailbox);
-/** Waiting to be matched or put aside, newest first. A copy whose twin (from the other mailbox) matched or was put
- *  aside isn't listed; of two copies neither of which has, only one is. */
-export const unmatchedEmailReceipts = (list: Receipt[]): Receipt[] => list.filter(r => {
-  if (!isEmailReceipt(r) || r.txnId || r.ignored) return false;
-  const twin = twinOf(r, list);
-  return !twin || (!twin.txnId && !twin.ignored && r.id < twin.id);
-}).sort(newestFirst);
+/** The email receipts with no bank row, sorted into where they show (each newest first):
+ *  `unmatched` = waiting for a match or to be put aside ("Not matched");
+ *  `same`      = the same money as another email (an order and its shipping emails, or two mailboxes): not listed;
+ *  `older`     = from before the card's rows begin in the planner, with the account they are too old for: not listed. */
+export interface EmailLists { unmatched: Receipt[]; same: { r: Receipt; why: SameAs }[]; older: { r: Receipt; account: CardHistory }[] }
+export function emailLists(list: Receipt[], history: CardHistory[] = []): EmailLists {
+  const dup = sameAsAnother(list);
+  const out: EmailLists = { unmatched: [], same: [], older: [] };
+  for (const r of [...list].sort(newestFirst)) {
+    if (!isEmailReceipt(r) || r.txnId || r.ignored) continue;
+    const why = dup.get(r.id), old = why ? null : beforeHistory(r, history);
+    if (why) out.same.push({ r, why }); else if (old) out.older.push({ r, account: old }); else out.unmatched.push(r);
+  }
+  return out;
+}
+/** "Not matched": see emailLists. */
+export const unmatchedEmailReceipts = (list: Receipt[], history: CardHistory[] = []): Receipt[] => emailLists(list, history).unmatched;
 /** "Show hidden": the ones put aside (company card, not a receipt), newest first. */
 export const hiddenEmailReceipts = (list: Receipt[]): Receipt[] => list.filter(r => isEmailReceipt(r) && !!r.ignored).sort(newestFirst);
 /** The normal receipts list: photo receipts, and email receipts once they've matched. */

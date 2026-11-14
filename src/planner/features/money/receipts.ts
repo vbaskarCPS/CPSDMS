@@ -7,6 +7,7 @@ import { getDocs, putDocs } from '../../lib/docs';
 import { uid } from '../../ui/primitives';
 import { loadAccounts, loadMonths, mergeTxns, normalizeMerchant, recategorize, round2, saveAccount, todayIso, visibleMonths } from './lib';
 import { awaitingMatch, foreignCurrency, looseCandidates, matchCandidates, pickMatch, shiftDay, type Candidate } from './receiptMatch';
+import { liveRows } from './receiptGroups';
 import { CASH_ACCOUNT_ID, type Account, type Receipt, type Txn, type TxnMonth } from './types';
 export { splitByCategory, type Candidate } from './receiptMatch';
 
@@ -98,6 +99,17 @@ export async function linkReceipt(r: Receipt, txn: Txn, by: 'auto' | 'hand'): Pr
   if (txn.category !== r.category || txn.source !== 'manual') await recategorize({ [txn.date.slice(0, 7)]: [{ ...txn }] }, new Set([txn.id]), r.category);
   return next;
 }
+/** Several receipts that are one charge together (orders billed as one): each is linked to the row, and the row takes
+ *  the category of the biggest of them. */
+export async function linkGroup(rs: Receipt[], txn: Txn, by: 'auto' | 'hand'): Promise<Receipt[]> {
+  if (!rs.length) return [];
+  const at = new Date().toISOString();
+  const next: Receipt[] = rs.map(r => ({ ...r, txnId: txn.id, txnMonth: txn.date.slice(0, 7), matchedAt: at, matchedBy: by }));
+  await putDocs(next.map(r => ({ kind: 'receipt', key: receiptKey(r), data: r })));
+  const big = [...rs].sort((a, b) => b.total - a.total)[0];
+  if (txn.category !== big.category || txn.source !== 'manual') await recategorize({ [txn.date.slice(0, 7)]: [{ ...txn }] }, new Set([txn.id]), big.category);
+  return next;
+}
 export async function unlinkReceipt(r: Receipt): Promise<Receipt> {
   const next: Receipt = { ...r };
   delete next.txnId; delete next.txnMonth; delete next.matchedAt; delete next.matchedBy;
@@ -123,7 +135,7 @@ export async function removeReceipt(r: Receipt): Promise<void> {
 export async function candidatesFor(r: Receipt, others: Receipt[]): Promise<Candidate[]> {
   const from = shiftDay(r.date, -2), to = shiftDay(r.date, 7);
   const [accounts, raw] = await Promise.all([loadAccounts(), loadMonths(from.slice(0, 7), to.slice(0, 7))]);
-  const rows = Object.values(visibleMonths(raw, accounts)).flat();
+  const rows = liveRows(Object.values(visibleMonths(raw, accounts)).flat(), accounts);
   const taken = new Set(others.filter(o => o.id !== r.id && o.txnId).map(o => o.txnId!));
   // another currency: the bank's amount is converted, so look by the store's name instead of the amount
   return foreignCurrency(r) ? looseCandidates(r, rows, taken) : matchCandidates(r, rows, accounts, taken);
@@ -138,7 +150,7 @@ export async function matchPending(): Promise<{ linked: Receipt[]; waiting: numb
   if (!pending.length) return { linked: [], waiting: 0 };
   const from = shiftDay(pending[0].date, -3), to = shiftDay(pending[pending.length - 1].date, 7);
   const [accounts, raw] = await Promise.all([loadAccounts(), loadMonths(from.slice(0, 7), to.slice(0, 7))]);
-  const rows = Object.values(visibleMonths(raw, accounts)).flat();
+  const rows = liveRows(Object.values(visibleMonths(raw, accounts)).flat(), accounts);   // not an archived account's
   const taken = new Set(all.filter(r => r.txnId).map(r => r.txnId!));
   const linked: Receipt[] = [];
   for (const r of pending) {

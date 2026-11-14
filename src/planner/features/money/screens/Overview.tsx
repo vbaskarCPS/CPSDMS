@@ -8,7 +8,7 @@ import { useMoney } from '../useMoney';
 import { budgetTotal, dailySpend, money, monthKey, monthLabel, shiftMonth, sumByCategory, todayIso, totals, daysInMonth } from '../lib';
 import { CategoryIcon, categoryColor } from '../CategoryIcon';
 import { loadReceipts, matchPending } from '../receipts';
-import { FIRST_MONTHS, monthsBack, unmatchedEmailReceipts } from '../mailReceipts';
+import { FIRST_MONTHS, loadMatchContext, monthsBack, unmatchedEmailReceipts } from '../mailReceipts';
 
 export function Overview() {
   const [m, setM] = useState(monthKey());
@@ -20,7 +20,9 @@ export function Overview() {
     let on = true;
     matchPending().then(res => { if (on && res.linked.length) { say(`${res.linked.length} receipt${res.linked.length === 1 ? '' : 's'} matched to the bank`, 'good'); void reload(); } }).catch(() => undefined)
       // then: receipts from email still without their bank row (Receipts › Not matched)
-      .then(() => loadReceipts(monthsBack(todayIso(), FIRST_MONTHS + 1))).then(rs => { if (on && rs) setNotMatched(unmatchedEmailReceipts(rs).length); }).catch(() => undefined);
+      // the same count as the Receipts screen: not the ones from before the card's rows begin
+      .then(() => Promise.all([loadReceipts(monthsBack(todayIso(), FIRST_MONTHS + 1)), loadMatchContext().catch(() => null)]))
+      .then(([rs, c]) => { if (on && rs) setNotMatched(unmatchedEmailReceipts(rs, c?.history || []).length); }).catch(() => undefined);
     return () => { on = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
