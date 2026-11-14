@@ -5,18 +5,22 @@ import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Upload, ListOrdered, PiggyBank, Landmark, RefreshCw, Wallet, Camera, Banknote, Receipt as ReceiptIcon } from 'lucide-react';
 import { Page, Header, Card, Button, Progress, Stat, Empty, Bars, useToast } from '../../../ui/primitives';
 import { useMoney } from '../useMoney';
-import { budgetTotal, dailySpend, money, monthKey, monthLabel, shiftMonth, sumByCategory, totals, daysInMonth } from '../lib';
+import { budgetTotal, dailySpend, money, monthKey, monthLabel, shiftMonth, sumByCategory, todayIso, totals, daysInMonth } from '../lib';
 import { CategoryIcon, categoryColor } from '../CategoryIcon';
-import { matchPending } from '../receipts';
+import { loadReceipts, matchPending } from '../receipts';
+import { FIRST_MONTHS, monthsBack, unmatchedEmailReceipts } from '../mailReceipts';
 
 export function Overview() {
   const [m, setM] = useState(monthKey());
   const { accounts, months, budget, loading, error, reload } = useMoney(shiftMonth(m, -3), m);
   const [toast, say] = useToast();
+  const [notMatched, setNotMatched] = useState(0);
   // receipts waiting for their card charge: match the ones that have come in
   useEffect(() => {
     let on = true;
-    matchPending().then(res => { if (on && res.linked.length) { say(`${res.linked.length} receipt${res.linked.length === 1 ? '' : 's'} matched to the bank`, 'good'); void reload(); } }).catch(() => undefined);
+    matchPending().then(res => { if (on && res.linked.length) { say(`${res.linked.length} receipt${res.linked.length === 1 ? '' : 's'} matched to the bank`, 'good'); void reload(); } }).catch(() => undefined)
+      // then: receipts from email still without their bank row (Receipts › Not matched)
+      .then(() => loadReceipts(monthsBack(todayIso(), FIRST_MONTHS + 1))).then(rs => { if (on && rs) setNotMatched(unmatchedEmailReceipts(rs).length); }).catch(() => undefined);
     return () => { on = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -47,6 +51,7 @@ export function Overview() {
         <Link to="/money/receipt" className="pl-btn"><Camera /> Receipt</Link>
         <Link to="/money/cash" className="pl-btn"><Banknote /> Cash</Link>
       </div>
+      {notMatched > 0 && <Link to="/money/receipts" className="pl-muted" style={{ fontSize: 13 }}>{notMatched} receipt{notMatched === 1 ? '' : 's'} from email not matched ›</Link>}
 
       {!loading && !anyData ? (
         <Card><Empty icon={<Wallet />} title="No transactions yet" blurb="Download a CSV from TD EasyWeb and import it here. Categories, budgets and recurring bills fill in from there."

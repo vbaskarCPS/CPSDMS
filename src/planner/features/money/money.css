@@ -55,3 +55,12 @@
 .mo-rcpt-match p svg, .mo-rcpt-result svg { width: 18px; height: 18px; flex: none; color: var(--accent); }
 .mo-rcpt-result { display: flex; align-items: flex-start; gap: 10px; font-size: 15px; line-height: 1.4; }
 .mo-rcpt-warn { font-size: 13px; padding: 8px 12px; border-radius: 10px; color: var(--amber-2); background: color-mix(in srgb, var(--amber-2) 12%, transparent); }
+
+/* receipts from email (Receipts › From your email) */
+.mo-mailrcpt { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.mo-mailrcpt:last-child { border-bottom: 0; }
+.mo-mailrcpt__subj { display: block; font-size: 11px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mo-mailrcpt__acts { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.mo-mailicon { width: 20px; height: 20px; flex: none; color: var(--accent); }
+.mo-mailicon--sm { width: 12px; height: 12px; vertical-align: -1px; margin-right: 4px; }
+.mo-linkbtn { background: none; border: 0; padding: 0; font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; }

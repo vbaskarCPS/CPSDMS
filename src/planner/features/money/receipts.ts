@@ -6,7 +6,7 @@
 import { getDocs, putDocs } from '../../lib/docs';
 import { uid } from '../../ui/primitives';
 import { loadAccounts, loadMonths, mergeTxns, normalizeMerchant, recategorize, round2, saveAccount, todayIso, visibleMonths } from './lib';
-import { autoPick, matchCandidates, shiftDay, type Candidate } from './receiptMatch';
+import { awaitingMatch, foreignCurrency, looseCandidates, matchCandidates, pickMatch, shiftDay, type Candidate } from './receiptMatch';
 import { CASH_ACCOUNT_ID, type Account, type Receipt, type Txn, type TxnMonth } from './types';
 export { splitByCategory, type Candidate } from './receiptMatch';
 
@@ -125,7 +125,8 @@ export async function candidatesFor(r: Receipt, others: Receipt[]): Promise<Cand
   const [accounts, raw] = await Promise.all([loadAccounts(), loadMonths(from.slice(0, 7), to.slice(0, 7))]);
   const rows = Object.values(visibleMonths(raw, accounts)).flat();
   const taken = new Set(others.filter(o => o.id !== r.id && o.txnId).map(o => o.txnId!));
-  return matchCandidates(r, rows, accounts, taken);
+  // another currency: the bank's amount is converted, so look by the store's name instead of the amount
+  return foreignCurrency(r) ? looseCandidates(r, rows, taken) : matchCandidates(r, rows, accounts, taken);
 }
 
 /** Link every waiting card receipt (last 75 days) whose bank row has come in and is a clear match. Run when the money
@@ -133,15 +134,15 @@ export async function candidatesFor(r: Receipt, others: Receipt[]): Promise<Cand
 export async function matchPending(): Promise<{ linked: Receipt[]; waiting: number }> {
   const since = shiftDay(todayIso(), -75);
   const all = await loadReceipts(since);
-  const pending = all.filter(r => r.payment === 'card' && !r.txnId).sort((a, b) => a.date.localeCompare(b.date));
+  const pending = all.filter(awaitingMatch).sort((a, b) => a.date.localeCompare(b.date));
   if (!pending.length) return { linked: [], waiting: 0 };
-  const from = shiftDay(pending[0].date, -2), to = shiftDay(pending[pending.length - 1].date, 7);
+  const from = shiftDay(pending[0].date, -3), to = shiftDay(pending[pending.length - 1].date, 7);
   const [accounts, raw] = await Promise.all([loadAccounts(), loadMonths(from.slice(0, 7), to.slice(0, 7))]);
   const rows = Object.values(visibleMonths(raw, accounts)).flat();
   const taken = new Set(all.filter(r => r.txnId).map(r => r.txnId!));
   const linked: Receipt[] = [];
   for (const r of pending) {
-    const pick = autoPick(matchCandidates(r, rows, accounts, taken), r.total);
+    const pick = pickMatch(r, rows, accounts, taken);   // the same rules as receipts from email (mailReceipts.ts)
     if (!pick) continue;
     taken.add(pick.txn.id);
     linked.push(await linkReceipt(r, pick.txn, 'auto'));
