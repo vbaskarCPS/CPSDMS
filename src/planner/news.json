@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-15-deposits", "date": "2026-11-15", "title": "Transfers: deposits, and transferred cash", "for": "night",
+    "lines": ["Money › Transfers has a Deposits card: the cash and cheques you put in, and what counts as income.", "Deposited cash only to e-transfer it to someone? Mark that e-transfer “Transferred cash” and its amount comes off your income.", "E-transfers sent right after a cash deposit are listed there, one tap each.", "Deposits the bank filed under something else can be counted as income in one tap."] },
   { "id": "2026-11-14-account-colours", "date": "2026-11-14", "title": "Accounts: nickname, colour, delete", "for": "night",
     "lines": ["Money › Accounts: tap an account to give it a nickname and pick its colour.", "Every transaction now has a line down its left side in its account’s colour.", "Delete account… removes an account and its transactions for good (it asks first, and stops the bank filling it). Archive still keeps everything."] },
   { "id": "2026-11-14-linked-transfers", "date": "2026-11-14", "title": "Transfers: both sides of a move, together", "for": "night",

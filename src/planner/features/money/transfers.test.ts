@@ -2,7 +2,7 @@
 // sent or received, and things that aren't transfers at all. Made-up rows in the bank's wording (TD Canada Trust).
 import { describe, expect, it } from 'vitest';
 import { builtinCategory, builtinCategoryNoTransfer, normalizeMerchant } from '../../../../supabase/functions/_shared/plannerMoney';
-import { accountEnding, answerAccount, endingLabel, linkMoves, movesByRow, nameEnding, applySentRules, etransferCode, ownEndings, rememberSent, sortTransfers, transferKind, type TransferPrefs } from './transfers';
+import { accountEnding, answerAccount, depositHow, endingLabel, linkMoves, movesByRow, nameEnding, sortDeposits, applySentRules, etransferCode, ownEndings, rememberSent, sortTransfers, transferKind, type TransferPrefs } from './transfers';
 import type { Account, Receipt, Txn } from './types';
 
 let n = 0;
@@ -371,5 +371,42 @@ describe('linkMoves: the two sides of one move, together', () => {
     expect(o.moves).toBe(3);       // moves
     expect(o.groups.map(g => [g.from, g.to, g.total, g.count, g.both])).toEqual([['Joint', 'Chequing', 900, 1, 1], ['Chequing', 'Joint', 550, 2, 2]]);
     expect(o.groups[1].moves.map(m => m.date)).toEqual(['2026-05-03', '2026-05-01']);   // newest first
+  });
+});
+
+describe('deposits, and cash that was only passed on', () => {
+  it('depositHow: deposits they made themselves, not pay, e-transfers or refunds', () => {
+    expect(depositHow('GC 1234-DEPOSIT')).toBe('machine');
+    expect(depositHow('TD ATM DEP 004512')).toBe('machine');
+    expect(depositHow('MOBILE DEPOSIT')).toBe('mobile');
+    expect(depositHow('DEPOSIT')).toBe('other');
+    for (const d of ['DIRECT DEPOSIT ACME', 'PAYROLL DEP', 'E-TRANSFER DEPOSIT', 'CANADA FED DEPOSIT', 'DEPOT HOME', 'DIRECTCASH MSP', 'SEND E-TFR ***9K5']) expect(depositHow(d), d).toBeNull();
+  });
+  it('sums the deposits counted as income, lists the ones that aren’t, and the cash passed on', () => {
+    const rows = [
+      tx('2026-05-01', 'GC 1234-DEPOSIT', 900, 'chq', 'Income'), tx('2026-05-03', 'MOBILE DEPOSIT', 400, 'chq', 'Income'),
+      tx('2026-05-05', 'TD ATM DEP 004512', 300, 'chq', 'Cash'),            // filed under Cash by its wording: offered as income
+      tx('2026-05-06', 'GC 1234-DEPOSIT', 50, 'chq', 'Transfers'),          // they said this one isn't income
+      tx('2026-05-02', 'SEND E-TFR ***aB1', -500, 'chq', 'Transferred cash'),
+      tx('2026-05-02', 'PAYROLL ACME', 2000, 'chq', 'Income'),
+    ];
+    const d = sortDeposits(rows, []);
+    expect(d.rows.map(r => [r.txn.amount, r.how])).toEqual([[50, 'machine'], [300, 'machine'], [400, 'mobile'], [900, 'machine']]);
+    expect([d.total, d.income, d.incomeCount]).toEqual([1650, 1300, 2]);
+    expect(d.uncounted.map(t => t.amount)).toEqual([300]);
+    expect([d.passed.length, d.passedTotal]).toEqual([1, 500]);
+  });
+  it('offers a sent e-transfer that went out within three days after a cash deposit that covers it', () => {
+    const dep = tx('2026-05-01', 'GC 1234-DEPOSIT', 900, 'chq', 'Income'), chq = tx('2026-05-01', 'MOBILE DEPOSIT', 5000, 'chq', 'Income');
+    const same = tx('2026-05-01', 'SEND E-TFR ***aB1', -900, 'chq'), later = tx('2026-05-04', 'SEND E-TFR ***aB2', -300, 'joint');
+    const tooBig = tx('2026-05-02', 'SEND E-TFR ***aB3', -1200, 'chq'), tooLate = tx('2026-05-06', 'SEND E-TFR ***aB4', -100, 'chq'), before = tx('2026-04-30', 'SEND E-TFR ***aB5', -100, 'chq');
+    const tiny = tx('2026-05-01', 'SEND E-TFR ***aB6', -10, 'chq'), sliver = tx('2026-05-01', 'SEND E-TFR ***aB7', -40, 'chq');   // under $20; under a twentieth of $900
+    const d = sortDeposits([dep, chq, same, later, tooBig, tooLate, before, tiny, sliver], [same, later, tooBig, tooLate, before, tiny, sliver]);
+    expect(d.maybe.map(m => [m.txn, m.deposit])).toEqual([[later, dep], [same, dep]]);   // a cheque isn't cash to pass on
+    // through sortTransfers: only e-transfers still standing as transfers are offered; one already marked isn't
+    const marked = { ...same, category: 'Transferred cash' };
+    const s = sortTransfers([dep, marked, later], ACCOUNTS);
+    expect(s.deposits.maybe.map(m => m.txn)).toEqual([later]);
+    expect(s.deposits.passed).toEqual([marked]);
   });
 });

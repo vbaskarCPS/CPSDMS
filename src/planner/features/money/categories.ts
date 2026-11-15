@@ -23,12 +23,16 @@ export const CATEGORIES: Category[] = [
   { name: 'Personal care', icon: 'Scissors', color: '#d35400', spending: true },
   { name: 'Transfers', icon: 'ArrowLeftRight', color: '#7f8c8d', spending: false },
   { name: 'Credit card payment', icon: 'CreditCard', color: '#7f8c8d', spending: false },
+  // cash they deposited only to e-transfer it to someone: not spending, and it comes off income (lib.ts totals)
+  { name: 'Transferred cash', icon: 'HandCoins', color: '#7f8c8d', spending: false },
   { name: 'Income', icon: 'Banknote', color: '#2a9d8f', spending: false },
   { name: 'Fees & interest', icon: 'Percent', color: '#c0392b', spending: true },
   { name: 'Cash', icon: 'Wallet', color: '#636e72', spending: true },
   { name: 'Other', icon: 'CircleDashed', color: '#95a5a6', spending: true },
 ];
 export const CATEGORY_NAMES = CATEGORIES.map(c => c.name);
+/** An e-transfer of cash that was deposited for someone else: its amount is taken off income, since it never was theirs. */
+export const TRANSFERRED_CASH = 'Transferred cash';
 export const SPENDING_CATEGORIES = CATEGORIES.filter(c => c.spending).map(c => c.name);
 export const byName = (name: string): Category => CATEGORIES.find(c => c.name === name) || CATEGORIES[CATEGORIES.length - 1];
 

@@ -2,7 +2,7 @@
 // saving the finance docs, and the sums the screens show.
 import { getDocs, putDoc, putDocs } from '../../lib/docs';
 import { categorize } from '../../lib/ai';
-import { builtinCategory, CATEGORY_NAMES, SPENDING_CATEGORIES } from './categories';
+import { builtinCategory, CATEGORY_NAMES, SPENDING_CATEGORIES, TRANSFERRED_CASH } from './categories';
 import { CASH_ACCOUNT_ID, type Account, type Budget, type Rule, type Txn, type TxnMonth } from './types';
 
 // ── formatting ──
@@ -106,7 +106,7 @@ export async function categorizeAll(txns: Txn[], rules: Record<string, string>):
   }
   let ai: Record<string, string> = {};
   if (unknown.size) {
-    try { ai = await categorize([...unknown].slice(0, 200), CATEGORY_NAMES); } catch { ai = {}; }
+    try { ai = await categorize([...unknown].slice(0, 200), CATEGORY_NAMES.filter(c => c !== TRANSFERRED_CASH)); } catch { ai = {}; }
   }
   for (const t of txns) {
     if (t.source === 'rule' || t.source === 'builtin') continue;
@@ -184,6 +184,8 @@ export const isWithdrawalToWallet = (t: Txn, since: string) =>
 // ── sums ──
 export const isSpending = (t: Txn) => t.amount < 0 && SPENDING_CATEGORIES.includes(t.category);
 export const isIncome = (t: Txn) => t.amount > 0 && t.category === 'Income';
+/** Cash they deposited and e-transferred on to someone: the deposit counted as income, but it never was theirs. */
+export const isPassedOn = (t: Txn) => t.amount < 0 && t.category === TRANSFERRED_CASH;
 
 export function sumByCategory(rows: Txn[]): Record<string, number> {
   const out: Record<string, number> = {};
@@ -191,9 +193,12 @@ export function sumByCategory(rows: Txn[]): Record<string, number> {
   return out;
 }
 export function totals(rows: Txn[]) {
-  let spent = 0, income = 0;
-  for (const t of rows) { if (isSpending(t)) spent -= t.amount; if (isIncome(t)) income += t.amount; }
-  return { spent: round2(spent), income: round2(income), net: round2(income - spent) };
+  let spent = 0, income = 0, passedOn = 0;
+  for (const t of rows) { if (isSpending(t)) spent -= t.amount; if (isIncome(t)) income += t.amount; if (isPassedOn(t)) passedOn -= t.amount; }
+  // income is what came in less the cash that was only passed on (it can dip below zero in a month where the
+  // deposit landed the month before)
+  income -= passedOn;
+  return { spent: round2(spent), income: round2(income), net: round2(income - spent), passedOn: round2(passedOn) };
 }
 export function dailySpend(rows: Txn[], m: string): number[] {
   const out = new Array(daysInMonth(m)).fill(0);
