@@ -90,7 +90,7 @@ export function Transfers() {
     if (await change([{ rows: [one], category }], nowCount(1, one.amount > 0 ? 'deposit' : 'e-transfer', category))) setOne(null);
   }
   /** This e-transfer was cash they deposited for someone: it comes off income. */
-  const passOn = (t: Txn) => change([{ rows: [t], category: TRANSFERRED_CASH }], `${money(Math.abs(t.amount))} marked Transferred cash: taken off your income`);
+  const passOn = (t: Txn) => change([{ rows: [t], category: TRANSFERRED_CASH }], `${money(Math.abs(t.amount))} marked Transferred cash: taken off your deposits`);
   /** Deposits the bank's wording filed under something else: count them as income, and the next ones like them. */
   async function countDeposits(rows: Txn[]) {
     if (!(await change([{ rows, category: 'Income' }], nowCount(rows.length, 'deposit', 'Income')))) return;
@@ -328,11 +328,11 @@ export function Transfers() {
           {dep.rows.length + dep.passed.length > 0 && (
             <Card>
               <h3 style={{ margin: '0 0 4px' }}>Deposits</h3>
-              <small className="pl-muted">Cash and cheques you put in. Most are income. Cash you deposited only to e-transfer it to someone isn’t yours: mark that e-transfer “Transferred cash” and its amount comes off your income.</small>
+              <small className="pl-muted">Cash and cheques you put in. Most are income. Cash you deposited only to e-transfer it to someone isn’t yours: mark that e-transfer “Transferred cash” and its amount comes off the total, and off your income.</small>
               <div style={{ margin: '10px 0 4px', fontSize: 14 }}>
                 <div className="pl-row" style={{ gap: 8, padding: '3px 0' }}><span className="pl-grow">Deposits counted as income <span className="pl-muted">({dep.incomeCount})</span></span><span className="mo-amt mo-amt--in">+{money(dep.income)}</span></div>
                 <div className="pl-row" style={{ gap: 8, padding: '3px 0' }}><span className="pl-grow">Transferred cash <span className="pl-muted">({dep.passed.length})</span></span><span className="mo-amt">−{money(dep.passedTotal)}</span></div>
-                <div className="pl-row" style={{ gap: 8, padding: '5px 0 3px', borderTop: '1px solid var(--line)' }}><b className="pl-grow">Your income from deposits</b><b className="mo-amt">{money(dep.income - dep.passedTotal)}</b></div>
+                <div className="pl-row" style={{ gap: 8, padding: '5px 0 3px', borderTop: '1px solid var(--line)' }}><b className="pl-grow">Deposits after transferred cash</b><b className="mo-amt">{money(dep.income - dep.passedTotal)}</b></div>
               </div>
 
               {dep.uncounted.length > 0 && (
@@ -345,16 +345,16 @@ export function Transfers() {
                 </div>
               )}
 
-              {dep.maybe.length > 0 && (
+              {dep.sendable.length > 0 && (
                 <div style={{ marginTop: 14 }}>
-                  <p className="pl-eyebrow" style={{ margin: 0 }}>Sent right after a deposit</p>
-                  <small className="pl-muted">Was this cash you put in for someone? Tap Transferred cash if so. The others stay as they are. Any other e-transfer can be marked from “Sent by e-transfer” above or from Transactions.</small>
+                  <p className="pl-eyebrow" style={{ margin: 0 }}>E-transfers you sent</p>
+                  <small className="pl-muted">Was one of these cash you put in for someone? Tap Transferred cash and its amount comes off your deposits, whether you sent it before or after the cash went in.</small>
                   <div className="pl-list" style={{ marginTop: 4 }}>
-                    {(all.maybe ? dep.maybe : dep.maybe.slice(0, SHOWN)).map(m => (
+                    {(all.sendable ? dep.sendable : dep.sendable.slice(0, SHOWN)).map(m => (
                       <div key={m.txn.id} className="mo-txn mo-acctline" style={{ padding: '6px 0 6px 8px', ...acct(m.txn.accountId) }}>
                         <div className="mo-txn__main">
                           <b style={{ fontWeight: 500 }}>{day(m.txn.date)} · {m.txn.desc}</b>
-                          <small>after {money(m.deposit.amount)} deposited {m.deposit.date === m.txn.date ? 'the same day' : day(m.deposit.date)}</small>
+                          <small>{m.near ? `${money(m.near.amount)} deposited ${m.near.date === m.txn.date ? 'the same day' : day(m.near.date)}` : accName(m.txn.accountId)}</small>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                           <span className="mo-amt">{money(m.txn.amount, { sign: true })}</span>
@@ -363,7 +363,7 @@ export function Transfers() {
                       </div>
                     ))}
                   </div>
-                  {more('maybe', dep.maybe.length)}
+                  {more('sendable', dep.sendable.length)}
                 </div>
               )}
 

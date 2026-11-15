@@ -399,10 +399,10 @@ export function depositHow(desc: string): DepositHow | null {
   if (/\bATM\b|\bABM\b|\bGC\b|BRANCH|CASH|GREEN MACHINE/.test(u)) return 'machine';
   return 'other';
 }
-/** How many days after a deposit an e-transfer can go out and still be offered as that cash being passed on, and how
- *  small it can be (a $10 e-transfer after a $5,000 deposit says nothing: under $20, or under a twentieth of the
- *  deposit, isn't offered; it can still be marked by hand). */
-const PASS_DAYS = 3, PASS_MIN = 20, PASS_SHARE = 0.05;
+/** How far either side of an e-transfer a deposit is mentioned beside it, as a reminder only. The cash is sometimes
+ *  sent before it is deposited and the two rarely line up, so nothing is matched: any sent e-transfer can be marked,
+ *  and its amount simply comes off the deposits' total. */
+const NEAR_DAYS = 7;
 
 export interface Deposits {
   /** Every deposit they made, newest first, whatever its category. */
@@ -414,27 +414,22 @@ export interface Deposits {
   uncounted: Txn[];
   /** E-transfers marked 'Transferred cash': deposited cash that went on to someone, taken off income. Newest first. */
   passed: Txn[]; passedTotal: number;
-  /** Sent e-transfers that went out within three days after a deposit (not a cheque by phone) of at least that much,
-   *  on any account, and aren't tiny beside it: perhaps that cash going on to someone. Offered, never assumed. Newest first. */
-  maybe: { txn: Txn; deposit: Txn }[];
+  /** Every e-transfer they sent that still stands as a plain transfer, newest first: any of them can be marked.
+   *  `near`: the closest deposit (not a cheque by phone) within a week either side, shown as a reminder only. */
+  sendable: { txn: Txn; near?: Txn }[];
 }
 export function sortDeposits(all: Txn[], sent: Txn[]): Deposits {
   const rows = newestFirst(all.filter(t => t.amount > 0)).flatMap(txn => { const how = depositHow(txn.desc); return how ? [{ txn, how }] : []; });
   const counted = rows.filter(r => r.txn.category === 'Income');
   const passed = newestFirst(all.filter(t => t.amount < 0 && t.category === PASSED_ON));
-  // a sent e-transfer right after a cash deposit that covers it: the closest deposit before it
   const cash = rows.filter(r => r.how !== 'mobile').map(r => r.txn);
-  const maybe = newestFirst(sent).flatMap(txn => {
-    if (abs(txn) < PASS_MIN) return [];
-    const near = cash.filter(d => { const gap = daysBetween(d.date, txn.date); return gap >= 0 && gap <= PASS_DAYS && d.amount + 0.005 >= abs(txn) && abs(txn) >= d.amount * PASS_SHARE; })
-      .sort((a, b) => b.date.localeCompare(a.date) || a.amount - b.amount)[0];
-    return near ? [{ txn, deposit: near }] : [];
-  });
+  const gap = (d: Txn, t: Txn) => Math.abs(daysBetween(d.date, t.date));
+  const sendable = newestFirst(sent).map(txn => ({ txn, near: cash.filter(d => gap(d, txn) <= NEAR_DAYS).sort((a, b) => gap(a, txn) - gap(b, txn) || b.date.localeCompare(a.date))[0] }));
   return {
     rows, total: round2(rows.reduce((n, r) => n + r.txn.amount, 0)),
     income: round2(counted.reduce((n, r) => n + r.txn.amount, 0)), incomeCount: counted.length,
     uncounted: rows.filter(r => r.txn.category !== 'Income' && r.txn.category !== 'Transfers').map(r => r.txn),
-    passed, passedTotal: sum(passed), maybe,
+    passed, passedTotal: sum(passed), sendable,
   };
 }
 

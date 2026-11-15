@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-15-transferred-cash-any", "date": "2026-11-15", "title": "Transferred cash: any e-transfer, any day", "for": "night",
+    "lines": ["The Deposits card now lists every e-transfer you sent, not only the ones right after a deposit.", "Tap Transferred cash on one and its amount comes off your deposits, whether you sent it before or after the cash went in."] },
   { "id": "2026-11-15-deposits", "date": "2026-11-15", "title": "Transfers: deposits, and transferred cash", "for": "night",
     "lines": ["Money › Transfers has a Deposits card: the cash and cheques you put in, and what counts as income.", "Deposited cash only to e-transfer it to someone? Mark that e-transfer “Transferred cash” and its amount comes off your income.", "E-transfers sent right after a cash deposit are listed there, one tap each.", "Deposits the bank filed under something else can be counted as income in one tap."] },
   { "id": "2026-11-14-account-colours", "date": "2026-11-14", "title": "Accounts: nickname, colour, delete", "for": "night",
