@@ -11,6 +11,8 @@
 .mo-txn__main { flex: 1; min-width: 0; }
 .mo-txn__main b { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mo-txn__main small { color: var(--ink-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+/* the account's colour down the left of a transaction row: --acct is set on the row (accountColor.ts) */
+.mo-acctline { border-left: 3px solid var(--acct, transparent); padding-left: 8px; }
 .mo-catchip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-2); cursor: pointer; max-width: 120px; white-space: nowrap; overflow: hidden; }
 .mo-day { font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 12px 0 2px; display: flex; justify-content: space-between; }
 .mo-catgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -19,6 +21,12 @@
 .mo-acct { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
 .mo-acct__icon { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); flex: none; }
 .mo-acct__icon svg { width: 20px; height: 20px; }
+/* Accounts: the dot beside an account's name, and the colours to pick from in its sheet (two rows of six) */
+.mo-acct__dot { display: inline-block; margin-right: 6px; }
+.mo-swatches { display: grid; grid-template-columns: repeat(6, 36px); gap: 10px 12px; }
+.mo-swatch { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 999px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #fff; }
+.mo-swatch svg { width: 18px; height: 18px; }
+.mo-swatch.is-on { box-shadow: 0 0 0 2px var(--bg-2), 0 0 0 4px var(--ink); }
 /* "Waiting for the bank to approve?" after a connect that didn't finish */
 .mo-help { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--amber) 14%, var(--bg-2)); border: 1px solid var(--line); color: var(--ink); }
 .mo-help svg { width: 20px; height: 20px; flex: none; color: var(--amber-2); margin-top: 1px; }

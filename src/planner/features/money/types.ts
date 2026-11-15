@@ -2,12 +2,14 @@
 export type AccountType = 'chequing' | 'savings' | 'credit' | 'cash';
 /** Set when the account is connected to the bank through Plaid (planner-plaid edge function). While it is,
  *  the bank's rows are the record and this account's CSV rows are hidden (kept, not deleted). */
-export interface AccountLink { itemId: string; plaidId: string; institution?: string; linkedAt: string; removedAt?: string }
+export interface AccountLink { itemId: string; plaidId: string; institution?: string; linkedAt: string; removedAt?: string; /** the day the bank's own rows begin (lib.ts withBankSince): statement rows from before it count */ since?: string }
 export interface Account {
   id: string; name: string; type: AccountType; last4?: string; balance?: number; balanceAsOf?: string; order: number; archived?: boolean; plaid?: AccountLink;
   /** The cash wallet (id 'cash'): the first day cash spending was logged. From then on an ATM withdrawal moves money
    *  into the wallet (shown as a transfer) and what's bought with the cash is the spending, so nothing counts twice. */
   cashSince?: string;
+  /** Picked on Money › Accounts ('#3b82f6'): the line down the side of its transactions (accountColor.ts). */
+  color?: string;
 }
 
 export type TxnSource = 'rule' | 'builtin' | 'ai' | 'manual' | 'plaid';   // 'plaid': Plaid's own category

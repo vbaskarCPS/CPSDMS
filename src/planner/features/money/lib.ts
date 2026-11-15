@@ -38,7 +38,8 @@ export const todayIso = () => { const d = new Date(); return `${monthKey(d)}-${S
 
 // ── merchants ── (shared with the planner-plaid edge function, so CSV and bank rows agree)
 export { maskNumbers, normalizeMerchant } from '../../../../supabase/functions/_shared/plannerMoney';
-import { hideReplaced } from '../../../../supabase/functions/_shared/plannerMoney';
+import { bankSince, hideReplaced } from '../../../../supabase/functions/_shared/plannerMoney';
+export { bankSince };
 
 /** FNV-1a; good enough to spot the same bank line twice. */
 export function hash(s: string): string {
@@ -54,7 +55,24 @@ export const txnId = (accountId: string, date: string, desc: string, amount: num
 // ── loading ──
 export async function loadAccounts(): Promise<Account[]> {
   const docs = await getDocs<Account>('account');
-  return docs.map(d => d.data).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+  const list = docs.map(d => d.data).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+  return withBankSince(list).catch(() => list);
+}
+/** A connected account needs to know the day the bank's own rows begin (plaid.since): statement rows from before
+ *  it count, the ones after are the bank's rows again (hideReplaced). It's worked out once from all the months and
+ *  kept on the account; connecting the account again clears it, so it's worked out again then. */
+export async function withBankSince(accounts: Account[], load: () => Promise<Record<string, Txn[]>> = () => loadMonths(), save: (a: Account) => Promise<void> = saveAccount): Promise<Account[]> {
+  const need = accounts.filter(a => a.plaid && !a.plaid.removedAt && !a.plaid.since);
+  if (!need.length) return accounts;
+  const since = bankSince(await load());
+  const out: Account[] = [];
+  for (const a of accounts) {
+    if (!need.includes(a) || !since[a.id]) { out.push(a); continue; }   // no bank rows yet: ask again next time
+    const next = { ...a, plaid: { ...a.plaid!, since: since[a.id] } };
+    await save(next).catch(() => undefined);
+    out.push(next);
+  }
+  return out;
 }
 export async function saveAccount(a: Account): Promise<void> { await putDoc('account', a.id, a); }
 
@@ -140,12 +158,15 @@ export async function recategorize(months: Record<string, Txn[]>, ids: Set<strin
   return keys;
 }
 
-/** What the screens show: a connected account's CSV rows are hidden (see hideReplaced), and once cash spending is
+/** What the screens show: a connected account's CSV rows are hidden from the day the bank's own rows begin (see
+ *  hideReplaced; older statement rows count), and once cash spending is
  *  logged (the cash wallet's cashSince), an ATM withdrawal is shown as a transfer into the wallet: the cash
  *  rows are the spending, so the withdrawal mustn't count too. Display only; writes go through loadMonths. */
 export function visibleMonths(months: Record<string, Txn[]>, accounts: Account[]): Record<string, Txn[]> {
-  const linked: Record<string, { removedAt?: string }> = {};
-  for (const a of accounts) if (a.plaid) linked[a.id] = { removedAt: a.plaid.removedAt };
+  const linked: Record<string, { removedAt?: string; since?: string }> = {};
+  // the bank's rows may since reach further back than the day kept on the account: the earlier of the two wins
+  const seen = bankSince(months);
+  for (const a of accounts) if (a.plaid) linked[a.id] = { removedAt: a.plaid.removedAt, since: a.plaid.since && seen[a.id] && seen[a.id] < a.plaid.since ? seen[a.id] : a.plaid.since };
   const since = accounts.find(a => a.id === CASH_ACCOUNT_ID)?.cashSince;
   if (!Object.keys(linked).length && !since) return months;
   const out: Record<string, Txn[]> = {};

@@ -2,7 +2,7 @@
 // sent or received, and things that aren't transfers at all. Made-up rows in the bank's wording (TD Canada Trust).
 import { describe, expect, it } from 'vitest';
 import { builtinCategory, builtinCategoryNoTransfer, normalizeMerchant } from '../../../../supabase/functions/_shared/plannerMoney';
-import { accountEnding, answerAccount, applySentRules, etransferCode, ownEndings, rememberSent, sortTransfers, transferKind, type TransferPrefs } from './transfers';
+import { accountEnding, answerAccount, endingLabel, linkMoves, movesByRow, nameEnding, applySentRules, etransferCode, ownEndings, rememberSent, sortTransfers, transferKind, type TransferPrefs } from './transfers';
 import type { Account, Receipt, Txn } from './types';
 
 let n = 0;
@@ -308,5 +308,68 @@ describe('remembered choices for e-transfers', () => {
     expect(applySentRules([t], prefs)[0].category).toBe('Kids');
     expect(applySentRules([t], prefs, [etransferReceipt(t, 'Sam Lee')])[0].category).toBe('Health');
     expect(applySentRules([t], { sentRules: [{ amount: 100, category: 'Transfers' }] })).toEqual([]);
+  });
+});
+
+describe('linkMoves: the two sides of one move, together', () => {
+  const own = (rows: Txn[], prefs: TransferPrefs = {}) => sortTransfers(rows, ACCOUNTS, prefs).own;
+  it('a move between two tracked accounts is one move with both rows', () => {
+    const out = tx('2026-05-01', 'TFR-TO ###1817', -500, 'chq'), into = tx('2026-05-01', 'TFR-FR 6095623', 500, 'joint');
+    const moves = linkMoves([out, into], ACCOUNTS);
+    expect(moves).toEqual([{ key: out.id, date: '2026-05-01', amount: 500, from: 'Chequing', to: 'Joint', fromId: 'chq', toId: 'joint', out, into }]);
+  });
+  it('pairs the closest day, to the cent, each row once; the other side up to three days away', () => {
+    const a = tx('2026-05-01', 'TFR-TO ###1817', -100, 'chq'), b = tx('2026-05-08', 'TFR-TO ###1817', -100, 'chq');
+    const a2 = tx('2026-05-02', 'TFR-FR 6095623', 100, 'joint'), b2 = tx('2026-05-08', 'TFR-FR 6095623', 100, 'joint');
+    const far = tx('2026-06-01', 'TFR-TO ###1817', -70, 'chq'), far2 = tx('2026-06-09', 'TFR-FR 6095623', 70, 'joint');   // eight days: two one-sided moves
+    const off = tx('2026-07-01', 'TFR-TO ###1817', -20, 'chq'), off2 = tx('2026-07-01', 'TFR-FR 6095623', 20.01, 'joint'); // a cent out: not the same move
+    const moves = linkMoves([a, b, a2, b2, far, far2, off, off2], ACCOUNTS);
+    const pair = (t: Txn) => moves.find(m => m.out === t)?.into;
+    expect(pair(a)).toBe(a2);
+    expect(pair(b)).toBe(b2);
+    expect(pair(far)).toBeUndefined();
+    expect(pair(off)).toBeUndefined();
+    expect(moves).toHaveLength(6);
+    // the lone arriving rows keep their direction: Chequing → Joint
+    expect(moves.find(m => m.into === far2)).toMatchObject({ from: 'Chequing', to: 'Joint' });
+    expect(moves.find(m => m.into === far2)!.out).toBeUndefined();
+  });
+  it('an account known only by its number has one side, and takes its nickname', () => {
+    const to = tx('2026-05-08', 'SSV TO: 6456622', -200, 'chq'), back = tx('2026-05-20', 'TFR-FR 6456622', 75, 'joint');
+    const prefs = nameEnding({ own: ['6622'] }, '6622', '  Rainy   day ');
+    expect(prefs.names).toEqual({ 6622: 'Rainy day' });
+    const o = own([to, back], prefs);
+    expect(o.moves).toBe(2);
+    expect(o.groups.map(g => [g.from, g.to, g.total, g.count, g.both])).toEqual([
+      ['Chequing', 'Rainy day ····6622', 200, 1, 0],
+      ['Rainy day ····6622', 'Joint', 75, 1, 0],
+    ]);
+    expect(o.byEnding[0]).toMatchObject({ ending: '6622', nick: 'Rainy day', flow: { routes: [{ from: 'Chequing', to: 'Rainy day ····6622' }, { from: 'Rainy day ····6622', to: 'Joint' }] } });
+    // an empty name takes the nickname away
+    expect(nameEnding(prefs, '6622', ' ').names).toEqual({});
+    expect(endingLabel('6622', ACCOUNTS)).toBe('····6622');
+    expect(endingLabel('1817', ACCOUNTS, { 1817: 'ignored' })).toBe('Joint');
+  });
+  it('movesByRow: both rows of a move point at it; rows that aren’t moves between their accounts are left out', () => {
+    const out = tx('2026-05-01', 'TFR-TO ###1817', -500, 'chq'), into = tx('2026-05-01', 'TFR-FR 6095623', 500, 'joint');
+    const sav = tx('2026-05-02', 'SSV TO: 6456622', -40, 'chq'), rent = tx('2026-05-01', 'SEND E-TFR ***9K5', -1700, 'chq'), food = tx('2026-05-01', 'LOBLAWS', -80, 'chq', 'Groceries');
+    const by = movesByRow([out, into, sav, rent, food], ACCOUNTS, { own: ['6622'], names: { 6622: 'Savings' } });
+    expect([...by.keys()].sort()).toEqual([out.id, into.id, sav.id].sort());
+    expect(by.get(out.id)).toBe(by.get(into.id));
+    expect(by.get(sav.id)).toMatchObject({ from: 'Chequing', to: 'Savings ····6622' });
+    // before they've said the number is theirs, it isn't shown as a move between their accounts
+    expect(movesByRow([sav], ACCOUNTS).size).toBe(0);
+  });
+  it('groups by direction, biggest first, counting each move once', () => {
+    const rows = [
+      tx('2026-05-01', 'TFR-TO ###1817', -500, 'chq'), tx('2026-05-01', 'TFR-FR 6095623', 500, 'joint'),
+      tx('2026-05-03', 'TFR-TO ###1817', -50, 'chq'), tx('2026-05-03', 'TFR-FR 6095623', 50, 'joint'),
+      tx('2026-05-04', 'TFR-TO 6095623', -900, 'joint'), tx('2026-05-04', 'TFR-FR ###1817', 900, 'chq'),
+    ];
+    const o = own(rows);
+    expect(o.count).toBe(6);       // rows
+    expect(o.moves).toBe(3);       // moves
+    expect(o.groups.map(g => [g.from, g.to, g.total, g.count, g.both])).toEqual([['Joint', 'Chequing', 900, 1, 1], ['Chequing', 'Joint', 550, 2, 2]]);
+    expect(o.groups[1].moves.map(m => m.date)).toEqual(['2026-05-03', '2026-05-01']);   // newest first
   });
 });

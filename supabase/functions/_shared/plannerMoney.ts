@@ -172,14 +172,22 @@ export function applySync(
   return { touched, added, updated, removed };
 }
 
-/** For a connected account, the bank's rows are the record: hide that account's CSV rows (they're kept),
- *  up to the day it was disconnected if it was. */
+/** For a connected account, the bank's rows are the record: hide that account's CSV rows (they're kept) from the
+ *  day the bank's own rows begin (`since`) up to the day it was disconnected, if it was. A statement from before the
+ *  bank's history isn't a repeat of anything, so its rows count. `since` unknown (not worked out yet): all are hidden. */
 export function hideReplaced<T extends { id: string; date: string; accountId: string }>(
-  rows: T[], linked: Record<string, { removedAt?: string } | undefined>,
+  rows: T[], linked: Record<string, { removedAt?: string; since?: string } | undefined>,
 ): T[] {
   return rows.filter(r => {
     const l = linked[r.accountId];
     if (!l || isPlaidRow(r)) return true;
+    if (l.since && r.date < l.since) return true;
     return !!l.removedAt && r.date > l.removedAt.slice(0, 10);
   });
+}
+/** The day the bank's own rows begin, per account: the date of its earliest bank row. */
+export function bankSince(months: Record<string, { id: string; date: string; accountId: string }[]>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const rows of Object.values(months)) for (const r of rows) if (isPlaidRow(r) && (!out[r.accountId] || r.date < out[r.accountId])) out[r.accountId] = r.date;
+  return out;
 }

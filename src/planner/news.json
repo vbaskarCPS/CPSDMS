@@ -1,4 +1,8 @@
 [
+  { "id": "2026-11-14-account-colours", "date": "2026-11-14", "title": "Accounts: nickname, colour, delete", "for": "night",
+    "lines": ["Money › Accounts: tap an account to give it a nickname and pick its colour.", "Every transaction now has a line down its left side in its account’s colour.", "Delete account… removes an account and its transactions for good (it asks first, and stops the bank filling it). Archive still keeps everything."] },
+  { "id": "2026-11-14-linked-transfers", "date": "2026-11-14", "title": "Transfers: both sides of a move, together", "for": "night",
+    "lines": ["Money › Transfers › Between your accounts: each move shows once, with the line from each account under it.", "Transactions says where a move went: “Moved to TD Chequing”.", "Name an account the planner only knows by number (Savings, RSP): tap Name it.", "A statement imported into a connected account now adds what’s older than the bank’s history, and leaves out the rest."] },
   { "id": "2026-11-14-transfers-question", "date": "2026-11-14", "title": "Transfers: in, out, and which accounts", "for": "night",
     "lines": ["Each account number now shows what went in (+), what came out (−) and the difference.", "Under it: which of your accounts the money came from and went to, with totals.", "“Is the account ending in 6622 one of yours?” is no longer cut off on a phone."] },
   { "id": "2026-11-14-sort-transfers", "date": "2026-11-14", "title": "Sort your transfers", "for": "night",

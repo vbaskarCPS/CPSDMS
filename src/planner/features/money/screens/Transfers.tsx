@@ -3,7 +3,7 @@
 // suggestions are in ../transfers.ts. Nothing is changed when the screen opens: every change is a tap here.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowLeftRight, ChevronDown, ChevronRight } from 'lucide-react';
-import { Page, Header, Card, Button, Sheet, Empty, useToast } from '../../../ui/primitives';
+import { Page, Header, Card, Button, Field, Input, Sheet, Empty, useToast } from '../../../ui/primitives';
 import { putDoc } from '../../../lib/docs';
 import { useDoc } from '../../../lib/useDoc';
 import { useMoney, allRows } from '../useMoney';
@@ -11,7 +11,8 @@ import { CATEGORIES, CATEGORY_NAMES } from '../categories';
 import { money, monthKey, niceName, recategorize, shiftMonth } from '../lib';
 import { loadReceipts } from '../receipts';
 import { CategoryIcon } from '../CategoryIcon';
-import { answerAccount, isCardPayment, rememberSent, sortTransfers, TRANSFER_PREFS_KEY, type Flow, type OtherGroup, type SentGroup, type TransferPrefs } from '../transfers';
+import { accountColors } from '../accountColor';
+import { answerAccount, isCardPayment, nameEnding, rememberSent, sortTransfers, TRANSFER_PREFS_KEY, type Flow, type MoveGroup, type OtherGroup, type SentGroup, type TransferPrefs } from '../transfers';
 import type { Receipt, Txn } from '../types';
 
 const CHOICES = CATEGORY_NAMES.filter(c => c !== 'Transfers');
@@ -38,9 +39,12 @@ export function Transfers() {
   const [all, setAll] = useState<Record<string, boolean>>({});        // "Show all" tapped, per list
   const [one, setOne] = useState<Txn | null>(null);                   // one row whose category is being picked
   const [showOwn, setShowOwn] = useState(false);                      // "Between your accounts" opened
+  const [naming, setNaming] = useState<{ ending: string; name: string } | null>(null);   // a nickname being typed for one of their account numbers
   const s = useMemo(() => sortTransfers(allRows(months), accounts, prefs.data, receipts), [months, accounts, prefs.data, receipts]);
   const ready = !loading && !prefs.loading;
   const accName = (id: string) => accounts.find(a => a.id === id)?.name || '';
+  const colours = useMemo(() => accountColors(accounts), [accounts]);
+  const acct = (id: string) => ({ ['--acct' as string]: colours[id] });
 
   /** Set categories on the person's tap (through recategorize, like the Transactions screen), then say what was done. */
   async function change(sets: { rows: Txn[]; category: string }[], done: string): Promise<boolean> {
@@ -93,14 +97,14 @@ export function Transfers() {
 
   // ── pieces ──
   /** In, out and the difference for one account number, then which accounts the money came from and went to. */
-  const flowLines = (f: Flow) => (
+  const flowLines = (f: Flow, routes = true) => (
     <div style={{ margin: '6px 0 2px', fontSize: 13 }}>
       <div className="pl-row" style={{ gap: 12, flexWrap: 'wrap' }}>
         <span><span className="mo-amt mo-amt--in">+{money(f.into, { whole: true })}</span> <span className="pl-muted">in</span></span>
         {f.out > 0 && <span><span className="mo-amt">−{money(f.out, { whole: true })}</span> <span className="pl-muted">out</span></span>}
         <span><b className={`mo-amt ${f.net > 0 ? 'mo-amt--in' : ''}`}>{f.net > 0 ? '+' : f.net < 0 ? '−' : ''}{money(Math.abs(f.net), { whole: true })}</b> <span className="pl-muted">{f.net < 0 ? 'net: more came out than went in' : f.net > 0 ? 'net: more went in than came out' : 'net'}</span></span>
       </div>
-      {f.routes.map(r => (
+      {routes && f.routes.map(r => (
         <div key={`${r.from}→${r.to}`} className="pl-row" style={{ gap: 8, padding: '4px 0', borderTop: '1px solid var(--line)', marginTop: 4 }}>
           <span className="pl-grow" style={{ minWidth: 0 }}>{r.from} → {r.to} <span className="pl-muted">({plural(r.count, 'move')})</span></span>
           <span className={`mo-amt ${r.dir === 'in' ? 'mo-amt--in' : ''}`} style={{ flex: 'none' }}>{r.dir === 'in' ? '+' : '−'}{money(r.total)}</span>
@@ -111,7 +115,7 @@ export function Transfers() {
   const txnRows = (rows: Txn[]) => (
     <div style={{ margin: '2px 0 8px' }}>
       {rows.map(t => (
-        <div key={t.id} className="pl-row" style={{ gap: 8, padding: '5px 0', borderTop: '1px solid var(--line)', fontSize: 13 }}>
+        <div key={t.id} className="pl-row mo-acctline" style={{ gap: 8, padding: '5px 0 5px 8px', borderTop: '1px solid var(--line)', fontSize: 13, ...acct(t.accountId) }}>
           <span style={{ width: 96, flex: 'none' }}>{day(t.date)}</span>
           <span className="pl-grow pl-muted" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{accName(t.accountId)}{t.desc ? ` · ${t.desc}` : ''}</span>
           <span className={`mo-amt ${t.amount > 0 ? 'mo-amt--in' : ''}`}>{money(t.amount, { sign: true })}</span>
@@ -132,6 +136,38 @@ export function Transfers() {
       {open === key && txnRows(rows)}
     </>
   );
+  /** Every move one way between two accounts: each move once, with the row from each side under it. */
+  const moveGroup = (g: MoveGroup) => {
+    const key = `mv:${g.key}`, isOpen = open === key;
+    const list = all[key] ? g.moves : g.moves.slice(0, SHOWN);
+    const side = (t: Txn, sign: string, other: string) => (
+      <div className="pl-muted mo-acctline" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2, ...acct(t.accountId) }}>{sign} {accName(t.accountId)} · {t.desc}{t.date !== other ? ` · ${day(t.date)}` : ''}</div>
+    );
+    return (
+      <div key={g.key} style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+        <div className="pl-row" style={{ gap: 8, alignItems: 'flex-start' }}>
+          <button type="button" className="pl-grow" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : key)} style={{ ...linkBtn, minWidth: 0 }}>
+            <b>{g.from} → {g.to} {isOpen ? <ChevronDown aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} /> : <ChevronRight aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} />}</b>
+            <small className="pl-muted" style={{ display: 'block' }}>{plural(g.count, 'move')}{!(g.fromId && g.toId) ? ` · one side only: ${g.fromId ? g.to : g.from} isn’t linked to the planner` : g.both === g.count ? ' · both sides matched' : ` · ${g.both} matched on both sides`}</small>
+          </button>
+          <span className="mo-amt" style={{ flex: 'none' }}>{money(g.total)}</span>
+        </div>
+        {isOpen && (
+          <div style={{ margin: '4px 0 2px', fontSize: 13 }}>
+            {list.map(m => (
+              <div key={m.key} style={{ padding: '6px 0', borderTop: '1px solid var(--line)' }}>
+                <div className="pl-row" style={{ gap: 8 }}><span className="pl-grow">{day(m.date)}</span><span className="mo-amt">{money(m.amount)}</span></div>
+                {m.out && side(m.out, '−', m.date)}
+                {m.into && side(m.into, '+', m.date)}
+                {!(m.out && m.into) && m.fromId && m.toId && <div className="pl-muted">The other side hasn’t shown up yet</div>}
+              </div>
+            ))}
+            {more(key, g.moves.length)}
+          </div>
+        )}
+      </div>
+    );
+  };
   const select = (key: string, value: string, leave?: string) => (
     <select className="pl-input pl-grow" aria-label="Category" style={{ minHeight: 36, width: 'auto', minWidth: 0, padding: '0 10px', fontSize: 14 }} value={value}
       onChange={e => setPicks(p => ({ ...p, [key]: e.target.value }))}>
@@ -150,7 +186,7 @@ export function Transfers() {
         <div key={g.key} style={{ padding: '8px 0' }}>
           <b style={{ fontSize: 14 }}>{g.label}</b> <small className="pl-muted">{g.count} · {money(g.total)} · tap one to say what it was</small>
           {rows.map(t => (
-            <div key={t.id} className="mo-txn" style={{ padding: '6px 0' }}>
+            <div key={t.id} className="mo-txn mo-acctline" style={{ padding: '6px 0 6px 8px', ...acct(t.accountId) }}>
               <div className="mo-txn__main"><b style={{ fontWeight: 500 }}>{day(t.date)}</b><small>{accName(t.accountId)} · {t.desc}</small></div>
               <span className="mo-amt">{money(-t.amount)}</span>
               <button type="button" className="mo-catchip" disabled={busy} onClick={() => setOne(t)}>Category</button>
@@ -295,21 +331,21 @@ export function Transfers() {
             <Card>
               <button type="button" aria-expanded={showOwn} onClick={() => setShowOwn(v => !v)} style={{ ...linkBtn, width: '100%' }}>
                 <h3 style={{ margin: 0 }}>Between your accounts {showOwn ? <ChevronDown aria-hidden style={{ width: 16, height: 16, verticalAlign: -2 }} /> : <ChevronRight aria-hidden style={{ width: 16, height: 16, verticalAlign: -2 }} />}</h3>
-                <small className="pl-muted">{plural(s.own.count, 'move')} · {money(s.own.total, { whole: true })} · these stay transfers, nothing to do</small>
+                <small className="pl-muted">{plural(s.own.moves, 'move')} · {money(s.own.total, { whole: true })} · these stay transfers, nothing to do</small>
               </button>
               {showOwn && (
-                <div className="pl-list" style={{ marginTop: 8 }}>
+                <div style={{ marginTop: 8 }}>
+                  {/* each move once, the two sides together, by direction */}
+                  {s.own.groups.map(moveGroup)}
+                  <p className="pl-eyebrow" style={{ margin: '14px 0 0' }}>Each account: in, out, difference</p>
                   {s.own.byEnding.map(e => (
-                    <div key={e.ending} style={{ padding: '8px 0' }}>
-                      <div className="mo-txn" style={{ padding: 0 }}>
-                        <div className="mo-txn__main">
-                          <b>····{e.ending}{e.name ? ` · ${e.name}` : ''}</b>
-                          <small>{plural(e.count, 'move')}{!e.name && confirmed.has(e.ending) ? ' · yours' : ''}</small>
-                        </div>
-                        <span className="mo-amt">{money(e.total)}</span>
+                    <div key={e.ending} style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+                      <div className="pl-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                        <b className="pl-grow">{e.name || (e.nick ? `${e.nick} ····${e.ending}` : `····${e.ending}`)}</b>
+                        {!e.name && <button type="button" className="mo-catchip" onClick={() => setNaming({ ending: e.ending, name: e.nick || '' })}>{e.nick ? 'Rename' : 'Name it'}</button>}
                         {!e.name && confirmed.has(e.ending) && <button type="button" className="mo-catchip" onClick={() => answer(e.ending, false)}>Not ours</button>}
                       </div>
-                      {flowLines(e.flow)}
+                      {flowLines(e.flow, false)}
                     </div>
                   ))}
                   {s.sent.cancelled.length > 0 && <small className="pl-muted" style={{ display: 'block', padding: '8px 0' }}>{plural(s.sent.cancelled.length, 'e-transfer')} sent and taken back: left as {s.sent.cancelled.length === 1 ? 'it is' : 'they are'}.</small>}
@@ -320,6 +356,20 @@ export function Transfers() {
           )}
         </>
       )}
+
+      <Sheet open={!!naming} onClose={() => setNaming(null)} title={naming ? `Name the account ending in ${naming.ending}` : ''}>
+        {naming && (
+          <>
+            <Field label="Nickname" hint="Shown wherever this account number comes up, e.g. Savings or RSP. Leave empty for none.">
+              <Input autoFocus value={naming.name} maxLength={30} placeholder="e.g. Savings" onChange={e => setNaming({ ...naming, name: e.target.value })} />
+            </Field>
+            <Button primary block onClick={() => {
+              if (prefs.loadError) { say('Could not load your answers. Try again in a moment.', 'bad'); return; }
+              prefs.update(p => nameEnding(p, naming.ending, naming.name)); setNaming(null); say('Saved', 'good');
+            }}>Save</Button>
+          </>
+        )}
+      </Sheet>
 
       <Sheet open={!!one} onClose={() => setOne(null)} title={one ? `${day(one.date)} · ${money(one.amount, { sign: true })}` : ''}>
         {one && (

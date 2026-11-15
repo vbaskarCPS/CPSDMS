@@ -6,10 +6,10 @@ import { Page, Header, Card, Button, Field, Input, Stat, useToast, uid } from '.
 import { useMoney } from '../useMoney';
 import { importCsv } from '../importers';
 import { importPdf } from '../importers/pdf';
-import { categorizeAll, mergeTxns, saveAccount, loadMonths } from '../lib';
+import { bankSince, categorizeAll, mergeTxns, saveAccount, loadMonths } from '../lib';
 import type { Account, AccountType, Txn } from '../types';
 
-type Preview = { txns: Txn[]; importer: string; from: string; to: string; counts: Record<string, number>; dupes: number; fileName: string; note?: string };
+type Preview = { txns: Txn[]; importer: string; from: string; to: string; counts: Record<string, number>; dupes: number; /** lines the bank link already brings in: left out */ covered: number; fileName: string; note?: string };
 
 export function Import() {
   const nav = useNavigate();
@@ -47,9 +47,14 @@ export function Import() {
       const dates = r.txns.map(t => t.date).sort();
       const existing = await loadMonths(dates[0].slice(0, 7), dates[dates.length - 1].slice(0, 7));
       const known = new Set(Object.values(existing).flat().map(t => t.id));
-      const fresh = r.txns.filter(t => !known.has(t.id));
+      // a connected account: the bank already brings in every line from the day its own rows begin, so only the
+      // statement's older lines are new (the rest would be the same lines twice)
+      const acc = live.find(a => a.id === chosen);
+      const since = acc?.plaid && !acc.plaid.removedAt ? acc.plaid.since || bankSince(await loadMonths())[acc.id] || '0000' : null;
+      const older = since ? r.txns.filter(t => t.date < since) : r.txns;
+      const fresh = older.filter(t => !known.has(t.id));
       const { counts } = await categorizeAll(fresh, rules);
-      setPreview({ txns: fresh, importer: r.importer.name, from: dates[0], to: dates[dates.length - 1], counts, dupes: r.txns.length - fresh.length, fileName: f.name, note: r.note });
+      setPreview({ txns: fresh, importer: r.importer.name, from: dates[0], to: dates[dates.length - 1], counts, dupes: older.length - fresh.length, covered: r.txns.length - older.length, fileName: f.name, note: r.note });
     } catch (e) { setErr(e instanceof Error ? e.message : 'Could not read the file'); }
     finally { setBusy(null); }
   }
@@ -91,7 +96,7 @@ export function Import() {
           </div>
         )}
         {live.find(a => a.id === chosen)?.plaid && !live.find(a => a.id === chosen)?.plaid?.removedAt && (
-          <p className="pl-muted" style={{ fontSize: 13, margin: 0 }}>This account is connected to the bank, so its transactions come in on their own. A CSV imported here is kept but stays hidden.</p>
+          <p className="pl-muted" style={{ fontSize: 13, margin: 0 }}>This account is connected to the bank, so its transactions come in on their own{live.find(a => a.id === chosen)?.plaid?.since ? ` from ${live.find(a => a.id === chosen)!.plaid!.since}` : ''}. A statement adds only the lines from before that; the rest are left out so nothing counts twice.</p>
         )}
         {newAcc && (
           <div className="pl-stack">
@@ -126,13 +131,14 @@ export function Import() {
           <p className="pl-eyebrow">3 · Preview · {preview.importer}</p>
           <div className="pl-stats">
             <Stat label="New" value={preview.txns.length} tone="good" />
-            <Stat label="Already in" value={preview.dupes} />
+            <Stat label="Already in" value={preview.dupes + preview.covered} />
             <Stat label="From" value={<span style={{ fontSize: 15 }}>{preview.from}</span>} />
             <Stat label="To" value={<span style={{ fontSize: 15 }}>{preview.to}</span>} />
           </div>
           <p className="pl-muted" style={{ fontSize: 13 }}>
             Categorized: {preview.counts.rule} by your rules · {preview.counts.builtin} built-in · {preview.counts.ai} by AI · {preview.counts.other} left as Other.
             {preview.note ? ` ${preview.note}` : ''}
+            {preview.covered > 0 ? ` ${preview.covered} line${preview.covered === 1 ? ' is' : 's are'} already here from the bank and ${preview.covered === 1 ? 'is' : 'are'} left out.` : ''}
           </p>
           <Button primary block disabled={busy !== null || preview.txns.length === 0} onClick={() => void doImport()}>{busy === 'importing' ? 'Importing…' : preview.txns.length === 0 ? 'Nothing new to import' : `Import ${preview.txns.length}`}</Button>
         </Card>

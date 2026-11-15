@@ -1,5 +1,6 @@
 // /money/transactions — every line, grouped by day; tap the category to change it (and teach a rule). A charge with a
-// receipt shows a receipt mark and opens it; a cash row without a receipt can be removed.
+// receipt shows a receipt mark and opens it; a cash row without a receipt can be removed. Each row has a line down its
+// left in its account's colour (Money › Accounts).
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ReceiptText, Search, Trash2, X } from 'lucide-react';
@@ -9,8 +10,11 @@ import { useMoney, allRows } from '../useMoney';
 import { CATEGORIES } from '../categories';
 import { dayLabel, money, monthKey, monthLabel, niceName, recategorize, shiftMonth } from '../lib';
 import { loadReceipts, removeCashRow } from '../receipts';
+import { accountColors } from '../accountColor';
 import { ReceiptSheet } from '../ReceiptSheet';
 import { CategoryIcon } from '../CategoryIcon';
+import { movesByRow, TRANSFER_PREFS_KEY, type TransferPrefs } from '../transfers';
+import { useDoc } from '../../../lib/useDoc';
 import type { Receipt, Txn } from '../types';
 import { rowIds } from '../receiptMatch';
 
@@ -34,6 +38,10 @@ export function Transactions() {
 
   const set = (k: string, v: string) => { const p = new URLSearchParams(params); if (v) p.set(k, v); else p.delete(k); setParams(p, { replace: true }); };
   const accName = (id: string) => accounts.find(a => a.id === id)?.name || '';
+  const colours = useMemo(() => accountColors(accounts), [accounts]);
+  // a move between their own accounts says where the money went or came from
+  const transferPrefs = useDoc<TransferPrefs>('moneyprefs', TRANSFER_PREFS_KEY, {}, 300);
+  const moves = useMemo(() => movesByRow(allRows(months), accounts, transferPrefs.data), [months, accounts, transferPrefs.data]);
 
   const rows = useMemo(() => {
     const base = q ? allRows(months) : months[m] || [];
@@ -94,7 +102,7 @@ export function Transactions() {
         <div className="pl-row" style={{ justifyContent: 'space-between' }}>
           <Button small ghost onClick={() => set('m', shiftMonth(m, -1))}>‹ {monthLabel(shiftMonth(m, -1)).split(' ')[0]}</Button>
           {accounts.length > 1 && (
-            <select className="pl-input" style={{ minHeight: 36, width: 'auto', padding: '0 10px', fontSize: 14 }} value={acc} onChange={e => set('acc', e.target.value)}>
+            <select className="pl-input" style={{ minHeight: 36, width: 'auto', minWidth: 0, padding: '0 10px', fontSize: 14 }} value={acc} onChange={e => set('acc', e.target.value)}>
               <option value="">All accounts</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           )}
@@ -111,11 +119,11 @@ export function Transactions() {
               <div className="mo-day"><span>{dayLabel(d.day)}</span>{d.total > 0 && <span>{money(d.total)}</span>}</div>
               <div className="pl-list">
                 {d.rows.map(t => (
-                  <div key={t.id} className="mo-txn">
+                  <div key={t.id} className="mo-txn mo-acctline" style={{ ['--acct' as string]: colours[t.accountId] }}>
                     <CategoryIcon name={t.category} size={20} />
                     <div className="mo-txn__main">
                       <b>{niceName(t.merchant)}{byTxn.has(t.id) && <ReceiptText className="mo-has-rcpt" aria-label="has a receipt" />}</b>
-                      <small>{t.toWallet ? 'Cash moved to the wallet' : t.desc}{accounts.length > 1 ? ` · ${accName(t.accountId)}` : ''}</small>
+                      <small>{t.toWallet ? 'Cash moved to the wallet' : moves.has(t.id) ? (t.amount < 0 ? `Moved to ${moves.get(t.id)!.to}` : `Moved from ${moves.get(t.id)!.from}`) + ` · ${t.desc}` : t.desc}{accounts.length > 1 ? ` · ${accName(t.accountId)}` : ''}</small>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                       <span className={`mo-amt ${t.amount > 0 ? 'mo-amt--in' : ''}`}>{money(t.amount, { sign: true })}</span>
