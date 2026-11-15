@@ -127,7 +127,7 @@ export function ConnectedBanks({ onChange, resume }: { onChange: () => void; res
         )}
         <p className="pl-muted" style={{ fontSize: 12, marginBottom: 0 }}>
           You sign in to your bank inside Plaid’s window; the planner never sees your bank password. New transactions come in on their own once they post.
-          For a connected account, the bank’s transactions replace its CSV imports (the imports are kept, just hidden).
+          For a connected account, the bank’s transactions are the record: a statement you import only adds what’s older than the bank’s history, so nothing counts twice.
         </p>
         {!stuck && <p className="pl-muted" style={{ fontSize: 12, margin: '8px 0 0' }}><WaitingHelp /></p>}
       </Card>

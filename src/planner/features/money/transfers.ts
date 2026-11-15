@@ -336,6 +336,17 @@ export function linkMoves(ownRows: Txn[], accounts: Account[], names: Record<str
   }
   return moves.sort((a, b) => b.date.localeCompare(a.date) || a.key.localeCompare(b.key));
 }
+/** For a list of rows (the Transactions screen): each row that is one side of a move between their own accounts →
+ *  that move, so the row can say where the money went or came from. */
+export function movesByRow(rows: Txn[], accounts: Account[], prefs: TransferPrefs = {}): Map<string, Move> {
+  const own = ownEndings(accounts, prefs);
+  const out = new Map<string, Move>();
+  for (const m of linkMoves(rows.filter(t => isTransferRow(t) && transferKind(t, own) === 'own'), accounts, prefs.names || {})) {
+    if (m.out) out.set(m.out.id, m);
+    if (m.into) out.set(m.into.id, m);
+  }
+  return out;
+}
 /** The moves by direction ("TD Chequing → Savings ····6622"), the biggest total first. */
 export function groupMoves(moves: Move[]): MoveGroup[] {
   const groups = new Map<string, MoveGroup>();

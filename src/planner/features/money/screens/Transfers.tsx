@@ -11,6 +11,7 @@ import { CATEGORIES, CATEGORY_NAMES } from '../categories';
 import { money, monthKey, niceName, recategorize, shiftMonth } from '../lib';
 import { loadReceipts } from '../receipts';
 import { CategoryIcon } from '../CategoryIcon';
+import { accountColors } from '../accountColor';
 import { answerAccount, isCardPayment, nameEnding, rememberSent, sortTransfers, TRANSFER_PREFS_KEY, type Flow, type MoveGroup, type OtherGroup, type SentGroup, type TransferPrefs } from '../transfers';
 import type { Receipt, Txn } from '../types';
 
@@ -42,6 +43,8 @@ export function Transfers() {
   const s = useMemo(() => sortTransfers(allRows(months), accounts, prefs.data, receipts), [months, accounts, prefs.data, receipts]);
   const ready = !loading && !prefs.loading;
   const accName = (id: string) => accounts.find(a => a.id === id)?.name || '';
+  const colours = useMemo(() => accountColors(accounts), [accounts]);
+  const acct = (id: string) => ({ ['--acct' as string]: colours[id] });
 
   /** Set categories on the person's tap (through recategorize, like the Transactions screen), then say what was done. */
   async function change(sets: { rows: Txn[]; category: string }[], done: string): Promise<boolean> {
@@ -112,7 +115,7 @@ export function Transfers() {
   const txnRows = (rows: Txn[]) => (
     <div style={{ margin: '2px 0 8px' }}>
       {rows.map(t => (
-        <div key={t.id} className="pl-row" style={{ gap: 8, padding: '5px 0', borderTop: '1px solid var(--line)', fontSize: 13 }}>
+        <div key={t.id} className="pl-row mo-acctline" style={{ gap: 8, padding: '5px 0 5px 8px', borderTop: '1px solid var(--line)', fontSize: 13, ...acct(t.accountId) }}>
           <span style={{ width: 96, flex: 'none' }}>{day(t.date)}</span>
           <span className="pl-grow pl-muted" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{accName(t.accountId)}{t.desc ? ` · ${t.desc}` : ''}</span>
           <span className={`mo-amt ${t.amount > 0 ? 'mo-amt--in' : ''}`}>{money(t.amount, { sign: true })}</span>
@@ -138,7 +141,7 @@ export function Transfers() {
     const key = `mv:${g.key}`, isOpen = open === key;
     const list = all[key] ? g.moves : g.moves.slice(0, SHOWN);
     const side = (t: Txn, sign: string, other: string) => (
-      <div className="pl-muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sign} {accName(t.accountId)} · {t.desc}{t.date !== other ? ` · ${day(t.date)}` : ''}</div>
+      <div className="pl-muted mo-acctline" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2, ...acct(t.accountId) }}>{sign} {accName(t.accountId)} · {t.desc}{t.date !== other ? ` · ${day(t.date)}` : ''}</div>
     );
     return (
       <div key={g.key} style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
@@ -183,7 +186,7 @@ export function Transfers() {
         <div key={g.key} style={{ padding: '8px 0' }}>
           <b style={{ fontSize: 14 }}>{g.label}</b> <small className="pl-muted">{g.count} · {money(g.total)} · tap one to say what it was</small>
           {rows.map(t => (
-            <div key={t.id} className="mo-txn" style={{ padding: '6px 0' }}>
+            <div key={t.id} className="mo-txn mo-acctline" style={{ padding: '6px 0 6px 8px', ...acct(t.accountId) }}>
               <div className="mo-txn__main"><b style={{ fontWeight: 500 }}>{day(t.date)}</b><small>{accName(t.accountId)} · {t.desc}</small></div>
               <span className="mo-amt">{money(-t.amount)}</span>
               <button type="button" className="mo-catchip" disabled={busy} onClick={() => setOne(t)}>Category</button>

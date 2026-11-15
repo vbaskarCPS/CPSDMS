@@ -13,6 +13,8 @@ import { loadReceipts, removeCashRow } from '../receipts';
 import { accountColors } from '../accountColor';
 import { ReceiptSheet } from '../ReceiptSheet';
 import { CategoryIcon } from '../CategoryIcon';
+import { movesByRow, TRANSFER_PREFS_KEY, type TransferPrefs } from '../transfers';
+import { useDoc } from '../../../lib/useDoc';
 import type { Receipt, Txn } from '../types';
 import { rowIds } from '../receiptMatch';
 
@@ -37,6 +39,9 @@ export function Transactions() {
   const set = (k: string, v: string) => { const p = new URLSearchParams(params); if (v) p.set(k, v); else p.delete(k); setParams(p, { replace: true }); };
   const accName = (id: string) => accounts.find(a => a.id === id)?.name || '';
   const colours = useMemo(() => accountColors(accounts), [accounts]);
+  // a move between their own accounts says where the money went or came from
+  const transferPrefs = useDoc<TransferPrefs>('moneyprefs', TRANSFER_PREFS_KEY, {}, 300);
+  const moves = useMemo(() => movesByRow(allRows(months), accounts, transferPrefs.data), [months, accounts, transferPrefs.data]);
 
   const rows = useMemo(() => {
     const base = q ? allRows(months) : months[m] || [];
@@ -118,7 +123,7 @@ export function Transactions() {
                     <CategoryIcon name={t.category} size={20} />
                     <div className="mo-txn__main">
                       <b>{niceName(t.merchant)}{byTxn.has(t.id) && <ReceiptText className="mo-has-rcpt" aria-label="has a receipt" />}</b>
-                      <small>{t.toWallet ? 'Cash moved to the wallet' : t.desc}{accounts.length > 1 ? ` · ${accName(t.accountId)}` : ''}</small>
+                      <small>{t.toWallet ? 'Cash moved to the wallet' : moves.has(t.id) ? (t.amount < 0 ? `Moved to ${moves.get(t.id)!.to}` : `Moved from ${moves.get(t.id)!.from}`) + ` · ${t.desc}` : t.desc}{accounts.length > 1 ? ` · ${accName(t.accountId)}` : ''}</small>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                       <span className={`mo-amt ${t.amount > 0 ? 'mo-amt--in' : ''}`}>{money(t.amount, { sign: true })}</span>

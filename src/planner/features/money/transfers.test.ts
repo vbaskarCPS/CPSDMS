@@ -2,7 +2,7 @@
 // sent or received, and things that aren't transfers at all. Made-up rows in the bank's wording (TD Canada Trust).
 import { describe, expect, it } from 'vitest';
 import { builtinCategory, builtinCategoryNoTransfer, normalizeMerchant } from '../../../../supabase/functions/_shared/plannerMoney';
-import { accountEnding, answerAccount, endingLabel, linkMoves, nameEnding, applySentRules, etransferCode, ownEndings, rememberSent, sortTransfers, transferKind, type TransferPrefs } from './transfers';
+import { accountEnding, answerAccount, endingLabel, linkMoves, movesByRow, nameEnding, applySentRules, etransferCode, ownEndings, rememberSent, sortTransfers, transferKind, type TransferPrefs } from './transfers';
 import type { Account, Receipt, Txn } from './types';
 
 let n = 0;
@@ -349,6 +349,16 @@ describe('linkMoves: the two sides of one move, together', () => {
     expect(nameEnding(prefs, '6622', ' ').names).toEqual({});
     expect(endingLabel('6622', ACCOUNTS)).toBe('····6622');
     expect(endingLabel('1817', ACCOUNTS, { 1817: 'ignored' })).toBe('Joint');
+  });
+  it('movesByRow: both rows of a move point at it; rows that aren’t moves between their accounts are left out', () => {
+    const out = tx('2026-05-01', 'TFR-TO ###1817', -500, 'chq'), into = tx('2026-05-01', 'TFR-FR 6095623', 500, 'joint');
+    const sav = tx('2026-05-02', 'SSV TO: 6456622', -40, 'chq'), rent = tx('2026-05-01', 'SEND E-TFR ***9K5', -1700, 'chq'), food = tx('2026-05-01', 'LOBLAWS', -80, 'chq', 'Groceries');
+    const by = movesByRow([out, into, sav, rent, food], ACCOUNTS, { own: ['6622'], names: { 6622: 'Savings' } });
+    expect([...by.keys()].sort()).toEqual([out.id, into.id, sav.id].sort());
+    expect(by.get(out.id)).toBe(by.get(into.id));
+    expect(by.get(sav.id)).toMatchObject({ from: 'Chequing', to: 'Savings ····6622' });
+    // before they've said the number is theirs, it isn't shown as a move between their accounts
+    expect(movesByRow([sav], ACCOUNTS).size).toBe(0);
   });
   it('groups by direction, biggest first, counting each move once', () => {
     const rows = [
