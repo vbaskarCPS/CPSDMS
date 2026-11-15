@@ -1,7 +1,8 @@
 // src/v2/features/benny/BennyPanel.tsx — The Benny: how you open it and its panel.
-//   variant "bar": "Ask the Benny" + mic in the top bar (super admins), panel on the right / bottom sheet on a phone.
+//   variant "bar": "Ask the Benny" + mic in the top bar (super admins, and admins: Workerbook or Master Bookings), panel on
+//                  the right / bottom sheet on a phone. What it can do for someone follows their permissions in the app.
 //   ms: on MainstreetAI's screens the top-bar Benny is MainstreetAI's (its admins): zones and reps, its own chat, no center.
-//   variant "fab": a round orange button on the route manager map (route managers, and super admins on any manager's map),
+//   variant "fab": a round orange button on the route manager map (route managers; super admins and Workerbook admins on any manager's map),
 //                  opening a bottom sheet; "my team" = the map that's open.
 // Mic: tap = listen until you pause, then send; hold = talk while held, let go to send.
 // Answers are read out only when the question was spoken (and the speaker is on).
@@ -93,7 +94,12 @@ export const Benny: React.FC<{
   const still = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const mic = canListen();
-  const allowed = ms ? !!profile && can('mainstreet_admin') : variant === 'bar' ? !!profile?.is_super_admin : !!profile && (profile.is_super_admin || can('route_manager') || can('rm_floater'));
+  // The Benny follows the app's permissions: what it can do for someone is what their permissions let them do (the database
+  // checks every call). wb = the workerbook's side, bk = Master Bookings. The top bar is for super admins and admins; the
+  // button on the route manager map for whoever can open that map.
+  const wb = !!profile && (profile.is_super_admin || can('workerbook'));
+  const bk = !!profile && (profile.is_super_admin || can('bookings'));
+  const allowed = ms ? !!profile && can('mainstreet_admin') : variant === 'bar' ? wb || bk : !!profile && (wb || can('route_manager') || can('rm_floater'));
   const userId = profile?.id || '';
   // the first-time demo: 0 = not showing, 1 = meet the Benny, 2 = try a question, 3 = three things to know
   const [demo, setDemo] = useState<0 | 1 | 2 | 3>(0);
@@ -229,7 +235,7 @@ export const Benny: React.FC<{
       setMsgs(m => [...m, { role: 'assistant', text: e instanceof Error ? e.message : 'I couldn’t read the day', error: true }]);
     } finally { setBusy(false); }
   }, [cid, center]);
-  const canStart = !!profile && (profile.is_super_admin || can('workerbook'));
+  const canStart = wb;
 
   // the mic's "done talking" arrives later: it must send with the chat as it is then, not as it was when listening began
   const sendRef = useRef(send);
@@ -327,7 +333,7 @@ export const Benny: React.FC<{
       <Mic size={cls.includes('big') ? 18 : 16} />
     </button>
   ) : null;
-  const demoAsk = ms ? ['Which zones have no rep?', 'Who has the most zones?'] : variant === 'fab' ? ['Who’s on my team today?', 'Which of my routes have prebooks?'] : ['Who’s booked today?', 'How many open prebooks do we have?'];
+  const demoAsk = ms ? ['Which zones have no rep?', 'Who has the most zones?'] : variant === 'fab' ? ['Who’s on my team today?', 'Which of my routes have prebooks?'] : wb ? ['Who’s booked today?', 'How many open prebooks do we have?'] : ['How many open prebooks do we have?', 'Which route has the most open prebooks?'];
   // the offer of a notification sits under the latest answer it belongs to, not under every one
   const offerAt = msgs.reduce((at, m, i) => (m.news || m.logged ? i : at), -1);
   const whose = floating ? (following!.length === 1 ? `${following![0].name}’s team` : `${following!.length} managers’ teams`) : rmName ? `${rmName}’s team` : 'Your team';
@@ -337,7 +343,8 @@ export const Benny: React.FC<{
     ? ['Who’s out today?', 'Plan my check order', 'Drop a pin here called Meet', 'Something’s broken on the map']
     : variant === 'fab'
     ? ['Who’s on my team today?', 'Find a free route connected to Kyle’s', 'Which of my routes have prebooks?', 'Something’s broken on the map']
-    : ['Who’s booked today?', 'How many open prebooks in Surrey?', 'Show me where the prebooks in Surrey are', 'Start tomorrow with me, solo, North Van 1'];
+    : wb ? ['Who’s booked today?', 'How many open prebooks in Surrey?', 'Show me where the prebooks in Surrey are', 'Start tomorrow with me, solo, North Van 1']
+    : ['How many open prebooks in Surrey?', 'Show me where the prebooks in Surrey are', 'Something’s broken on this screen'];
 
   return (
     <span className="benny-root" style={{ display: 'contents' }}>
@@ -373,7 +380,8 @@ export const Benny: React.FC<{
                 <p>{ms ? 'Ask about zones and reps, or tell me a change: “give Hamilton South 2 to Newton”, “swap Sina’s and Newton’s zones”, “retire Barrie 4”. Send a picture of a map with an area marked and I’ll find the zones there. You confirm every change first.'
                   : floating ? `Ask about the team${following!.length === 1 ? '' : 's'} you’re following (${following!.map(f => f.name.split(' ')[0]).join(', ')}), or tell me a change: “give Wilson route 35”, “drop a pin at Wilson”, “plan my pickup order”. You confirm every change first.`
                   : variant === 'fab' ? 'Ask about your team and routes, or tell me a change: “partner up Wilson with Michael A”, “give Wilson route 35”. You confirm every change first.'
-                  : 'Ask about today, people, bookings or maps, or start a day. You confirm every change first. Tell me when something’s broken and I’ll let Vijay know.'}</p>
+                  : wb ? 'Ask about today, people, bookings or maps, or start a day. You confirm every change first. Tell me when something’s broken and I’ll let Vijay know.'
+                  : 'Ask about bookings and maps, or tell me a change to a booking: “mark 3575 Latimer done”, “add a gate code note”. You confirm every change first. Tell me when something’s broken and I’ll let Vijay know.'}</p>
                 {variant === 'bar' && !ms && canStart && <button type="button" className="benny-chip" onClick={() => void startWalk()}>Help me start the day</button>}
                 {suggestions.map(s => <button key={s} type="button" className="benny-chip" onClick={() => void send(s, false)}>{s}</button>)}
               </div>
@@ -422,7 +430,8 @@ export const Benny: React.FC<{
                 <b>Meet the Benny</b>
                 <p>{variant === 'fab'
                   ? 'I’m the assistant built into the app. Ask me about your team, your routes and your prebooks, or tell me a change, like you’d text a person.'
-                  : 'I’m the assistant built into the app. Ask me about the day, people, bookings and maps, or tell me a change, like you’d text a person.'}</p>
+                  : wb ? 'I’m the assistant built into the app. Ask me about the day, people, bookings and maps, or tell me a change, like you’d text a person.'
+                  : 'I’m the assistant built into the app. Ask me about bookings and maps, or tell me a change to a booking, like you’d text a person.'}</p>
                 <div className="benny-card-b">
                   <button type="button" className="benny-go" onClick={() => setDemo(2)}>Show me</button>
                   <button type="button" className="benny-alt" onClick={endDemo}>Skip</button>
@@ -444,7 +453,7 @@ export const Benny: React.FC<{
                 <b>That’s it. Three things to know</b>
                 <ol>
                   <li>{mic ? <><b>Talk instead of typing.</b> Tap the mic and pause when you’re done, or hold it and let go.</> : <><b>Type it like a text.</b> Short and plain works best.</>}</li>
-                  <li><b>Changes wait for you.</b> {variant === 'fab' ? 'Say “give Wilson route 35”, “drop a pin at Wilson called Lunch” or “plan my pickup order”' : 'Say “start tomorrow with me, North Van 1” or “give Wilson route 35”'} and I show a card. Nothing happens until you tap it.</li>
+                  <li><b>Changes wait for you.</b> {variant === 'fab' ? 'Say “give Wilson route 35”, “drop a pin at Wilson called Lunch” or “plan my pickup order”' : wb ? 'Say “start tomorrow with me, North Van 1” or “give Wilson route 35”' : 'Say “mark 3575 Latimer done” or “move 3575 Latimer to route 137”'} and I show a card. Nothing happens until you tap it.</li>
                   <li><b>Something broken?</b> Tell me what happened and it goes straight into Vijay’s bug log.</li>
                 </ol>
                 <div className="benny-card-b"><button type="button" className="benny-go" onClick={endDemo}>Got it</button></div>
