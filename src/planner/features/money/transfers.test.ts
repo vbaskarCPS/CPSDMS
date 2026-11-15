@@ -2,7 +2,7 @@
 // sent or received, and things that aren't transfers at all. Made-up rows in the bank's wording (TD Canada Trust).
 import { describe, expect, it } from 'vitest';
 import { builtinCategory, builtinCategoryNoTransfer, normalizeMerchant } from '../../../../supabase/functions/_shared/plannerMoney';
-import { accountEnding, answerAccount, depositHow, endingLabel, linkMoves, movesByRow, nameEnding, sortDeposits, applySentRules, etransferCode, ownEndings, rememberSent, sortTransfers, transferKind, type TransferPrefs } from './transfers';
+import { accountEnding, answerAccount, depositHow, setDepositKind, endingLabel, linkMoves, movesByRow, nameEnding, sortDeposits, applySentRules, etransferCode, ownEndings, rememberSent, sortTransfers, transferKind, type TransferPrefs } from './transfers';
 import type { Account, Receipt, Txn } from './types';
 
 let n = 0;
@@ -392,6 +392,18 @@ describe('deposits, and cash that was only passed on', () => {
     ];
     const d = sortDeposits(rows, []);
     expect(d.rows.map(r => [r.txn.amount, r.how])).toEqual([[50, 'machine'], [300, 'machine'], [400, 'mobile'], [900, 'machine']]);
+    // cash and cheques apart: a cheque by phone is a cheque, the machine ones are cash until they say otherwise
+    expect(d.rows.map(r => r.kind)).toEqual(['cash', 'cash', 'cheque', 'cash']);
+    expect(d.cash).toEqual({ count: 3, total: 1250, income: 900, incomeCount: 1 });
+    expect(d.cheque).toEqual({ count: 1, total: 400, income: 400, incomeCount: 1 });
+    // "that $900 at the machine was a cheque": it moves over, and can move back
+    const big = d.rows[3].txn;
+    const said = setDepositKind({}, big.id, 'cheque');
+    const moved = sortDeposits(rows, [], said);
+    expect([moved.cash.income, moved.cheque.income, moved.cheque.count]).toEqual([0, 1300, 2]);
+    expect(sortDeposits(rows, [], setDepositKind(said, big.id, 'cash')).cash.income).toBe(900);
+    // a cheque by phone can be said to be cash too (it's theirs to say)
+    expect(sortDeposits(rows, [], setDepositKind({}, d.rows[2].txn.id, 'cash')).cheque.count).toBe(0);
     expect([d.total, d.income, d.incomeCount]).toEqual([1650, 1300, 2]);
     expect(d.uncounted.map(t => t.amount)).toEqual([300]);
     expect([d.passed.length, d.passedTotal]).toEqual([1, 500]);

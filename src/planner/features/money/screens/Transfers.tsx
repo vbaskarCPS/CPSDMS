@@ -12,7 +12,7 @@ import { money, monthKey, niceName, recategorize, shiftMonth } from '../lib';
 import { loadReceipts } from '../receipts';
 import { CategoryIcon } from '../CategoryIcon';
 import { accountColors } from '../accountColor';
-import { answerAccount, isCardPayment, nameEnding, rememberSent, sortTransfers, TRANSFER_PREFS_KEY, type Flow, type MoveGroup, type OtherGroup, type SentGroup, type TransferPrefs } from '../transfers';
+import { answerAccount, isCardPayment, nameEnding, rememberSent, setDepositKind, sortTransfers, TRANSFER_PREFS_KEY, type Flow, type MoveGroup, type OtherGroup, type SentGroup, type TransferPrefs } from '../transfers';
 import type { Receipt, Txn } from '../types';
 
 const CHOICES = CATEGORY_NAMES.filter(c => c !== 'Transfers');
@@ -90,12 +90,18 @@ export function Transfers() {
     if (await change([{ rows: [one], category }], nowCount(1, one.amount > 0 ? 'deposit' : 'e-transfer', category))) setOne(null);
   }
   /** This e-transfer was cash they deposited for someone: it comes off income. */
-  const passOn = (t: Txn) => change([{ rows: [t], category: TRANSFERRED_CASH }], `${money(Math.abs(t.amount))} marked Transferred cash: taken off your deposits`);
+  const passOn = (t: Txn) => change([{ rows: [t], category: TRANSFERRED_CASH }], `${money(Math.abs(t.amount))} marked Transferred cash: taken off your cash deposits`);
   /** Deposits the bank's wording filed under something else: count them as income, and the next ones like them. */
   async function countDeposits(rows: Txn[]) {
     if (!(await change([{ rows, category: 'Income' }], nowCount(rows.length, 'deposit', 'Income')))) return;
     for (const name of new Set(rows.map(t => t.merchant))) await teach(name, 'Income');
   }
+  /** At a bank machine the bank's line doesn't say what went in: they say this one was a cheque (or cash). */
+  const moveDeposit = (t: Txn, kind: 'cash' | 'cheque') => {
+    if (prefs.loadError) { say('Could not load your answers. Try again in a moment.', 'bad'); return; }
+    prefs.update(p => setDepositKind(p, t.id, kind));
+    say(`${money(t.amount)} on ${day(t.date)} is now a ${kind === 'cash' ? 'cash' : 'cheque'} deposit`, 'good');
+  };
   const answer = (ending: string, yes: boolean) => {
     if (prefs.loadError) { say('Could not load your answers. Try again in a moment.', 'bad'); return; }
     prefs.update(p => answerAccount(p, ending, yes));
@@ -328,11 +334,14 @@ export function Transfers() {
           {dep.rows.length + dep.passed.length > 0 && (
             <Card>
               <h3 style={{ margin: '0 0 4px' }}>Deposits</h3>
-              <small className="pl-muted">Cash and cheques you put in. Most are income. Cash you deposited only to e-transfer it to someone isn’t yours: mark that e-transfer “Transferred cash” and its amount comes off the total, and off your income.</small>
+              <small className="pl-muted">Cash and cheques you put in, apart. Most are income. Cash you deposited only to e-transfer it to someone isn’t yours: mark that e-transfer “Transferred cash” and its amount comes off your cash deposits, and off your income.</small>
               <div style={{ margin: '10px 0 4px', fontSize: 14 }}>
-                <div className="pl-row" style={{ gap: 8, padding: '3px 0' }}><span className="pl-grow">Deposits counted as income <span className="pl-muted">({dep.incomeCount})</span></span><span className="mo-amt mo-amt--in">+{money(dep.income)}</span></div>
+                <div className="pl-row" style={{ gap: 8, padding: '3px 0' }}><span className="pl-grow">Cash deposits counted as income <span className="pl-muted">({dep.cash.incomeCount})</span></span><span className="mo-amt mo-amt--in">+{money(dep.cash.income)}</span></div>
                 <div className="pl-row" style={{ gap: 8, padding: '3px 0' }}><span className="pl-grow">Transferred cash <span className="pl-muted">({dep.passed.length})</span></span><span className="mo-amt">−{money(dep.passedTotal)}</span></div>
-                <div className="pl-row" style={{ gap: 8, padding: '5px 0 3px', borderTop: '1px solid var(--line)' }}><b className="pl-grow">Deposits after transferred cash</b><b className="mo-amt">{money(dep.income - dep.passedTotal)}</b></div>
+                <div className="pl-row" style={{ gap: 8, padding: '5px 0 3px', borderTop: '1px solid var(--line)' }}><b className="pl-grow">Cash after transferred cash</b><b className="mo-amt">{money(dep.cash.income - dep.passedTotal)}</b></div>
+                <div className="pl-row" style={{ gap: 8, padding: '10px 0 3px' }}><span className="pl-grow">Cheque deposits counted as income <span className="pl-muted">({dep.cheque.incomeCount})</span></span><span className="mo-amt mo-amt--in">+{money(dep.cheque.income)}</span></div>
+                <div className="pl-row" style={{ gap: 8, padding: '5px 0 3px', borderTop: '1px solid var(--line)' }}><b className="pl-grow">Income from deposits</b><b className="mo-amt">{money(dep.income - dep.passedTotal)}</b></div>
+                <small className="pl-muted" style={{ display: 'block' }}>At a bank machine the bank doesn’t say cash or cheque: those start as cash, and you can move any one below.</small>
               </div>
 
               {dep.uncounted.length > 0 && (
@@ -348,7 +357,7 @@ export function Transfers() {
               {dep.sendable.length > 0 && (
                 <div style={{ marginTop: 14 }}>
                   <p className="pl-eyebrow" style={{ margin: 0 }}>E-transfers you sent</p>
-                  <small className="pl-muted">Was one of these cash you put in for someone? Tap Transferred cash and its amount comes off your deposits, whether you sent it before or after the cash went in.</small>
+                  <small className="pl-muted">Was one of these cash you put in for someone? Tap Transferred cash and its amount comes off your cash deposits, whether you sent it before or after the cash went in.</small>
                   <div className="pl-list" style={{ marginTop: 4 }}>
                     {(all.sendable ? dep.sendable : dep.sendable.slice(0, SHOWN)).map(m => (
                       <div key={m.txn.id} className="mo-txn mo-acctline" style={{ padding: '6px 0 6px 8px', ...acct(m.txn.accountId) }}>
@@ -383,28 +392,36 @@ export function Transfers() {
                 </div>
               )}
 
-              {dep.rows.length > 0 && (
-                <div style={{ marginTop: 14 }}>
-                  <button type="button" aria-expanded={open === 'deposits'} onClick={() => setOpen(open === 'deposits' ? null : 'deposits')} style={linkBtn}>
-                    <b>All deposits ({dep.rows.length}) {open === 'deposits' ? <ChevronDown aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} /> : <ChevronRight aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} />}</b>
-                    <small className="pl-muted" style={{ display: 'block' }}>{money(dep.total)} · tap one to change what it counts as</small>
-                  </button>
-                  {open === 'deposits' && (
-                    <div className="pl-list" style={{ marginTop: 4 }}>
-                      {(all.deposits ? dep.rows : dep.rows.slice(0, SHOWN)).map(({ txn: t, how }) => (
-                        <div key={t.id} className="mo-txn mo-acctline" style={{ padding: '6px 0 6px 8px', ...acct(t.accountId) }}>
-                          <div className="mo-txn__main"><b style={{ fontWeight: 500 }}>{day(t.date)}</b><small>{how === 'mobile' ? 'Cheque by phone' : how === 'machine' ? 'Bank machine or branch' : 'Deposit'} · {accName(t.accountId)}</small></div>
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                            <span className="mo-amt mo-amt--in">{money(t.amount, { sign: true })}</span>
-                            <button type="button" className="mo-catchip" disabled={busy} onClick={() => setOne(t)}>{t.category === 'Transfers' ? 'Not income' : t.category}</button>
+              {(['cash', 'cheque'] as const).map(kind => {
+                const list = dep.rows.filter(r => r.kind === kind), sums = dep[kind], key = `dep:${kind}`;
+                if (!list.length) return null;
+                return (
+                  <div key={kind} style={{ marginTop: 14 }}>
+                    <button type="button" aria-expanded={open === key} onClick={() => setOpen(open === key ? null : key)} style={linkBtn}>
+                      <b>{kind === 'cash' ? 'Cash deposits' : 'Cheque deposits'} ({sums.count}) {open === key ? <ChevronDown aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} /> : <ChevronRight aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} />}</b>
+                      <small className="pl-muted" style={{ display: 'block' }}>{money(sums.total)} · tap one to change what it counts as, or move it to {kind === 'cash' ? 'cheques' : 'cash'}</small>
+                    </button>
+                    {open === key && (
+                      <div className="pl-list" style={{ marginTop: 4 }}>
+                        {(all[key] ? list : list.slice(0, SHOWN)).map(({ txn: t, how }) => (
+                          <div key={t.id} className="mo-txn mo-acctline" style={{ padding: '6px 0 6px 8px', ...acct(t.accountId) }}>
+                            <div className="mo-txn__main">
+                              <b style={{ fontWeight: 500 }}>{day(t.date)}</b>
+                              <small>{how === 'mobile' ? 'By phone' : how === 'machine' ? 'Bank machine or branch' : 'Deposit'} · {accName(t.accountId)}</small>
+                              <span><button type="button" className="mo-catchip" onClick={() => moveDeposit(t, kind === 'cash' ? 'cheque' : 'cash')}>{kind === 'cash' ? 'It was a cheque' : 'It was cash'}</button></span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                              <span className="mo-amt mo-amt--in">{money(t.amount, { sign: true })}</span>
+                              <button type="button" className="mo-catchip" disabled={busy} onClick={() => setOne(t)}>{t.category === 'Transfers' ? 'Not income' : t.category}</button>
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                      {more('deposits', dep.rows.length)}
-                    </div>
-                  )}
-                </div>
-              )}
+                        ))}
+                        {more(key, list.length)}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </Card>
           )}
 

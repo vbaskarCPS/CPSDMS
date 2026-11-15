@@ -25,7 +25,8 @@ export type TransferKind = 'own' | 'card' | 'sent' | 'received' | 'reversal' | '
 export interface SentRule { payee?: string; amount?: number; category: string }
 /** kind 'moneyprefs', key 'transfers': the last-four digits confirmed as theirs / not theirs, and the remembered
  *  categories for e-transfers. */
-export interface TransferPrefs { own?: string[]; notOwn?: string[]; sentRules?: SentRule[]; /** nicknames for their own account numbers the planner doesn't track, by last four digits ("6622": "Savings") */ names?: Record<string, string> }
+export interface TransferPrefs { own?: string[]; notOwn?: string[]; sentRules?: SentRule[]; /** nicknames for their own account numbers the planner doesn't track, by last four digits ("6622": "Savings") */ names?: Record<string, string>;
+  /** deposits they said were a cheque, or cash, when the bank's line doesn't say (by row id) */ depositKinds?: Record<string, DepositKind> }
 export const TRANSFER_PREFS_KEY = 'transfers';
 
 /** How close two amounts have to be to count as "the same payment" (rent that went up a little is still rent). */
@@ -404,10 +405,23 @@ export function depositHow(desc: string): DepositHow | null {
  *  and its amount simply comes off the deposits' total. */
 const NEAR_DAYS = 7;
 
+/** What was deposited. A cheque by phone is a cheque; at a bank machine or branch the bank's line doesn't say, so it's
+ *  taken as cash until they say that one was a cheque (TransferPrefs.depositKinds). */
+export type DepositKind = 'cash' | 'cheque';
+export const depositKind = (t: Txn, how: DepositHow, said: Record<string, DepositKind> = {}): DepositKind => said[t.id] || (how === 'mobile' ? 'cheque' : 'cash');
+/** The prefs with one deposit said to be cash or a cheque. */
+export function setDepositKind(prefs: TransferPrefs, id: string, kind: DepositKind): TransferPrefs {
+  return { ...prefs, depositKinds: { ...(prefs.depositKinds || {}), [id]: kind } };
+}
+/** One kind's deposits: how many, their sum, and the part of it counted as income. */
+export interface DepositSum { count: number; total: number; income: number; incomeCount: number }
+
 export interface Deposits {
   /** Every deposit they made, newest first, whatever its category. */
-  rows: { txn: Txn; how: DepositHow }[];
+  rows: { txn: Txn; how: DepositHow; kind: DepositKind }[];
   total: number;
+  /** Cash and cheques apart. Transferred cash comes off the cash. */
+  cash: DepositSum; cheque: DepositSum;
   /** The ones counted as income, and their sum. */
   income: number; incomeCount: number;
   /** Deposits not counted as income yet (the bank's wording put them under Cash or Other): offered as income. */
@@ -415,18 +429,23 @@ export interface Deposits {
   /** E-transfers marked 'Transferred cash': deposited cash that went on to someone, taken off income. Newest first. */
   passed: Txn[]; passedTotal: number;
   /** Every e-transfer they sent that still stands as a plain transfer, newest first: any of them can be marked.
-   *  `near`: the closest deposit (not a cheque by phone) within a week either side, shown as a reminder only. */
+   *  `near`: the closest cash deposit within a week either side, shown as a reminder only. */
   sendable: { txn: Txn; near?: Txn }[];
 }
-export function sortDeposits(all: Txn[], sent: Txn[]): Deposits {
-  const rows = newestFirst(all.filter(t => t.amount > 0)).flatMap(txn => { const how = depositHow(txn.desc); return how ? [{ txn, how }] : []; });
+export function sortDeposits(all: Txn[], sent: Txn[], prefs: TransferPrefs = {}): Deposits {
+  const rows = newestFirst(all.filter(t => t.amount > 0)).flatMap(txn => { const how = depositHow(txn.desc); return how ? [{ txn, how, kind: depositKind(txn, how, prefs.depositKinds) }] : []; });
+  const sumOf = (kind: DepositKind): DepositSum => {
+    const list = rows.filter(r => r.kind === kind).map(r => r.txn), inc = list.filter(t => t.category === 'Income');
+    return { count: list.length, total: round2(list.reduce((n, t) => n + t.amount, 0)), income: round2(inc.reduce((n, t) => n + t.amount, 0)), incomeCount: inc.length };
+  };
   const counted = rows.filter(r => r.txn.category === 'Income');
   const passed = newestFirst(all.filter(t => t.amount < 0 && t.category === PASSED_ON));
-  const cash = rows.filter(r => r.how !== 'mobile').map(r => r.txn);
+  const cash = rows.filter(r => r.kind === 'cash').map(r => r.txn);
   const gap = (d: Txn, t: Txn) => Math.abs(daysBetween(d.date, t.date));
   const sendable = newestFirst(sent).map(txn => ({ txn, near: cash.filter(d => gap(d, txn) <= NEAR_DAYS).sort((a, b) => gap(a, txn) - gap(b, txn) || b.date.localeCompare(a.date))[0] }));
   return {
     rows, total: round2(rows.reduce((n, r) => n + r.txn.amount, 0)),
+    cash: sumOf('cash'), cheque: sumOf('cheque'),
     income: round2(counted.reduce((n, r) => n + r.txn.amount, 0)), incomeCount: counted.length,
     uncounted: rows.filter(r => r.txn.category !== 'Income' && r.txn.category !== 'Transfers').map(r => r.txn),
     passed, passedTotal: sum(passed), sendable,
@@ -529,7 +548,7 @@ export function sortTransfers(all: Txn[], accounts: Account[], prefs: TransferPr
     sent: { groups, cancelled, remembered },
     received,
     other,
-    deposits: sortDeposits(all, live),
+    deposits: sortDeposits(all, live, prefs),
     totals: { own: moved, card: sum(card), sent: sum(live), received: sum(of('received')) },
   };
 }
