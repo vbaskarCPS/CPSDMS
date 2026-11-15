@@ -396,17 +396,17 @@ describe('deposits, and cash that was only passed on', () => {
     expect(d.uncounted.map(t => t.amount)).toEqual([300]);
     expect([d.passed.length, d.passedTotal]).toEqual([1, 500]);
   });
-  it('offers a sent e-transfer that went out within three days after a cash deposit that covers it', () => {
-    const dep = tx('2026-05-01', 'GC 1234-DEPOSIT', 900, 'chq', 'Income'), chq = tx('2026-05-01', 'MOBILE DEPOSIT', 5000, 'chq', 'Income');
-    const same = tx('2026-05-01', 'SEND E-TFR ***aB1', -900, 'chq'), later = tx('2026-05-04', 'SEND E-TFR ***aB2', -300, 'joint');
-    const tooBig = tx('2026-05-02', 'SEND E-TFR ***aB3', -1200, 'chq'), tooLate = tx('2026-05-06', 'SEND E-TFR ***aB4', -100, 'chq'), before = tx('2026-04-30', 'SEND E-TFR ***aB5', -100, 'chq');
-    const tiny = tx('2026-05-01', 'SEND E-TFR ***aB6', -10, 'chq'), sliver = tx('2026-05-01', 'SEND E-TFR ***aB7', -40, 'chq');   // under $20; under a twentieth of $900
-    const d = sortDeposits([dep, chq, same, later, tooBig, tooLate, before, tiny, sliver], [same, later, tooBig, tooLate, before, tiny, sliver]);
-    expect(d.maybe.map(m => [m.txn, m.deposit])).toEqual([[later, dep], [same, dep]]);   // a cheque isn't cash to pass on
-    // through sortTransfers: only e-transfers still standing as transfers are offered; one already marked isn't
-    const marked = { ...same, category: 'Transferred cash' };
-    const s = sortTransfers([dep, marked, later], ACCOUNTS);
-    expect(s.deposits.maybe.map(m => m.txn)).toEqual([later]);
+  it('any sent e-transfer can be marked: sent before the deposit, after it, or nowhere near one', () => {
+    const dep = tx('2026-05-10', 'GC 1234-DEPOSIT', 900, 'chq', 'Income'), chq = tx('2026-05-09', 'MOBILE DEPOSIT', 5000, 'chq', 'Income');
+    const before = tx('2026-05-05', 'SEND E-TFR ***aB1', -900, 'chq'), after = tx('2026-05-12', 'SEND E-TFR ***aB2', -2000, 'joint'), far = tx('2026-03-01', 'SEND E-TFR ***aB3', -10, 'chq');
+    const d = sortDeposits([dep, chq, before, after, far], [before, after, far]);
+    // all three are there, newest first; the deposit beside each is only a reminder (a cheque isn't cash, so it's never the one)
+    expect(d.sendable.map(m => [m.txn, m.near])).toEqual([[after, dep], [before, dep], [far, undefined]]);
+    // through sortTransfers: only e-transfers still standing as transfers are listed; one already marked isn't
+    const marked = { ...before, category: 'Transferred cash' };
+    const s = sortTransfers([dep, marked, after], ACCOUNTS);
+    expect(s.deposits.sendable.map(m => m.txn)).toEqual([after]);
     expect(s.deposits.passed).toEqual([marked]);
+    expect(s.deposits.income - s.deposits.passedTotal).toBe(0);   // $900 deposited, $900 of it passed on
   });
 });
