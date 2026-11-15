@@ -7,7 +7,7 @@ import { Page, Header, Card, Button, Field, Input, Sheet, Empty, useToast } from
 import { putDoc } from '../../../lib/docs';
 import { useDoc } from '../../../lib/useDoc';
 import { useMoney, allRows } from '../useMoney';
-import { CATEGORIES, CATEGORY_NAMES } from '../categories';
+import { CATEGORIES, CATEGORY_NAMES, TRANSFERRED_CASH } from '../categories';
 import { money, monthKey, niceName, recategorize, shiftMonth } from '../lib';
 import { loadReceipts } from '../receipts';
 import { CategoryIcon } from '../CategoryIcon';
@@ -88,6 +88,13 @@ export function Transfers() {
   async function applyOne(category: string) {
     if (!one) return;
     if (await change([{ rows: [one], category }], nowCount(1, one.amount > 0 ? 'deposit' : 'e-transfer', category))) setOne(null);
+  }
+  /** This e-transfer was cash they deposited for someone: it comes off income. */
+  const passOn = (t: Txn) => change([{ rows: [t], category: TRANSFERRED_CASH }], `${money(Math.abs(t.amount))} marked Transferred cash: taken off your income`);
+  /** Deposits the bank's wording filed under something else: count them as income, and the next ones like them. */
+  async function countDeposits(rows: Txn[]) {
+    if (!(await change([{ rows, category: 'Income' }], nowCount(rows.length, 'deposit', 'Income')))) return;
+    for (const name of new Set(rows.map(t => t.merchant))) await teach(name, 'Income');
   }
   const answer = (ending: string, yes: boolean) => {
     if (prefs.loadError) { say('Could not load your answers. Try again in a moment.', 'bad'); return; }
@@ -234,7 +241,8 @@ export function Transfers() {
     s.totals.received > 0 && `${money(s.totals.received, { whole: true })} received`,
   ].filter(Boolean).join(' · ');
   const toDo = s.unknownAccounts.length + s.card.length + s.sent.groups.length + s.sent.remembered.length + s.received.length + act.length;
-  const quiet = s.own.count + kept.length + s.sent.cancelled.length;
+  const dep = s.deposits;
+  const quiet = s.own.count + kept.length + s.sent.cancelled.length + dep.rows.length + dep.passed.length;
   const received = all.received ? s.received : s.received.slice(0, SHOWN);
   const confirmed = new Set(prefs.data.own || []);
 
@@ -317,6 +325,89 @@ export function Transfers() {
             </Card>
           )}
 
+          {dep.rows.length + dep.passed.length > 0 && (
+            <Card>
+              <h3 style={{ margin: '0 0 4px' }}>Deposits</h3>
+              <small className="pl-muted">Cash and cheques you put in. Most are income. Cash you deposited only to e-transfer it to someone isn’t yours: mark that e-transfer “Transferred cash” and its amount comes off your income.</small>
+              <div style={{ margin: '10px 0 4px', fontSize: 14 }}>
+                <div className="pl-row" style={{ gap: 8, padding: '3px 0' }}><span className="pl-grow">Deposits counted as income <span className="pl-muted">({dep.incomeCount})</span></span><span className="mo-amt mo-amt--in">+{money(dep.income)}</span></div>
+                <div className="pl-row" style={{ gap: 8, padding: '3px 0' }}><span className="pl-grow">Transferred cash <span className="pl-muted">({dep.passed.length})</span></span><span className="mo-amt">−{money(dep.passedTotal)}</span></div>
+                <div className="pl-row" style={{ gap: 8, padding: '5px 0 3px', borderTop: '1px solid var(--line)' }}><b className="pl-grow">Your income from deposits</b><b className="mo-amt">{money(dep.income - dep.passedTotal)}</b></div>
+              </div>
+
+              {dep.uncounted.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <p className="pl-eyebrow" style={{ margin: 0 }}>Not counted as income yet</p>
+                  <small className="pl-muted">{plural(dep.uncounted.length, 'deposit')}, {money(dep.uncounted.reduce((n, t) => n + t.amount, 0))}: the bank’s wording filed {dep.uncounted.length === 1 ? 'it' : 'them'} under something else.</small>
+                  {txnRows(all.uncounted ? dep.uncounted : dep.uncounted.slice(0, SHOWN))}
+                  {more('uncounted', dep.uncounted.length)}
+                  <Button small primary disabled={busy} onClick={() => void countDeposits(dep.uncounted)}>Count {dep.uncounted.length === 1 ? 'it' : `all ${dep.uncounted.length}`} as income</Button>
+                </div>
+              )}
+
+              {dep.maybe.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <p className="pl-eyebrow" style={{ margin: 0 }}>Sent right after a deposit</p>
+                  <small className="pl-muted">Was this cash you put in for someone? Tap Transferred cash if so. The others stay as they are. Any other e-transfer can be marked from “Sent by e-transfer” above or from Transactions.</small>
+                  <div className="pl-list" style={{ marginTop: 4 }}>
+                    {(all.maybe ? dep.maybe : dep.maybe.slice(0, SHOWN)).map(m => (
+                      <div key={m.txn.id} className="mo-txn mo-acctline" style={{ padding: '6px 0 6px 8px', ...acct(m.txn.accountId) }}>
+                        <div className="mo-txn__main">
+                          <b style={{ fontWeight: 500 }}>{day(m.txn.date)} · {m.txn.desc}</b>
+                          <small>after {money(m.deposit.amount)} deposited {m.deposit.date === m.txn.date ? 'the same day' : day(m.deposit.date)}</small>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                          <span className="mo-amt">{money(m.txn.amount, { sign: true })}</span>
+                          <button type="button" className="mo-catchip" disabled={busy} onClick={() => void passOn(m.txn)}>Transferred cash</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {more('maybe', dep.maybe.length)}
+                </div>
+              )}
+
+              {dep.passed.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <p className="pl-eyebrow" style={{ margin: 0 }}>Transferred cash · off your income</p>
+                  <div className="pl-list" style={{ marginTop: 4 }}>
+                    {(all.passed ? dep.passed : dep.passed.slice(0, SHOWN)).map(t => (
+                      <div key={t.id} className="mo-txn mo-acctline" style={{ padding: '6px 0 6px 8px', ...acct(t.accountId) }}>
+                        <div className="mo-txn__main"><b style={{ fontWeight: 500 }}>{day(t.date)}</b><small>{accName(t.accountId)} · {t.desc}</small></div>
+                        <span className="mo-amt">{money(t.amount, { sign: true })}</span>
+                        <button type="button" className="mo-catchip" disabled={busy} onClick={() => void change([{ rows: [t], category: 'Transfers' }], 'Back to a plain transfer: your income counts it again')}>Undo</button>
+                      </div>
+                    ))}
+                  </div>
+                  {more('passed', dep.passed.length)}
+                </div>
+              )}
+
+              {dep.rows.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <button type="button" aria-expanded={open === 'deposits'} onClick={() => setOpen(open === 'deposits' ? null : 'deposits')} style={linkBtn}>
+                    <b>All deposits ({dep.rows.length}) {open === 'deposits' ? <ChevronDown aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} /> : <ChevronRight aria-hidden style={{ width: 14, height: 14, verticalAlign: -2 }} />}</b>
+                    <small className="pl-muted" style={{ display: 'block' }}>{money(dep.total)} · tap one to change what it counts as</small>
+                  </button>
+                  {open === 'deposits' && (
+                    <div className="pl-list" style={{ marginTop: 4 }}>
+                      {(all.deposits ? dep.rows : dep.rows.slice(0, SHOWN)).map(({ txn: t, how }) => (
+                        <div key={t.id} className="mo-txn mo-acctline" style={{ padding: '6px 0 6px 8px', ...acct(t.accountId) }}>
+                          <div className="mo-txn__main"><b style={{ fontWeight: 500 }}>{day(t.date)}</b><small>{how === 'mobile' ? 'Cheque by phone' : how === 'machine' ? 'Bank machine or branch' : 'Deposit'} · {accName(t.accountId)}</small></div>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                            <span className="mo-amt mo-amt--in">{money(t.amount, { sign: true })}</span>
+                            <button type="button" className="mo-catchip" disabled={busy} onClick={() => setOne(t)}>{t.category === 'Transfers' ? 'Not income' : t.category}</button>
+                          </div>
+                        </div>
+                      ))}
+                      {more('deposits', dep.rows.length)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
+
           {act.length > 0 && (
             <Card>
               <h3 style={{ margin: '0 0 4px' }}>Don't look like transfers</h3>
@@ -376,7 +467,7 @@ export function Transfers() {
           <>
             <p className="pl-muted" style={{ fontSize: 13 }}>{one.desc} · {accName(one.accountId)}</p>
             <div className="mo-catgrid">
-              {CATEGORIES.filter(c => c.name !== 'Transfers').map(c => (
+              {CATEGORIES.filter(c => c.name !== one.category && (c.name !== TRANSFERRED_CASH || one.amount < 0)).map(c => (
                 <button key={c.name} type="button" disabled={busy} className="pl-btn pl-btn--small" onClick={() => void applyOne(c.name)}>
                   <CategoryIcon name={c.name} /> {c.name}
                 </button>

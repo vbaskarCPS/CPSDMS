@@ -63,7 +63,7 @@ export function Overview() {
           <Card>
             <div className="pl-stats">
               <Stat label="Spent" value={money(t.spent, { whole: true })} sub={bTotal ? `of ${money(bTotal, { whole: true })} budget` : undefined} tone={bTotal && t.spent > bTotal ? 'bad' : undefined} />
-              <Stat label="Income" value={money(t.income, { whole: true })} tone="good" />
+              <Stat label="Income" value={money(t.income, { whole: true })} sub={t.passedOn > 0 ? `less ${money(t.passedOn, { whole: true })} transferred cash` : undefined} tone="good" />
               <Stat label="Net" value={money(t.net, { whole: true, sign: true })} tone={t.net < 0 ? 'bad' : 'good'} />
               <Stat label={bTotal ? 'Budget left' : 'Budget'} value={bTotal ? money(bTotal - t.spent, { whole: true, sign: false }) : '—'} sub={bTotal ? (isThisMonth ? `${dim - new Date().getDate()} days left` : undefined) : 'Set one'} tone={bTotal && bTotal - t.spent < 0 ? 'bad' : undefined} />
             </div>

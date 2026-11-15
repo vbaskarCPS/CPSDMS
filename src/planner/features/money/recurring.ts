@@ -46,7 +46,7 @@ export interface Recurring {
   varies: boolean;
 }
 
-const SKIP = new Set(['Transfers', 'Credit card payment', 'Income', 'Cash']);
+const SKIP = new Set(['Transfers', 'Credit card payment', 'Transferred cash', 'Income', 'Cash']);
 /** Bills whose amount changes month to month: allowed ±40% instead of ±8%. */
 const VARIABLE = new Set(['Utilities', 'Phone & Internet', 'Insurance', 'Fees & interest', 'Health']);
 /** Spending that repeats without being a bill: a price that happens to recur needs more charges to count. */

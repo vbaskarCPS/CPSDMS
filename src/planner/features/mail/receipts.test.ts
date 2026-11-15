@@ -8,7 +8,7 @@ import { b64u, mailKey, seal, tokenOwner } from '../../../../supabase/functions/
 import { EXPIRED, NOT_SET_UP, RECEIPT_SCHEMA, mailReceiptKey, moneyCategory, readReceiptsCursor, receiptInput, receiptQuery, receiptSystem, receiptsFrom, receiptsSince, writeReceiptsCursor,
   type CheckMail, type EmailReceipt } from '../../../../supabase/functions/planner-mail/mail';
 import { MONEY_CATEGORIES } from '../../../../supabase/functions/_shared/plannerMoney';
-import { CATEGORY_NAMES } from '../money/categories';
+import { CATEGORY_NAMES, TRANSFERRED_CASH } from '../money/categories';
 
 const KEY = b64u(new Uint8Array(32).map((_, i) => (i * 7 + 3) % 256));
 const SECRET = 'made-up-client-secret';
@@ -487,10 +487,11 @@ describe('receipts: what Claude says, checked (receiptsFrom)', () => {
 });
 
 describe('receipts: the pieces', () => {
-  it('the server’s category list is the app’s', () => {
-    expect([...MONEY_CATEGORIES]).toEqual(CATEGORY_NAMES);
+  it('the server’s category list is the app’s (less the one only a person can give: cash passed on to someone)', () => {
+    const server = CATEGORY_NAMES.filter(c => c !== TRANSFERRED_CASH);
+    expect([...MONEY_CATEGORIES]).toEqual(server);
     const items = RECEIPT_SCHEMA.properties.receipts.items.properties;
-    expect([...items.category.enum]).toEqual(CATEGORY_NAMES);
+    expect([...items.category.enum]).toEqual(server);
   });
   it('where a look starts', () => {
     expect(receiptsSince(undefined, '2026-11-13')).toBe('2025-11-13');

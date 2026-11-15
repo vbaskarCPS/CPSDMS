@@ -2,13 +2,13 @@
 // Named imports only: `import * as` would put every lucide icon in the planner's bundle.
 import {
   ShoppingCart, Utensils, Coffee, Bus, Fuel, Home, Zap, Smartphone, Shield, HeartPulse, Dumbbell, ShoppingBag, Baby, Film,
-  Repeat, Plane, Gift, GraduationCap, Scissors, ArrowLeftRight, CreditCard, Banknote, Percent, Wallet, CircleDashed, type LucideIcon,
+  Repeat, Plane, Gift, GraduationCap, Scissors, ArrowLeftRight, CreditCard, HandCoins, Banknote, Percent, Wallet, CircleDashed, type LucideIcon,
 } from 'lucide-react';
 import { byName } from './categories';
 
 const ICONS: Record<string, LucideIcon> = {
   ShoppingCart, Utensils, Coffee, Bus, Fuel, Home, Zap, Smartphone, Shield, HeartPulse, Dumbbell, ShoppingBag, Baby, Film,
-  Repeat, Plane, Gift, GraduationCap, Scissors, ArrowLeftRight, CreditCard, Banknote, Percent, Wallet, CircleDashed,
+  Repeat, Plane, Gift, GraduationCap, Scissors, ArrowLeftRight, CreditCard, HandCoins, Banknote, Percent, Wallet, CircleDashed,
 };
 
 export function CategoryIcon({ name, size = 16 }: { name: string; size?: number }) {
