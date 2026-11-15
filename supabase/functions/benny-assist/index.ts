@@ -11,9 +11,15 @@
 //   logged   = true when this question was saved to the log (a bug, or a request the Benny couldn't do): the app then offers
 //              the person a notification for when it's live.
 //
-// Who: super admins (everything), route managers (their own team on the live map: carts, routes, connected routes),
-// floaters on the floater map (the teams of the managers they follow there), and MainstreetAI admins on MainstreetAI's
-// screens (context.screen "ms": zones and reps only, with its own tools and rules).
+// Who: whoever the app's own permissions (User Management) let do something the Benny can help with, and only that.
+// The database says what the person has (benny_who), and the Benny is offered, and told about, only those tools:
+//   Route Manager / Floater : their own team on the live map (a floater: the teams of the managers followed there)
+//   Workerbook              : the workerbook's side (the day, crew, start the day, payouts, bonuses, a closed day's jobs,
+//                             the crew's week, texts to workers) and the whole center's live day
+//   Master Bookings         : one booking, changing it, the booking emails, the master maps
+//   a super admin           : everything
+//   MainstreetAI Admin      : on MainstreetAI's screens (context.screen "ms"), zones and reps only, with its own tools and rules
+// Which tools to offer is decided here; whether a call is allowed is decided again by the database, on every call.
 // Pictures: sent with the question to the main model only (the small model never takes a question with a picture). They
 // are looked at for that one question and kept nowhere: not in the chat that is sent back next time, not in the log.
 // Runs as the signed-in person: their JWT is passed through, so every lookup (benny_* database functions) is checked by
@@ -32,7 +38,7 @@
 // model) and roughly what it cost (cost.ts): Super Admin › Bug log › AI logs (benny_ai_log). Saving never holds up or
 // fails an answer.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
-import { FAST_TOOLS, TOOLS, arrayLengths, fastAnswerStop, forModel, namedIn, needsMain, now, openMap, opening, saidForNames, systemBlocks, toolCall, toolsFor, type Ctx, type ProposalKind, type Role, type Vocab } from './tools.ts';
+import { FAST_TOOLS, TOOLS, arrayLengths, fastAnswerStop, forModel, mayUse, namedIn, needsMain, now, openMap, opening, saidForNames, systemBlocks, toolCall, toolsFor, whoFrom, whoOf, type Ctx, type ProposalKind, type Vocab, type Who } from './tools.ts';
 import { costUsd, type Tally } from './cost.ts';
 
 const MODEL = Deno.env.get('BENNY_MODEL') || 'claude-sonnet-5-5';
@@ -67,11 +73,13 @@ const FIRST_CARDS = ['start_day', 'give_route', 'partner', 'solo'];
 /** The Benny said it couldn't, without logging it: caught here so no request goes unseen. */
 const CANT = /\b(can['’]?t|cannot|not able to|unable to|don['’]t have (a|the) (tool|way)|no (tool|way) (to|for)|isn['’]t (something i can|switched on|available)|not (yet )?(supported|possible|available))\b/i;
 const OFF_TOPIC = /only help with the DMS/i;
+/** "That needs the Workerbook permission" is an answer, not a request to build something. */
+const NEEDS_PERMISSION = /\bpermission\b/i;
 /** Said once to the main model when it stops with no words: answer, or log what it couldn't do. */
 const NUDGE = '(System: you stopped without replying. Reply to the person now in plain words with what you found. If the tools can\'t answer it, call log_request, then say so.)';
 
-async function runTool(sb: SupabaseClient, ctx: Ctx, role: Role, name: string, input: Record<string, unknown>, said: string[] = []): Promise<{ out: unknown; proposal?: Proposal }> {
-  if (!TOOLS.some(t => t.name === name && t.roles.includes(role))) return { out: { error: `${name} isn't available to you` } };
+async function runTool(sb: SupabaseClient, ctx: Ctx, who: Who, name: string, input: Record<string, unknown>, said: string[] = []): Promise<{ out: unknown; proposal?: Proposal }> {
+  if (!TOOLS.some(t => t.name === name && mayUse(t, who))) return { out: { error: `${name} isn't available to you` } };
   const call = toolCall(name, input, ctx);
   if (!call) return { out: { error: `unknown tool ${name}` } };
   if ('log' in call) return { out: await logEntry(sb, ctx, call.log, input) };
@@ -141,12 +149,13 @@ Deno.serve(async req => {
     // MainstreetAI's own Benny: for its admins, on its screens. It has no center, and nothing of the Property Stars side.
     const onMs = ctx.screen === 'ms';
     if (onMs) { ctx.center_id = undefined; ctx.center_name = undefined; ctx.rm_manager = undefined; ctx.following = undefined; ctx.following_names = undefined; }
-    const [{ data: asRole, error: roleErr }, { data: mode }] = await Promise.all([
-      onMs ? sb.rpc('ms_is_admin').then(r => ({ data: r.data === true ? 'ms' : null, error: r.error })) : sb.rpc('benny_ok_any', { p_center: ctx.center_id || null }),
+    // what their permissions in the app give them, at this center: the database's own answer
+    const [{ data: asWho, error: whoErr }, { data: mode }] = await Promise.all([
+      onMs ? sb.rpc('ms_is_admin').then(r => ({ data: r.data === true ? whoOf('ms') : null, error: r.error })) : sb.rpc('benny_who', { p_center: ctx.center_id || null }).then(r => ({ data: whoFrom(r.data), error: r.error })),
       sb.rpc('benny_model_mode')]);
-    const role = asRole as Role | null;
-    if (onMs && (roleErr || role !== 'ms')) return json({ error: 'The Benny here is for MainstreetAI admins.' }, 403);
-    if (!onMs && (roleErr || (role !== 'admin' && role !== 'rm'))) return json({ error: 'The Benny is for super admins and route managers.' }, 403);
+    if (onMs && (whoErr || !asWho)) return json({ error: 'The Benny here is for MainstreetAI admins.' }, 403);
+    if (whoErr || !asWho) return json({ error: 'The Benny is for route managers, admins (Workerbook or Master Bookings) and super admins, in their own centers.' }, 403);
+    const who: Who = asWho; const role = who.role;
     // pictures sent with the question (the app shrinks them first): a few, of a kind the model reads, none huge
     const pics = (Array.isArray(b.images) ? b.images : []).filter((i): i is { media_type: string; data: string } => !!i && typeof i === 'object'
         && /^image\/(jpeg|png|webp|gif)$/.test(String((i as { media_type?: unknown }).media_type)) && typeof (i as { data?: unknown }).data === 'string'
@@ -155,6 +164,7 @@ Deno.serve(async req => {
     ctx.pictures = pics.length;
     // a route manager's "my team" is their own map; only admins can open someone else's.
     // The floater map is the floater's own: the database checks it (their id, the permission, the managers followed).
+    if (role === 'office') { ctx.rm_manager = undefined; ctx.following = undefined; ctx.following_names = undefined; }   // no live day for them
     if (role === 'rm' && ctx.rm_manager && !/^floater_/.test(ctx.rm_manager)) {
       const { data: mine } = await sb.rpc('benny_my_rm_ids', { p_center: ctx.center_id || null });
       if (Array.isArray(mine) && !mine.includes(ctx.rm_manager)) ctx.rm_manager = mine[0];
@@ -172,16 +182,16 @@ Deno.serve(async req => {
       const { data } = await sb.rpc('benny_vocab', { p_center: ctx.center_id || null, p_date: /^\d{4}-\d{2}-\d{2}$/.test(ctx.today || '') ? ctx.today : null, p_manager: openMap(ctx) });
       vocab = (data as Vocab) || null;
     }
-    const sys = systemBlocks(ctx, role as Role, vocab);
-    const tools = toolsFor(role as Role);
+    const sys = systemBlocks(ctx, who, vocab);
+    const tools = toolsFor(who);
     const question = String(history[history.length - 1].content);
     // which model: the setting in the database; a super admin's own app can ask for one or the other to try it out
-    const asked = role === 'admin' && (ctx.model === 'fast' || ctx.model === 'main') ? ctx.model : null;
+    const asked = who.caps.includes('super') && (ctx.model === 'fast' || ctx.model === 'main') ? ctx.model : null;
     // MainstreetAI's questions and anything with a picture go to the main model
     const fastOn = (asked ? asked === 'fast' : mode === 'fast_first') && FAST !== MODEL && role !== 'ms';
     const used = tallies;
     logTo = sb;
-    logBase = { role, center_id: ctx.center_id || null, path: ctx.path || null, spoken: !!ctx.spoken, question, fast_model: FAST, main_model: MODEL };
+    logBase = { role: who.caps.includes('super') ? 'super' : role, center_id: ctx.center_id || null, path: ctx.path || null, spoken: !!ctx.spoken, question, fast_model: FAST, main_model: MODEL };
     // a change that is about routes always comes with its map, even when the Benny didn't draw one
     const mapOf = (p: Proposal | null): unknown => {
       if (!p) return null;
@@ -242,7 +252,7 @@ Deno.serve(async req => {
             }
           }
           if (!fast) return out;
-          const stop = CANT.test(out.reply) ? { why: 'cant' } : fastAnswerStop(out.reply, lookups, [...history.map(m => String(m.content)), now(ctx, role as Role)], lengths);
+          const stop = CANT.test(out.reply) ? { why: 'cant' } : fastAnswerStop(out.reply, lookups, [...history.map(m => String(m.content)), now(ctx, who)], lengths);
           return stop ? { ...out, stop } : out;
         }
         if (fast) {
@@ -257,7 +267,7 @@ Deno.serve(async req => {
         for (const u of uses) {
           if (u.name === 'log_request' || u.name === 'report_bug') out.logged = true;
           const s0 = Date.now();
-          const { out: got, proposal: p } = await runTool(sb, ctx, role as Role, u.name || '', u.input || {}, saidForNames(history));
+          const { out: got, proposal: p } = await runTool(sb, ctx, who, u.name || '', u.input || {}, saidForNames(history));
           toolRuns.push({ name: u.name || '', model: fast ? 'fast' : 'main', ok: !(got && (got as { error?: string }).error), ms: Date.now() - s0 });
           if ((u.name === 'log_request' || u.name === 'report_bug') && got && (got as { saved?: boolean }).saved === true) out.saved = true;
           if (fast && got && (got as { error?: string }).error) return { ...out, stop: { why: 'tool_error' } };
@@ -303,7 +313,7 @@ Deno.serve(async req => {
     }
     // it said it couldn't, straight off, and logged nothing: log it for it. Only when the answer OPENS with the refusal:
     // "what can you do" is answered with a list that mentions the things it can't do yet, and that is no request
-    if (!res.logged && res.usedTools === 0 && !res.proposal && CANT.test(opening(res.reply)) && !OFF_TOPIC.test(res.reply)) {
+    if (!res.logged && res.usedTools === 0 && !res.proposal && CANT.test(opening(res.reply)) && !OFF_TOPIC.test(res.reply) && !NEEDS_PERMISSION.test(res.reply)) {
       const auto = await logEntry(sb, ctx, 'request', { title: question.slice(0, 120), asked: question, reply: res.reply.slice(0, 600), auto: true });
       if (auto.saved === true) res.saved = true;
     }

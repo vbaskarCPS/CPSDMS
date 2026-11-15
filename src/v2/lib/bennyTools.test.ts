@@ -1,6 +1,6 @@
 // The Benny's tools (supabase/functions/benny-assist/tools.ts): who gets which, and that each one goes somewhere.
 import { describe, it, expect } from 'vitest';
-import { FAST_TOOLS, TOOLS, arrayLengths, dayOpen, fastAnswerStop, forModel, heardRight, namedIn, needsMain, now, openMap, opening, rules, saidForNames, system, systemBlocks, toolCall, toolsFor, ungrounded } from '../../../supabase/functions/benny-assist/tools';
+import { FAST_TOOLS, TOOLS, arrayLengths, dayOpen, fastAnswerStop, forModel, heardRight, levelOf, mayUse, namedIn, needsMain, now, openMap, opening, rules, saidForNames, system, systemBlocks, toolCall, toolsFor, ungrounded, whoFrom, whoOf, type Who } from '../../../supabase/functions/benny-assist/tools';
 
 const ctx = { center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-10', rm_manager: 'rm_x' };
 
@@ -10,7 +10,7 @@ describe('the Benny’s tools', () => {
       const call = toolCall(t.name, {}, ctx);
       expect(call, t.name).not.toBeNull();
       // MainstreetAI's tools have no center: the database checks its own permission
-      if (call && 'fn' in call) { expect(call.fn).toMatch(/^benny_/); if (t.roles.includes('ms') && t.roles.length === 1) expect(call.fn).toMatch(/^benny_ms_/); else expect(call.args.p_center).toBe('c1'); }
+      if (call && 'fn' in call) { expect(call.fn).toMatch(/^benny_/); if (t.for.includes('ms') && t.for.length === 1) expect(call.fn).toMatch(/^benny_ms_/); else expect(call.args.p_center).toBe('c1'); }
     }
     expect(toolCall('nope', {}, ctx)).toBeNull();
   });
@@ -207,7 +207,7 @@ describe('the Benny’s tools', () => {
     expect(rm).toEqual(expect.arrayContaining(['live_team', 'logsheet', 'connected_routes', 'propose_give_route', 'propose_partner', 'propose_solo', 'propose_job_change', 'propose_pin', 'propose_stops', 'report_bug', 'log_request', 'show_map']));
     for (const no of ['find_people', 'day', 'maps', 'crew_stats', 'propose_start_day', 'booking', 'propose_booking', 'propose_booking_emails', 'payouts', 'propose_payouts', 'bonus_ranking', 'propose_bonuses', 'text_people', 'propose_texts']) expect(rm).not.toContain(no);
     expect(toolsFor('admin').map(t => t.name)).toEqual(TOOLS.filter(t => !t.name.includes('ms_')).map(t => t.name));
-    expect(toolsFor('rm')[0]).not.toHaveProperty('roles');   // only what the model's API accepts is sent
+    expect(toolsFor('rm')[0]).not.toHaveProperty('for');   // only what the model's API accepts is sent
   });
   it('changes become cards; lookups don’t', () => {
     const kinds = TOOLS.map(t => { const c = toolCall(t.name, {}, ctx); return c && 'fn' in c && c.card ? c.card.kind : null; }).filter(Boolean);
@@ -460,6 +460,99 @@ describe('the Benny’s tools', () => {
       expect(now({ ...ctx, pictures: 1 }, 'admin')).toContain('Their message came with a picture.');
       expect(now({ ...ctx, pictures: 2 }, 'ms')).toContain('Their message came with 2 pictures.');
       expect(now(ctx, 'admin')).not.toContain('picture');
+    });
+  });
+
+  // The Benny follows the app's own permissions (User Management): route manager, admin (Workerbook, Master Bookings), super admin.
+  describe('permissions', () => {
+    const names = (w: Who) => toolsFor(w).map(t => t.name);
+    // Franklyn: a route manager with Workerbook and Master Bookings, not a super admin
+    const franklyn = whoFrom({ role: 'admin', super: false, rm: true, workerbook: true, bookings: true, territory: false })!;
+    const office = whoFrom({ role: 'office', super: false, rm: false, workerbook: false, bookings: true, territory: false })!;
+    const wbOnly = whoFrom({ role: 'admin', super: false, rm: false, workerbook: true, bookings: false, territory: false })!;
+    const rmOnly = whoFrom({ role: 'rm', super: false, rm: true, workerbook: false, bookings: false, territory: false })!;
+
+    it('reads what the database says the person has, and nothing it doesn’t say', () => {
+      expect(franklyn).toEqual({ role: 'admin', caps: ['rm', 'workerbook', 'bookings'] });
+      expect(whoFrom({ role: 'admin', super: true, rm: false, workerbook: true, bookings: true, territory: true })).toEqual(whoOf('admin'));
+      expect(rmOnly).toEqual(whoOf('rm'));
+      for (const none of [null, undefined, 'admin', {}, { role: null, workerbook: true }, { role: 'admin' }, { role: 'boss', workerbook: true }, { role: 'rm', rm: 'yes' }]) expect(whoFrom(none)).toBeNull();
+      expect(whoFrom({ role: 'admin', workerbook: true, ms: true, super: 'true' })).toEqual({ role: 'admin', caps: ['workerbook'] });   // only a real true counts; ms is never taken from here
+    });
+    it('every tool names the permissions that give it', () => {
+      for (const t of TOOLS) { expect(t.for.length).toBeGreaterThan(0); expect(t.for).not.toContain('super'); }   // a super admin has the others
+      for (const t of TOOLS.filter(x => x.name.includes('ms_'))) expect(t.for).toEqual(['ms']);
+    });
+    it('an admin with Workerbook gets the workerbook’s side: “who won the day” is the bonus ranking, not a guess', () => {
+      for (const t of ['bonus_ranking', 'propose_bonuses', 'payouts', 'propose_payouts', 'day', 'crew_stats', 'propose_start_day', 'propose_past_job', 'crew_week', 'text_people', 'propose_texts', 'find_people']) {
+        expect(names(franklyn)).toContain(t); expect(names(wbOnly)).toContain(t); expect(names(rmOnly)).not.toContain(t); expect(names(office)).not.toContain(t);
+      }
+      expect(rules(franklyn)).toContain('"who won the day", "who gets the bonus", "who qualifies"');
+      expect(rules(franklyn)).toContain('Never rank the carts for the bonus yourself from live_team or a logsheet');
+      expect(TOOLS.find(t => t.name === 'bonus_ranking')!.description).toContain('"who won the day"');
+    });
+    it('a plain route manager is told the bonus ranking isn’t theirs, and never ranks for it', () => {
+      const r = rules(rmOnly);
+      expect(r).toContain('- Who won the day, who gets the bonus:');
+      expect(r).toContain('needs the Workerbook permission');
+      expect(r).toContain("don't divide by team size or judge who qualifies yourself");
+      expect(rules(franklyn)).not.toContain('- Who won the day, who gets the bonus:');
+      expect(r).toBe(rules('rm'));
+    });
+    it('Master Bookings gives the booking tools, with or without the rest', () => {
+      for (const t of ['booking', 'propose_booking', 'propose_booking_emails', 'maps']) {
+        expect(names(franklyn)).toContain(t); expect(names(office)).toContain(t); expect(names(rmOnly)).not.toContain(t); expect(names(wbOnly)).not.toContain(t);
+      }
+      expect(names(office)).toEqual(['bookings', 'booking', 'maps', 'route', 'show_map', 'propose_booking', 'propose_booking_emails', 'report_bug', 'log_request']);
+      expect(rules(office)).toContain('to change a booking (a "service ticket") use propose_booking');
+      expect(rules(wbOnly)).not.toContain('propose_booking');
+      expect(rules(franklyn)).toContain('offer to mark it done: propose_booking'); expect(rules(wbOnly)).toContain('the office closes it in Bookings');
+    });
+    it('someone without the live day isn’t told about it', () => {
+      const r = rules(office);
+      for (const live of ['live_team to get', 'propose_pin', 'propose_remove', 'propose_prebook_done', 'job_history', 'call pace', 'logsheet for that worker']) expect(r).not.toContain(live);
+      for (const t of ['live_team', 'logsheet', 'pace', 'areas', 'job_history', 'propose_give_route', 'propose_add_job', 'propose_pin']) { expect(names(office)).not.toContain(t); expect(names(rmOnly)).toContain(t); expect(names(wbOnly)).toContain(t); }
+      expect(r).toContain('you can prepare changing a booking (status, notes, route) and setting up the booking emails to customers with the propose_ tools.');
+    });
+    it('what they can’t do is named with the permission it needs, as an answer and not a logged request', () => {
+      expect(rules(rmOnly)).toContain('payouts, the bonus ranking and bonuses');
+      expect(rules(rmOnly)).toContain('need the Workerbook permission.');
+      expect(rules(rmOnly)).toContain('need the Master Bookings permission.');
+      expect(rules(office)).toContain('need the Route Manager or the Workerbook permission.');
+      expect(rules(franklyn)).not.toContain('- What they may do:');   // nothing he lacks
+      expect(rules('admin')).not.toContain('- What they may do:');
+      expect(rules(rmOnly)).toContain("That is an answer: don't log it");
+    });
+    it('a super admin’s Benny is what it was', () => {
+      expect(names(whoOf('admin'))).toEqual(TOOLS.filter(t => !t.name.includes('ms_')).map(t => t.name));
+      expect(names(franklyn)).toEqual(names(whoOf('admin')));   // Franklyn has every permission those tools need
+      expect(rules(franklyn)).toBe(rules('admin').replace('You help a super admin with', 'You help an admin with'));
+      for (const t of TOOLS) expect(mayUse(t, 'admin')).toBe(!t.name.includes('ms_'));
+    });
+    it('the Benny is told who it is talking to, in the app’s levels', () => {
+      expect(levelOf(whoOf('admin'))).toBe('a super admin');
+      expect(levelOf(rmOnly)).toBe('a route manager');
+      expect(levelOf(franklyn)).toBe('an admin (Workerbook, Master Bookings) who is also a route manager');
+      expect(levelOf(office)).toBe('an admin (Master Bookings)');
+      expect(now({ ...ctx, user_name: 'Franklyn Mitchell', screen: 'rm', rm_manager: 'rm_franklynmitchell' }, franklyn)).toContain('You are helping an admin (Workerbook, Master Bookings) who is also a route manager (Franklyn Mitchell).');
+      // off the route manager map the live day is the whole center's: "my team" still means his own
+      const off = now({ center_id: 'c1', center_name: 'BC Fall RJ', today: '2026-11-14', user_name: 'Franklyn Mitchell' }, franklyn);
+      expect(off).toContain('"my team", "my carts" mean the carts whose manager is them');
+      expect(now({ ...ctx, screen: 'rm' }, franklyn)).not.toContain('whose manager is them');   // on the map, it is the map that is open
+      expect(now({ center_id: 'c1', today: '2026-11-14' }, 'admin')).not.toContain('whose manager is them');
+      expect(now({ center_id: 'c1', today: '2026-11-14' }, wbOnly)).not.toContain('whose manager is them');
+    });
+    it('the rules stay the same text for everyone with the same permissions (the prompt cache)', () => {
+      const other = whoFrom({ role: 'admin', super: false, rm: true, workerbook: true, bookings: true, territory: false })!;
+      expect(systemBlocks({ ...ctx, user_name: 'Jovan Chung' }, other)[0]).toEqual(systemBlocks({ ...ctx, user_name: 'Franklyn Mitchell' }, franklyn)[0]);
+      expect(rules(franklyn)).not.toContain('Franklyn Mitchell');
+    });
+    it('“who won the day” is never the small model’s to answer from the live map', () => {
+      for (const q of ['Hey Benny who won the day', 'who is winning today', 'who wins the bonus', 'who’s the winner']) expect(needsMain(q)).toBe('compare');
+      expect(needsMain('who is on my team today')).toBeNull();
+    });
+    it('the live map says a paid-out cart’s equiv is the payout’s', () => {
+      expect(TOOLS.find(t => t.name === 'live_team')!.description).toContain('a paid-out cart\'s equiv is the payout\'s own');
     });
   });
 });
