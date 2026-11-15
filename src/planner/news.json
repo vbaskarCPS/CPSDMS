@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-15-cash-cheque-deposits", "date": "2026-11-15", "title": "Deposits: cash and cheques apart", "for": "night",
+    "lines": ["The Deposits card now totals cash deposits and cheque deposits separately; transferred cash comes off the cash.", "A cheque by phone is a cheque. At a bank machine the bank doesn’t say, so those start as cash: tap “It was a cheque” to move one."] },
   { "id": "2026-11-15-transferred-cash-any", "date": "2026-11-15", "title": "Transferred cash: any e-transfer, any day", "for": "night",
     "lines": ["The Deposits card now lists every e-transfer you sent, not only the ones right after a deposit.", "Tap Transferred cash on one and its amount comes off your deposits, whether you sent it before or after the cash went in."] },
   { "id": "2026-11-15-deposits", "date": "2026-11-15", "title": "Transfers: deposits, and transferred cash", "for": "night",
