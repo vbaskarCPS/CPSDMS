@@ -9,7 +9,8 @@
 //   pin        → RM map › Pins › drop a pin (the map's own createMapPin)
 //   stops      → RM map › Pins: one numbered pin per cart, in the planned order; an earlier order of the same kind is replaced
 //   job        → RM map › a worker's jobs › edit a job: its amount and how it was paid (the edit screen's own save, which
-//                works the cart's equiv and totals out again). The database keeps a record of each one (benny_job_changes).
+//                works the cart's equiv and totals out again), or the line turned into an office flat (Production, the
+//                flat's code, the season's set value, prepaid). The database keeps a record of each one (benny_job_changes).
 //   add_job    → the logsheet's own save of a new sale (completeJob), with each add-on as its own line tied to it; the
 //                cart's totals are worked out again, and a client with an email gets the logsheet's receipt
 //   past_job   → a closed day's payout list › a cart's sales: change one job (type, amount, how it was paid) or add one,
@@ -41,7 +42,7 @@ import { STOP_WORD } from './bennyDrive';
 import { textOf, textsTitle, type TextPerson, type TextsCheck, type TextsState } from './bennyTexts';
 import { removeCard, removedSaid, type RemoveCheck, type RemoveDone } from './bennyRemove';
 import { addJobCard, addJobLines, addedSaid, type AddJobCheck } from './bennyAddJob';
-import { codeValue, liveBookingId, prebookCard, prebookFix, prebookLine, prebookSaid, type PrebookCheck } from './bennyPrebook';
+import { codeValue, liveBookingId, prebookCard, prebookFix, prebookLine, prebookSaid, seasonItem, type PrebookCheck } from './bennyPrebook';
 import { lastSettings } from './bennyWalk';
 import { queueHref } from './payoutQueue';
 import { cartContext, dayLines, listCarts, saveDay } from './payoutCarts';
@@ -81,9 +82,11 @@ export interface NoteChange { mode: 'set' | 'add' | 'replace' | 'clear'; text: s
 export interface BookingCheck {
   ok: boolean; problems?: string[]; booking: BennyBooking; heard_as?: string;
   /** the change in words (for the card) */
-  change: { status?: { from: BookingStatus; to: BookingStatus }; route?: { from?: string; to: string; map?: string }; field_note?: NoteChange; office_note?: NoteChange };
-  /** exactly the fields the Bookings save gets */
-  patch: Pick<BookingPatch, 'status' | 'route_code' | 'field_notes' | 'office_notes'>;
+  /** credit = the job is on a closed day's logsheet: the booking is dated that day and credited to that cart (was_* = how a booking already marked done reads now) */
+  change: { status?: { from: BookingStatus; to: BookingStatus }; route?: { from?: string; to: string; map?: string }; field_note?: NoteChange; office_note?: NoteChange;
+    credit?: { day: string; workers?: string; shown_as?: string; was_on?: string; was_by?: string } };
+  /** exactly the fields the Bookings save gets (credit is not one of them: it is done after the save, by benny_booking_credit) */
+  patch: Pick<BookingPatch, 'status' | 'route_code' | 'field_notes' | 'office_notes'> & { credit?: boolean };
   /** cautions to read before saving */
   notes?: string[];
   /** the request, to run the same check again right before saving; stamp = when the booking last changed */
@@ -123,13 +126,22 @@ export interface LogJob {
   amount: number; paid_by: string;
 }
 /** What the edit screen's save takes for a change of amount or payment type (transactions columns). */
-export interface JobPatch { price: number; display_price: string; payment_method: string; payment_breakdown: Record<string, number>; items?: { name: string; price: number }[] }
+export interface JobPatch { price: number; display_price: string; payment_method: string; payment_breakdown: Record<string, number>; items?: { name: string; price: number }[]; type?: string; flat?: string }
 export interface JobCheck {
   ok: boolean; problems?: string[]; date: string; worker: { cn: string; name: string }; cart: { id: string; workers: string[] };
-  job: LogJob; change: { amount?: { from: number; to: number }; paid_by?: { from: string; to: string } };
-  ask: { amount?: number; paid_by?: string }; patch: JobPatch; stamp: string; notes?: string[];
+  job: LogJob;
+  /** flat = the line becomes an office flat (its code); from = how the line reads now */
+  change: { amount?: { from: number; to: number }; paid_by?: { from: string; to: string }; flat?: { to: string; from: { type: string; amount: number; paid_by?: string; shown_as?: string } } };
+  ask: { amount?: number; paid_by?: string; flat?: string }; patch: JobPatch; stamp: string; notes?: string[];
+  /** what the flat is worth this season, put in by the app when it can read the season's flats (the card shows it; the save works it out again) */
+  value?: number | null;
 }
 export const dollars = (n: number) => `$${Number(n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** What the edit save is given to turn a line into an office flat: a Production job with the flat's code at its set value,
+ *  prepaid. The same fields the prebook card writes (prebookFix), without a booking. Pure, so it's tested. */
+export function flatUpdates(code: string, value: number, season: string): { type: 'Production'; price: number; displayPrice: string; paymentMethod: 'Prepaid'; paymentBreakdown: Record<string, number>; items: { name: string; price: number }[] } {
+  return { type: 'Production', price: value, displayPrice: code, paymentMethod: 'Prepaid', paymentBreakdown: { Prepaid: value }, items: [{ name: seasonItem(season), price: value }] };
+}
 /** The patch as the old app's updateTransaction takes it. Only these five fields are ever sent. */
 export function jobUpdates(patch: JobPatch): { price: number; displayPrice: string; paymentMethod: string; paymentBreakdown: Record<string, number>; items?: { name: string; price: number }[] } {
   return { price: patch.price, displayPrice: patch.display_price, paymentMethod: patch.payment_method, paymentBreakdown: patch.payment_breakdown, ...(patch.items ? { items: patch.items } : {}) };
@@ -174,12 +186,16 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 export function bookingSaved(change: BookingCheck['change']): string {
   const out: string[] = [];
   if (change.status) out.push(change.status.to === 'done' ? 'marked done' : change.status.to === 'cancelled' ? 'cancelled' : 'open again');
+  if (change.credit) out.push(`dated ${shortDate(change.credit.day)} and credited to ${change.credit.workers || 'that day’s cart'}`);
   if (change.route) out.push(`moved to ${change.route.to}`);
   for (const k of ['field_note', 'office_note'] as const) {
     const n = change[k]; if (n) out.push(`${NOTE[k]} ${n.mode === 'clear' ? 'cleared' : n.mode === 'replace' ? 'changed' : 'added'}`);
   }
   return out.join(', ');
 }
+
+/** "Nov 7" from 2026-11-07. */
+const shortDate = (iso: string) => { const [y, m, d] = iso.split('-').map(Number); return y && m && d ? `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]} ${d}` : iso; };
 
 /** What the confirm card says (pure, so it's tested). */
 export function describe(p: BennyProposal): { title: string; lines: string[]; action: string } {
@@ -271,9 +287,10 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
     }
     case 'booking': {
       const c = p.check; const ch = c.change; const a = c.booking.address;
-      const one = Object.keys(ch).length === 1;
+      const one = Object.keys(ch).filter(k => k !== 'credit').length <= 1;
       const note = ch.field_note ? 'field_note' as const : ch.office_note ? 'office_note' as const : null;
       const title = !one ? `Change ${a}`
+        : ch.credit && !ch.status ? `Credit ${a} to the crew that did it`
         : ch.status ? (ch.status.to === 'done' ? `Mark ${a} done` : ch.status.to === 'cancelled' ? `Cancel ${a}` : `Reopen ${a}`)
         : ch.route ? `Move ${a} to ${ch.route.to}`
         : note && ch[note]!.mode === 'clear' ? `Clear the ${NOTE[note]} on ${a}`
@@ -281,6 +298,7 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         : note ? `Add ${note === 'office_note' ? 'an' : 'a'} ${NOTE[note]} to ${a}` : `Change ${a}`;
       const lines = [[c.booking.city, c.booking.list, c.booking.job, c.booking.people?.[0]].filter(Boolean).join(' · ')].filter(Boolean);
       if (ch.status) lines.push(`Status: ${ch.status.from} → ${ch.status.to}`);
+      if (ch.credit) lines.push(`Done ${shortDate(ch.credit.day)} by ${ch.credit.workers || 'that day’s cart'}${ch.credit.shown_as ? ` (${ch.credit.shown_as} on their logsheet)` : ''}${ch.credit.was_by ? `. Now it reads: ${ch.credit.was_by}${ch.credit.was_on ? `, ${shortDate(ch.credit.was_on)}` : ''}` : ''}`);
       if (ch.route) lines.push(`Route: ${ch.route.from || 'none'} → ${ch.route.to}${ch.route.map ? ` (${ch.route.map})` : ''}`);
       for (const k of ['field_note', 'office_note'] as const) {
         const n = ch[k]; if (!n) continue;
@@ -333,6 +351,21 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
       const c = p.check; const j = c.job; const ch = c.change; const first = c.worker.name.split(' ')[0];
       const what = [j.type === 'Production' ? 'Production' : j.type, j.service, j.does?.length ? `(${j.does.join(', ')})` : ''].filter(Boolean).join(' · ').replace(' · (', ' (');
       const team = c.cart.workers.length > 1;
+      const totals = `${team ? `The cart’s (${c.cart.workers.map(n => n.split(' ')[0]).join(' + ')})` : `${first}’s`} equiv and totals are worked out again. The change is recorded under your name.`;
+      if (ch.flat) {
+        const f = ch.flat.from;
+        return {
+          title: `Make a job on ${first}’s logsheet an office flat`,
+          lines: [
+            [j.client, j.address].filter(Boolean).join(' · ') || 'A job with no client name',
+            `Now: ${[f.type, dollars(f.amount), (f.paid_by || '').toLowerCase()].filter(Boolean).join(' · ')}`,
+            `Becomes: Production · ${ch.flat.to}${c.value != null ? ` (${dollars(c.value)} flat)` : ''} · prepaid`,
+            ...(c.notes || []),
+            totals,
+          ],
+          action: 'Save',
+        };
+      }
       return {
         title: `Change a job on ${first}’s logsheet`,
         lines: [
@@ -341,7 +374,7 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
           ch.amount ? `Amount: ${dollars(ch.amount.from)} → ${dollars(ch.amount.to)}` : `Amount: ${dollars(j.amount)} (stays)`,
           ch.paid_by ? `Paid by: ${ch.paid_by.from || 'not set'} → ${ch.paid_by.to}` : `Paid by: ${j.paid_by} (stays)`,
           ...(c.notes || []),
-          `${team ? `The cart’s (${c.cart.workers.map(n => n.split(' ')[0]).join(' + ')})` : `${first}’s`} equiv and totals are worked out again. The change is recorded under your name.`,
+          totals,
         ],
         action: 'Save',
       };
@@ -537,10 +570,20 @@ export async function removeFromBenny(p: Extract<BennyProposal, { kind: 'remove'
 export async function bookingFromBenny(p: Extract<BennyProposal, { kind: 'booking' }>, centerId: string): Promise<string> {
   const c = await recheck<BookingCheck>('benny_check_booking', { p_center: centerId, p_booking: p.check.booking.id, p_change: p.check.ask });
   if (c.stamp !== p.check.stamp) throw new Error(`${c.booking.address} was changed since I checked. Ask me again.`);
-  const saved = await saveBooking(c.booking.id, null, c.patch);
+  const { credit: _credit, ...patch } = c.patch;
+  const saved = await saveBooking(c.booking.id, null, patch);
   const kept = (k: 'field_notes' | 'office_notes') => !(k in c.patch) || (saved[k] || '') === (c.patch[k] || '');
   if ((c.patch.status && saved.status !== c.patch.status) || (c.patch.route_code && saved.route_code !== c.patch.route_code) || !kept('field_notes') || !kept('office_notes'))
     throw new Error(`${c.booking.address} didn’t save. Try it in Bookings › List.`);
+  // done, and the job is on a closed day's logsheet: the database dates it to that day and names the cart, and says whether it did
+  if (c.change.credit) {
+    let credited = false;
+    try { credited = ((await db.rpc('benny_booking_credit', { p_center: centerId, p_booking: c.booking.id })).data as { ok?: boolean } | null)?.ok === true; } catch { /* said below */ }
+    if (!credited) {
+      const { credit: _c, ...rest } = c.change; const said = bookingSaved(rest);
+      return `${c.booking.address}: ${said ? `${said}, but ` : ''}I couldn’t credit it to ${c.change.credit.workers || 'the crew'}. It reads as marked done by the office: check it in Bookings › List.`;
+    }
+  }
   return `${c.booking.address}: ${bookingSaved(c.change)}.`;
 }
 
@@ -551,10 +594,19 @@ export async function jobFromBenny(p: Extract<BennyProposal, { kind: 'job' }>, c
   const c = p.check; const first = c.worker.name.split(' ')[0];
   const { sessionService, date } = await legacy(centerId);
   if (date !== c.date) throw new Error('The live day changed since I checked. Ask me again.');
-  const begun = must(await db.rpc('benny_job_begin', { p_center: centerId, p_worker: c.worker.cn, p_job: c.job.id, p_change: c.ask, p_stamp: c.stamp })) as JobCheck & { change_id?: string };
+  // into an office flat: what the code is worth is the season's own figure, read here and never taken from the chat
+  let flat: { season: string; value: number } | null = null;
+  if (c.ask.flat) {
+    const { season, flats } = await seasonFlats(centerId);
+    const isFlat = flats.some(f => f.code.toUpperCase() === c.ask.flat!.toUpperCase());
+    const value = isFlat ? codeValue(c.ask.flat, flats) : null;
+    if (value == null) throw new Error(`${c.ask.flat} isn’t an office flat this season${flats.length ? ` (the flats are ${flats.map(f => f.code).join(', ')})` : ''}, so nothing was saved.`);
+    flat = { season, value };
+  }
+  const begun = must(await db.rpc('benny_job_begin', { p_center: centerId, p_worker: c.worker.cn, p_job: c.job.id, p_change: flat ? { ...c.ask, flat_value: flat.value } : c.ask, p_stamp: c.stamp })) as JobCheck & { change_id?: string };
   if (!begun?.ok || !begun.change_id || !begun.patch) throw new Error(begun?.problems?.[0] || 'That job can’t be changed now. Ask me again.');
   let failed = false;
-  try { await sessionService.updateTransaction(c.job.id, jobUpdates(begun.patch)); } catch { failed = true; }
+  try { await sessionService.updateTransaction(c.job.id, (flat ? flatUpdates(c.ask.flat!, flat.value, flat.season) : jobUpdates(begun.patch)) as Parameters<typeof sessionService.updateTransaction>[1]); } catch { failed = true; }
   // read it back whatever happened, so the record says what the job reads now
   let state: string | undefined;
   try { state = ((await db.rpc('benny_job_done', { p_id: begun.change_id })).data as { state?: string } | null)?.state; } catch { /* no signal: not confirmed */ }
@@ -562,6 +614,7 @@ export async function jobFromBenny(p: Extract<BennyProposal, { kind: 'job' }>, c
   if (state === 'not_saved' || (failed && state !== 'done')) throw new Error(`The change didn’t save: ${first}’s job still reads ${dollars(c.job.amount)}, ${c.job.paid_by}. Try again, or change it on the edit screen.`);
   if (state === 'differs') throw new Error(`It saved, but it doesn’t read the way you asked. Check the job on ${screen}.`);
   if (state !== 'done') throw new Error(`I couldn’t read the job back to confirm it. Check it on ${screen} before trying again.`);
+  if (flat) return `${c.job.client ? `${c.job.client.split(' ')[0]}’s job` : 'The job'} on ${first}’s logsheet now reads Production, ${c.ask.flat} (${dollars(flat.value)} flat), prepaid. The totals are worked out again.`;
   return `${c.job.client ? `${c.job.client.split(' ')[0]}’s job` : 'The job'} on ${first}’s logsheet now reads ${dollars(begun.patch.price)}, ${begun.patch.payment_method}. The totals are worked out again.`;
 }
 

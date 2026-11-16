@@ -555,4 +555,42 @@ describe('the Benny’s tools', () => {
       expect(TOOLS.find(t => t.name === 'live_team')!.description).toContain('a paid-out cart\'s equiv is the payout\'s own');
     });
   });
+
+  // The log of Nov 15 and 16: four things Franklyn asked that the Benny handled badly without logging them.
+  describe('the log of Nov 15 and 16', () => {
+    const c = { center_id: 'c1', today: '2026-11-16' };
+    it('a line can be turned into an office flat: the code goes alone, never with an amount of the Benny’s', () => {
+      const call = toolCall('propose_job_change', { worker: 'Tim Chan', job: 't9', flat: 'afsl' }, c) as { fn: string; args: { p_change: Record<string, unknown> }; card: { kind: string } };
+      expect(call.fn).toBe('benny_check_job'); expect(call.card.kind).toBe('job');
+      expect(call.args.p_change).toEqual({ flat: 'AFSL' });
+      // not a code: not passed on as one (a sentence, a price, something far too long)
+      for (const bad of ['210', 'A F S L', 'prepaid afsl please', 'ABCDEFGH', '', 5]) expect((toolCall('propose_job_change', { worker: 'x', job: 't', flat: bad }, c) as unknown as { args: { p_change: object } }).args.p_change).toEqual({});
+      // nothing the model adds can set the value: flat_value is the app's alone
+      expect((toolCall('propose_job_change', { worker: 'x', job: 't', flat: 'AFSL', flat_value: 999 }, c) as unknown as { args: { p_change: object } }).args.p_change).toEqual({ flat: 'AFSL' });
+      expect(rules('rm')).toContain('pass flat with the code, and no amount or paid_by');
+      expect(rules('rm')).toContain('you never ask or give its value');
+      expect(TOOLS.find(t => t.name === 'propose_job_change')!.description).toContain('turn the line into an office flat');
+    });
+    it('a client’s name is looked up on the logsheets with the addresses, never among the workers', () => {
+      const call = toolCall('job_history', { addresses: ['21015 46 Ave'], clients: ['Chris Rand', ' '] }, c) as { fn: string; args: { p_addresses: string[] } };
+      expect(call.fn).toBe('benny_job_history');
+      expect(call.args.p_addresses).toEqual(['21015 46 Ave', 'Chris Rand']);
+      expect((toolCall('job_history', { clients: ['Chris Rand'] }, c) as unknown as { args: { p_addresses: string[] } }).args.p_addresses).toEqual(['Chris Rand']);
+      expect((toolCall('job_history', { addresses: Array.from({ length: 10 }, (_, i) => `${i + 1} A St`), clients: ['a b', 'c d', 'e f'] }, c) as unknown as { args: { p_addresses: string[] } }).args.p_addresses).toHaveLength(12);
+      expect(rules('rm')).toContain('a client is never looked up with find_people');
+      expect(TOOLS.find(t => t.name === 'job_history')!.input_schema).not.toHaveProperty('required');
+    });
+    it('who knocked a route, and when, comes from the route look-up', () => {
+      for (const who of ['admin', 'rm', 'office'] as const) expect(rules(who)).toContain('- Who knocked a route, and when');
+      expect(rules('admin')).toContain('and the workers with how many each'); expect(rules('rm')).not.toContain('and the workers with how many each');
+      expect(TOOLS.find(t => t.name === 'route')!.description).toContain('every day it was knocked');
+      expect(rules('ms')).not.toContain('Who knocked');
+    });
+    it('a booking done on a closed day is credited to the crew, and account work is a super admin’s', () => {
+      expect(rules('admin')).toContain('the booking is dated that day and credited to them');
+      expect(rules('office')).toContain('propose_booking with status done again');
+      expect(rules('rm')).not.toContain('credited to them');
+      for (const who of ['admin', 'rm', 'office'] as const) { expect(rules(who)).toContain('- Accounts: logging someone out'); expect(rules(who)).toContain('don\'t list staff accounts or usernames'); }
+    });
+  });
 });

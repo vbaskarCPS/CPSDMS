@@ -56,8 +56,9 @@ export function forServer(messages: BennyMsg[]) {
 export const CARDS: BennyProposal['kind'][] = ['start_day', 'give_route', 'partner', 'solo', 'booking', 'booking_emails', 'pin', 'stops', 'job', 'payouts', 'bonus', 'texts', 'remove', 'add_job', 'past_job', 'prebook_done', 'ms_assign', 'ms_zone', 'ms_cut', 'ms_cut_save'];
 
 /** What else this build can do with a card it already shows. 'crews' = a start-day card that says who goes with which
- *  manager (an older tab would start the day and ignore the crews, so the server holds that card back from it). */
-export const CAN = ['crews'];
+ *  manager (an older tab would start the day and ignore the crews, so the server holds that card back from it).
+ *  'job_flat' = a job card that turns a line into an office flat (an older tab would save it with no value). */
+export const CAN = ['crews', 'job_flat'];
 
 /** A super admin trying the models out: localStorage benny.model = 'fast' (the small model first) or 'main' (the main model only).
  *  The server ignores it from anyone else, and without it uses its own setting. */
@@ -88,6 +89,13 @@ export async function askBenny(messages: BennyMsg[], context: BennyContext): Pro
   if (answer.proposal?.kind === 'prebook_done' && context.center_id) {
     const check = answer.proposal.check;
     const value = await import('./bennyActions').then(m => m.seasonFlats(context.center_id!)).then(f => import('./bennyPrebook').then(m => m.codeValue(check.booking.job_code, f.flats))).catch(() => null);
+    return { ...answer, proposal: { ...answer.proposal, check: { ...check, value } } };
+  }
+  // the same for a job card that turns a line into an office flat
+  if (answer.proposal?.kind === 'job' && answer.proposal.check.ask?.flat && context.center_id) {
+    const check = answer.proposal.check; const code = check.ask.flat!;
+    const value = await import('./bennyActions').then(m => m.seasonFlats(context.center_id!))
+      .then(f => (f.flats.some(x => x.code.toUpperCase() === code.toUpperCase()) ? import('./bennyPrebook').then(m => m.codeValue(code, f.flats)) : null)).catch(() => null);
     return { ...answer, proposal: { ...answer.proposal, check: { ...check, value } } };
   }
   return answer;
