@@ -219,7 +219,9 @@ Deno.serve(async req => {
       let map = res.map; const proposal = res.proposal;
       // a tab opened before this kind of card existed can't draw it: say so, rather than send a card it would choke on
       // (the same for a start-day card that splits the crew between managers: an older tab would start the day without the crews)
-      const old = proposal && (!shows.has(proposal.kind) || (proposal.kind === 'start_day' && (proposal.check as { crews?: boolean })?.crews === true && !shows.has('crews')));
+      // and the same for a job card that turns a line into an office flat: an older tab would save it with no value
+      const old = proposal && (!shows.has(proposal.kind) || (proposal.kind === 'start_day' && (proposal.check as { crews?: boolean })?.crews === true && !shows.has('crews'))
+        || (proposal.kind === 'job' && !!(proposal.check as { ask?: { flat?: string } })?.ask?.flat && !shows.has('job_flat')));
       if (old) return json({ reply: 'I can do that, but this screen is on an older version of the app. Refresh the page, then ask me again.', map: null, proposal: null });
       // a plan's map shows the plan's routes, also when the Benny drew the maps and picked no routes out
       const plan = proposal?.kind === 'start_day' ? mapOf(proposal) as { maps: unknown; highlight: unknown[] } : null;

@@ -1,5 +1,5 @@
 import { describe as d, it, expect } from 'vitest';
-import { bookingSaved, buildBennyPlan, crewProblems, describe, dollars, emailsPreset, jobUpdates, payoutsStart, stopPin, type JobCheck, type PayoutsCheck, type StartDayCheck } from './bennyActions';
+import { bookingSaved, buildBennyPlan, crewProblems, describe, dollars, emailsPreset, flatUpdates, jobUpdates, payoutsStart, stopPin, type JobCheck, type PayoutsCheck, type StartDayCheck } from './bennyActions';
 import type { BonusCheck } from './bennyBonus';
 import { planProblems } from './startSession';
 import { defaultRateCard } from './rateCard';
@@ -228,6 +228,41 @@ d('describe', () => {
     expect(jobUpdates(job.patch)).toEqual({ price: 250, displayPrice: 'RJ250.00', paymentMethod: 'Prepaid', paymentBreakdown: { Prepaid: 250 }, items: [{ name: 'Lawn Rejuvenation', price: 250 }] });
     expect(Object.keys(jobUpdates({ ...job.patch, items: undefined, ...({ cc_full_number: 'x', customer_phone: 'y' } as object) }))).toEqual(['price', 'displayPrice', 'paymentMethod', 'paymentBreakdown']);
     expect(dollars(210)).toBe('$210.00');
+  });
+  // Franklyn, Nov 15: "Change Tim Chan's $0.00 to a prepaid AFSL". The card could only change the amount and how it was paid.
+  it('a job card can turn a line into an office flat: what it reads now, what it becomes, and what is saved', () => {
+    const flat: JobCheck = { ok: true, date: '2026-11-15', worker: { cn: 'B1003', name: 'Tim Chan' }, cart: { id: 's9', workers: ['Tim Chan'] },
+      job: { id: 't9', client: 'Andrew Laurie', address: '1040 Glacierview', route: 'SQU35', type: 'Sale', service: 'Lawn Rejuvenation', amount: 0, paid_by: 'Cash' },
+      change: { flat: { to: 'AFSL', from: { type: 'Sale', amount: 0, paid_by: 'Cash', shown_as: 'RJ0.00' } } }, ask: { flat: 'AFSL' },
+      patch: { type: 'Production', flat: 'AFSL', display_price: 'AFSL', payment_method: 'Prepaid' } as JobCheck['patch'], stamp: 's',
+      notes: ['It becomes a production job at the flat’s set value: it no longer counts as a sale.'], value: 210 };
+    expect(describe({ kind: 'job', check: flat })).toEqual({ title: 'Make a job on Tim’s logsheet an office flat', action: 'Save', lines: [
+      'Andrew Laurie · 1040 Glacierview', 'Now: Sale · $0.00 · cash', 'Becomes: Production · AFSL ($210.00 flat) · prepaid',
+      'It becomes a production job at the flat’s set value: it no longer counts as a sale.',
+      'Tim’s equiv and totals are worked out again. The change is recorded under your name.'] });
+    // the value isn't known to the card (the season's flats couldn't be read): it shows the code alone, never a guess
+    expect(describe({ kind: 'job', check: { ...flat, value: null } }).lines[2]).toBe('Becomes: Production · AFSL · prepaid');
+    // the save: a Production job with the flat's code at its set value, prepaid, with the season's own item. Nothing else rides along
+    expect(flatUpdates('AFSL', 210, 'lawn_rejuv')).toEqual({ type: 'Production', price: 210, displayPrice: 'AFSL', paymentMethod: 'Prepaid', paymentBreakdown: { Prepaid: 210 }, items: [{ name: 'Lawn Rejuvenation', price: 210 }] });
+    expect(flatUpdates('SP', 95, 'aeration').items).toEqual([{ name: 'Aeration', price: 95 }]);
+  });
+  // Franklyn, Nov 16: "Credit Michael and Andy" for a booking done on Nov 7. Marking it done always read "by the office", dated today.
+  it('a booking done on a closed day is dated that day and credited to the cart that did it', () => {
+    const booking = { id: 'b2', address: '46542 MacGregor Pl', city: 'Chilliwack', list: 'Fall Rejuv 2026', job: 'AFSL', status: 'open' as const, route: 'PRO10', people: ['Pat Lee'] };
+    const credit = { day: '2026-11-07', workers: 'Michael Asiegbunam + Andile Gobodo', shown_as: 'AFSL' };
+    const base = { ok: true, booking, ask: { status: 'done' }, stamp: 't' };
+    const done = describe({ kind: 'booking', check: { ...base, patch: { status: 'done', credit: true }, change: { status: { from: 'open', to: 'done' }, credit },
+      notes: ['It’s on the Nov 7 logsheet of Michael Asiegbunam + Andile Gobodo: the booking is dated that day and credited to them.'] } });
+    expect(done.title).toBe('Mark 46542 MacGregor Pl done');
+    expect(done.lines).toEqual(['Chilliwack · Fall Rejuv 2026 · AFSL · Pat Lee', 'Status: open → done', 'Done Nov 7 by Michael Asiegbunam + Andile Gobodo (AFSL on their logsheet)',
+      'It’s on the Nov 7 logsheet of Michael Asiegbunam + Andile Gobodo: the booking is dated that day and credited to them.']);
+    // already marked done by hand: only the credit changes, and the card says how it reads now
+    const again = describe({ kind: 'booking', check: { ...base, booking: { ...booking, status: 'done' as const }, patch: { credit: true },
+      change: { credit: { ...credit, was_on: '2026-11-16', was_by: 'Marked done by the office' } } } });
+    expect(again.title).toBe('Credit 46542 MacGregor Pl to the crew that did it');
+    expect(again.lines[1]).toBe('Done Nov 7 by Michael Asiegbunam + Andile Gobodo (AFSL on their logsheet). Now it reads: Marked done by the office, Nov 16');
+    expect(bookingSaved({ status: { from: 'open', to: 'done' }, credit })).toBe('marked done, dated Nov 7 and credited to Michael Asiegbunam + Andile Gobodo');
+    expect(bookingSaved({ credit })).toBe('dated Nov 7 and credited to Michael Asiegbunam + Andile Gobodo');
   });
   it('the payouts card lists who is lined up and who is left, and says nobody is paid out from it', () => {
     const pay: PayoutsCheck = { ok: true, date: '2026-11-10', paid_out: 4,
