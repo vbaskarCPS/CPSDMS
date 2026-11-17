@@ -142,6 +142,17 @@ describe('Arvy changes', () => {
     expect(store.get('event|2026-11-13~e1')).toBeNull();
   });
 
+  it('finds an event named in other words: a shared word, or the day’s only event; else lists the day', async () => {
+    store.set('event|2026-12-04~p1', { id: 'p1', title: 'Christmas mini photo session – Parkhill Studio, Cambridge', date: '2026-12-04', who: 'rosh', repeat: 'none', createdAt: '2026-11-11' });
+    store.set('event|2026-12-04~p2', { id: 'p2', title: 'Chiro Dr Dan', date: '2026-12-04', time: '09:00', who: 'vijay', repeat: 'none', createdAt: '2026-11-11' });
+    const c = (await prepare('change_event', { date: '2026-12-04', title: 'Photo shoot (Cambridge)', who: 'both' }))!;
+    expect(c.lines.join(' ')).toMatch(/Christmas mini photo session/);
+    await expect(prepare('change_event', { date: '2026-12-04', title: 'Swimming lesson', who: 'both' })).rejects.toThrow(/That day has: .*Chiro Dr Dan/);
+    store.set('event|2026-12-05~p3', { id: 'p3', title: 'Parkhill Studio', date: '2026-12-05', who: 'rosh', repeat: 'none', createdAt: '2026-11-11' });
+    const only = (await prepare('change_event', { date: '2026-12-05', title: 'photo shoot', who: 'both' }))!;
+    expect(only.lines.join(' ')).toMatch(/Parkhill Studio/);
+  });
+
   it('moves a time and keeps the length; won’t move a repeating event to another day', async () => {
     const c = (await prepare('change_event', { date: '2026-11-13', new_time: '09:30' }))!;
     expect(c.lines[1]).toMatch(/9:30 AM–10:30 AM/);
