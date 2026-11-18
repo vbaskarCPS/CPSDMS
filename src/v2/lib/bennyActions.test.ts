@@ -307,6 +307,8 @@ d('describe', () => {
     const samples: Record<string, Parameters<typeof describe>[0]> = {
       start_day: { kind: 'start_day', check: check() }, give_route: { kind: 'give_route', check: { ok: true, date: '2026-11-10', route: 'X1', worker: { cn: 'I1', name: 'A B' } } },
       partner: { kind: 'partner', check: move }, solo: { kind: 'solo', check: move },
+      add_routes: { kind: 'add_routes', check: { ok: true, date: '2026-11-18', stamp: 't', manager: { id: 'rm_jovanchung', name: 'Jovan Chung' }, maps: [{ map: 'SOUTHWEST SURREY #2', total: 23, new: 23 }],
+        new: [{ code: 'SWS34', area: 'SOUTHWEST SURREY #2', number: 34 }, { code: 'SWS35', area: 'SOUTHWEST SURREY #2', number: 35 }], mine: [], other: [], open_prebooks: 0 } },
       booking: { kind: 'booking', check: { ok: true, booking, change: { status: { from: 'open', to: 'done' } }, patch: { status: 'done' }, ask: { status: 'done' }, stamp: 't' } },
       booking_emails: { kind: 'booking_emails', check: emails },
       pin: { kind: 'pin', check: pin }, stops: { kind: 'stops', check: order },
