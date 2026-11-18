@@ -3,6 +3,7 @@
 //   start_day  → Workerbook › Start session (startSession). With a crew per manager when the plan has them ("give
 //                Franklyn the worst half"): each worker's cart goes to the manager whose crew they are in.
 //   give_route → RM map › Assign route (whole route, with its prebooks; moves the route to the cart's manager)
+//   add_routes → Workerbook › the day › Session details › Add routes to the live session (add only, to one manager)
 //   partner    → RM map › Move worker › to another cart
 //   solo       → RM map › Move worker › own cart
 //   booking    → Bookings › List › save (status, notes, route of one Master Booking)
@@ -42,6 +43,7 @@ import { STOP_WORD } from './bennyDrive';
 import { textOf, textsTitle, type TextPerson, type TextsCheck, type TextsState } from './bennyTexts';
 import { removeCard, removedSaid, type RemoveCheck, type RemoveDone } from './bennyRemove';
 import { addJobCard, addJobLines, addedSaid, type AddJobCheck } from './bennyAddJob';
+import { addRoutesCard, addedRoutesSaid, type AddRoutesCheck } from './bennyAddRoutes';
 import { codeValue, liveBookingId, prebookCard, prebookFix, prebookLine, prebookSaid, seasonItem, type PrebookCheck } from './bennyPrebook';
 import { lastSettings } from './bennyWalk';
 import { queueHref } from './payoutQueue';
@@ -176,6 +178,7 @@ export type BennyProposal =
   | { kind: 'booking_emails'; check: EmailsCheck }
   | { kind: 'start_day'; check: StartDayCheck; team_mode?: TeamMode; /** product cost and tax chosen in the walk-through */ money?: { productCostPercent: number; noTaxOnCash: boolean; line: string } }
   | { kind: 'give_route'; check: GiveCheck }
+  | { kind: 'add_routes'; check: AddRoutesCheck }
   | { kind: 'partner'; check: MoveCheck }
   | { kind: 'solo'; check: MoveCheck }
   | { kind: 'booking'; check: BookingCheck };
@@ -228,6 +231,7 @@ export function describe(p: BennyProposal): { title: string; lines: string[]; ac
         action: 'Start the day',
       };
     }
+    case 'add_routes': return addRoutesCard(p.check);
     case 'give_route': {
       const c = p.check;
       const who = (c.cart || []).map(w => w.name).join(' + ') || c.worker.name;
@@ -491,6 +495,17 @@ async function legacy(centerId: string) {
   const [{ sessionService }, { seasonHasTeams }] = await Promise.all([import('../../lib/sessionService'), import('../../lib/commandCenterService')]);
   const date = await sessionService.getDailySessionDate();
   return { sessionService, date, seasonHasTeams };
+}
+
+/** Session details › Add routes to the live session: the routes still free, to that manager, add only. */
+export async function addRoutesFromBenny(p: Extract<BennyProposal, { kind: 'add_routes' }>, centerId: string): Promise<string> {
+  const codes = p.check.new.map(r => r.code);
+  const c = await recheck<AddRoutesCheck>('benny_check_add_routes', { p_center: centerId, p_manager: p.check.manager.me ? 'me' : p.check.manager.name, p_maps: null, p_routes: codes });
+  if (c.date !== p.check.date || c.manager.id !== p.check.manager.id) throw new Error('The live day changed since I checked. Ask me again.');
+  if (!same(c.new.map(r => r.code), codes)) throw new Error('Some of those routes were taken since I checked. Ask me again.');
+  const { addLiveRoutes } = await import('./liveRoutes');
+  const n = await addLiveRoutes(centerId, c.manager.id, c.new.map(r => ({ code: r.code, area: r.area, number: r.number, managerId: c.manager.id })));
+  return addedRoutesSaid(c, n);
 }
 
 /** RM map › Assign route, whole route (the same steps as RMMapTab's handleAssign). */
@@ -818,6 +833,7 @@ export function textOpened(centerId: string, check: Pick<TextsCheck, 'date' | 't
 export async function doProposal(p: BennyProposal, center: CenterLite, onStep?: (note: string) => void): Promise<string | MsNext> {
   if (p.kind === 'start_day') return startDayFromBenny(p, center);
   if (p.kind === 'give_route') return giveRouteFromBenny(p, center.id);
+  if (p.kind === 'add_routes') return addRoutesFromBenny(p, center.id);
   if (p.kind === 'booking') return bookingFromBenny(p, center.id);
   if (p.kind === 'job') return jobFromBenny(p, center.id);
   if (p.kind === 'bonus') return bonusesFromBenny(p, center);

@@ -3,7 +3,7 @@
 //   POST { messages: [{ role, content }], images?: [{ media_type, data }] (up to 3 pictures sent with the last message), context: { center_id, center_name, today, path, screen, rm_manager, following, user_name, spoken, diag } }
 //     → { reply, map?, proposal?, logged? }
 //   map      = { maps, highlight, pins, title } for the chat's map card
-//   proposal = a change for the person to confirm on a card: start_day | give_route | partner | solo | booking | booking_emails | pin | stops | job | add_job | prebook_done | past_job | payouts | bonus | texts | remove | ms_assign | ms_zone | ms_cut.
+//   proposal = a change for the person to confirm on a card: start_day | give_route | add_routes | partner | solo | booking | booking_emails | pin | stops | job | add_job | prebook_done | past_job | payouts | bonus | texts | remove | ms_assign | ms_zone | ms_cut.
 //              The Benny never makes the change itself: the app does, with the same code as its screens, after the person taps
 //              Confirm. booking_emails changes nothing at all: its card opens the Send booking emails screen, where the person sends.
 //              payouts changes nothing either: its card opens the payout screen, where the person finalizes each payout.
@@ -198,6 +198,10 @@ Deno.serve(async req => {
       if (p.kind === 'start_day') {
         const assign = (p.check.assign || []) as { routes?: { code: string }[] }[];
         return { maps: p.check.maps || [], highlight: assign.flatMap(a => (a.routes || []).map(r => r.code)), pins: [], title: 'The plan’s routes' };
+      }
+      if (p.kind === 'add_routes' && Array.isArray(p.check.maps) && p.check.maps.length) {
+        const added = (p.check.new || []) as { code: string }[];
+        return { maps: (p.check.maps as { map: string }[]).map(m => m.map), highlight: added.map(r => r.code), pins: [], title: 'Routes to add' };
       }
       if (p.kind === 'give_route' && p.check.map) return { maps: [p.check.map], highlight: [p.check.route], pins: [], title: String(p.check.route) };
       // a booking moving to another route: the route, with the house on it

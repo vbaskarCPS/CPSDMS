@@ -121,6 +121,8 @@ export const TOOLS: Tool[] = [
       team_mode: { type: 'string', enum: ['roster', 'solo', 'pairs'] } }, required: ['date', 'assign'] } },
   { name: 'propose_give_route', for: ['rm', 'workerbook'], description: "Prepare giving a route on today's live map to a worker's cart (everyone on their cart gets it, with its prebooks), for the person to confirm on a card.",
     input_schema: { type: 'object', properties: { route: { type: 'string', description: 'route code' }, worker: { type: 'string', description: 'name or CN' } }, required: ['route', 'worker'] } },
+  { name: 'propose_add_routes', for: ['workerbook'], description: "Prepare adding whole maps and/or routes to a manager's map on today's live day (add only: routes another manager already has are left off, never moved), for the person to confirm on a card.",
+    input_schema: { type: 'object', properties: { manager: { type: 'string', description: '"me" (default) or a manager\'s name' }, maps: strs('whole maps, e.g. ["SOUTHWEST SURREY #2"]'), routes: strs('route codes') } } },
   { name: 'propose_partner', for: ['rm', 'workerbook'], description: 'Prepare partnering two workers on today\'s live map: "partner A with B" = B joins A\'s cart (A keeps their routes). For the person to confirm on a card.',
     input_schema: { type: 'object', properties: { a: { type: 'string', description: 'the worker whose cart it is' }, b: { type: 'string', description: 'the worker who joins' } }, required: ['a', 'b'] } },
   { name: 'propose_solo', for: ['rm', 'workerbook'], description: 'Prepare moving a worker off their cart onto a cart of their own, for the person to confirm on a card.',
@@ -371,13 +373,13 @@ export function rules(w0: Role | Who): string {
   // what their permissions give: wb = Workerbook, bk = Master Bookings, live = the live day (a route manager's team, or with Workerbook the whole center)
   const wb = has(w, 'workerbook'), bk = has(w, 'bookings'), live = has(w, 'rm', 'workerbook');
   const list = (xs: (string | false)[]) => { const a = xs.filter((x): x is string => !!x); return a.length > 1 ? `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}` : a[0] || ''; };
-  const can = list([wb && 'starting the day', live && 'giving a route to a cart', live && 'partnering workers', live && 'solo carts', live && 'taking a worker off today\'s live day',
+  const can = list([wb && 'starting the day', wb && 'adding maps or routes to a manager on the live day', live && 'giving a route to a cart', live && 'partnering workers', live && 'solo carts', live && 'taking a worker off today\'s live day',
     live && 'adding a job to a logsheet', live && 'putting a prebook on a logsheet as done', live && 'changing a job on a logsheet (amount, how it was paid)',
     bk && 'changing a booking (status, notes, route)', bk && 'setting up the booking emails to customers', wb && 'changing or adding a job on a closed day\'s payout',
     wb && 'lining up payouts to finalize', wb && 'adding bonuses to paid-out carts', wb && 'setting up texts to workers']);
   const changes = can ? `${can} with the propose_ tools${live ? ', and on the route manager map dropping a pin and planning a drop, pickup or check order' : ''}.` : 'nothing yet: you can look things up and show them on the map.';
   // what they can't do, and which permission would give it (nothing for a super admin)
-  const missing = [!wb && 'The day\'s roster and starting a day, payouts, the bonus ranking and bonuses, a closed day\'s jobs, the crew\'s week and texts to workers need the Workerbook permission.',
+  const missing = [!wb && 'The day\'s roster and starting a day, adding maps or routes to the live day, payouts, the bonus ranking and bonuses, a closed day\'s jobs, the crew\'s week and texts to workers need the Workerbook permission.',
     !bk && 'Looking one booking up, changing a booking and the booking emails need the Master Bookings permission.',
     !live && 'The live map, logsheets, pace and pins need the Route Manager or the Workerbook permission.'].filter(Boolean).join(' ');
   const who = has(w, 'super') ? 'a super admin' : wb || bk || !live ? 'an admin' : 'a route manager';
@@ -393,6 +395,8 @@ Rules:
     `- One change per answer. If they ask for several, prepare the first and say you'll do the next after.`,
     `- Names: if a tool says "Which one", ask which, listing the names. "Michael A" = Michael with a last name starting A.`,
     wb && `- Starting the day: work out each manager's maps and routes first (whole maps by name; map_side for "the side of 2 connected to 1"; bookings.by_route for "only the routes with prebooks in Surrey"), show them with show_map (routes = every route in the plan), then propose_start_day. If they don't say the date, it is today. If they don't say who, the manager is "me".`,
+    wb && `- Adding to the live day ("add Southwest Surrey 2 for me", "put SWS40 on Jovan's map"): propose_add_routes, the manager is "me" unless they name one. Say the map name and how many routes are new before "Tap Add the routes to do it.", and that mid-day they can't be taken off again. When a route isn't on today's map (giving a route says so), offer to add it first with propose_add_routes, then give it after.`,
+    live && `- A map or route that isn't on today's map can be added in Workerbook › today › Session details › Add routes to the live session (it needs the Workerbook permission). Name that screen; never just "the day page".`,
     live && `- "Find a route connected to X's and give it to X": live_team to get X's routes, connected_routes (touching) from those, pick the nearest free one (no workers today), prefer one with prebooks, then propose_give_route. Show it with show_map.`,
     wb && `- Crews ("give Franklyn the worst half and me the good guys", "split the crew evenly", "draft the teams", "who are my best workers"): call crew_stats for that day first. Rank by average equiv per day worked unless they say steps or gross. "The worst half" = halves.worse, "the good guys" = halves.better (with an odd number the middle worker is in the better half). An even split, balanced teams or a draft = draft.two for two managers, draft.three for three: managers take turns down the ranking in snake order (1st to A, 2nd and 3rd to B, 4th and 5th to A, and so on). Pass those lists' CNs on exactly as given; don't count the split out yourself, and take the names you say from the same lists. Only for another kind of split ("my top five", four managers) work it out from the rank numbers. Workers with no days yet can't be ranked: name them and ask who they go with before making the card (unless they already said, e.g. "new guys with me"). No-shows are in nobody's crew. Only the managers in crew_stats.managers can take a crew: if they said "me" and you.can_manage is false, or named someone who isn't listed, say that first, with why (you.why_not) and who is available, before asking anything else. Then propose_start_day with each manager's workers as CNs, plus their maps and routes. After ok, give each crew in one short line (how many, its average, the names) and any note about a roster cart being split, then "Tap Start the day to do it." Don't work out who is paired with whom or how many carts there are: the card says. Just asking who is best or worst is an answer from crew_stats, not a card.`,
     wb && `- "The prebook-heavy maps in North Van" (or any city): bookings with where = the city, and take the maps with the most open prebooks; say which maps you took and how many prebooks each has. If none of its maps has an open prebook, say so and ask which maps they want instead.`,
@@ -538,7 +542,7 @@ export function fastAnswerStop(reply: string, lookups: string[], context: string
   return tokens.length ? { why: 'ungrounded', tokens: tokens.slice(0, 8) } : null;
 }
 
-export type ProposalKind = 'start_day' | 'give_route' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus' | 'texts' | 'remove' | 'add_job' | 'past_job' | 'prebook_done' | 'ms_assign' | 'ms_zone' | 'ms_cut';
+export type ProposalKind = 'start_day' | 'give_route' | 'add_routes' | 'partner' | 'solo' | 'booking' | 'booking_emails' | 'pin' | 'stops' | 'job' | 'payouts' | 'bonus' | 'texts' | 'remove' | 'add_job' | 'past_job' | 'prebook_done' | 'ms_assign' | 'ms_zone' | 'ms_cut';
 
 /**
  * What the Benny itself is shown of a checked change. A texts card carries each worker's cell number for its links;
@@ -634,6 +638,11 @@ export function toolCall(name: string, input: Record<string, unknown>, ctx: Ctx)
     case 'propose_start_day': return { fn: 'benny_plan_day', args: { p_center: c, p_date: String(input.date || ctx.today), p_assign: input.assign ?? [], p_pair: !!input.pair_managers },
       card: { kind: 'start_day', team_mode: ['roster', 'solo', 'pairs'].includes(String(input.team_mode)) ? String(input.team_mode) : 'roster' } };
     case 'propose_give_route': return { fn: 'benny_check_give', args: { p_center: c, p_route: String(input.route || ''), p_worker: String(input.worker || '') }, card: { kind: 'give_route' } };
+    case 'propose_add_routes': {
+      const said = (v: unknown) => (Array.isArray(v) ? v : []).filter((a): a is string => typeof a === 'string' && !!a.trim()).map(a => a.trim().slice(0, 60)).slice(0, 12);
+      return { fn: 'benny_check_add_routes', args: { p_center: c, p_manager: typeof input.manager === 'string' && input.manager.trim() ? input.manager.trim() : 'me',
+        p_maps: said(input.maps), p_routes: said(input.routes) }, card: { kind: 'add_routes' } };
+    }
     case 'propose_partner': return { fn: 'benny_check_move', args: { p_center: c, p_a: String(input.a || ''), p_b: String(input.b || '') }, card: { kind: 'partner' } };
     case 'propose_solo': return { fn: 'benny_check_move', args: { p_center: c, p_a: String(input.worker || ''), p_b: null }, card: { kind: 'solo' } };
     case 'propose_remove': return { fn: 'benny_check_remove', args: { p_center: c,
