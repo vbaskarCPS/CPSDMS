@@ -7,7 +7,13 @@ const center = (over: Partial<CenterReport> = {}): CenterReport => ({
   booked: 15, showed: 12, no_shows: 1,
   gross: 4783, new_sales: 3733, prepaid_work: 1050, jobs: 22, addons: 0,
   payments: { Cash: 2100, 'Credit Card': 900, Prepaid: 1050, 'E-Transfer': 733 },
-  workers: 10, payout: 1348.16,
+  workers: 10, payout: 1348.16, bonuses: 100,
+  top: [
+    { name: 'Alex Moore', gross: 800, jobs: 4, payout: 228.16, bonus: 50 },
+    { name: 'Jo Park', gross: 761.25, jobs: 3.5, payout: 271, bonus: 25 },
+    { name: 'Kim Tran', gross: 761.25, jobs: 3.5, payout: 258.2, bonus: 25 },
+  ],
+  bonus_list: [{ name: 'Alex Moore', amount: 50 }, { name: 'Jo Park', amount: 25 }, { name: 'Kim Tran', amount: 25 }],
   managers: [{ name: 'Pat Lee & Sam Roy', workers: 10, gross: 4783, payout: 1348.16 }],
   month: { days: 14, gross: 50210.25, jobs: 230 },
   ...over,
@@ -41,6 +47,7 @@ describe('totals', () => {
     expect(t.gross).toBe(5783);
     expect(t.jobs).toBe(27);
     expect(t.workers).toBe(14);
+    expect(t.bonuses).toBe(200);
     expect(t.payments.map(([m]) => m)).toEqual(['Cash', 'Cheque', 'Credit Card', 'E-Transfer', 'Prepaid']);
     expect(t.payments[0]).toEqual(['Cash', 2700]);
     expect(t.collected).toBe(2700 + 400 + 900 + 733);   // everything but prepaid
@@ -72,6 +79,26 @@ describe('renderNightly', () => {
     expect(text).toContain('Sales $4,783 · 22 jobs · 10 workers ($478.30 each) · paid out $1,348.16');
     expect(text).toContain('  Prepaid: $1,050');
   });
+  it('lists the top 3 and the bonuses paid', () => {
+    const { html, text } = renderNightly(data([center()]));
+    expect(html).toContain('Top 3');
+    expect(html).toContain('Alex Moore');
+    expect(html).toContain('+$50 bonus');
+    expect(html).toContain('>3.5<');                    // shared team-cart jobs keep the half
+    expect(html).toContain('Bonuses: $100');
+    expect(html).toContain('Alex Moore $50, Jo Park $25, Kim Tran $25');
+    expect(html).toContain('$100 in bonuses');
+    expect(text).toContain('  1. Alex Moore: $800, 4 jobs, paid $228.16 (+$50 bonus)');
+    expect(text).toContain('  2. Jo Park: $761.25, 3.5 jobs, paid $271 (+$25 bonus)');
+    expect(text).toContain('  Bonuses: $100 · Alex Moore $50, Jo Park $25, Kim Tran $25');
+    expect(text).toContain('paid out $1,348.16 incl. $100 bonuses');
+  });
+  it('says no bonuses when there were none', () => {
+    const { html, text } = renderNightly(data([center({ bonuses: 0, bonus_list: [], top: [] })]));
+    expect(html).toContain('Bonuses: $0');
+    expect(html).not.toContain('Top ');
+    expect(text).toContain('  Bonuses: $0');
+  });
   it('escapes names', () => {
     const { html } = renderNightly(data([center({ name: '<b>X</b>' })]));
     expect(html).not.toContain('<b>X</b>');
@@ -84,7 +111,7 @@ describe('renderNightly', () => {
     expect(text).toContain('BC Fall RJ: Still open');
   });
   it('handles a day with nothing saved yet', () => {
-    const { html, text } = renderNightly(data([center({ gross: 0, new_sales: 0, prepaid_work: 0, jobs: 0, workers: 0, payout: 0, payments: {}, managers: [], month: null })]));
+    const { html, text } = renderNightly(data([center({ gross: 0, new_sales: 0, prepaid_work: 0, jobs: 0, workers: 0, payout: 0, bonuses: 0, top: [], bonus_list: [], payments: {}, managers: [], month: null })]));
     expect(html).toContain('$0');
     expect(html).not.toContain('NaN');
     expect(text).not.toContain('NaN');
