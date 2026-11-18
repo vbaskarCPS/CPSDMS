@@ -252,7 +252,7 @@ export interface RouteHouse {
   lat: number;
   lng: number;
   footprint: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
-  source: 'nar' | 'osm' | 'manual' | 'mapbox';
+  source: 'nar' | 'osm' | 'manual' | 'mapbox' | 'pcl';   // 'pcl': added for a past client whose address had no house (route_houses_from_pcl)
   /** 'mapbox' once the house has a Mapbox rooftop position; null = register/OSM point. */
   geoSource: string | null;
   /** When Mapbox was asked about this house (matched or not) — never asked twice. */
