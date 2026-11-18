@@ -2,12 +2,16 @@
 // report_nightly_data(). No Deno or network here, so the app's tests run it too (src/v2/lib/nightlyReport.test.ts).
 
 export interface ManagerRow { name: string; workers: number; gross: number; payout: number }
+export interface TopRow { name: string; gross: number; jobs: number; payout: number; bonus: number }
+export interface BonusRow { name: string; amount: number }
 export interface CenterReport {
   id: string; name: string; region: string | null; state: 'live' | 'closed'; closed_at: string | null;
   booked: number; showed: number; no_shows: number;
   gross: number; new_sales: number; prepaid_work: number; jobs: number; addons: number;
   payments: Record<string, number>;
-  workers: number; payout: number;
+  workers: number; payout: number; bonuses: number;
+  top: TopRow[];             // the location's top 3 workers by their sales on the payout
+  bonus_list: BonusRow[];    // who got a bonus, and how much
   managers: ManagerRow[];
   month: { days: number; gross: number; jobs: number } | null;
 }
@@ -28,6 +32,9 @@ export function money(v: unknown): string {
   return (x < 0 ? '-$' : '$') + Math.abs(x).toLocaleString('en-CA', { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 });
 }
 const count = (v: unknown) => Math.round(n(v)).toLocaleString('en-CA');
+/** Jobs can be shared on a team cart: 3.5 stays 3.5. */
+const jobsOf = (v: unknown) => { const x = Math.round(n(v) * 10) / 10; return Number.isInteger(x) ? x.toLocaleString('en-CA') : x.toFixed(1); };
+const bonusLine = (c: CenterReport) => (c.bonus_list || []).map(b => `${b.name} ${money(b.amount)}`).join(', ');
 
 /** "Tuesday, November 17" for a plain YYYY-MM-DD day (no time zone shift). */
 export function dayLabel(day: string, weekday: 'long' | 'short' = 'long'): string {
@@ -44,11 +51,11 @@ export function closedLabel(iso: string | null, tz = TZ): string {
 }
 const perWorker = (gross: number, workers: number) => (workers > 0 ? gross / workers : 0);
 
-export interface Totals { gross: number; new_sales: number; prepaid_work: number; jobs: number; addons: number; workers: number; payout: number;
+export interface Totals { gross: number; new_sales: number; prepaid_work: number; jobs: number; addons: number; workers: number; payout: number; bonuses: number;
   booked: number; showed: number; no_shows: number; collected: number; payments: [string, number][] }
 
 export function totals(centers: CenterReport[]): Totals {
-  const t = { gross: 0, new_sales: 0, prepaid_work: 0, jobs: 0, addons: 0, workers: 0, payout: 0, booked: 0, showed: 0, no_shows: 0 };
+  const t = { gross: 0, new_sales: 0, prepaid_work: 0, jobs: 0, addons: 0, workers: 0, payout: 0, bonuses: 0, booked: 0, showed: 0, no_shows: 0 };
   const pay = new Map<string, number>();
   for (const c of centers) {
     for (const k of Object.keys(t) as (keyof typeof t)[]) t[k] += n(c[k]);
@@ -75,9 +82,9 @@ const th = (s: string, right = false) => `<th style="${H}padding:7px 8px;border-
 const td = (s: string, right = false, bold = false) => `<td style="${H}padding:7px 8px;border-bottom:1px solid #f1f5f9;font-size:14px;color:#111827;text-align:${right ? 'right' : 'left'};${bold ? 'font-weight:700;' : ''}white-space:nowrap;">${s}</td>`;
 const table = (head: string, rows: string[]) => `<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin:6px 0 4px;"><tr>${head}</tr>${rows.join('')}</table>`;
 const h2 = (s: string) => `<h2 style="${H}font-size:15px;margin:22px 0 4px;color:#111827;">${esc(s)}</h2>`;
-const tile = (label: string, value: string, sub = '') => `<td style="${H}padding:10px 12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;vertical-align:top;width:25%;">
+const tile = (label: string, value: string, ...subs: string[]) => `<td style="${H}padding:10px 12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;vertical-align:top;width:25%;">
   <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;font-weight:700;">${esc(label)}</div>
-  <div style="font-size:20px;color:#111827;font-weight:700;margin-top:2px;">${esc(value)}</div>${sub ? `<div style="font-size:12px;color:#6b7280;margin-top:2px;">${esc(sub)}</div>` : ''}</td>`;
+  <div style="font-size:20px;color:#111827;font-weight:700;margin-top:2px;">${esc(value)}</div>${subs.filter(Boolean).map(x => `<div style="font-size:12px;color:#6b7280;margin-top:2px;">${esc(x)}</div>`).join('')}</td>`;
 const tiles = (cells: string[]) => `<table role="presentation" cellpadding="0" cellspacing="6" style="width:100%;border-collapse:separate;margin:4px -6px;"><tr>${cells.join('')}</tr></table>`;
 
 function centerStatus(c: CenterReport, tz: string): string {
@@ -96,10 +103,10 @@ export function renderNightly(data: NightlyData, opts: RenderOptions = {}): { su
     : cs.length > 1 ? `All ${cs.length} locations closed · the last at ${closedLabel(lastClose, tz)} ET` : `Closed ${closedLabel(lastClose, tz)} ET`;
 
   const byLocation = table(
-    th('Location') + th('Sales', true) + th('Jobs', true) + th('Workers', true) + th('Per worker', true) + th('Paid out', true),
+    th('Location') + th('Sales', true) + th('Jobs', true) + th('Workers', true) + th('Per worker', true) + th('Paid out', true) + th('Bonuses', true),
     [
-      ...cs.map(c => `<tr>${td(esc(c.name) + (c.state === 'live' ? ' <span style="color:#b45309;font-size:12px;">(open)</span>' : ''))}${td(money(c.gross), true)}${td(count(c.jobs), true)}${td(count(c.workers), true)}${td(money(perWorker(n(c.gross), n(c.workers))), true)}${td(money(c.payout), true)}</tr>`),
-      ...(cs.length > 1 ? [`<tr>${td('Total', false, true)}${td(money(t.gross), true, true)}${td(count(t.jobs), true, true)}${td(count(t.workers), true, true)}${td(money(perWorker(t.gross, t.workers)), true, true)}${td(money(t.payout), true, true)}</tr>`] : []),
+      ...cs.map(c => `<tr>${td(esc(c.name) + (c.state === 'live' ? ' <span style="color:#b45309;font-size:12px;">(open)</span>' : ''))}${td(money(c.gross), true)}${td(count(c.jobs), true)}${td(count(c.workers), true)}${td(money(perWorker(n(c.gross), n(c.workers))), true)}${td(money(c.payout), true)}${td(money(c.bonuses), true)}</tr>`),
+      ...(cs.length > 1 ? [`<tr>${td('Total', false, true)}${td(money(t.gross), true, true)}${td(count(t.jobs), true, true)}${td(count(t.workers), true, true)}${td(money(perWorker(t.gross, t.workers)), true, true)}${td(money(t.payout), true, true)}${td(money(t.bonuses), true, true)}</tr>`] : []),
     ]);
 
   const paid = t.payments.length ? table(th('How it was paid') + th('Amount', true),
@@ -114,9 +121,12 @@ export function renderNightly(data: NightlyData, opts: RenderOptions = {}): { su
       ...(n(c.addons) ? [`${count(c.addons)} add-on${n(c.addons) === 1 ? '' : 's'}`] : []),
       ...(c.month ? [`Month so far: ${money(c.month.gross)} over ${count(c.month.days)} day${n(c.month.days) === 1 ? '' : 's'}, ${count(c.month.jobs)} jobs`] : []),
     ];
+    const top = c.top?.length ? `<div style="${H}font-size:13px;font-weight:700;color:#111827;margin-top:10px;">Top ${c.top.length}</div>` + table(th('#') + th('Worker') + th('Sales', true) + th('Jobs', true) + th('Paid', true),
+      c.top.map((w, i) => `<tr>${td(String(i + 1))}${td(esc(w.name) + (n(w.bonus) ? ` <span style="color:#0f766e;font-size:12px;">+${esc(money(w.bonus))} bonus</span>` : ''))}${td(money(w.gross), true)}${td(jobsOf(w.jobs), true)}${td(money(w.payout), true)}</tr>`)) : '';
+    const bonus = `<div style="${H}font-size:13px;color:#374151;margin-top:10px;"><b>Bonuses: ${esc(money(c.bonuses))}</b>${c.bonus_list?.length ? ` · ${esc(bonusLine(c))}` : ''}</div>`;
     const mgr = c.managers?.length ? table(th('Manager') + th('Workers', true) + th('Sales', true) + th('Per worker', true),
       c.managers.map(m => `<tr>${td(esc(m.name))}${td(count(m.workers), true)}${td(money(m.gross), true)}${td(money(perWorker(n(m.gross), n(m.workers))), true)}</tr>`)) : '';
-    return `${h2(c.name)}<div style="${H}font-size:13px;color:#374151;line-height:1.6;">${facts.map(esc).join('<br>')}</div>${mgr}`;
+    return `${h2(c.name)}<div style="${H}font-size:13px;color:#374151;line-height:1.6;">${facts.map(esc).join('<br>')}</div>${top}${bonus}${mgr}`;
   }).join('');
 
   const empty = cs.length ? '' : `<p style="${H}font-size:14px;color:#374151;">No location ran a day.</p>`;
@@ -128,7 +138,7 @@ export function renderNightly(data: NightlyData, opts: RenderOptions = {}): { su
     tile('Sales', money(t.gross), t.prepaid_work ? `${money(t.prepaid_work)} prepaid work` : ''),
     tile('Jobs', count(t.jobs), t.addons ? `+ ${count(t.addons)} add-ons` : ''),
     tile('Workers', count(t.workers), `${money(perWorker(t.gross, t.workers))} each`),
-    tile('Paid out', money(t.payout), t.gross ? `${Math.round((t.payout / t.gross) * 100)}% of sales` : ''),
+    tile('Paid out', money(t.payout), t.gross ? `${Math.round((t.payout / t.gross) * 100)}% of sales` : '', `${money(t.bonuses)} in bonuses`),
   ]) : ''}
   ${cs.length ? h2('By location') + byLocation : ''}
   ${paid ? h2('Payments') + paid : ''}
@@ -139,10 +149,10 @@ export function renderNightly(data: NightlyData, opts: RenderOptions = {}): { su
   const lines: string[] = [`Property Stars nightly report: ${dayLabel(data.day)}`, status, ''];
   if (!cs.length) lines.push('No location ran a day.');
   else {
-    lines.push(`Sales ${money(t.gross)} · ${count(t.jobs)} jobs · ${count(t.workers)} workers (${money(perWorker(t.gross, t.workers))} each) · paid out ${money(t.payout)}`);
+    lines.push(`Sales ${money(t.gross)} · ${count(t.jobs)} jobs · ${count(t.workers)} workers (${money(perWorker(t.gross, t.workers))} each) · paid out ${money(t.payout)} incl. ${money(t.bonuses)} bonuses`);
     if (t.prepaid_work) lines.push(`Includes ${money(t.prepaid_work)} prepaid work`);
     lines.push('', 'By location:');
-    for (const c of cs) lines.push(`  ${c.name}${c.state === 'live' ? ' (open)' : ''}: ${money(c.gross)}, ${count(c.jobs)} jobs, ${count(c.workers)} workers, paid out ${money(c.payout)}`);
+    for (const c of cs) lines.push(`  ${c.name}${c.state === 'live' ? ' (open)' : ''}: ${money(c.gross)}, ${count(c.jobs)} jobs, ${count(c.workers)} workers, paid out ${money(c.payout)}, bonuses ${money(c.bonuses)}`);
     if (t.payments.length) {
       lines.push('', 'Payments:');
       for (const [m, a] of t.payments) lines.push(`  ${m}: ${money(a)}`);
@@ -151,6 +161,8 @@ export function renderNightly(data: NightlyData, opts: RenderOptions = {}): { su
     for (const c of cs) {
       lines.push('', `${c.name}: ${centerStatus(c, tz)}`);
       lines.push(`  ${count(c.showed)} showed of ${count(c.booked)} booked`);
+      (c.top || []).forEach((w, i) => lines.push(`  ${i + 1}. ${w.name}: ${money(w.gross)}, ${jobsOf(w.jobs)} jobs, paid ${money(w.payout)}${n(w.bonus) ? ` (+${money(w.bonus)} bonus)` : ''}`));
+      lines.push(`  Bonuses: ${money(c.bonuses)}${c.bonus_list?.length ? ` · ${bonusLine(c)}` : ''}`);
       for (const m of c.managers || []) lines.push(`  ${m.name}: ${count(m.workers)} workers, ${money(m.gross)} (${money(perWorker(n(m.gross), n(m.workers)))} each)`);
       if (c.month) lines.push(`  Month so far: ${money(c.month.gross)} over ${count(c.month.days)} days`);
     }
