@@ -404,8 +404,26 @@ async function findEvent(input: AnyIn): Promise<CalEvent> {
   if (!isDate(input.date)) throw new Refuse('Which day is it on?');
   const events = (await loadEvents(input.date, input.date)).filter(e => occursOn(e, input.date as string));
   if (!events.length) throw new Refuse(`Nothing on the calendar on ${pretty(input.date)}.`);
-  return str(input.title) ? one(events, e => e.title, str(input.title), `event on ${pretty(input.date)}`)
-    : events.length === 1 ? events[0] : (() => { throw new Refuse(`There’s more than one event on ${pretty(input.date as string)}: ${events.map(e => e.title).join('; ')}. Which one?`); })();
+  const title = str(input.title);
+  if (!title) return events.length === 1 ? events[0] : (() => { throw new Refuse(`There’s more than one event on ${pretty(input.date as string)}: ${events.map(e => e.title).join('; ')}. Which one?`); })();
+  try { return one(events, e => e.title, title, `event on ${pretty(input.date)}`); }
+  catch (err) {
+    if (!(err instanceof Refuse) || /more than one/.test(err.message)) throw err;
+    // Named in other words ("Photo shoot (Cambridge)" for "Christmas mini photo session – Parkhill Studio, Cambridge",
+    // Rosh, 14 Nov): the one event that shares a word with what was said, or the day's only event. The change still
+    // shows its real title on the card before anything is saved.
+    const close = events.filter(e => sharesWord(e.title, title));
+    if (close.length === 1) return close[0];
+    if (!close.length && events.length === 1) return events[0];
+    throw new Refuse(`Nothing on ${pretty(input.date)} called “${title}”. That day has: ${(close.length ? close : events).slice(0, 6).map(e => e.title).join('; ')}. Which one?`, true);
+  }
+}
+/** Do two titles share a real word (3+ letters, not a filler word)? "photo shoot" and "photo session" do. */
+const FILLER = new Set(['the', 'and', 'for', 'with', 'our', 'your', 'appointment', 'appt', 'event', 'meeting']);
+export function sharesWord(a: string, b: string): boolean {
+  const words = (t: string) => new Set(t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w.length >= 3 && !FILLER.has(w)));
+  const wa = words(a);
+  return [...words(b)].some(w => wa.has(w));
 }
 async function changeEvent(input: AnyIn): Promise<Change> {
   const old = await findEvent(input);

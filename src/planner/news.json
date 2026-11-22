@@ -1,4 +1,6 @@
 [
+  { "id": "2026-11-17-event-match", "date": "2026-11-17", "title": "Arvy finds events said in other words",
+    "lines": ["Ask Arvy to change “the photo shoot” and it finds “Christmas mini photo session” that day.", "If it still can’t tell which, it lists that day’s events so you can pick."] },
   { "id": "2026-11-15-cash-cheque-deposits", "date": "2026-11-15", "title": "Deposits: cash and cheques apart", "for": "night",
     "lines": ["The Deposits card now totals cash deposits and cheque deposits separately; transferred cash comes off the cash.", "A cheque by phone is a cheque. At a bank machine the bank doesn’t say, so those start as cash: tap “It was a cheque” to move one."] },
   { "id": "2026-11-15-transferred-cash-any", "date": "2026-11-15", "title": "Transferred cash: any e-transfer, any day", "for": "night",
