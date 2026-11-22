@@ -82,7 +82,7 @@ const DealList: React.FC<{ list: PipelineDeal[]; view: View; onDone: () => void 
             <span>{dayLabel(d.meeting.starts_at)} at {timeLabel(d.meeting.starts_at)} with {d.meeting.host}{d.meeting.outcome_note ? ` · ${d.meeting.outcome_note}` : ''}</span>
           </div>}
           {d.notes && <div className="v2-small" style={{ marginTop: 6 }}>“{d.notes}”</div>}
-          <AnswersPanel a={d.answers} />
+          <AnswersPanel a={d.answers} label="Their answers" quiet />
           <DealPhotos id={d.id} />
           {d.status !== 'pending' && <div className="v2-small v2-mut" style={{ marginTop: 6 }}>
             {d.status === 'approved' ? 'Approved' : 'Rejected'}{d.decided_by ? ` by ${d.decided_by}` : ''}{d.decided_at ? ` · ${whenLabel(d.decided_at)}` : ''}{d.decision_note ? ` · ${d.decision_note}` : ''}</div>}
