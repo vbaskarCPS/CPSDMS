@@ -10,6 +10,7 @@ import { COLORS } from '../ui';
 import { SERVICE_LINES } from '../lib/clientImport';
 import { adminStats, clientStats, isoDay, liveStats, workerbookStats, type LiveStats } from '../lib/dashboard';
 import type { Component } from './nav';
+import { cardStats } from '../lib/cardSales';
 
 const n = (v: number) => v.toLocaleString('en-CA');
 const $ = (v: number) => `$${Math.round(v).toLocaleString('en-CA')}`;
@@ -57,12 +58,13 @@ export const StatCards: React.FC<{ comps: Component[]; onOpen: (c: Component) =>
   const { center, can } = useAuth();
   const cid = center?.id || '';
   const has = (k: string) => comps.find(c => c.key === k);
-  const rm = has('rm'), wb = has('wb'), mb = has('mb'), cd = has('cd'), sa = has('sa');
+  const rm = has('rm'), wb = has('wb'), mb = has('mb'), cd = has('cd'), sa = has('sa'), cards = has('cards');
 
   const live = useLoad<LiveStats | null>(() => (cid && (rm || mb) ? liveStats(cid) : Promise.resolve(null)), [cid, !!rm, !!mb]);
   const work = useLoad(() => (cid && wb ? workerbookStats(cid) : Promise.resolve(null)), [cid, !!wb]);
   const lines = SERVICE_LINES.map(l => l.key);
   const clients = useLoad(() => (cd ? clientStats(lines) : Promise.resolve(null)), [!!cd]);
+  const cardNums = useLoad(() => (cards ? cardStats() : Promise.resolve(null)), [!!cards]);
   const saUsers = !!sa && can('sa_users'), saTerr = !!sa && can('sa_territory');
   const admin = useLoad(() => (sa ? adminStats({ users: saUsers, territory: saTerr }) : Promise.resolve(null)), [saUsers, saTerr]);
 
@@ -119,6 +121,17 @@ export const StatCards: React.FC<{ comps: Component[]; onOpen: (c: Component) =>
               { label: 'Properties', value: n(c.total), to: '/app/clients/list' },
               { label: 'Need a route', value: n(c.noRoute), tone: c.noRoute ? 'amber' : undefined, to: '/app/clients/list' },
               ...top.map(x => ({ label: `${SERVICE_LINES.find(l => l.key === x.key)?.label || x.key} clients`, value: n(x.n), to: '/app/clients/list' })),
+            ] : null} />
+        );
+      })()}
+      {cards && (() => {
+        const c = cardNums.data;
+        return (
+          <StatCard comp={cards} onOpen={() => onOpen(cards)} loading={cardNums.loading} error={cardNums.error} caption="Cards charged over the phone"
+            kpis={c ? [
+              { label: 'Charged today', value: $(Number(c.today_total)), sub: `${n(Number(c.today_n))} sale${Number(c.today_n) === 1 ? '' : 's'}`, tone: 'green', to: '/app/cards/history' },
+              { label: 'This month', value: $(Number(c.month_total)), sub: `${n(Number(c.month_n))} sale${Number(c.month_n) === 1 ? '' : 's'}`, to: '/app/cards/history' },
+              { label: 'Declined today', value: n(Number(c.today_declined)), tone: Number(c.today_declined) ? 'amber' : undefined, to: '/app/cards/history' },
             ] : null} />
         );
       })()}
