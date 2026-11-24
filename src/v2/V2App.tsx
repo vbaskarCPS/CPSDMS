@@ -36,6 +36,7 @@ import { BookingsPage, PlansPage } from './features/bookings/BookingsPage';
 import { BookingEmails } from './features/bookings/BookingEmails';
 import { EmailTemplates } from './features/bookings/EmailTemplates';
 import { MyAccount } from './features/account/MyAccount';
+import { CardHistory, CardProcess, CardReceipt } from './features/cards/CardProcessing';
 import { NotificationsPage } from './features/account/NotifyPanel';
 import { DraftPage } from './features/benny/DraftPage';
 import { Zones } from './features/mainstreet/Zones';
@@ -101,6 +102,9 @@ const V2Routes: React.FC = () => (
     <Route path="admin/centers" element={<Guard perm="sa_users"><Centers /></Guard>} />
     <Route path="admin/availability" element={<Guard perm="sa_users"><Availability /></Guard>} />
     <Route path="admin/bugs" element={<Guard perm="sa_users"><BugLog /></Guard>} />
+    <Route path="cards" element={<Guard perm="card_processing"><CardProcess /></Guard>} />
+    <Route path="cards/history" element={<Guard perm="card_processing"><CardHistory /></Guard>} />
+    <Route path="cards/receipt" element={<Guard perm="card_processing"><CardReceipt /></Guard>} />
     <Route path="workerbook/rate-cards" element={<Guard perm="workerbook"><RateCards /></Guard>} />
     <Route path="workerbook/contractors" element={<Guard perm="workerbook"><Contractors /></Guard>} />
     <Route path="workerbook/status" element={<Guard perm="workerbook"><Contractors /></Guard>} />

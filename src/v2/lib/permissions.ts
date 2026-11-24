@@ -5,6 +5,7 @@ export const PERMISSIONS = [
   { key: 'workerbook', label: 'Workerbook', unlocks: 'Days, Start session, payouts, payslips, rate cards, pipeline, contractors' },
   { key: 'bookings', label: 'Master Bookings', unlocks: 'Bookings, Inbox, Accounts, Crews, KPIs' },
   { key: 'dialer', label: 'Clients & Dialer', unlocks: 'Clients, Campaigns, Dialer, Follow-ups, KPIs' },
+  { key: 'card_processing', label: 'Card Processing', unlocks: 'Charge a customer’s card over the phone (Bambora), see every charge, and the receipt email' },
   { key: 'sa_users', label: 'SA · User Management', unlocks: 'Users, command centers, seasons, availability' },
   { key: 'sa_territory', label: 'SA · Territory & Client Data', unlocks: 'Digital maps, assignments, client imports' },
   { key: 'sa_reporting', label: 'SA · Reporting', unlocks: 'Reporting (Super Admin)' },

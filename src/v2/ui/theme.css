@@ -836,3 +836,17 @@ html, body { overflow-x: clip; }
 .v2-daychip i { width: 8px; height: 8px; border-radius: 4px; background: currentColor; flex: none; }
 .v2-daychip.live { background: #052e1b; border-color: #065f46; color: #6ee7b7; }
 .v2-daychip.warn { background: #3b1d06; border-color: #92400e; color: #fdba74; }
+
+/* Card Processing (src/v2/features/cards) */
+.v2-cards-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 16px; align-items: start; }
+.v2-cards-cols > div > .v2-card { margin-bottom: 14px; }
+.v2-cards-side { position: sticky; top: 76px; }
+.v2-cards-item { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 110px 38px; gap: 8px; margin-bottom: 10px; align-items: center; }
+.v2-cardfield { height: 42px; padding: 0 11px; border-radius: 10px; border: 1px solid #d1d5db; background: #fff; overflow: hidden; }
+.v2-warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 10px; padding: 9px 12px; font-size: 13px; }
+@media (max-width: 900px) {
+  .v2-cards-cols { grid-template-columns: minmax(0, 1fr); }
+  .v2-cards-side { position: static; }
+  .v2-cards-item { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .v2-cards-item .v2-input[aria-label="Price"] { grid-column: 1; }
+}

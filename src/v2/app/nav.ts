@@ -4,7 +4,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Map, BookOpen, CalendarCheck, Phone, Shield, Calendar, FileText, SlidersHorizontal, UserPlus, Contact, AlertCircle,
-  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck, BadgeCheck, Mail, Send, Columns3, Bug,
+  List, Inbox, Receipt, Truck, CreditCard, History, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet, BedDouble, Store, Hexagon, UserCheck, BadgeCheck, Mail, Send, Columns3, Bug,
 } from 'lucide-react';
 import type { ColorName } from '../ui';
 import type { Permission } from '../lib/permissions';
@@ -54,6 +54,12 @@ export const COMPONENTS: Component[] = [
     { key: 'dialer', label: 'Dialer', icon: Phone, color: 'green', path: '/app/clients/dialer', ready: false },
     { key: 'followups', label: 'Follow-ups', icon: Clock, color: 'amber', path: '/app/clients/follow-ups', ready: false },
     { key: 'kpis', label: 'KPIs', icon: BarChart3, color: 'blue', path: '/app/clients/kpis', ready: false },
+  ] },
+  { key: 'cards', label: 'Card Processing', icon: CreditCard, color: 'sky', perm: 'card_processing', home: '/app/cards', tabs: true,
+    blurb: 'Take a card over the phone: charge it, see every charge, and the receipt customers get', subs: [
+    { key: 'process', label: 'Process a card', icon: CreditCard, color: 'sky', path: '/app/cards', ready: true },
+    { key: 'history', label: 'History', icon: History, color: 'slate', path: '/app/cards/history', ready: true },
+    { key: 'receipt', label: 'Receipt email', icon: Mail, color: 'blue', path: '/app/cards/receipt', ready: true },
   ] },
   { key: 'ms', label: 'MainstreetAI', icon: Store, color: 'teal', perm: 'mainstreet_admin', home: '/app/mainstreet/zones', tabs: true, brand: 'MainstreetAI',
     blurb: 'Business door-knocking: zones, campaigns, reps and the dashboard', subs: [
