@@ -216,7 +216,7 @@ export const CardProcess: React.FC = () => {
             ) : (
               <div className="v2-mut" style={{ fontSize: 14 }}>{runningTotal > 0 ? <>Total so far <b style={{ color: '#111827' }}>{money(runningTotal)}</b>{prov ? `, ${prov.tax} ${pct(prov.rate)} included` : ''}</> : 'Fill in the sale to see the total.'}</div>
             )}
-            {tried && checked.errors && <div className="v2-err" style={{ marginTop: 12 }}>{checked.errors.map((e, i) => <div key={i}>{e}</div>)}</div>}
+            {tried && checked.errors && <div className="v2-err" style={{ marginTop: 12 }}>{checked.errors.map((e, i) => <div key={i}>{e.charAt(0).toUpperCase() + e.slice(1)}</div>)}</div>}
             {err && <div className="v2-err" style={{ marginTop: 12 }}>{err}</div>}
             {warn && <div className="v2-warn" style={{ marginTop: 12 }}>{warn}</div>}
             <Btn kind="g" icon={CreditCard} style={{ width: '100%', justifyContent: 'center', marginTop: 14, padding: '12px 14px', fontSize: 16 }} disabled={busy}
