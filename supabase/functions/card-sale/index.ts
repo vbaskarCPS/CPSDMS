@@ -127,6 +127,7 @@ Deno.serve(async (req) => {
       processed_by: me.id, processed_by_name: me.full_name || 'Manager', first_name: sale.first_name, last_name: sale.last_name, phone: sale.phone, email: sale.email,
       address: sale.address, city: sale.city, province: sale.province, postal_code: sale.postal_code, items: sale.items, total: sale.total,
       subtotal: sale.subtotal, tax_amount: sale.tax_amount, tax_name: sale.tax_name, tax_rate: sale.tax_rate, notes: sale.notes,
+      locked_gate: sale.locked_gate, sprinklers: sale.sprinklers,
       status: 'processing', idempotency_key: key,
     }).select(SALE_COLS).single();
     if (claimErr || !made) {

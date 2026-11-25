@@ -1,6 +1,8 @@
 // src/v2/features/cards/CardProcessing.tsx — Card Processing: take a card over the phone for a spring or fall booking.
-//   Process a card   the customer, where the work is, what they bought, and the card (typed into Bambora's own
-//                    fields: the number never touches this app). The price typed is what is charged, tax included.
+//   Process a card   the customer, where the work is, what they bought (each service asked the way the worker app's
+//                    upsell recipes ask: full property / front / back, and when for the grub-type plans), a locked
+//                    gate, sprinklers, a note, one total price (tax included: that is what is charged), and the
+//                    card, typed into Bambora's own fields: the number never touches this app.
 //   History          every attempt, by anyone: who sold what to whom, what was charged, and what Bambora answered
 //   Receipt email    the one receipt every customer gets (a super admin edits it)
 // For managers with the Card Processing permission. Nothing here writes to Master Bookings yet.
@@ -12,10 +14,10 @@ import { useAuth } from '../../lib/auth';
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tabs, Tag } from '../../ui';
 import {
   blankItem, cardOf, cardSales, chargeCard, customerName, isoDay, itemsToInput, newChargeKey, receiptTemplate, resendReceipt, salesCsv, saveReceiptTemplate,
-  searchSales, seasonOptions, sendTestReceipt, serviceOptions, STATUS_LABEL, STATUS_TONE, type CardSale, type ChargeAnswer, type ItemDraft, type SaleStatus,
+  searchSales, sendTestReceipt, serviceOptions, STATUS_LABEL, STATUS_TONE, type CardSale, type ChargeAnswer, type ItemDraft, type SaleStatus,
 } from '../../lib/cardSales';
 import {
-  addressLine, cardName, checkSale, EMAIL_RE, itemLine, money, pct, PROVINCES, renderReceipt, sampleReceipt, type ReceiptTemplate, type Sale,
+  addressLine, asksTiming, cardName, checkSale, EMAIL_RE, itemLine, money, pct, PROPERTY_TYPES, propertyFlags, PROVINCES, renderReceipt, sampleReceipt, TIMINGS, type ReceiptTemplate, type Sale,
 } from '../../../../supabase/functions/card-sale/sale';
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -88,14 +90,23 @@ const CardFields = forwardRef<CardFieldsHandle, { disabled?: boolean }>(({ disab
 CardFields.displayName = 'CardFields';
 
 // ───────────── Process a card ─────────────
-const BLANK = { first_name: '', last_name: '', phone: '', email: '', address: '', city: '', province: '', postal_code: '', notes: '' };
+const BLANK = { first_name: '', last_name: '', phone: '', email: '', address: '', city: '', province: '', postal_code: '', notes: '', total: '' };
+/** A row of buttons where one is picked (full property / front only / back only; spring only / fall only / both). */
+function Pick<T extends string>({ label, options, value, onChange }: { label: string; options: readonly { key: T; label: string }[]; value: string; onChange: (k: T) => void }) {
+  return (
+    <div className="v2-seg" role="group" aria-label={label}>
+      {options.map(o => <button key={o.key} type="button" className={value === o.key ? 'on' : ''} aria-pressed={value === o.key} onClick={() => onChange(o.key)}>{o.label}</button>)}
+    </div>
+  );
+}
 
 export const CardProcess: React.FC = () => {
   const { profile } = useAuth();
-  const seasons = useMemo(() => seasonOptions(), []);
   const nextId = useRef(2);
   const [f, setF] = useState({ ...BLANK });
-  const [items, setItems] = useState<ItemDraft[]>([blankItem(1, seasons[0].key)]);
+  const [gate, setGate] = useState(false);
+  const [sprinklers, setSprinklers] = useState(false);
+  const [items, setItems] = useState<ItemDraft[]>([blankItem(1)]);
   const [cardKey, setCardKey] = useState(0);          // a new one clears the card fields
   const fields = useRef<CardFieldsHandle>(null);
   const [tried, setTried] = useState(false);
@@ -109,12 +120,12 @@ export const CardProcess: React.FC = () => {
 
   const set = (k: keyof typeof BLANK) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF(p => ({ ...p, [k]: e.target.value }));
   const setItem = (id: number, patch: Partial<ItemDraft>) => setItems(rows => rows.map(r => (r.id === id ? { ...r, ...patch } : r)));
-  const input = { ...f, items: itemsToInput(items) };
+  const input = { ...f, items: itemsToInput(items), locked_gate: gate, sprinklers };
   const checked = checkSale(input);
   const prov = PROVINCES.find(p => p.code === f.province);
-  const runningTotal = items.reduce((s, r) => s + (Number(r.price.replace(/[$,\s]/g, '')) || 0), 0);
+  const typedTotal = Number(f.total.replace(/[$,\s]/g, '')) || 0;
 
-  const reset = () => { setF({ ...BLANK }); setItems([blankItem(nextId.current++, seasons[0].key)]); setCardKey(k => k + 1); setTried(false); setErr(null); setWarn(null); setDone(null); };
+  const reset = () => { setF({ ...BLANK }); setGate(false); setSprinklers(false); setItems([blankItem(nextId.current++)]); setCardKey(k => k + 1); setTried(false); setErr(null); setWarn(null); setDone(null); };
 
   const finish = (answer: ChargeAnswer, sale: Sale, key: string, token: string) => {
     if (answer.duplicate) { setDup({ info: answer.duplicate, key, token, sale }); return; }
@@ -152,7 +163,7 @@ export const CardProcess: React.FC = () => {
               <div className="v2-mut">{customerName(s)} · {a.last4 ? `${cardName(a.cardType)} ending ${a.last4}` : 'Card'}</div></div>
           </div>
           <table className="v2-table"><tbody>
-            {s.items.map((i, n) => <tr key={n}><td>{itemLine(i)}</td><td style={{ textAlign: 'right' }}>{money(i.price)}</td></tr>)}
+            {s.items.map((i, n) => <tr key={n}><td colSpan={2}>{itemLine(i)}</td></tr>)}
             <tr><td className="v2-mut">Subtotal</td><td style={{ textAlign: 'right' }}>{money(s.subtotal)}</td></tr>
             <tr><td className="v2-mut">{s.tax_name} ({pct(s.tax_rate)})</td><td style={{ textAlign: 'right' }}>{money(s.tax_amount)}</td></tr>
             <tr><td><b>Total charged</b></td><td style={{ textAlign: 'right' }}><b>{money(s.total)}</b></td></tr>
@@ -191,34 +202,45 @@ export const CardProcess: React.FC = () => {
               <Field label="Postal code"><input className="v2-input" value={f.postal_code} onChange={set('postal_code')} autoComplete="off" /></Field>
             </div>
           </Card>
-          <Card title="What they bought" right={<span className="v2-mut v2-small">Prices include tax</span>}>
-            {items.map(r => (
+          <Card title="What they bought">
+            {items.map((r, n) => (
               <div key={r.id} className="v2-cards-item">
-                <select className="v2-sel" aria-label="Service" value={r.service} onChange={e => setItem(r.id, { service: e.target.value })}>
-                  <option value="">Service…</option>{serviceOptions.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}</select>
-                <select className="v2-sel" aria-label="Season" value={r.seasonKey} onChange={e => setItem(r.id, { seasonKey: e.target.value })}>
-                  {seasons.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}</select>
-                <input className="v2-input" aria-label="Price" placeholder="Price" inputMode="decimal" value={r.price} onChange={e => setItem(r.id, { price: e.target.value })} />
-                <button type="button" className="v2-gbtn" aria-label="Remove this service" disabled={items.length === 1} onClick={() => setItems(rows => rows.filter(x => x.id !== r.id))}><Trash2 size={15} /></button>
-                {r.service === 'other' && <input className="v2-input" style={{ gridColumn: '1 / -1' }} aria-label="What is it" placeholder="What is it?" value={r.description} onChange={e => setItem(r.id, { description: e.target.value })} />}
+                <div className="v2-row" style={{ flexWrap: 'nowrap' }}>
+                  <span className="v2-cards-num">{n + 1}</span>
+                  <select className="v2-sel" aria-label="Service" value={r.service} onChange={e => setItem(r.id, { service: e.target.value, timing: asksTiming(e.target.value) ? r.timing : '' })}>
+                    <option value="">Service…</option>{serviceOptions.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}</select>
+                  <button type="button" className="v2-gbtn" aria-label="Remove this service" disabled={items.length === 1} onClick={() => setItems(rows => rows.filter(x => x.id !== r.id))}><Trash2 size={15} /></button>
+                </div>
+                {r.service === 'other' && <input className="v2-input" aria-label="What is it" placeholder="What is it?" value={r.description} onChange={e => setItem(r.id, { description: e.target.value })} />}
+                {r.service && <div className="v2-row">
+                  <Pick label="How much of the property" options={PROPERTY_TYPES} value={r.property_type} onChange={k => setItem(r.id, { property_type: k })} />
+                  {asksTiming(r.service) && <Pick label="When" options={TIMINGS} value={r.timing} onChange={k => setItem(r.id, { timing: k })} />}
+                </div>}
               </div>
             ))}
-            <Btn size="sm" icon={Plus} onClick={() => setItems(rows => [...rows, blankItem(nextId.current++, rows[rows.length - 1]?.seasonKey || seasons[0].key)])}>Add another service</Btn>
+            <Btn size="sm" icon={Plus} onClick={() => setItems(rows => [...rows, blankItem(nextId.current++)])}>Add another service</Btn>
+            <div className="v2-cards-prop">
+              <span className="v2-label" style={{ margin: 0 }}>The property</span>
+              <label className="v2-check" style={{ border: 0, padding: 0 }}><input type="checkbox" checked={gate} onChange={e => setGate(e.target.checked)} /><span>Locked gate</span></label>
+              <label className="v2-check" style={{ border: 0, padding: 0 }}><input type="checkbox" checked={sprinklers} onChange={e => setSprinklers(e.target.checked)} /><span>Sprinklers</span></label>
+            </div>
+            <Field label="Note"><textarea className="v2-input" rows={2} value={f.notes} onChange={set('notes')} placeholder="Anything the office or the crew should know" /></Field>
+            <Field label="Total price" hint={`For everything on this sale, tax included${prov ? ` (${prov.tax} ${pct(prov.rate)})` : ''}. This is what the card is charged.`}>
+              <input className="v2-input v2-cards-total" aria-label="Total price" placeholder="0.00" inputMode="decimal" value={f.total} onChange={set('total')} /></Field>
           </Card>
           <Card title="Card"><CardFields key={cardKey} ref={fields} disabled={busy} /></Card>
-          <Card title="Note (optional)"><textarea className="v2-input" rows={2} value={f.notes} onChange={set('notes')} placeholder="Anything the office should know about this sale" /></Card>
         </div>
         <div className="v2-cards-side">
           <Card title="Charge">
             {checked.sale ? (
               <table className="v2-table"><tbody>
-                {checked.sale.items.map((i, n) => <tr key={n}><td>{itemLine(i)}</td><td style={{ textAlign: 'right' }}>{money(i.price)}</td></tr>)}
+                {checked.sale.items.map((i, n) => <tr key={n}><td colSpan={2}>{itemLine(i)}</td></tr>)}
                 <tr><td className="v2-mut">Subtotal</td><td style={{ textAlign: 'right' }}>{money(checked.sale.subtotal)}</td></tr>
                 <tr><td className="v2-mut">{checked.sale.tax_name} ({pct(checked.sale.tax_rate)})</td><td style={{ textAlign: 'right' }}>{money(checked.sale.tax_amount)}</td></tr>
                 <tr><td><b>Total to charge</b></td><td style={{ textAlign: 'right' }}><b>{money(checked.sale.total)}</b></td></tr>
               </tbody></table>
             ) : (
-              <div className="v2-mut" style={{ fontSize: 14 }}>{runningTotal > 0 ? <>Total so far <b style={{ color: '#111827' }}>{money(runningTotal)}</b>{prov ? `, ${prov.tax} ${pct(prov.rate)} included` : ''}</> : 'Fill in the sale to see the total.'}</div>
+              <div className="v2-mut" style={{ fontSize: 14 }}>{typedTotal > 0 ? <>Total <b style={{ color: '#111827' }}>{money(typedTotal)}</b>{prov ? `, ${prov.tax} ${pct(prov.rate)} included` : ''}</> : 'Fill in the sale to see the total.'}</div>
             )}
             {tried && checked.errors && <div className="v2-err" style={{ marginTop: 12 }}>{checked.errors.map((e, i) => <div key={i}>{e.charAt(0).toUpperCase() + e.slice(1)}</div>)}</div>}
             {err && <div className="v2-err" style={{ marginTop: 12 }}>{err}</div>}
@@ -237,7 +259,8 @@ export const CardProcess: React.FC = () => {
           footer={<><Btn onClick={() => setConfirm(null)} disabled={busy}>Cancel</Btn><Btn kind="g" icon={CreditCard} onClick={() => charge(confirm)} disabled={busy}>{busy ? 'Charging…' : `Charge ${money(confirm.total)}`}</Btn></>}>
           <div style={{ fontSize: 15, lineHeight: 1.6 }}>
             <b>{customerName(confirm)}</b><br />{addressLine(confirm)}<br />
-            {confirm.items.map((i, n) => <div key={n}>{itemLine(i)} · {money(i.price)}</div>)}
+            {confirm.items.map((i, n) => <div key={n}>{itemLine(i)}</div>)}
+            {propertyFlags(confirm) && <div>{propertyFlags(confirm)}</div>}
             <div className="v2-mut" style={{ marginTop: 8 }}>{confirm.tax_name} {pct(confirm.tax_rate)} included: {money(confirm.tax_amount)}. The card is charged as soon as you confirm.
               {confirm.email ? ` The receipt goes to ${confirm.email}.` : ' No email address, so no receipt is sent.'}</div>
           </div>
@@ -341,7 +364,8 @@ const SaleDetail: React.FC<{ sale: CardSale; onClose: () => void; onChanged: () 
         {fact('Phone', s.phone)}
         {fact('Email', s.email)}
         {fact('Service address', addressLine(s))}
-        {fact('Sold', s.items.map((i, n) => <div key={n}>{itemLine(i)} · {money(i.price)}</div>))}
+        {fact('Sold', s.items.map((i, n) => <div key={n}>{itemLine(i)}</div>))}
+        {propertyFlags(s) && fact('Property', propertyFlags(s))}
         {fact('Charged', <>{money(s.total)} <span className="v2-mut">({money(s.subtotal)} + {s.tax_name} {pct(s.tax_rate)} {money(s.tax_amount)})</span></>)}
         {fact('Card', cardOf(s))}
         {fact('Approval code', s.auth_code)}

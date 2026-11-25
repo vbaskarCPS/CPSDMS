@@ -841,14 +841,19 @@ html, body { overflow-x: clip; }
 .v2-cards-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 16px; align-items: start; }
 .v2-cards-cols > div > .v2-card { margin-bottom: 14px; }
 .v2-cards-side { position: sticky; top: 76px; }
-.v2-cards-item { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) 110px 38px; gap: 8px; margin-bottom: 10px; align-items: center; }
+.v2-cards-item { display: flex; flex-direction: column; gap: 8px; padding: 10px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.v2-cards-num { width: 24px; height: 24px; border-radius: 12px; background: #e0f2fe; color: #075985; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.v2-cards-prop { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 14px 0 12px; }
+.v2-cards-total { font-size: 20px; font-weight: 700; max-width: 220px; }
+.v2-seg { display: inline-flex; border: 1px solid #d1d5db; border-radius: 10px; overflow: hidden; background: #fff; }
+.v2-seg button { padding: 7px 12px; font-size: 13px; border: 0; border-right: 1px solid #e5e7eb; background: #fff; color: #374151; cursor: pointer; }
+.v2-seg button:last-child { border-right: 0; }
+.v2-seg button.on { background: #0284c7; color: #fff; font-weight: 600; }
 .v2-cardfield { height: 42px; padding: 0 11px; border-radius: 10px; border: 1px solid #d1d5db; background: #fff; overflow: hidden; }
 .v2-warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 10px; padding: 9px 12px; font-size: 13px; }
 @media (max-width: 900px) {
   .v2-cards-cols { grid-template-columns: minmax(0, 1fr); }
   .v2-cards-side { position: static; }
-  .v2-cards-item { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .v2-cards-item .v2-input[aria-label="Price"] { grid-column: 1; }
 }
 /* Card Processing tour (src/v2/features/cards/CardIntro.tsx) */
 .v2-intro { font-size: 15px; line-height: 1.55; min-height: 230px; }

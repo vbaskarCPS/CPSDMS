@@ -17,8 +17,25 @@ export const CARD_SERVICES = [
   { key: 'other', label: 'Other' },
 ] as const;
 export type CardServiceKey = typeof CARD_SERVICES[number]['key'];
-export type Season = 'spring' | 'fall';
-export const SEASON_LABEL: Record<Season, string> = { spring: 'Spring', fall: 'Fall' };
+
+// What each service asks, the same as the worker app's upsell recipes (src/components/AddContractModal.tsx):
+// how much of the property (FP / FO / BO) for every one, and when it is applied for the grub-type plans.
+export const PROPERTY_TYPES = [
+  { key: 'FP', label: 'Full property' },
+  { key: 'FO', label: 'Front only' },
+  { key: 'BO', label: 'Back only' },
+] as const;
+export type PropertyType = typeof PROPERTY_TYPES[number]['key'];
+export const TIMINGS = [
+  { key: 'spring', label: 'Spring only' },
+  { key: 'fall', label: 'Fall only' },
+  { key: 'both', label: 'Both' },
+] as const;
+export type Timing = typeof TIMINGS[number]['key'];
+const ASKS_TIMING: readonly string[] = ['grub', 'chafer', 'star_plan_protection_plus'];
+export const asksTiming = (service: string) => ASKS_TIMING.includes(service);
+export const propertyLabel = (k: string | null | undefined) => PROPERTY_TYPES.find(p => p.key === k)?.label || '';
+export const timingLabel = (k: string | null | undefined) => (k === 'both' ? 'Spring and fall' : TIMINGS.find(t => t.key === k)?.label || '');
 
 // ───────────── tax ─────────────
 // The price a manager types already has the tax in it. The receipt shows how much of it is tax, by province.
@@ -45,29 +62,34 @@ export function money(v: unknown): string {
 }
 
 // ───────────── a sale ─────────────
-export interface SaleItemInput { service: string; description?: string | null; season: string; year: number | string; price: number | string }
+export interface SaleItemInput { service: string; description?: string | null; property_type?: string | null; timing?: string | null }
 export interface SaleInput {
   first_name: string; last_name: string; phone?: string | null; email?: string | null;
   address: string; city: string; province: string; postal_code?: string | null;
-  items: SaleItemInput[]; notes?: string | null;
+  items: SaleItemInput[];
+  /** the one price for everything on the sale, tax included: what the card is charged */
+  total: number | string;
+  locked_gate?: boolean; sprinklers?: boolean; notes?: string | null;
 }
-export interface SaleItem { service: CardServiceKey; label: string; season: Season; year: number; price: number }
+export interface SaleItem { service: CardServiceKey; label: string; property_type: PropertyType; timing: Timing | null }
 export interface Sale {
   first_name: string; last_name: string; phone: string | null; email: string | null;
   address: string; city: string; province: ProvinceCode; postal_code: string | null;
-  items: SaleItem[]; notes: string | null;
+  items: SaleItem[]; locked_gate: boolean; sprinklers: boolean; notes: string | null;
   total: number; subtotal: number; tax_amount: number; tax_name: string; tax_rate: number;
 }
 
 const clean = (s: unknown, max = 200) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 export const digits = (s: unknown) => String(s ?? '').replace(/\D/g, '');
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-/** "Lawn Rejuvenation · Spring 2027" */
-export const itemLine = (i: Pick<SaleItem, 'label' | 'season' | 'year'>) => `${i.label} · ${SEASON_LABEL[i.season]} ${i.year}`;
+/** "Grub Control · Front only · Spring and fall": what the customer reads on the receipt. */
+export const itemLine = (i: Pick<SaleItem, 'label' | 'property_type' | 'timing'>) => [i.label, propertyLabel(i.property_type), timingLabel(i.timing)].filter(Boolean).join(' · ');
+/** "Locked gate · Sprinklers": what the crew needs to know about the property (not on the receipt). */
+export const propertyFlags = (s: { locked_gate?: boolean | null; sprinklers?: boolean | null }) => [s.locked_gate ? 'Locked gate' : '', s.sprinklers ? 'Sprinklers' : ''].filter(Boolean).join(' · ');
 export const MAX_CHARGE = 10000;
 
 /** A sale ready to charge, or what is wrong with it (in the words the form shows). */
-export function checkSale(input: SaleInput, thisYear = new Date().getFullYear()): { sale: Sale; errors: null } | { sale: null; errors: string[] } {
+export function checkSale(input: SaleInput): { sale: Sale; errors: null } | { sale: null; errors: string[] } {
   const errors: string[] = [];
   const first_name = clean(input?.first_name, 60), last_name = clean(input?.last_name, 60);
   if (!first_name || !last_name) errors.push('Enter the customer’s first and last name.');
@@ -86,24 +108,26 @@ export function checkSale(input: SaleInput, thisYear = new Date().getFullYear())
   const items: SaleItem[] = [];
   const rows = Array.isArray(input?.items) ? input.items : [];
   if (!rows.length) errors.push('Add at least one service.');
-  rows.forEach((r, i) => {
+  if (rows.length > 12) errors.push('One sale can hold up to 12 services.');
+  rows.slice(0, 12).forEach((r, i) => {
     const n = rows.length > 1 ? `Service ${i + 1}: ` : '';
     const svc = CARD_SERVICES.find(s => s.key === r?.service);
     if (!svc) { errors.push(`${n}pick the service.`); return; }
     const desc = clean(r.description, 80);
     if (svc.key === 'other' && !desc) { errors.push(`${n}say what “Other” is.`); return; }
-    const season = r.season === 'spring' || r.season === 'fall' ? r.season : null;
-    const year = Math.round(Number(r.year));
-    if (!season || !(year >= thisYear && year <= thisYear + 2)) { errors.push(`${n}pick the season and year.`); return; }
-    const price = Math.round(Number(r.price) * 100) / 100;
-    if (!(price > 0)) { errors.push(`${n}enter the price.`); return; }
-    items.push({ service: svc.key, label: svc.key === 'other' ? desc : svc.label, season, year, price });
+    const part = PROPERTY_TYPES.find(p => p.key === String(r.property_type || 'FP').toUpperCase());
+    if (!part) { errors.push(`${n}pick full property, front only or back only.`); return; }
+    const timing = asksTiming(svc.key) ? TIMINGS.find(t => t.key === r.timing) : null;
+    if (asksTiming(svc.key) && !timing) { errors.push(`${n}pick spring only, fall only or both.`); return; }
+    items.push({ service: svc.key, label: svc.key === 'other' ? desc : svc.label, property_type: part.key, timing: timing ? timing.key : null });
   });
-  const total = items.reduce((s, i) => s + cents(i.price), 0) / 100;
-  if (items.length === rows.length && total > MAX_CHARGE) errors.push(`One charge can’t be more than ${money(MAX_CHARGE)}.`);
+  const total = Math.round(Number(String(input?.total ?? '').replace(/[$,\s]/g, '')) * 100) / 100;
+  if (!(total > 0)) errors.push('Enter the total price.');
+  else if (total > MAX_CHARGE) errors.push(`One charge can’t be more than ${money(MAX_CHARGE)}.`);
   if (errors.length || !prov) return { sale: null, errors };
   const { subtotal, tax } = taxInside(total, prov.rate);
   return { errors: null, sale: { first_name, last_name, phone, email, address, city, province: prov.code, postal_code, items,
+    locked_gate: !!input.locked_gate, sprinklers: !!input.sprinklers,
     notes: clean(input.notes, 500) || null, total, subtotal, tax_amount: tax, tax_name: prov.tax, tax_rate: prov.rate } };
 }
 
@@ -145,7 +169,7 @@ export function renderReceipt(tpl: ReceiptTemplate, d: ReceiptData): { subject: 
   <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#0f766e;margin-bottom:14px;">Property Stars · Receipt</div>
   ${para(t.greeting)}
   <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin:6px 0 16px;">
-    ${s.items.map(i => row(esc(itemLine(i)), esc(money(i.price)))).join('')}
+    ${s.items.map(i => row(esc(itemLine(i)), '')).join('')}
     ${row('Subtotal', esc(money(s.subtotal)), false, true)}
     ${row(esc(taxLabel), esc(money(s.tax_amount)))}
     ${row('Total charged', esc(money(s.total)), true, true)}
@@ -158,7 +182,7 @@ export function renderReceipt(tpl: ReceiptTemplate, d: ReceiptData): { subject: 
 </div>`;
   const text = [
     fill(t.greeting, d).trim(), '',
-    ...s.items.map(i => `${itemLine(i)}: ${money(i.price)}`),
+    ...s.items.map(i => `- ${itemLine(i)}`),
     `Subtotal: ${money(s.subtotal)}`, `${taxLabel}: ${money(s.tax_amount)}`, `Total charged: ${money(s.total)}`, '',
     ...facts.map(([l, r]) => `${l}: ${r}`), '',
     fill(t.closing, d).trim(), ...(t.footer.trim() ? ['', fill(t.footer, d).trim()] : []),
@@ -171,7 +195,7 @@ export function sampleReceipt(now = new Date().toISOString()): ReceiptData {
   const total = 395.5, { subtotal, tax } = taxInside(total, 0.13);
   return { card_type: 'VI', last4: '4242', transaction_id: '10000123', charged_at: now,
     sale: { first_name: 'Jordan', last_name: 'Sample', address: '123 Maple Street', city: 'Ottawa', province: 'ON', postal_code: 'K1A 0B1',
-      items: [{ service: 'aeration', label: 'Aeration', season: 'spring', year: new Date(now).getFullYear() + 1, price: 169.5 },
-              { service: 'dethatch', label: 'Dethatching', season: 'spring', year: new Date(now).getFullYear() + 1, price: 226 }],
+      items: [{ service: 'aeration', label: 'Aeration', property_type: 'FP', timing: null },
+              { service: 'grub', label: 'Grub Control', property_type: 'FO', timing: 'both' }],
       total, subtotal, tax_amount: tax, tax_name: 'HST', tax_rate: 0.13 } };
 }
