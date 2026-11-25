@@ -37,6 +37,7 @@ import { BookingEmails } from './features/bookings/BookingEmails';
 import { EmailTemplates } from './features/bookings/EmailTemplates';
 import { MyAccount } from './features/account/MyAccount';
 import { CardHistory, CardProcess, CardReceipt } from './features/cards/CardProcessing';
+import { CardIntroGate } from './features/cards/CardIntro';
 import { NotificationsPage } from './features/account/NotifyPanel';
 import { DraftPage } from './features/benny/DraftPage';
 import { Zones } from './features/mainstreet/Zones';
@@ -63,7 +64,7 @@ const Guard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ per
   // a MainstreetAI rep only ever gets the rep app
   if (can('mainstreet_rep')) return <Navigate to="/app/rep" replace />;
   if (perm && !can(perm)) return <AppShell><div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to this screen.</div></div></AppShell>;
-  return <AppShell>{children}</AppShell>;
+  return <AppShell>{children}<CardIntroGate /></AppShell>;
 };
 
 /** Like Guard, but full screen (no top bar): for the RM map, which has its own header on phone and desktop. */
@@ -75,7 +76,7 @@ const BareGuard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({
   if (profile.must_change_password) return <Navigate to="/app/password" replace />;
   if (can('mainstreet_rep')) return <Navigate to="/app/rep" replace />;
   if (perm && !can(perm)) return <AppShell><div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to this screen.</div></div></AppShell>;
-  return <>{children}</>;
+  return <>{children}<CardIntroGate /></>;
 };
 
 /** Route Manager opens the floater view for Floater Route Managers (their own map is one tap away). */
