@@ -1,12 +1,12 @@
 // Card Processing: the sale check, the tax inside a price and the receipt (supabase/functions/card-sale/sale.ts),
 // and the form and history helpers (src/v2/lib/cardSales.ts).
 import { describe, expect, it } from 'vitest';
-import { checkSale, DEFAULT_TEMPLATE, renderReceipt, sampleReceipt, taxInside, type SaleInput } from '../../../supabase/functions/card-sale/sale';
-import { itemsToInput, salesCsv, searchSales, seasonOptions, type CardSale } from './cardSales';
+import { asksTiming, checkSale, DEFAULT_TEMPLATE, itemLine, propertyFlags, renderReceipt, sampleReceipt, taxInside, type SaleInput } from '../../../supabase/functions/card-sale/sale';
+import { blankItem, itemsToInput, salesCsv, searchSales, type CardSale } from './cardSales';
 
 const input = (over: Partial<SaleInput> = {}): SaleInput => ({
   first_name: ' Ann ', last_name: 'Lee', phone: '(604) 555-0100', email: 'Ann@Example.com', address: '12 Oak St', city: 'Surrey', province: 'BC', postal_code: 'v3s 1a1',
-  items: [{ service: 'aeration', season: 'spring', year: 2027, price: '105' }], ...over,
+  items: [{ service: 'aeration' }], total: '105', ...over,
 });
 
 describe('taxInside', () => {
@@ -24,33 +24,45 @@ describe('taxInside', () => {
 
 describe('checkSale', () => {
   it('tidies a good sale and works out the tax by province', () => {
-    const { sale, errors } = checkSale(input(), 2026);
+    const { sale, errors } = checkSale(input());
     expect(errors).toBeNull();
-    expect(sale).toMatchObject({ first_name: 'Ann', email: 'ann@example.com', postal_code: 'V3S 1A1', province: 'BC', total: 105, subtotal: 100, tax_amount: 5, tax_name: 'GST', tax_rate: 0.05 });
-    expect(sale!.items).toEqual([{ service: 'aeration', label: 'Aeration', season: 'spring', year: 2027, price: 105 }]);
+    expect(sale).toMatchObject({ first_name: 'Ann', email: 'ann@example.com', postal_code: 'V3S 1A1', province: 'BC', total: 105, subtotal: 100, tax_amount: 5, tax_name: 'GST', tax_rate: 0.05, locked_gate: false, sprinklers: false });
+    expect(sale!.items).toEqual([{ service: 'aeration', label: 'Aeration', property_type: 'FP', timing: null }]);
   });
   it('uses 13% HST in Ontario and 5% GST in Alberta', () => {
-    expect(checkSale(input({ province: 'ON', items: [{ service: 'star_plan', season: 'fall', year: 2027, price: 226 }] }), 2026).sale).toMatchObject({ tax_name: 'HST', tax_rate: 0.13, subtotal: 200, tax_amount: 26, total: 226 });
-    expect(checkSale(input({ province: 'ab' }), 2026).sale).toMatchObject({ province: 'AB', tax_name: 'GST', tax_amount: 5 });
+    expect(checkSale(input({ province: 'ON', items: [{ service: 'star_plan' }], total: 226 })).sale).toMatchObject({ tax_name: 'HST', tax_rate: 0.13, subtotal: 200, tax_amount: 26, total: 226 });
+    expect(checkSale(input({ province: 'ab' })).sale).toMatchObject({ province: 'AB', tax_name: 'GST', tax_amount: 5 });
   });
-  it('adds several services into one charge', () => {
-    const { sale } = checkSale(input({ items: [{ service: 'aeration', season: 'spring', year: 2027, price: 105 }, { service: 'dethatch', season: 'spring', year: 2027, price: '157.50' },
-      { service: 'other', description: 'Moss control', season: 'fall', year: 2027, price: 52.5 }] }), 2026);
-    expect(sale!.total).toBe(315);
-    expect(sale!.items.map(i => i.label)).toEqual(['Aeration', 'Dethatching', 'Moss control']);
+  it('holds several services under one total price, each asked what its recipe asks', () => {
+    const { sale } = checkSale(input({ total: ' $1,315.00 ', locked_gate: true, sprinklers: true, notes: '  gate code 1234  ', items: [
+      { service: 'aeration', property_type: 'FO' }, { service: 'grub', property_type: 'bo', timing: 'both' },
+      { service: 'dethatch', timing: 'spring' }, { service: 'other', description: 'Moss control' }] }));
+    expect(sale!.total).toBe(1315);
+    expect(sale!.items).toEqual([
+      { service: 'aeration', label: 'Aeration', property_type: 'FO', timing: null },
+      { service: 'grub', label: 'Grub Control', property_type: 'BO', timing: 'both' },
+      { service: 'dethatch', label: 'Dethatching', property_type: 'FP', timing: null },     // dethatching has no timing question
+      { service: 'other', label: 'Moss control', property_type: 'FP', timing: null }]);
+    expect(sale).toMatchObject({ locked_gate: true, sprinklers: true, notes: 'gate code 1234' });
+  });
+  it('asks when for grub, chafer beetle and Star Plan Protection Plus only', () => {
+    expect(['grub', 'chafer', 'star_plan_protection_plus', 'aeration', 'lawn_rejuv', 'star_plan', 'dethatch'].map(asksTiming)).toEqual([true, true, true, false, false, false, false]);
+    expect(checkSale(input({ items: [{ service: 'grub' }] })).errors).toEqual(['pick spring only, fall only or both.']);
+    expect(checkSale(input({ items: [{ service: 'aeration' }, { service: 'chafer', timing: 'winter' }] })).errors).toEqual(['Service 2: pick spring only, fall only or both.']);
   });
   it('says what is missing', () => {
-    const { sale, errors } = checkSale({ first_name: '', last_name: '', address: '', city: '', province: 'QC', items: [] }, 2026);
+    const { sale, errors } = checkSale({ first_name: '', last_name: '', address: '', city: '', province: 'QC', items: [], total: '' });
     expect(sale).toBeNull();
-    expect(errors).toEqual(['Enter the customer’s first and last name.', 'Enter a phone number or an email address.', 'Enter the service address.', 'Enter the city.', 'Pick the province.', 'Add at least one service.']);
+    expect(errors).toEqual(['Enter the customer’s first and last name.', 'Enter a phone number or an email address.', 'Enter the service address.', 'Enter the city.', 'Pick the province.', 'Add at least one service.', 'Enter the total price.']);
   });
-  it('refuses a bad email, a short phone, a missing price, an unnamed Other and a past season', () => {
-    expect(checkSale(input({ email: 'ann@' }), 2026).errors).toEqual(['That email address doesn’t look right.']);
-    expect(checkSale(input({ phone: '555-0100', email: '' }), 2026).errors).toEqual(['The phone number needs 10 digits.']);
-    expect(checkSale(input({ items: [{ service: 'aeration', season: 'spring', year: 2027, price: '' }] }), 2026).errors).toEqual(['enter the price.']);
-    expect(checkSale(input({ items: [{ service: 'aeration', season: 'spring', year: 2027, price: 100 }, { service: 'other', season: 'spring', year: 2027, price: 50 }] }), 2026).errors).toEqual(['Service 2: say what “Other” is.']);
-    expect(checkSale(input({ items: [{ service: 'aeration', season: 'spring', year: 2024, price: 100 }] }), 2026).errors).toEqual(['pick the season and year.']);
-    expect(checkSale(input({ items: [{ service: 'aeration', season: 'spring', year: 2027, price: 20000 }] }), 2026).errors).toEqual(['One charge can’t be more than $10,000.00.']);
+  it('refuses a bad email, a short phone, a missing or huge total, an unnamed Other and a wrong property part', () => {
+    expect(checkSale(input({ email: 'ann@' })).errors).toEqual(['That email address doesn’t look right.']);
+    expect(checkSale(input({ phone: '555-0100', email: '' })).errors).toEqual(['The phone number needs 10 digits.']);
+    expect(checkSale(input({ total: '' })).errors).toEqual(['Enter the total price.']);
+    expect(checkSale(input({ total: 'abc' })).errors).toEqual(['Enter the total price.']);
+    expect(checkSale(input({ total: 20000 })).errors).toEqual(['One charge can’t be more than $10,000.00.']);
+    expect(checkSale(input({ items: [{ service: 'aeration' }, { service: 'other' }] })).errors).toEqual(['Service 2: say what “Other” is.']);
+    expect(checkSale(input({ items: [{ service: 'aeration', property_type: 'XX' }] })).errors).toEqual(['pick full property, front only or back only.']);
   });
 });
 
@@ -60,7 +72,9 @@ describe('renderReceipt', () => {
     const { subject, text, html } = renderReceipt(DEFAULT_TEMPLATE, data);
     expect(subject).toBe('Your Property Stars receipt');
     expect(text).toContain('Hi Jordan,');
-    expect(text).toContain('Aeration · Spring 2027: $169.50');
+    expect(text).toContain('- Aeration · Full property');
+    expect(text).toContain('- Grub Control · Front only · Spring and fall');
+    expect(text).not.toContain('gate');
     expect(text).toContain('Subtotal: $350.00');
     expect(text).toContain('HST (13%): $45.50');
     expect(text).toContain('Total charged: $395.50');
@@ -83,19 +97,20 @@ describe('renderReceipt', () => {
 });
 
 describe('the form and the history', () => {
-  it('offers the seasons still ahead', () => {
-    expect(seasonOptions(new Date(2026, 10, 24)).map(s => s.label)).toEqual(['Spring 2027', 'Fall 2027']);
-    expect(seasonOptions(new Date(2027, 2, 1)).map(s => s.label)).toEqual(['Spring 2027', 'Fall 2027', 'Spring 2028', 'Fall 2028']);
-    expect(seasonOptions(new Date(2027, 7, 1)).map(s => s.label)).toEqual(['Fall 2027', 'Spring 2028', 'Fall 2028']);
+  it('starts a service on full property and sends timing only where it is asked', () => {
+    expect(blankItem(1)).toEqual({ id: 1, service: '', description: '', property_type: 'FP', timing: '' });
+    expect(itemsToInput([{ id: 1, service: 'grub', description: '', property_type: 'BO', timing: 'fall' }, { id: 2, service: 'aeration', description: '', property_type: 'FP', timing: 'fall' }]))
+      .toEqual([{ service: 'grub', description: '', property_type: 'BO', timing: 'fall' }, { service: 'aeration', description: '', property_type: 'FP', timing: null }]);
   });
-  it('turns the rows typed into the sale sent', () => {
-    expect(itemsToInput([{ id: 1, service: 'grub', description: '', seasonKey: 'fall:2027', price: ' $1,050.00 ' }]))
-      .toEqual([{ service: 'grub', description: '', season: 'fall', year: 2027, price: '1050.00' }]);
+  it('describes a service and the property in words', () => {
+    expect(itemLine({ label: 'Chafer Beetle', property_type: 'FP', timing: 'spring' })).toBe('Chafer Beetle · Full property · Spring only');
+    expect(propertyFlags({ locked_gate: true, sprinklers: true })).toBe('Locked gate · Sprinklers');
+    expect(propertyFlags({ locked_gate: false, sprinklers: false })).toBe('');
   });
   const sale = (over: Partial<CardSale> = {}): CardSale => ({
     id: '1', created_at: '2026-11-24T23:30:00Z', processed_by_name: 'Sam Roy', first_name: 'Ann', last_name: 'Lee', phone: '(604) 555-0100', email: 'ann@example.com',
-    address: '12 Oak St', city: 'Surrey', province: 'BC', postal_code: 'V3S 1A1', items: [{ service: 'aeration', label: 'Aeration', season: 'spring', year: 2027, price: 105 }],
-    total: 105, subtotal: 100, tax_amount: 5, tax_name: 'GST', tax_rate: 0.05, notes: null, status: 'approved', transaction_id: '10000123', auth_code: 'TEST',
+    address: '12 Oak St', city: 'Surrey', province: 'BC', postal_code: 'V3S 1A1', items: [{ service: 'aeration', label: 'Aeration', property_type: 'FP', timing: null }],
+    locked_gate: false, sprinklers: false, total: 105, subtotal: 100, tax_amount: 5, tax_name: 'GST', tax_rate: 0.05, notes: null, status: 'approved', transaction_id: '10000123', auth_code: 'TEST',
     card_type: 'VI', last4: '4242', message: 'Approved', receipt_to: 'ann@example.com', receipt_sent_at: '2026-11-24T23:30:05Z', receipt_error: null, ...over,
   });
   it('searches by name, phone digits, city, service and card', () => {
@@ -107,11 +122,11 @@ describe('the form and the history', () => {
     expect(searchSales(list, '').length).toBe(2);
   });
   it('exports one row per attempt, quoting what needs it', () => {
-    const csv = salesCsv([sale({ address: '12 Oak St, Unit 4', notes: 'said "call first"' })]).split('\n');
+    const csv = salesCsv([sale({ address: '12 Oak St, Unit 4', notes: 'said "call first"', locked_gate: true })]).split('\n');
     expect(csv[0].startsWith('Date,Time (ET),Status,First name')).toBe(true);
     expect(csv[1]).toContain('2026-11-24,18:30,Approved,Ann,Lee');
     expect(csv[1]).toContain('"12 Oak St, Unit 4"');
-    expect(csv[1]).toContain('Aeration (Spring 2027) $105.00,105.00,100.00,GST 5%,5.00,Sam Roy,Visa ••4242,TEST,10000123');
+    expect(csv[1]).toContain('Aeration · Full property,Locked gate,105.00,100.00,GST 5%,5.00,Sam Roy,Visa ••4242,TEST,10000123');
     expect(csv[1]).toContain('"said ""call first"""');
   });
 });

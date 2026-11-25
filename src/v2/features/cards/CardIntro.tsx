@@ -31,8 +31,9 @@ export function introSteps(grantedBy: string | null): Step[] {
     { icon: ListChecks, title: 'Fill in the sale',
       lines: [
         <>Enter the customer’s name, phone and email, then the <b>service address</b> with the city and province.</>,
-        <>Add what they bought and the season. One sale can hold more than one service.</>,
-        <>The <b>price you type is the full price, tax included</b>. The app works out the GST or HST inside it for the receipt.</>,
+        <>Add each service they bought. For each one pick full property, front only or back only, and for grub-type plans spring only, fall only or both.</>,
+        <>Tick <b>Locked gate</b> or <b>Sprinklers</b> if they apply, and add a note for the office or the crew.</>,
+        <>Type one <b>total price for everything, tax included</b>. The app works out the GST or HST inside it for the receipt.</>,
       ] },
     { icon: CreditCard, title: 'Take the card and charge it',
       lines: [
