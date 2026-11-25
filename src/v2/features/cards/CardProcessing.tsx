@@ -5,8 +5,9 @@
 //   Receipt email    the one receipt every customer gets (a super admin edits it)
 // For managers with the Card Processing permission. Nothing here writes to Master Bookings yet.
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, CreditCard, Download, Mail, Plus, Save, Send, Trash2 } from 'lucide-react';
+import { CheckCircle2, CircleHelp, CreditCard, Download, Mail, Plus, Save, Send, Trash2 } from 'lucide-react';
 import { useLoad } from '../../lib/data';
+import { CardIntroModal } from './CardIntro';
 import { useAuth } from '../../lib/auth';
 import { Btn, Card, ErrorBox, Field, Loading, Modal, Tabs, Tag } from '../../ui';
 import {
@@ -104,6 +105,7 @@ export const CardProcess: React.FC = () => {
   const [warn, setWarn] = useState<string | null>(null);
   const [done, setDone] = useState<{ answer: ChargeAnswer; sale: Sale } | null>(null);
   const [dup, setDup] = useState<{ info: NonNullable<ChargeAnswer['duplicate']>; key: string; token: string; sale: Sale } | null>(null);
+  const [tour, setTour] = useState(false);
 
   const set = (k: keyof typeof BLANK) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF(p => ({ ...p, [k]: e.target.value }));
   const setItem = (id: number, patch: Partial<ItemDraft>) => setItems(rows => rows.map(r => (r.id === id ? { ...r, ...patch } : r)));
@@ -167,7 +169,9 @@ export const CardProcess: React.FC = () => {
 
   return (
     <div className="v2-main v2-narrow">
-      <div className="v2-head"><span className="v2-h1">Process a card</span><span className="v2-mut">Sold by {profile?.full_name || 'you'}</span></div>
+      <div className="v2-head"><span className="v2-h1">Process a card</span><span className="v2-mut">Sold by {profile?.full_name || 'you'}</span><span className="v2-spacer" />
+        <Btn size="sm" icon={CircleHelp} onClick={() => setTour(true)}>How it works</Btn></div>
+      {tour && <CardIntroModal grantedBy={null} onClose={() => setTour(false)} />}
       <div className="v2-cards-cols">
         <div>
           <Card title="Customer">

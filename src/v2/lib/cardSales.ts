@@ -45,6 +45,9 @@ export async function cardSales(from: string, to: string): Promise<CardSale[]> {
   return ((must(await db.rpc('card_sales_list', { p_from: from, p_to: to })) as CardSale[]) || []).map(s => ({ ...s, total: Number(s.total), subtotal: Number(s.subtotal), tax_amount: Number(s.tax_amount), tax_rate: Number(s.tax_rate) }));
 }
 export async function cardStats(): Promise<CardStats> { return must(await db.rpc('card_sales_stats')) as CardStats; }
+/** Should this person see the Card Processing tour now (once after the permission is turned on), and who turned it on. */
+export async function cardIntro(): Promise<{ show: boolean; granted_by: string | null }> { return must(await db.rpc('card_intro')) as { show: boolean; granted_by: string | null }; }
+export async function cardIntroDone(): Promise<void> { must(await db.rpc('card_intro_done')); }
 export async function receiptTemplate(): Promise<TemplateInfo> { return must(await db.rpc('card_receipt_template_get')) as TemplateInfo; }
 export async function saveReceiptTemplate(t: ReceiptTemplate): Promise<void> {
   must(await db.rpc('card_receipt_template_save', { p_subject: t.subject, p_greeting: t.greeting, p_closing: t.closing, p_footer: t.footer }));
