@@ -844,7 +844,9 @@ html, body { overflow-x: clip; }
 .v2-cards-item { display: flex; flex-direction: column; gap: 8px; padding: 10px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
 .v2-cards-num { width: 24px; height: 24px; border-radius: 12px; background: #e0f2fe; color: #075985; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .v2-cards-prop { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 14px 0 12px; }
-.v2-cards-total { font-size: 20px; font-weight: 700; max-width: 220px; }
+.v2-cards-price { width: 110px; flex: none; text-align: right; }
+.v2-cards-sum { display: flex; align-items: center; justify-content: space-between; gap: 14px; border-top: 2px solid var(--line); padding-top: 12px; margin-top: 4px; font-weight: 700; }
+.v2-cards-sum b { font-size: 22px; white-space: nowrap; }
 .v2-seg { display: inline-flex; border: 1px solid #d1d5db; border-radius: 10px; overflow: hidden; background: #fff; }
 .v2-seg button { padding: 7px 12px; font-size: 13px; border: 0; border-right: 1px solid #e5e7eb; background: #fff; color: #374151; cursor: pointer; }
 .v2-seg button:last-child { border-right: 0; }

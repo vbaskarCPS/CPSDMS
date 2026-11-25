@@ -54,12 +54,13 @@ export async function saveReceiptTemplate(t: ReceiptTemplate): Promise<void> {
 }
 
 // ───────────── the form ─────────────
-/** One service on the form. What it asks follows the worker app's upsell recipes: how much of the property for
+/** One service on the form, with its own price. What it asks follows the worker app's upsell recipes: how much of the property for
  *  every service, and spring only / fall only / both for the grub-type plans. */
-export interface ItemDraft { id: number; service: string; description: string; property_type: string; timing: string }
-export const blankItem = (id: number): ItemDraft => ({ id, service: '', description: '', property_type: 'FP', timing: '' });
+export interface ItemDraft { id: number; service: string; description: string; property_type: string; timing: string; price: string }
+export const blankItem = (id: number): ItemDraft => ({ id, service: '', description: '', property_type: 'FP', timing: '', price: '' });
 export const itemsToInput = (rows: ItemDraft[]) => rows.map(r => ({
   service: r.service, description: r.description, property_type: r.property_type, timing: asksTiming(r.service) ? r.timing || null : null,
+  price: r.price.replace(/[$,\s]/g, ''),
 }));
 export const serviceOptions = CARD_SERVICES;
 
@@ -87,7 +88,7 @@ export function salesCsv(list: CardSale[]): string {
     const d = new Date(s.created_at);
     return [d.toLocaleDateString('en-CA', { timeZone: 'America/Toronto' }), d.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Toronto' }),
       STATUS_LABEL[s.status], s.first_name, s.last_name, s.phone, s.email, s.address, s.city, s.province, s.postal_code,
-      s.items.map(i => itemLine(i)).join('; '), propertyFlags(s),
+      s.items.map(i => `${itemLine(i)} $${Number(i.price || 0).toFixed(2)}`).join('; '), propertyFlags(s),
       s.total.toFixed(2), s.subtotal.toFixed(2), `${s.tax_name} ${Math.round(s.tax_rate * 10000) / 100}%`, s.tax_amount.toFixed(2), s.processed_by_name,
       cardOf(s), s.auth_code, s.transaction_id, s.status === 'approved' ? '' : s.message, s.receipt_sent_at ? s.receipt_to : '', s.notes];
   });

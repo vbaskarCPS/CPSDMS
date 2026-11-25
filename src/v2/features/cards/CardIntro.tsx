@@ -33,7 +33,7 @@ export function introSteps(grantedBy: string | null): Step[] {
         <>Enter the customer’s name, phone and email, then the <b>service address</b> with the city and province.</>,
         <>Add each service they bought. For each one pick full property, front only or back only, and for grub-type plans spring only, fall only or both.</>,
         <>Tick <b>Locked gate</b> or <b>Sprinklers</b> if they apply, and add a note for the office or the crew.</>,
-        <>Type one <b>total price for everything, tax included</b>. The app works out the GST or HST inside it for the receipt.</>,
+        <>Type a <b>price for each service, tax included</b>. The app adds them up into the total and works out the GST or HST inside it for the receipt.</>,
       ] },
     { icon: CreditCard, title: 'Take the card and charge it',
       lines: [

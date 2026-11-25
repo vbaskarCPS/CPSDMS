@@ -62,16 +62,15 @@ export function money(v: unknown): string {
 }
 
 // ───────────── a sale ─────────────
-export interface SaleItemInput { service: string; description?: string | null; property_type?: string | null; timing?: string | null }
+export interface SaleItemInput { service: string; description?: string | null; property_type?: string | null; timing?: string | null; price: number | string }
 export interface SaleInput {
   first_name: string; last_name: string; phone?: string | null; email?: string | null;
   address: string; city: string; province: string; postal_code?: string | null;
+  /** each service has its own price, tax included; the card is charged their sum */
   items: SaleItemInput[];
-  /** the one price for everything on the sale, tax included: what the card is charged */
-  total: number | string;
   locked_gate?: boolean; sprinklers?: boolean; notes?: string | null;
 }
-export interface SaleItem { service: CardServiceKey; label: string; property_type: PropertyType; timing: Timing | null }
+export interface SaleItem { service: CardServiceKey; label: string; property_type: PropertyType; timing: Timing | null; price: number }
 export interface Sale {
   first_name: string; last_name: string; phone: string | null; email: string | null;
   address: string; city: string; province: ProvinceCode; postal_code: string | null;
@@ -119,11 +118,12 @@ export function checkSale(input: SaleInput): { sale: Sale; errors: null } | { sa
     if (!part) { errors.push(`${n}pick full property, front only or back only.`); return; }
     const timing = asksTiming(svc.key) ? TIMINGS.find(t => t.key === r.timing) : null;
     if (asksTiming(svc.key) && !timing) { errors.push(`${n}pick spring only, fall only or both.`); return; }
-    items.push({ service: svc.key, label: svc.key === 'other' ? desc : svc.label, property_type: part.key, timing: timing ? timing.key : null });
+    const price = Math.round(Number(String(r.price ?? '').replace(/[$,\s]/g, '')) * 100) / 100;
+    if (!(price > 0)) { errors.push(`${n}enter the price.`); return; }
+    items.push({ service: svc.key, label: svc.key === 'other' ? desc : svc.label, property_type: part.key, timing: timing ? timing.key : null, price });
   });
-  const total = Math.round(Number(String(input?.total ?? '').replace(/[$,\s]/g, '')) * 100) / 100;
-  if (!(total > 0)) errors.push('Enter the total price.');
-  else if (total > MAX_CHARGE) errors.push(`One charge can’t be more than ${money(MAX_CHARGE)}.`);
+  const total = items.reduce((sum, i) => sum + cents(i.price), 0) / 100;
+  if (items.length === Math.min(rows.length, 12) && total > MAX_CHARGE) errors.push(`One charge can’t be more than ${money(MAX_CHARGE)}.`);
   if (errors.length || !prov) return { sale: null, errors };
   const { subtotal, tax } = taxInside(total, prov.rate);
   return { errors: null, sale: { first_name, last_name, phone, email, address, city, province: prov.code, postal_code, items,
@@ -169,7 +169,7 @@ export function renderReceipt(tpl: ReceiptTemplate, d: ReceiptData): { subject: 
   <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#0f766e;margin-bottom:14px;">Property Stars · Receipt</div>
   ${para(t.greeting)}
   <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin:6px 0 16px;">
-    ${s.items.map(i => row(esc(itemLine(i)), '')).join('')}
+    ${s.items.map(i => row(esc(itemLine(i)), esc(money(i.price)))).join('')}
     ${row('Subtotal', esc(money(s.subtotal)), false, true)}
     ${row(esc(taxLabel), esc(money(s.tax_amount)))}
     ${row('Total charged', esc(money(s.total)), true, true)}
@@ -182,7 +182,7 @@ export function renderReceipt(tpl: ReceiptTemplate, d: ReceiptData): { subject: 
 </div>`;
   const text = [
     fill(t.greeting, d).trim(), '',
-    ...s.items.map(i => `- ${itemLine(i)}`),
+    ...s.items.map(i => `${itemLine(i)}: ${money(i.price)}`),
     `Subtotal: ${money(s.subtotal)}`, `${taxLabel}: ${money(s.tax_amount)}`, `Total charged: ${money(s.total)}`, '',
     ...facts.map(([l, r]) => `${l}: ${r}`), '',
     fill(t.closing, d).trim(), ...(t.footer.trim() ? ['', fill(t.footer, d).trim()] : []),
@@ -195,7 +195,7 @@ export function sampleReceipt(now = new Date().toISOString()): ReceiptData {
   const total = 395.5, { subtotal, tax } = taxInside(total, 0.13);
   return { card_type: 'VI', last4: '4242', transaction_id: '10000123', charged_at: now,
     sale: { first_name: 'Jordan', last_name: 'Sample', address: '123 Maple Street', city: 'Ottawa', province: 'ON', postal_code: 'K1A 0B1',
-      items: [{ service: 'aeration', label: 'Aeration', property_type: 'FP', timing: null },
-              { service: 'grub', label: 'Grub Control', property_type: 'FO', timing: 'both' }],
+      items: [{ service: 'aeration', label: 'Aeration', property_type: 'FP', timing: null, price: 169.5 },
+              { service: 'grub', label: 'Grub Control', property_type: 'FO', timing: 'both', price: 226 }],
       total, subtotal, tax_amount: tax, tax_name: 'HST', tax_rate: 0.13 } };
 }

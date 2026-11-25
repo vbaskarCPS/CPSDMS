@@ -1,7 +1,7 @@
 // src/v2/features/cards/CardProcessing.tsx — Card Processing: take a card over the phone for a spring or fall booking.
 //   Process a card   the customer, where the work is, what they bought (each service asked the way the worker app's
 //                    upsell recipes ask: full property / front / back, and when for the grub-type plans), a locked
-//                    gate, sprinklers, a note, one total price (tax included: that is what is charged), and the
+//                    gate, sprinklers, a note, a price on each service (tax included; their sum is charged), and the
 //                    card, typed into Bambora's own fields: the number never touches this app.
 //   History          every attempt, by anyone: who sold what to whom, what was charged, and what Bambora answered
 //   Receipt email    the one receipt every customer gets (a super admin edits it)
@@ -90,7 +90,7 @@ const CardFields = forwardRef<CardFieldsHandle, { disabled?: boolean }>(({ disab
 CardFields.displayName = 'CardFields';
 
 // ───────────── Process a card ─────────────
-const BLANK = { first_name: '', last_name: '', phone: '', email: '', address: '', city: '', province: '', postal_code: '', notes: '', total: '' };
+const BLANK = { first_name: '', last_name: '', phone: '', email: '', address: '', city: '', province: '', postal_code: '', notes: '' };
 /** A row of buttons where one is picked (full property / front only / back only; spring only / fall only / both). */
 function Pick<T extends string>({ label, options, value, onChange }: { label: string; options: readonly { key: T; label: string }[]; value: string; onChange: (k: T) => void }) {
   return (
@@ -123,7 +123,7 @@ export const CardProcess: React.FC = () => {
   const input = { ...f, items: itemsToInput(items), locked_gate: gate, sprinklers };
   const checked = checkSale(input);
   const prov = PROVINCES.find(p => p.code === f.province);
-  const typedTotal = Number(f.total.replace(/[$,\s]/g, '')) || 0;
+  const runningTotal = items.reduce((sum, r) => sum + (Number(r.price.replace(/[$,\s]/g, '')) || 0), 0);
 
   const reset = () => { setF({ ...BLANK }); setGate(false); setSprinklers(false); setItems([blankItem(nextId.current++)]); setCardKey(k => k + 1); setTried(false); setErr(null); setWarn(null); setDone(null); };
 
@@ -163,7 +163,7 @@ export const CardProcess: React.FC = () => {
               <div className="v2-mut">{customerName(s)} · {a.last4 ? `${cardName(a.cardType)} ending ${a.last4}` : 'Card'}</div></div>
           </div>
           <table className="v2-table"><tbody>
-            {s.items.map((i, n) => <tr key={n}><td colSpan={2}>{itemLine(i)}</td></tr>)}
+            {s.items.map((i, n) => <tr key={n}><td>{itemLine(i)}</td><td style={{ textAlign: 'right' }}>{money(i.price)}</td></tr>)}
             <tr><td className="v2-mut">Subtotal</td><td style={{ textAlign: 'right' }}>{money(s.subtotal)}</td></tr>
             <tr><td className="v2-mut">{s.tax_name} ({pct(s.tax_rate)})</td><td style={{ textAlign: 'right' }}>{money(s.tax_amount)}</td></tr>
             <tr><td><b>Total charged</b></td><td style={{ textAlign: 'right' }}><b>{money(s.total)}</b></td></tr>
@@ -209,6 +209,7 @@ export const CardProcess: React.FC = () => {
                   <span className="v2-cards-num">{n + 1}</span>
                   <select className="v2-sel" aria-label="Service" value={r.service} onChange={e => setItem(r.id, { service: e.target.value, timing: asksTiming(e.target.value) ? r.timing : '' })}>
                     <option value="">Service…</option>{serviceOptions.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}</select>
+                  <input className="v2-input v2-cards-price" aria-label="Price" placeholder="Price" inputMode="decimal" value={r.price} onChange={e => setItem(r.id, { price: e.target.value })} />
                   <button type="button" className="v2-gbtn" aria-label="Remove this service" disabled={items.length === 1} onClick={() => setItems(rows => rows.filter(x => x.id !== r.id))}><Trash2 size={15} /></button>
                 </div>
                 {r.service === 'other' && <input className="v2-input" aria-label="What is it" placeholder="What is it?" value={r.description} onChange={e => setItem(r.id, { description: e.target.value })} />}
@@ -225,8 +226,10 @@ export const CardProcess: React.FC = () => {
               <label className="v2-check" style={{ border: 0, padding: 0 }}><input type="checkbox" checked={sprinklers} onChange={e => setSprinklers(e.target.checked)} /><span>Sprinklers</span></label>
             </div>
             <Field label="Note"><textarea className="v2-input" rows={2} value={f.notes} onChange={set('notes')} placeholder="Anything the office or the crew should know" /></Field>
-            <Field label="Total price" hint={`For everything on this sale, tax included${prov ? ` (${prov.tax} ${pct(prov.rate)})` : ''}. This is what the card is charged.`}>
-              <input className="v2-input v2-cards-total" aria-label="Total price" placeholder="0.00" inputMode="decimal" value={f.total} onChange={set('total')} /></Field>
+            <div className="v2-cards-sum">
+              <span>Total price<span className="v2-mut v2-small" style={{ display: 'block', fontWeight: 400 }}>All services added up, tax included{prov ? ` (${prov.tax} ${pct(prov.rate)})` : ''}. This is what the card is charged.</span></span>
+              <b>{money(runningTotal)}</b>
+            </div>
           </Card>
           <Card title="Card"><CardFields key={cardKey} ref={fields} disabled={busy} /></Card>
         </div>
@@ -234,13 +237,13 @@ export const CardProcess: React.FC = () => {
           <Card title="Charge">
             {checked.sale ? (
               <table className="v2-table"><tbody>
-                {checked.sale.items.map((i, n) => <tr key={n}><td colSpan={2}>{itemLine(i)}</td></tr>)}
+                {checked.sale.items.map((i, n) => <tr key={n}><td>{itemLine(i)}</td><td style={{ textAlign: 'right' }}>{money(i.price)}</td></tr>)}
                 <tr><td className="v2-mut">Subtotal</td><td style={{ textAlign: 'right' }}>{money(checked.sale.subtotal)}</td></tr>
                 <tr><td className="v2-mut">{checked.sale.tax_name} ({pct(checked.sale.tax_rate)})</td><td style={{ textAlign: 'right' }}>{money(checked.sale.tax_amount)}</td></tr>
                 <tr><td><b>Total to charge</b></td><td style={{ textAlign: 'right' }}><b>{money(checked.sale.total)}</b></td></tr>
               </tbody></table>
             ) : (
-              <div className="v2-mut" style={{ fontSize: 14 }}>{typedTotal > 0 ? <>Total <b style={{ color: '#111827' }}>{money(typedTotal)}</b>{prov ? `, ${prov.tax} ${pct(prov.rate)} included` : ''}</> : 'Fill in the sale to see the total.'}</div>
+              <div className="v2-mut" style={{ fontSize: 14 }}>{runningTotal > 0 ? <>Total so far <b style={{ color: '#111827' }}>{money(runningTotal)}</b>{prov ? `, ${prov.tax} ${pct(prov.rate)} included` : ''}</> : 'Fill in the sale to see the total.'}</div>
             )}
             {tried && checked.errors && <div className="v2-err" style={{ marginTop: 12 }}>{checked.errors.map((e, i) => <div key={i}>{e.charAt(0).toUpperCase() + e.slice(1)}</div>)}</div>}
             {err && <div className="v2-err" style={{ marginTop: 12 }}>{err}</div>}
@@ -259,7 +262,7 @@ export const CardProcess: React.FC = () => {
           footer={<><Btn onClick={() => setConfirm(null)} disabled={busy}>Cancel</Btn><Btn kind="g" icon={CreditCard} onClick={() => charge(confirm)} disabled={busy}>{busy ? 'Charging…' : `Charge ${money(confirm.total)}`}</Btn></>}>
           <div style={{ fontSize: 15, lineHeight: 1.6 }}>
             <b>{customerName(confirm)}</b><br />{addressLine(confirm)}<br />
-            {confirm.items.map((i, n) => <div key={n}>{itemLine(i)}</div>)}
+            {confirm.items.map((i, n) => <div key={n}>{itemLine(i)} · {money(i.price)}</div>)}
             {propertyFlags(confirm) && <div>{propertyFlags(confirm)}</div>}
             <div className="v2-mut" style={{ marginTop: 8 }}>{confirm.tax_name} {pct(confirm.tax_rate)} included: {money(confirm.tax_amount)}. The card is charged as soon as you confirm.
               {confirm.email ? ` The receipt goes to ${confirm.email}.` : ' No email address, so no receipt is sent.'}</div>
@@ -364,7 +367,7 @@ const SaleDetail: React.FC<{ sale: CardSale; onClose: () => void; onChanged: () 
         {fact('Phone', s.phone)}
         {fact('Email', s.email)}
         {fact('Service address', addressLine(s))}
-        {fact('Sold', s.items.map((i, n) => <div key={n}>{itemLine(i)}</div>))}
+        {fact('Sold', s.items.map((i, n) => <div key={n}>{itemLine(i)}{i.price != null ? ` · ${money(i.price)}` : ''}</div>))}
         {propertyFlags(s) && fact('Property', propertyFlags(s))}
         {fact('Charged', <>{money(s.total)} <span className="v2-mut">({money(s.subtotal)} + {s.tax_name} {pct(s.tax_rate)} {money(s.tax_amount)})</span></>)}
         {fact('Card', cardOf(s))}
